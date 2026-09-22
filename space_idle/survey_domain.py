@@ -257,6 +257,18 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition_id == spec.facility_def_id, f"extraction spec key mismatch: {definition_id}")
         _require(definition_id in ctx.facility_defs, f"extraction spec references unknown facility: {definition_id}")
         _require(spec.nominal_capacity_t_per_day >= 0, f"negative extraction capacity: {definition_id}")
+        if spec.minimum_knowledge_level is not None:
+            _require(
+                sim.extraction.survey is not None,
+                f"extraction Knowledge eligibility has no Survey service: {definition_id}",
+            )
+            for cell in sim.graph.surface_cells.values():
+                if cell.resource_potential_by_resource.get(spec.resource_id, 0.0) <= 0:
+                    continue
+                _require(
+                    (cell.id, spec.resource_id) in sim.extraction.survey.targets,
+                    f"extraction Knowledge eligibility has no Survey target: {definition_id}/{cell.id}/{spec.resource_id}",
+                )
         validate_site_requirements(
             spec.opportunity_requirements,
             ctx.known_capabilities,

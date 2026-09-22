@@ -204,7 +204,10 @@ class ExtractionRow:
 class ExtractionResourceRow:
     resource_id: str
     resource_name: str
+    static_opportunity: float
     effective_opportunity: float
+    knowledge_eligible_cell_count: int
+    knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
     diminishing_efficiency: float

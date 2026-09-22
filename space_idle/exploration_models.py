@@ -214,6 +214,7 @@ class ExtractionSpec:
     opportunity_requirements: SiteRequirements = SiteRequirements()
     geology_accessibility_key: str | None = None
     terrain_accessibility_attribute: str | None = None
+    minimum_knowledge_level: KnowledgeLevel | None = None
 
     def __post_init__(self) -> None:
         if self.nominal_capacity_t_per_day < 0:
@@ -222,12 +223,19 @@ class ExtractionSpec:
             raise ValueError("geology accessibility key must not be empty")
         if self.terrain_accessibility_attribute is not None and not self.terrain_accessibility_attribute:
             raise ValueError("terrain accessibility attribute must not be empty")
+        if self.minimum_knowledge_level is not None:
+            object.__setattr__(self, "minimum_knowledge_level", KnowledgeLevel(self.minimum_knowledge_level))
+            if self.minimum_knowledge_level is KnowledgeLevel.UNKNOWN:
+                raise ValueError("minimum extraction knowledge level must be positive")
 
 
 @dataclass(frozen=True)
 class ExtractionResourceSnapshot:
     resource_id: DefinitionId
+    static_opportunity: float
     effective_opportunity: float
+    knowledge_eligible_cell_count: int
+    knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
     diminishing_efficiency: float

@@ -47,10 +47,12 @@ from space_idle.persistence import (
     SAVE_SCHEMA_VERSION, SaveFormatError, capture_state, load_game, save_game,
 )
 from space_idle.research import (
+    ResearchDefinition, ResearchPrototypeStageSpec,
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
     ResearchState,
 )
 from space_idle.shared import EntityId, DefinitionId, SpatialNodeId
+from space_idle.site import SiteRequirements
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -73,7 +75,7 @@ def _make_nontrivial_state():
 
     research = next(
         item for item in app.query(GetResearch()).items
-        if item.id == str(ids.TECH_ORBITAL_OPERATIONS)
+        if item.id == str(ids.RP_RESOURCE_CHAIN_01)
     )
     assert research.can_start
     app.execute(StartResearch(research.id, priority=4))
@@ -106,7 +108,7 @@ def _make_nontrivial_state():
     survey_mode_id = "remote_orbital_spectrometry"
     survey_goal = 2
     survey_cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
-    survey_resources = (ids.REGOLITH, ids.WATER)
+    survey_resources = (ids.MINERAL_FEEDSTOCK, ids.VOLATILE_BEARING_MATERIAL)
     survey_key = (survey_cells[0], survey_resources[0])
     app.execute(
         StartSurvey(
@@ -331,7 +333,7 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     )
     survey_campaign_id = app.execute(StartSurvey(
         target_cell_ids=(str(ids.MOON_CELL_FARSIDE_HIGHLANDS),),
-        resource_ids=(str(ids.REGOLITH),),
+        resource_ids=(str(ids.MINERAL_FEEDSTOCK),),
         goal_knowledge_level=1,
         provider_constraint=SurveyProviderConstraintInput(
             str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT)
@@ -435,6 +437,7 @@ def _roundtrip_fleet_backed_assignment(
 
 def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_fleet_commitment(tmp_path):
     provider_id = DefinitionId("test.research_provider.persistence_fleet")
+    research_id = DefinitionId("test.research.persistence_prototype")
 
     def research_factory(*, for_load: bool):
         app = build_game_application_for_load() if for_load else build_game_application()
@@ -445,11 +448,15 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
             tier=2,
             levels=(ResearchProviderLevelSpec(1, 2.0, 25.0, 1.5),),
         )
+        app._simulation.research.definitions[research_id] = ResearchDefinition(
+            research_id,
+            "Persistence Prototype Research",
+            (ResearchPrototypeStageSpec("prototype", {}, SiteRequirements()),),
+        )
         return app
 
     research_app = research_factory(for_load=False)
     research_sim = research_app._simulation
-    research_id = ids.TECH_ORBITAL_OPERATIONS
     research_sim.research.active[research_id] = ResearchState(
         research_id,
         "prototype",

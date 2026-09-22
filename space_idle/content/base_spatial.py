@@ -116,7 +116,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             139.0,
             (ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND),
             SurfaceTerrain(1.0, 1.0, 0.05, 0.02),
-            {ids.AGGREGATE: 60.0, ids.METAL_ORE: 35.0, ids.WATER: 120.0},
+            {ids.MINERAL_FEEDSTOCK: 60.0, ids.METAL_ORE: 35.0, ids.WATER: 120.0},
         ),
         _earth_cell(
             ids.EARTH_CELL_COASTAL,
@@ -125,7 +125,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             150.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
             SurfaceTerrain(0.95, 0.95, 0.07, 0.03),
-            {ids.AGGREGATE: 45.0, ids.METAL_ORE: 24.0, ids.WATER: 180.0},
+            {ids.MINERAL_FEEDSTOCK: 45.0, ids.METAL_ORE: 24.0, ids.WATER: 180.0},
         ),
         _earth_cell(
             ids.EARTH_CELL_INLAND,
@@ -134,7 +134,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             110.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
             SurfaceTerrain(0.92, 0.96, 0.06, 0.05),
-            {ids.AGGREGATE: 72.0, ids.METAL_ORE: 52.0, ids.WATER: 75.0},
+            {ids.MINERAL_FEEDSTOCK: 72.0, ids.METAL_ORE: 52.0, ids.WATER: 75.0},
         ),
     )
     moon_cells = (
@@ -145,7 +145,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             30.0,
             (ids.MOON_CELL_POLAR_COLD_TRAP, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
             SurfaceTerrain(0.90, 0.90, 0.55, 0.10),
-            {ids.WATER: 0.45, ids.REGOLITH: 22.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 0.45, ids.MINERAL_FEEDSTOCK: 22.0, ids.METAL_ORE: 5.5},
         ),
         _moon_cell(
             ids.MOON_CELL_POLAR_COLD_TRAP,
@@ -154,7 +154,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             50.0,
             (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
             SurfaceTerrain(0.62, 0.75, 0.60, 0.28),
-            {ids.WATER: 4.5, ids.REGOLITH: 16.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 4.5, ids.MINERAL_FEEDSTOCK: 16.0, ids.METAL_ORE: 3.8},
         ),
         _moon_cell(
             ids.MOON_CELL_SOUTH_POLAR_PLAIN,
@@ -167,7 +167,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
                 ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
             ),
             SurfaceTerrain(0.84, 0.86, 0.60, 0.12),
-            {ids.WATER: 0.18, ids.REGOLITH: 25.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 0.18, ids.MINERAL_FEEDSTOCK: 25.0, ids.METAL_ORE: 6.2},
         ),
         _moon_cell(
             ids.MOON_CELL_NEARSIDE_MARE,
@@ -176,7 +176,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             20.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),
             SurfaceTerrain(0.95, 0.95, 0.60, 0.05),
-            {ids.WATER: 0.02, ids.REGOLITH: 38.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 0.02, ids.MINERAL_FEEDSTOCK: 38.0, ids.METAL_ORE: 9.0},
         ),
         _moon_cell(
             ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
@@ -189,7 +189,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
                 ids.MOON_CELL_FARSIDE_HIGHLANDS,
             ),
             SurfaceTerrain(0.78, 0.82, 0.65, 0.18),
-            {ids.WATER: 0.06, ids.REGOLITH: 30.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 0.06, ids.MINERAL_FEEDSTOCK: 30.0, ids.METAL_ORE: 7.5},
         ),
         _moon_cell(
             ids.MOON_CELL_FARSIDE_HIGHLANDS,
@@ -198,7 +198,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             170.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),
             SurfaceTerrain(0.75, 0.80, 0.67, 0.20),
-            {ids.WATER: 0.08, ids.REGOLITH: 28.0},
+            {ids.VOLATILE_BEARING_MATERIAL: 0.08, ids.MINERAL_FEEDSTOCK: 28.0, ids.METAL_ORE: 6.8},
         ),
     )
     for cell in earth_cells + moon_cells:

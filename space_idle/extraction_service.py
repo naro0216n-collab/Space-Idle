@@ -19,6 +19,7 @@ from .site import evaluate_physical_site_requirements
 from .spatial import EnvironmentResolver, SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
 from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, ExtractionSnapshot
+from .survey_service import SurveyService
 
 
 @dataclass
@@ -29,6 +30,7 @@ class ExtractionService:
     graph: SpatialGraph
     environment: EnvironmentResolver
     surface_infrastructure: SurfaceInfrastructureService
+    survey: SurveyService | None = None
 
     @classmethod
     def service_type(cls, resource_id: DefinitionId) -> str:
@@ -77,6 +79,38 @@ class ExtractionService:
             terrain = getattr(cell.terrain, spec.terrain_accessibility_attribute)
         return max(0.0, geology) * max(0.0, terrain)
 
+    def _knowledge_cell_eligible(
+        self, spec: ExtractionSpec, cell_id, resource_id: DefinitionId
+    ) -> bool:
+        if spec.minimum_knowledge_level is None:
+            return True
+        return (
+            self.survey is not None
+            and self.survey.knowledge_level(cell_id, resource_id) >= spec.minimum_knowledge_level
+        )
+
+    def knowledge_eligibility_counts(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId, facilities: FacilityBook
+    ) -> tuple[int, int]:
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return (0, 0)
+        specs = [
+            self.specs[facility.definition_id]
+            for facility in facilities.all_at(location_id)
+            if facility.definition_id in self.specs
+            and self.specs[facility.definition_id].resource_id == resource_id
+        ]
+        eligible = blocked = 0
+        for cell_id in location.developed_cell_ids:
+            if self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0) <= 1e-12:
+                continue
+            if specs and any(self._knowledge_cell_eligible(spec, cell_id, resource_id) for spec in specs):
+                eligible += 1
+            elif specs:
+                blocked += 1
+        return eligible, blocked
+
     def effective_opportunity(
         self,
         location_id: SpatialNodeId,
@@ -107,8 +141,14 @@ class ExtractionService:
             potential = cell.resource_potential_by_resource.get(resource_id, 0.0)
             if potential <= 1e-12:
                 continue
+            eligible_specs = [
+                spec for spec in active_specs.values()
+                if self._knowledge_cell_eligible(spec, cell_id, resource_id)
+            ]
+            if not eligible_specs:
+                continue
             accessibility = max(
-                (self._cell_accessibility(spec, cell_id, day) for spec in active_specs.values()),
+                (self._cell_accessibility(spec, cell_id, day) for spec in eligible_specs),
                 default=0.0,
             )
             total += potential * accessibility
@@ -320,9 +360,15 @@ class ExtractionService:
                 location_id, resource_id, facilities, power, day
             )
             response = self.diminishing_response(installed, opportunity)
+            eligible_cells, blocked_cells = self.knowledge_eligibility_counts(
+                location_id, resource_id, facilities
+            )
             rows.append(ExtractionResourceSnapshot(
                 resource_id,
+                self.static_opportunity(location_id, resource_id),
                 opportunity,
+                eligible_cells,
+                blocked_cells,
                 installed,
                 operational,
                 0.0 if installed <= 1e-12 else response / installed,
@@ -370,7 +416,13 @@ class ExtractionService:
                 location_id, spec.resource_id, facilities, power, day
             )
             if opportunity <= 1e-12 and nominal > 1e-12:
-                reasons.append(f"resource_opportunity:{spec.resource_id}")
+                _eligible_cells, blocked_cells = self.knowledge_eligibility_counts(
+                    location_id, spec.resource_id, facilities
+                )
+                if blocked_cells:
+                    reasons.append(f"knowledge:{spec.resource_id}")
+                else:
+                    reasons.append(f"resource_opportunity:{spec.resource_id}")
             rows.append(ExtractionSnapshot(
                 facility.id,
                 facility.definition_id,

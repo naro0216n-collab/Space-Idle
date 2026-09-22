@@ -132,6 +132,9 @@ class ResearchRow:
     execution_context_comparison_axes: tuple[ComparisonAxisRow, ...]
     operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
+    progression_stage: int | None = None
+    category: str | None = None
+    series: str | None = None
     unlocks: tuple[ResearchUnlockRow, ...] = ()
 
 

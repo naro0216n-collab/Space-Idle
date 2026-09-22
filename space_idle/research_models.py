@@ -112,12 +112,21 @@ class ResearchDefinition:
     display_name: str
     stage_specs: tuple[ResearchStageSpec, ...]
     prerequisites: frozenset[DefinitionId] = frozenset()
+    progression_stage: int | None = None
+    category: str | None = None
+    series: str | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("research display name must not be empty")
         if not self.stage_specs:
             raise ValueError("research definition must explicitly define its stages")
+        if self.progression_stage is not None and self.progression_stage < 1:
+            raise ValueError("research progression stage must be positive")
+        if self.category is not None and not self.category:
+            raise ValueError("research category must not be empty")
+        if self.series is not None and not self.series:
+            raise ValueError("research series must not be empty")
         ids = tuple(spec.stage_id for spec in self.stage_specs)
         if len(set(ids)) != len(ids):
             raise ValueError("research definition stage ids must be unique")

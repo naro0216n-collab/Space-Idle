@@ -108,7 +108,7 @@ Idleだからといって、プレイヤーの判断まで自動化しない。�
 初期候補：
 
 原料
-- Regolith / Aggregate Feed
+- Mineral Feedstock
 - Metal Ore / Metal Feedstock
 - Volatile-bearing Material
 - Water
@@ -280,7 +280,7 @@ Salvageを全量受け入れられないことだけを理由にFacility removal
 - Basic Structural Material Plant
 - Basic Machinery Works
 
-地表資源は有限埋蔵量を消費する方式ではなく、地域ごとの `Resource Potential` と、そこへ投入した採掘設備能力の組み合わせから継続的な採掘Throughputを得る。Resource Potentialは「残量」や「建設可能鉱山数」ではなく、その地域が追加採掘投資をどの程度高い限界生産性で受け入れられるかを表す地質的機会とする。
+地表資源は有限埋蔵量を消費する方式ではなく、Surface Cell × Resourceごとの `Resource Potential` と、そこへ投入した採掘設備能力の組み合わせから継続的な採掘Throughputを得る。Resource Potentialは「残量」や「建設可能鉱山数」ではなく、その地域が追加採掘投資をどの程度高い限界生産性で受け入れられるかを表す、非枯渇のOpportunity scaleとする。一次Resourceのidentityは産地や採掘方式ではなく産業上の物質状態を表し、地球の骨材と月面レゴリスのように同じ下流用途を持つ粒状鉱物原料は `Mineral Feedstock` として扱う。月面の水資源Opportunityは処理済みWaterではなく `Volatile-bearing Material` として表し、採取後の処理ProcessでWaterへ回収する。
 
 同一Location内の採掘Facilityが供給するNominal Extraction Capacityを合算し、開発済みSurface Cell群から得られるEffective Resource Opportunityに対して、Generic Core共通の単調増加・限界収益逓減responseから実効採掘量を導出する。設備を追加して総採掘量が通常減少する式にはせず、同じOpportunityへ過度に集中するほど追加投資1単位あたりの増産量が低下する構造とする。
 
@@ -597,7 +597,7 @@ Operational ExperienceはResearch Project自身が時間経過だけで生成す
 
 ### 13.1 研究段階区分とTechnology DAG
 
-研究の発展段階は、Technology DAGの成熟度とゲーム世界における宇宙活動の変化をプレイヤーへ可視化する表示metadataとする。研究開始可否とTechnology Unlockは各Research Definitionが持つ具体的なprerequisiteから個別に決まり、表示段階は研究項目を束ねる一括gateとして扱わない。
+研究の発展段階は、Technology DAGの成熟度とゲーム世界における宇宙活動の変化をプレイヤーへ可視化する表示metadataとする。研究開始可否とTechnology Unlockは各Research Definitionが持つdirect prerequisiteから個別に決まり、表示段階や同一series内の並びは暗黙のprerequisiteにしない。ResearchはResource Definitionそのものを解禁せず、そのResourceを利用するFacility、Process、Vehicle、Provider、method等を解禁・改善する。
 
 表示名は、宇宙活動の技術的成熟と運用形態の変化を表す基準名として次のように定義する。第9段階以降も、同じ原則でTechnology DAGへより高い成熟段階を追加できる。
 
@@ -648,7 +648,7 @@ UNKNOWN
 → MEASURED_RESOURCE_POTENTIAL
 ```
 
-各Levelは公開可能な情報を段階的に増やす。Presenceでは存在確率、Estimatedでは推定Potentialとuncertainty、Measuredでは投資判断に用いる測定済みPotentialを示す。Survey KnowledgeとStatic Resource Potential自体は分離し、Knowledge進展が地質量そのものを書き換えない。
+各Levelは公開可能な情報を段階的に増やす。Presenceでは存在確率、Estimatedでは推定Potentialとuncertainty、Measuredでは測定済みPotentialを示す。Survey KnowledgeとStatic Resource Potential自体は分離し、Knowledge進展が地質量そのものを書き換えない。採掘方式ごとのContentはOpportunity利用に必要なminimum Knowledge Levelを定義でき、通常の一次採掘ではEstimated Resource Potential以上を利用条件とする。Knowledgeは採掘量へ掛ける係数ではなく、各CellのOpportunityが現在利用可能かを決めるEligibilityとして扱う。
 
 Survey ProviderはFacilityまたはFleetから有限なSurvey / Observation Service Capacityを供給できる。Provider / Observation Modeはsurvey rate、coverage / reach、max Knowledge Level、precision、必要Operation / Infrastructure / Capability、minimum source units等の物理差をContent Definitionとして持てる。軌道Remote Survey等は対象天体にSurface Locationが存在しなくても成立し得る。
 

@@ -561,9 +561,8 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
 
     project_id = app.execute(PlanBuild(
-        str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
+        str(EARTH), str(ids.CONSTRUCTION_YARD), priority=2,
         procurement_policy="immediate",
-        site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)

@@ -532,6 +532,7 @@ CellEffectiveOpportunity(cell, resource, method)
   <- static Resource Potential
   <- current Physical Environment
   <- geological / terrain accessibility
+  <- Content-defined minimum Survey Knowledge eligibility
 
 EffectiveOpportunity(location, resource, method)
   <- developed cellsのCellEffectiveOpportunity集約
@@ -548,7 +549,7 @@ Installed Nominal Extraction CapacityとEffective Opportunityから実効Through
 
 ResourceやLocationごとの任意response関数をContentへ持たせない。方式差は共通responseへ入力するOpportunity、Facility性能、Environment / accessibility等で表す。
 
-Surface Infrastructure / Local Distributionの有限能力はExtraction executionのService Requirementとして一度だけAllocationへ反映し、Resource Opportunityへ別係数として重ねない。Survey Knowledgeは物理Throughput係数ではなく、公開する推定値・候補・Knowledge blockerを決めるStateとして分離する。
+Surface Infrastructure / Local Distributionの有限能力はExtraction executionのService Requirementとして一度だけAllocationへ反映し、Resource Opportunityへ別係数として重ねない。Survey Knowledgeは物理Throughput係数ではなく、公開する推定値とOpportunity利用可否を決めるEligibility Stateとして分離する。Extraction Definitionはminimum Knowledge LevelをContentとして持て、Knowledge未達CellはEffective Opportunityの集約対象から外すがStatic Resource Potential自体は変更しない。
 
 研究は新しいFacility Definition、Process、Construction / Modernization手段を解禁する。Throughput上昇には実際のFacility建設・Upgrade・更新が必要となる。
 
@@ -865,7 +866,7 @@ Assignmentは継続的な研究供給へFleetを使うPlayer intentであり、T
 
 Research DefinitionはTechnology間のdirect prerequisiteをContentとして定義できる。Technology dependency graphはacyclicなDAGとし、研究開始可否は完了済みTechnologyと個別prerequisiteから判定する。表示上の研究段階区分や専門区分を暗黙のprerequisiteにしない。
 
-研究段階区分はTechnologyの発展位置を可視化するContent metadataであり、Research Project内のStage種別とは別概念とする。Designは表示段階1〜8の基準名を定義し、第9段階以降も同じ原則で追加できる。Coreは段階数上限、区分ごとの研究数、特定区分の存在を固定しない。
+研究段階区分はTechnologyの発展位置を可視化するContent metadataであり、Research Project内のStage種別とは別概念とする。series / categoryも表示・整理metadataであり、series内の順序から暗黙の依存を生成しない。Designは表示段階1〜8の基準名を定義し、第9段階以降も同じ原則で追加できる。Coreは段階数上限、区分ごとの研究数、特定区分の存在を固定しない。Resource DefinitionそのものをTechnology Unlock対象にせず、利用手段となるAsset / Process / methodへTechnology prerequisiteを設定する。
 
 Content validationはTechnology ID一意性、prerequisite参照、dependency cycle、表示段階とdependency方向の自己矛盾を検証する。
 
@@ -1048,13 +1049,13 @@ SaveはApplication単位のversion付きSnapshotとする。静的Definitionは 
 
 保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、Dynamic Physical Environment、canonical game day等を含む。
 
-Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Movement Plan候補、Transport Service Plan、auto-selected source / end-to-end path、Required Fleet Units、Nominal / Available Capacity、auto-selected Survey provider / observation mode、Survey未完了target展開、salvage recoverable projection、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
+Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / Resource / Facility / Extraction / Process / Research Definition / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Dynamic StateはDefinition IDを参照し、display nameやbalance値を複製しない。Movement Plan候補、Transport Service Plan、auto-selected source / end-to-end path、Required Fleet Units、Nominal / Available Capacity、auto-selected Survey provider / observation mode、Survey未完了target展開、salvage recoverable projection、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
 
 Offline Progressは通常Simulationと別ルールにせず、実時間経過をゲーム時間へ換算して同じ1 game dayのcanonical advance経路を使う。通常進行、高速進行、Offlineで同じgame timeを進めた結果が同じStateになることを不変条件とする。fast-forwardは日次tick列と同値な区間をまとめる実装最適化としてのみ利用する。
 
 ## 15. Validation / Test
 
-Configuration Validationは、未定義Resource / Facility / Vehicle / Movement Operation参照、無効Eligibility / SiteRequirement、存在しないCapability / Service type、負の容量・率・期間、Priority範囲外、Facility Recipe / Maintenance / Decommission recovery、Vehicle Production、Transport Allocation、Spatial topology、Founding target / Deployment Recipe、Research Stage / Technology / Experience category、Survey Provider、Market Definition等の参照不整合を検出する。Research DefinitionではStage listが非空であること、`stage_id` の一意性、各typed Stage Specの必須fieldを検証する。Technology prerequisiteの未定義参照・自己参照・循環、表示段階とdependency方向の自己矛盾、Allocation dependency graphの循環もfail-closedとする。
+Configuration Validationは、Definition IDの重複、Resource Potential / Survey Target / Extraction / Process / Construction / Vehicle / Knowledge Requirementからの未定義Resource・Facility参照、旧semantic IDの残存、Generic Coreによる特定Content ID依存、および未定義Resource / Facility / Vehicle / Movement Operation参照、無効Eligibility / SiteRequirement、存在しないCapability / Service type、負の容量・率・期間、Priority範囲外、Facility Recipe / Maintenance / Decommission recovery、Vehicle Production、Transport Allocation、Spatial topology、Founding target / Deployment Recipe、Research Stage / Technology / Experience category、Survey Provider、Market Definition等の参照不整合を検出する。Research DefinitionではStage listが非空であること、`stage_id` の一意性、各typed Stage Specの必須fieldを検証する。Technology prerequisiteの未定義参照・自己参照・循環、表示段階とdependency方向の自己矛盾、Allocation dependency graphの循環もfail-closedとする。
 
 Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存と二重所有、Execution / Admission / Reservation settlement超過、Transport Capacity二重消費、Facility / Project / Movement lifecycle不整合、Research Point Pool capacity、Technology / Knowledge重複正本、Market commitment、Facility Decommission、Fleet Retirement / Commitment、Location領域、Facility placement等を検査する。
 

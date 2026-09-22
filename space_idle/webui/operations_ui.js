@@ -706,7 +706,7 @@
     const row=state.operationalNode?.extraction_resources?.find((item)=>item.resource_id===id);if(!row)return false;
     const infra=state.operationalNode?.surface_infrastructure;
     const infraLimit=infra?.limiting_factors?.some((factor)=>factor.code==='surface_infrastructure');
-    setInspector(row.resource_name,section('資源機会 / 採掘',kv([['有効採掘機会',fmt(row.effective_opportunity,3)],['設置採掘能力',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['実採掘量',`${fmt(row.output_t_per_day,3)} t/日`],['規模逓減効率',pct(row.diminishing_efficiency)],['限界効率',pct(row.marginal_efficiency)],['運用充足率',pct(row.operational_fulfillment)]]))+section('地表インフラ',infra?kv([['充足率',pct(infra.fulfillment)],['主な制約',infraLimit?'<span class="badge warn">地表インフラ</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
+    setInspector(row.resource_name,section('資源機会 / 採掘',kv([['静的資源機会',fmt(row.static_opportunity,3)],['Knowledge適格後の採掘機会',fmt(row.effective_opportunity,3)],['Knowledge適格Cell',fmt(row.knowledge_eligible_cell_count,0)],['Knowledge不足Cell',fmt(row.knowledge_blocked_cell_count,0)],['設置採掘能力',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['実採掘量',`${fmt(row.output_t_per_day,3)} t/日`],['規模逓減効率',pct(row.diminishing_efficiency)],['限界効率',pct(row.marginal_efficiency)],['運用充足率',pct(row.operational_fulfillment)]]))+section('地表インフラ',infra?kv([['充足率',pct(infra.fulfillment)],['主な制約',infraLimit?'<span class="badge warn">地表インフラ</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
     return true;
   }
   function renderResourceInspector(id){
@@ -890,7 +890,7 @@
     const researchPriorityAttributes=r.can_set_priority?`id="researchPriorityInput" data-priority-direct="research" data-priority-id="${esc(r.id)}"`:`id="researchPriorityInput" data-draft-key="research:${esc(r.id)}:priority"`;
     const priorityControlHtml=`<div class="form-row">${priorityControl(r.priority??3,researchPriorityAttributes,'研究優先度',!(r.can_start||r.can_set_priority))}</div>`;
     setInspector(r.display_name,
-      section('研究状態',kv([['段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
+      section('研究状態',kv([['進行Stage',r.progression_stage==null?'—':fmt(r.progression_stage,0)],['Category',esc(r.category||'—')],['Series',esc(r.series||'—')],['現在段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
       section('解禁内容',researchUnlocksHtml(r))+
       section('現在の制約',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(x)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)+

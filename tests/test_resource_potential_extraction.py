@@ -41,7 +41,7 @@ def _resource_snapshot(sim, resource_id):
     )
 
 
-def test_extraction_physical_potential_is_static_and_independent_of_knowledge_or_unlocks():
+def test_extraction_requires_content_defined_knowledge_without_mutating_static_potential():
     app = build_game_application()
     sim = app._simulation
     key = (ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
@@ -52,25 +52,29 @@ def test_extraction_physical_potential_is_static_and_independent_of_knowledge_or
 
     sim.survey.knowledge_progress[key] = 0.0
     unknown = _resource_snapshot(sim, ids.METAL_ORE)
+    assert unknown.static_opportunity > 0.0
+    assert unknown.effective_opportunity == 0.0
+    assert unknown.knowledge_blocked_cell_count == 1
+    assert unknown.output_t_per_day == 0.0
+
     sim.survey.initialize_known(*key)
     known = _resource_snapshot(sim, ids.METAL_ORE)
-    assert known == unknown
-
-    sim.technology.unlock(ids.TECH_REGOLITH_EXCAVATION)
-    after_research = _resource_snapshot(sim, ids.METAL_ORE)
-    assert after_research == known
+    assert known.static_opportunity == unknown.static_opportunity
+    assert known.effective_opportunity > 0.0
+    assert known.knowledge_eligible_cell_count == 1
+    assert known.output_t_per_day > 0.0
 
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
-    before_stock = sim.inventory.amount(ids.EARTH, ids.AGGREGATE)
-    aggregate = _resource_snapshot(sim, ids.AGGREGATE)
-    assert aggregate.output_t_per_day > 0.0
+    before_stock = sim.inventory.amount(ids.EARTH, ids.MINERAL_FEEDSTOCK)
+    mineral = _resource_snapshot(sim, ids.MINERAL_FEEDSTOCK)
+    assert mineral.output_t_per_day > 0.0
 
     sim.extraction.advance_day(
         ids.EARTH, sim.facilities, sim.inventory, power, sim.day,
         decision.allocations.execution,
     )
-    assert sim.inventory.amount(ids.EARTH, ids.AGGREGATE) > before_stock
+    assert sim.inventory.amount(ids.EARTH, ids.MINERAL_FEEDSTOCK) > before_stock
     assert {
         cell_id: dict(cell.resource_potential_by_resource)
         for cell_id, cell in sim.graph.surface_cells.items()

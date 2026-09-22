@@ -40,14 +40,14 @@
     cargo_storage:'一般貨物保管',cargo_transfer:'貨物移送',construction_yard:'建設ヤード',
     cryogenic_storage:'極低温保管',grid_power:'外部電力網',heavy_equipment_assembly:'重機組立',
     basic_machinery_production:'基礎機械製造',basic_structural_material:'基礎構造材製造',
-    industrial_water_supply:'工業用水供給',metal_ore_extraction:'金属鉱石採掘',aggregate_extraction:'骨材採掘',
+    industrial_water_supply:'工業用水供給',metal_ore_extraction:'金属鉱石採掘',mineral_extraction:'鉱物原料採掘',
     industrial_electrolysis:'工業電解',industrial_power:'産業電力',launch_operations:'打上げ運用',
     launch_vehicle_servicing:'打上げ機整備',metallurgy:'金属精錬',ore_processing:'鉱石処理',
-    power_grid:'電力網',propellant_production:'推進剤製造',regolith_excavation:'レゴリス採掘',
-    research_lab:'研究設備',robotic_operations:'ロボット運用',sintering:'焼結',
+    power_grid:'電力網',propellant_production:'推進剤製造',granular_mineral_extraction:'真空粒状鉱物採掘',
+    research_lab:'研究設備',robotic_operations:'ロボット運用',mineral_sintering:'鉱物焼結',
     spacecraft_servicing:'宇宙船整備',structural_fabrication:'構造材加工',surface_survey:'地表探査',
     refueling_interface:'補給インターフェース',docking_interface:'ドッキングインターフェース',
-    vehicle_assembly:'輸送機組立',vehicle_refueling:'輸送機補給',water_extraction:'水抽出',water_storage:'水保管',
+    vehicle_assembly:'輸送機組立',vehicle_refueling:'輸送機補給',volatile_extraction:'揮発性原料採取',volatile_processing:'揮発性成分回収',water_storage:'水保管',
   };
   const operationLabels={powered_ascent:'動力離昇',launch:'打上げ',spaceflight:'宇宙航行',landing:'着陸',atmospheric_entry:'大気圏突入'};
   const locationKindLabels={surface:'地表',orbital:'軌道',orbit:'軌道'};

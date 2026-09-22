@@ -125,8 +125,8 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["inventory"]
 
         # Exercise nested command decoding through the real HTTP boundary.
-        # Domain validation should reject this not-yet-surveyed founding target,
-        # proving the typed target reached the application command contract.
+        # Generic founding no longer hardcodes a Resource Knowledge requirement;
+        # a typed surface target should therefore reach the application contract.
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {
@@ -144,9 +144,8 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                 },
             },
         )
-        assert status == 400
-        assert payload["error"]["code"] == "invalid_command"
-        assert "knowledge_requirement" in payload["error"]["message"]
+        assert status == 200
+        assert payload["data"]["created_id"] is not None
 
         # Survey Campaign crosses the HTTP codec as a multi-target intent with a nested
         # optional provider constraint; the query must expose the same authoritative scope.
@@ -155,7 +154,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
             "/api/v1/survey-campaign-intent-preview"
             f"?target_cell_id={survey_cells[0]}"
             f"&target_cell_id={survey_cells[1]}"
-            f"&resource_id={ids.WATER}"
+            f"&resource_id={ids.VOLATILE_BEARING_MATERIAL}"
             "&goal_knowledge_level=1"
         )
         status, _, payload = _request(port, "GET", preview_path)
@@ -168,7 +167,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                 "type": "StartSurvey",
                 "payload": {
                     "target_cell_ids": survey_cells,
-                    "resource_ids": [str(ids.WATER)],
+                    "resource_ids": [str(ids.VOLATILE_BEARING_MATERIAL)],
                     "goal_knowledge_level": 1,
                     "provider_constraint": {
                         "provider_definition_id": str(ids.LUNAR_RESOURCE_SURVEY_ORBITER),
@@ -189,7 +188,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert status == 200
         campaign = next(row for row in payload["data"]["surveys"]["campaigns"] if row["id"] == campaign_id)
         assert set(campaign["target_cell_ids"]) == set(survey_cells)
-        assert campaign["resource_ids"] == [str(ids.WATER)]
+        assert campaign["resource_ids"] == [str(ids.VOLATILE_BEARING_MATERIAL)]
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
         assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)

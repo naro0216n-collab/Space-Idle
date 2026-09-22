@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from ..founding import DeploymentRecipe, FoundingFacilityDeployment, FoundingResourceRequirement
-from ..survey import KnowledgeLevel, KnowledgeRequirementSpec
 from . import base_requirements as req
 from . import base_ids as ids
 
@@ -36,7 +35,7 @@ def build_deployment_recipes() -> dict:
         preparation_service_type="cargo_transfer",
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.VACUUM_SURFACE_SITE,
-        knowledge_requirements=(KnowledgeRequirementSpec(ids.REGOLITH, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL),),
+        knowledge_requirements=(),
         required_units=1,
     )
     return {recipe.id: recipe}

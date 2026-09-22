@@ -25,7 +25,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.GRID_POWER_SUPPLY, ids.EARTH, invested_resources=((S, 8.0), (M, 6.0))),
         ScenarioFacility(ids.EARTH_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 10.0), (M, 8.0), (E, 2.0))),
         ScenarioFacility(ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH, invested_resources=((S, 10.0), (M, 10.0), (E, 3.0))),
-        ScenarioFacility(ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH, invested_resources=((S, 5.0), (M, 7.0))),
+        ScenarioFacility(ids.MINERAL_QUARRY, ids.EARTH, invested_resources=((S, 5.0), (M, 7.0))),
         ScenarioFacility(ids.METAL_ORE_MINE, ids.EARTH, invested_resources=((S, 6.0), (M, 8.0))),
         ScenarioFacility(ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH, invested_resources=((S, 5.0), (M, 5.0))),
         ScenarioFacility(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, invested_resources=((S, 8.0), (M, 8.0))),
@@ -58,7 +58,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
     known = tuple(
         (cell_id, resource_id)
         for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND)
-        for resource_id in (ids.AGGREGATE, ids.METAL_ORE, ids.WATER)
+        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER)
     )
     return ScenarioDefinition(
         id=STANDARD_SCENARIO_ID,

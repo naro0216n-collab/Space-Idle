@@ -57,7 +57,7 @@ def test_campaign_intent_preview_uses_domain_blockers_and_update_excludes_self()
     assert any(blocker.code == "knowledge_goal_reached" for blocker in completed.blockers)
 
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    resource = ids.WATER
+    resource = ids.VOLATILE_BEARING_MATERIAL
 
     available = app.query(GetSurveyCampaignIntentPreview(
         target_cell_ids=(str(cell),),
@@ -88,14 +88,14 @@ def test_campaign_intent_preview_uses_domain_blockers_and_update_excludes_self()
     app.execute(UpdateSurvey(
         campaign_id,
         (str(cell), str(ids.MOON_CELL_NEARSIDE_MARE)),
-        (str(resource), str(ids.REGOLITH)),
+        (str(resource), str(ids.MINERAL_FEEDSTOCK)),
         2,
         None,
         None,
     ))
     campaign = app._simulation.survey.campaigns[campaign_id]
     assert set(campaign.target_cell_ids) == {cell, ids.MOON_CELL_NEARSIDE_MARE}
-    assert set(campaign.resource_ids) == {resource, ids.REGOLITH}
+    assert set(campaign.resource_ids) == {resource, ids.MINERAL_FEEDSTOCK}
     assert campaign.goal_knowledge_level == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
     assert campaign.provider_constraint is None
     assert campaign.observation_mode_constraint is None
@@ -104,8 +104,8 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     app = build_game_application()
     sim = app._simulation
     cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
-    resources = (ids.REGOLITH, ids.WATER)
-    outside = (ids.MOON_CELL_EQUATORIAL_HIGHLANDS, ids.REGOLITH)
+    resources = (ids.MINERAL_FEEDSTOCK, ids.VOLATILE_BEARING_MATERIAL)
+    outside = (ids.MOON_CELL_EQUATORIAL_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
     outside_before = sim.survey.progress(*outside)
 
     campaign_id = _start_campaign(app, cells, resources)
@@ -124,7 +124,7 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     assert sim.survey.progress(*outside) == pytest.approx(outside_before)
     assert all(sim.survey.progress(cell, resource) > 0 for cell, resource in expected_pairs)
 
-    remaining = (cells[1], ids.REGOLITH)
+    remaining = (cells[1], ids.MINERAL_FEEDSTOCK)
     remaining_bundle = sim.survey.execution_bundle_id(campaign.id, *remaining)
     for pair in expected_pairs:
         if pair == remaining:
@@ -148,7 +148,7 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
 def test_remote_campaign_completion_respects_provider_goal_cap_and_precision():
     app = build_game_application()
     sim = app._simulation
-    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
     assert sim.graph.owner_of_cell(key[0]) is None
 
     campaign_id = _start_campaign(app, (key[0],), (key[1],), goal=2)
@@ -165,7 +165,7 @@ def test_remote_campaign_completion_respects_provider_goal_cap_and_precision():
     assert sim.survey.visible_potential_precision_fraction(*key) == pytest.approx(0.35)
 
     blocked_id = _start_campaign(
-        app, (ids.MOON_CELL_NEARSIDE_MARE,), (ids.REGOLITH,), goal=3
+        app, (ids.MOON_CELL_NEARSIDE_MARE,), (ids.MINERAL_FEEDSTOCK,), goal=3
     )
     blocked = sim.survey.campaigns[blocked_id]
     candidate, blockers = sim.survey.resolve_campaign_candidate(blocked, day=sim.day)
@@ -199,7 +199,7 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
             rows.reverse()
         sim.survey.providers = dict(rows)
         campaign_id = _start_campaign(
-            app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,),
+            app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.MINERAL_FEEDSTOCK,),
             constrained=False,
         )
         candidate, blockers = sim.survey.resolve_campaign_candidate(
@@ -229,7 +229,7 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
         str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
     ))
     campaign_id = _start_campaign(
-        app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.REGOLITH,),
+        app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.MINERAL_FEEDSTOCK,),
         constrained=False,
     )
     campaign = sim.survey.campaigns[campaign_id]
@@ -279,7 +279,7 @@ def test_explicit_constraint_failure_never_falls_back_to_other_provider():
         provider_id, SurveyProviderSourceKind.FACILITY, source_id, (mode,)
     )
     campaign_id = app.execute(StartSurvey(
-        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.REGOLITH),), 1,
+        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.MINERAL_FEEDSTOCK),), 1,
         SurveyProviderConstraintInput(str(provider_id), str(ids.LEO)), "same_body_only",
     )).created_id
     campaign = sim.survey.campaigns[campaign_id]
@@ -301,23 +301,23 @@ def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitm
     )).created_id
     assert assignment_id is not None
     campaign_id = app.execute(StartSurvey(
-        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.REGOLITH),), 1,
+        (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.MINERAL_FEEDSTOCK),), 1,
         SurveyProviderConstraintInput(str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)),
         "fleet_remote_mapping",
     )).created_id
     assignment = next(iter(sim.survey.provider_assignments.values()))
     commitment_id = assignment.fleet_commitment_ref
-    before = sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    before = sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
 
     app.execute(PauseSurvey(campaign_id))
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH) == pytest.approx(before)
+    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) == pytest.approx(before)
     assert sim.transport.fleet_commitment_snapshot(commitment_id) is not None
     assert sim.survey.provider_assignment_quantity(assignment.id) == 1
 
     app.execute(ResumeSurvey(campaign_id))
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH) > before
+    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) > before
 
 
 
@@ -325,7 +325,7 @@ def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitm
 def test_knowledge_consumers_depend_on_typed_requirement_not_campaign_internal_state():
     app = build_game_application()
     sim = app._simulation
-    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.REGOLITH)
+    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
     requirement = KnowledgeRequirement(key[0], key[1], KnowledgeLevel.PRESENCE_PROBABILITY)
     assert sim.survey.knowledge_requirement_failures(requirement)
     campaign_id = _start_campaign(app, (key[0],), (key[1],))

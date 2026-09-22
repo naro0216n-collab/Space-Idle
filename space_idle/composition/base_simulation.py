@@ -204,7 +204,7 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
     logistics.register_supply_owner_resolver(
         "scientific_exploration", exploration_owner_exists
     )
-    extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
+    extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure, survey)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.

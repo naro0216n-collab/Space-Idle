@@ -587,7 +587,10 @@ class LocationProjectorMixin:
                 ExtractionResourceRow(
                     str(row.resource_id),
                     self._resource_name(row.resource_id),
+                    row.static_opportunity,
                     row.effective_opportunity,
+                    row.knowledge_eligible_cell_count,
+                    row.knowledge_blocked_cell_count,
                     row.installed_nominal_capacity_t_per_day,
                     row.operational_fulfillment,
                     row.diminishing_efficiency,

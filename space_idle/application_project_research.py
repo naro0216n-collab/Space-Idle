@@ -467,6 +467,9 @@ class ResearchProgressionProjectorMixin:
                 execution_context_comparison_axes=execution_context_comparison_axes,
                 operational_experience=tuple(experience_rows),
                 prerequisites=tuple(sorted(str(item) for item in definition.prerequisites)),
+                progression_stage=definition.progression_stage,
+                category=definition.category,
+                series=definition.series,
                 unlocks=unlocks_by_id.get(definition.id, ()),
             ))
         return ResearchView(

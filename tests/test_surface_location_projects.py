@@ -36,12 +36,12 @@ from space_idle.spatial_claims import SurfaceCellClaim
 
 
 def _survey_cell_to_l2(sim, cell_id):
-    target = sim.survey.targets[(cell_id, ids.REGOLITH)]
+    target = sim.survey.targets[(cell_id, ids.MINERAL_FEEDSTOCK)]
     key = (target.cell_id, target.resource_id)
     sim.survey.knowledge_progress[key] = target.thresholds[1]
     sim.survey.estimated_potential[key] = sim.survey.actual_potential(*key) * 0.9
     sim.survey.knowledge_precision_fraction[key] = 0.35
-    assert sim.survey.knowledge_level(cell_id, ids.REGOLITH) >= 2
+    assert sim.survey.knowledge_level(cell_id, ids.MINERAL_FEEDSTOCK) >= 2
 
 
 def _surface_target(sim, body_id, cell_id):
@@ -96,28 +96,24 @@ def _found_command(name: str, cell_id):
     )
 
 
-def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_early_materialization():
+def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowledge():
     app = build_game_application()
     sim = app._simulation
 
     earth_cell = ids.EARTH_CELL_COASTAL
-    water_key = (earth_cell, ids.WATER)
-    unrelated_key = (earth_cell, ids.METAL_ORE)
-    sim.survey.knowledge_progress[water_key] = 0.0
-    sim.survey.knowledge_progress[unrelated_key] = sim.survey.targets[unrelated_key].thresholds[-1]
+    for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER):
+        sim.survey.knowledge_progress[(earth_cell, resource_id)] = 0.0
     development_failures = sim.projects.surface_cell_development_failures(
         ids.EARTH, earth_cell, sim.day
     )
-    assert any(
-        failure.code == "knowledge" and str(ids.WATER) in failure.detail
-        for failure in development_failures
-    )
+    assert not any(failure.code == "knowledge" for failure in development_failures)
 
     lunar_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
-    water_target = sim.survey.targets[(lunar_cell, ids.WATER)]
-    sim.survey.knowledge_progress[(lunar_cell, ids.WATER)] = water_target.thresholds[-1]
-    sim.survey.knowledge_progress[(lunar_cell, ids.REGOLITH)] = 0.0
+    for resource_id in (
+        ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.VOLATILE_BEARING_MATERIAL
+    ):
+        sim.survey.knowledge_progress[(lunar_cell, resource_id)] = 0.0
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT,
         _surface_target(sim, ids.MOON, lunar_cell),
@@ -125,27 +121,17 @@ def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_e
         ids.REUSABLE_SURFACE_CARGO_LANDER,
         sim.day,
     )
-    assert any(
-        failure.code == "knowledge_requirement" and str(ids.REGOLITH) in failure.detail
-        for failure in founding_failures
-    )
-    with pytest.raises(ApplicationError, match="knowledge_requirement"):
-        app.execute(_found_command("Farside", lunar_cell))
+    assert not any(failure.code == "knowledge_requirement" for failure in founding_failures)
 
-    _survey_cell_to_l2(sim, lunar_cell)
     _stage_founding_resources(sim)
     result = app.execute(_found_command("Farside", lunar_cell))
     assert result.created_id is not None
-    project = next(
-        row for row in sim.founding.projects.values()
-        if str(row.id) == result.created_id
-    )
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == result.created_id)
     target_id = sim.founding.target_operational_node_id(project.target_spec)
     assert target_id not in sim.graph.locations
     assert not sim.graph.has_operational_node(target_id)
     assert all(location_id != target_id for location_id, _resource in sim.inventory.stock)
     assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)
-
 
 def test_non_surface_operational_node_founding_uses_common_lifecycle_without_early_node_creation():
     app = build_game_application()
@@ -468,7 +454,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     }
     assert displayed_resources == expected_resources
     assert str(ids.PROPELLANT) in displayed_resources
-    assert any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
+    assert not any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
 
     surface = app.query(GetSurfaceMap(str(ids.MOON)))
     assert surface.founding_comparison_axes

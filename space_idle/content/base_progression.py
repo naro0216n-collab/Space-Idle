@@ -16,18 +16,18 @@ def build_survey_targets() -> dict:
     """Content-defined geological knowledge targets keyed by Surface Cell × Resource."""
     targets = {}
     for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND):
-        for resource_id in (ids.AGGREGATE, ids.METAL_ORE, ids.WATER):
+        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER):
             targets[(cell_id, resource_id)] = SurveyTarget(
                 cell_id, resource_id, _EARTH_SURVEY_THRESHOLDS, 0.99
             )
 
     lunar_presence = {
-        ids.MOON_CELL_SOUTH_POLAR_RIDGE: {ids.WATER: 0.55, ids.REGOLITH: 0.99},
-        ids.MOON_CELL_POLAR_COLD_TRAP: {ids.WATER: 0.90, ids.REGOLITH: 0.99},
-        ids.MOON_CELL_SOUTH_POLAR_PLAIN: {ids.WATER: 0.35, ids.REGOLITH: 0.99},
-        ids.MOON_CELL_NEARSIDE_MARE: {ids.WATER: 0.08, ids.REGOLITH: 0.99},
-        ids.MOON_CELL_EQUATORIAL_HIGHLANDS: {ids.WATER: 0.12, ids.REGOLITH: 0.99},
-        ids.MOON_CELL_FARSIDE_HIGHLANDS: {ids.WATER: 0.15, ids.REGOLITH: 0.99},
+        ids.MOON_CELL_SOUTH_POLAR_RIDGE: {ids.VOLATILE_BEARING_MATERIAL: 0.55, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.65},
+        ids.MOON_CELL_POLAR_COLD_TRAP: {ids.VOLATILE_BEARING_MATERIAL: 0.90, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.42},
+        ids.MOON_CELL_SOUTH_POLAR_PLAIN: {ids.VOLATILE_BEARING_MATERIAL: 0.35, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.58},
+        ids.MOON_CELL_NEARSIDE_MARE: {ids.VOLATILE_BEARING_MATERIAL: 0.08, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.82},
+        ids.MOON_CELL_EQUATORIAL_HIGHLANDS: {ids.VOLATILE_BEARING_MATERIAL: 0.12, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.74},
+        ids.MOON_CELL_FARSIDE_HIGHLANDS: {ids.VOLATILE_BEARING_MATERIAL: 0.15, ids.MINERAL_FEEDSTOCK: 0.99, ids.METAL_ORE: 0.68},
     }
     for cell_id, probabilities in lunar_presence.items():
         for resource_id, probability in probabilities.items():
@@ -85,24 +85,29 @@ def build_survey_providers() -> dict:
 
 def build_extraction_specs() -> dict:
     return {
-        ids.SURFACE_AGGREGATE_QUARRY: ExtractionSpec(
-            ids.SURFACE_AGGREGATE_QUARRY, ids.AGGREGATE, ids.AGGREGATE, 2.4,
+        ids.MINERAL_QUARRY: ExtractionSpec(
+            ids.MINERAL_QUARRY, ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK, 2.4,
             req.SURFACE_SITE, "crust_accessibility", "terrain_factor",
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
         ids.METAL_ORE_MINE: ExtractionSpec(
             ids.METAL_ORE_MINE, ids.METAL_ORE, ids.METAL_ORE, 1.7,
             req.SURFACE_SITE, "crust_accessibility", "bearing_capacity_factor",
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
         ids.INDUSTRIAL_WATER_INTAKE: ExtractionSpec(
             ids.INDUSTRIAL_WATER_INTAKE, ids.WATER, ids.WATER, 1.0,
             req.ATMOSPHERIC_SURFACE_SITE, "crust_accessibility", "terrain_factor",
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
         ids.VOLATILE_EXTRACTOR: ExtractionSpec(
-            ids.VOLATILE_EXTRACTOR, ids.WATER, ids.WATER, 6.0,
+            ids.VOLATILE_EXTRACTOR, ids.VOLATILE_BEARING_MATERIAL, ids.VOLATILE_BEARING_MATERIAL, 6.0,
             req.COLD_VOLATILE_SURFACE_SITE, "regolith_accessibility", "bearing_capacity_factor",
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-        ids.REGOLITH_HARVESTER: ExtractionSpec(
-            ids.REGOLITH_HARVESTER, ids.REGOLITH, ids.REGOLITH, 8.0,
+        ids.VACUUM_MINERAL_HARVESTER: ExtractionSpec(
+            ids.VACUUM_MINERAL_HARVESTER, ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK, 8.0,
             req.VACUUM_SURFACE_SITE, "regolith_accessibility", "terrain_factor",
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
     }

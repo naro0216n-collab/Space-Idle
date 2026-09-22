@@ -63,7 +63,7 @@ def test_execution_bundles_share_one_default_pool_admission_capacity():
     node = ids.EARTH
     pool = DEFAULT_STORAGE_POOL_KEY
     capacity = sim.inventory.usable_storage_capacity_t[(node, pool)]
-    sim.inventory.admit(node, ids.AGGREGATE, capacity - sim.inventory.stored_in_pool(node, pool) - 1.0)
+    sim.inventory.admit(node, ids.MINERAL_FEEDSTOCK, capacity - sim.inventory.stored_in_pool(node, pool) - 1.0)
 
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[node]
@@ -84,7 +84,7 @@ def test_application_exposes_pool_capacity_and_actual_limiting_factor():
     app = build_game_application()
     sim = app._simulation
     node = ids.EARTH
-    resource = ids.AGGREGATE
+    resource = ids.MINERAL_FEEDSTOCK
     pool = sim.inventory.storage_pool_for_resource(resource)
     current_physical = dict(sim.inventory.physical_storage_capacity_t)
     current_usable = dict(sim.inventory.usable_storage_capacity_t)
