@@ -30,9 +30,9 @@
 .research-node {
   position: absolute;
   width: 232px;
-  min-height: 116px;
+  min-height: 136px;
   display: grid;
-  grid-template-rows: auto auto auto 7px;
+  grid-template-rows: auto auto auto auto 7px;
   gap: 6px;
   align-content: start;
   text-align: left;
@@ -57,6 +57,9 @@
   border-color: #343f49;
   background: #10161c;
 }
+.research-node.is-blocked:not(.status-complete) {
+  box-shadow: inset 3px 0 0 var(--warn), 0 5px 18px #0004;
+}
 .research-node.status-prototype,
 .research-node.status-demonstration,
 .research-node.status-theory {
@@ -76,11 +79,23 @@
   white-space: normal;
 }
 .research-node-meta,
+.research-node-blocker,
 .research-node-progress {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
   white-space: normal;
+}
+.research-node-blocker {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-node-blocker:not(.is-empty) {
+  color: var(--warn);
+}
+.research-node-blocker.is-empty {
+  visibility: hidden;
 }
 .research-node-progress {
   display: flex;

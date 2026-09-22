@@ -114,6 +114,35 @@ def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_
     assert facility.remaining_prerequisite_ids == ()
 
 
+def test_research_projection_exposes_primary_blocker_for_tree_decisions():
+    app = build_game_application()
+    sim = app._simulation
+    prerequisite_id = DefinitionId("test.research.primary_blocker_prerequisite")
+    blocked_id = DefinitionId("test.research.primary_blocker")
+    sim.research.definitions[prerequisite_id] = ResearchDefinition(
+        prerequisite_id,
+        "Primary Blocker Prerequisite",
+        (ResearchTheoryStageSpec("theory", 1.0),),
+    )
+    sim.research.definitions[blocked_id] = ResearchDefinition(
+        blocked_id,
+        "Primary Blocker",
+        (ResearchTheoryStageSpec("theory", 1.0),),
+        prerequisites=frozenset({prerequisite_id}),
+    )
+
+    blocked = _research_row(app, blocked_id)
+    assert blocked.status == "locked"
+    assert blocked.current_blockers
+    assert blocked.primary_blocker == blocked.current_blockers[0]
+    assert blocked.primary_blocker.code == "prerequisite"
+
+    available = _research_row(app, prerequisite_id)
+    assert available.status == "available"
+    assert available.current_blockers == ()
+    assert available.primary_blocker is None
+
+
 def _remove_research_site_service(sim):
     facility = _research_site_fixture(sim)
     definition = sim.facilities.definitions[facility.definition_id]

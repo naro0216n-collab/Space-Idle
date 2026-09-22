@@ -125,6 +125,7 @@ class ResearchRow:
     execution_requested: float
     execution_allocated: float
     current_blockers: tuple[DecisionConstraintRow, ...]
+    primary_blocker: DecisionConstraintRow | None
     start_blockers: tuple[DecisionConstraintRow, ...]
     stage_resources: tuple[ResearchPrototypeResourceRow, ...]
     execution_context: ResearchExecutionSiteRow | None

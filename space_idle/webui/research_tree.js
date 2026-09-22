@@ -63,7 +63,7 @@
     }
 
     const nodeWidth = 232;
-    const nodeHeight = 116;
+    const nodeHeight = 136;
     const columnGap = 74;
     const rowGap = 26;
     const padding = 22;
@@ -163,11 +163,16 @@
       const state = statusLabels[item.status] || item.status;
       const phase = progress(item);
       const blockerCount = blockers(item).length;
+      const primaryBlocker = item.primary_blocker;
+      const primaryBlockerText = primaryBlocker
+        ? (window.SpaceIdleApp?.constraintSummary?.(primaryBlocker) || primaryBlocker.message || '実行条件を確認してください')
+        : '';
       const prerequisiteCount = (item.prerequisites || []).length;
       const selected = selectedId === item.id;
-      return `<button type="button" class="research-node status-${esc(item.status)}${selected ? ' is-selected' : ''}" data-inspect="research" data-id="${esc(item.id)}" style="left:${pos.x}px;top:${pos.y}px" aria-label="${esc(item.display_name)} ${esc(state)}">
+      return `<button type="button" class="research-node status-${esc(item.status)}${blockerCount ? ' is-blocked' : ''}${selected ? ' is-selected' : ''}" data-inspect="research" data-id="${esc(item.id)}" style="left:${pos.x}px;top:${pos.y}px" aria-label="${esc(item.display_name)} ${esc(state)}${primaryBlockerText ? ` · ${esc(primaryBlockerText)}` : ''}">
         <span class="research-node-head"><span class="research-node-title">${esc(item.display_name)}</span><span class="badge ${item.status === 'complete' ? 'ok' : blockerCount ? 'warn' : ''}">${esc(state)}</span></span>
         <span class="research-node-meta">研究段階 ${item.progression_stage ?? '—'} · ${esc(item.series || item.category || '未分類')} · 前提 ${prerequisiteCount} · 制約 ${blockerCount}</span>
+        <span class="research-node-blocker${primaryBlockerText ? '' : ' is-empty'}">${primaryBlockerText ? `主制約: ${esc(primaryBlockerText)}` : '主制約なし'}</span>
         <span class="research-node-progress"><span>${esc(phase.text)}</span>${item.status==='theory'?`<span>RP ${fmt(item.rp_allocated,1)}/${fmt(item.rp_requested,1)} /日</span>`:''}</span>
         <span class="progress-track"><span class="progress-bar" style="width:${Math.max(0, Math.min(100, phase.ratio * 100))}%"></span></span>
       </button>`;

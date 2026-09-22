@@ -437,6 +437,12 @@ class ResearchProgressionProjectorMixin:
                 spec.research_point_cost for spec in definition.stage_specs
                 if isinstance(spec, ResearchTheoryStageSpec)
             )
+            projected_current_blockers = constraints_from_pairs(
+                current_blockers,
+                affected_action="progress_research",
+                related_entity_kind="research",
+                related_entity_id=str(definition.id),
+            )
             rows.append(ResearchRow(
                 id=str(definition.id), display_name=definition.display_name, status=status,
                 stages=tuple(ResearchStageRow(spec.stage_id, spec.stage_type.value) for spec in definition.stage_specs),
@@ -450,12 +456,8 @@ class ResearchProgressionProjectorMixin:
                 rp_allocated=point_allocations.get(definition.id, 0.0),
                 rp_remaining=sim.research.theory_remaining(definition.id),
                 execution_requested=execution_requested, execution_allocated=execution_allocated,
-                current_blockers=constraints_from_pairs(
-                    current_blockers,
-                    affected_action="progress_research",
-                    related_entity_kind="research",
-                    related_entity_id=str(definition.id),
-                ),
+                current_blockers=projected_current_blockers,
+                primary_blocker=(projected_current_blockers[0] if projected_current_blockers else None),
                 start_blockers=constraints_from_pairs(
                     start_blockers,
                     affected_action="start_research",

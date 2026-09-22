@@ -496,6 +496,11 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator('.research-tree-card').evaluate("el => Boolean(el.compareDocumentPosition(document.querySelector('.research-provider-summary')) & Node.DOCUMENT_POSITION_FOLLOWING)"), "research DAG must precede provider allocation details in the decision flow")
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
+            blocked_research_nodes = page.locator('#researchTree .research-node.is-blocked')
+            _assert(blocked_research_nodes.count() > 0, "research DAG must distinguish blocked decisions on the node")
+            primary_blocker = blocked_research_nodes.first.locator('.research-node-blocker:not(.is-empty)')
+            _assert(primary_blocker.count() == 1, "blocked research nodes must expose the Application-projected primary blocker")
+            _assert(primary_blocker.inner_text().startswith("主制約:"), "research node must label its primary blocker")
             first_research_node = research_rows.first
             first_research_node.evaluate("node => { window.__spaceIdleResearchNode = node; }")
             page.wait_for_timeout(1200)
