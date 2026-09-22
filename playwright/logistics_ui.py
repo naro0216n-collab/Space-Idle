@@ -31,7 +31,7 @@ def _choose_priority(root, holder_selector: str, level: int | str) -> None:
 def _build_logistics_test_application():
     app = build_game_application()
     app._simulation.technology.completed.update(  # noqa: SLF001 - deterministic E2E fixture setup
-        {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
+        {ids.LM_LOGISTICS_MAINTENANCE_01, ids.CR_CRYOGENIC_STORAGE_TRANSFER_03}
     )
     return app
 
