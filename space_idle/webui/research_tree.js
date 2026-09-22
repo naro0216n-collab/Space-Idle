@@ -167,7 +167,7 @@
       const selected = selectedId === item.id;
       return `<button type="button" class="research-node status-${esc(item.status)}${selected ? ' is-selected' : ''}" data-inspect="research" data-id="${esc(item.id)}" style="left:${pos.x}px;top:${pos.y}px" aria-label="${esc(item.display_name)} ${esc(state)}">
         <span class="research-node-head"><span class="research-node-title">${esc(item.display_name)}</span><span class="badge ${item.status === 'complete' ? 'ok' : blockerCount ? 'warn' : ''}">${esc(state)}</span></span>
-        <span class="research-node-meta">Stage ${item.progression_stage ?? '—'} · ${esc(item.series || item.category || '未分類')} · 前提 ${prerequisiteCount} · 制約 ${blockerCount}</span>
+        <span class="research-node-meta">研究段階 ${item.progression_stage ?? '—'} · ${esc(item.series || item.category || '未分類')} · 前提 ${prerequisiteCount} · 制約 ${blockerCount}</span>
         <span class="research-node-progress"><span>${esc(phase.text)}</span>${item.status==='theory'?`<span>RP ${fmt(item.rp_allocated,1)}/${fmt(item.rp_requested,1)} /日</span>`:''}</span>
         <span class="progress-track"><span class="progress-bar" style="width:${Math.max(0, Math.min(100, phase.ratio * 100))}%"></span></span>
       </button>`;

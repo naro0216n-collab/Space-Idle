@@ -890,7 +890,7 @@
     const researchPriorityAttributes=r.can_set_priority?`id="researchPriorityInput" data-priority-direct="research" data-priority-id="${esc(r.id)}"`:`id="researchPriorityInput" data-draft-key="research:${esc(r.id)}:priority"`;
     const priorityControlHtml=`<div class="form-row">${priorityControl(r.priority??3,researchPriorityAttributes,'研究優先度',!(r.can_start||r.can_set_priority))}</div>`;
     setInspector(r.display_name,
-      section('研究状態',kv([['進行Stage',r.progression_stage==null?'—':fmt(r.progression_stage,0)],['Category',esc(r.category||'—')],['Series',esc(r.series||'—')],['現在段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
+      section('研究状態',kv([['研究段階',r.progression_stage==null?'—':fmt(r.progression_stage,0)],['Category',esc(r.category||'—')],['Series',esc(r.series||'—')],['現在段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
       section('解禁内容',researchUnlocksHtml(r))+
       section('現在の制約',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(x)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)+

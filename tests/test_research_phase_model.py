@@ -30,6 +30,8 @@ from space_idle.construction.models import ConstructionRecipe
 from space_idle.execution_requirements import ServiceCapacityRequirement
 from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
 from space_idle.shared import DefinitionId
+from space_idle.validation import validate_simulation_configuration
+from space_idle.validation_support import ConfigurationError
 from space_idle.site import (
     CapabilityRequirement,
     CapabilityRequirementState,
@@ -323,6 +325,29 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
     app.execute(AdvanceTime(1))
     assert _research_row(app, research_id).status == "complete"
 
+
+
+def test_research_configuration_rejects_display_stage_reversal_in_dependency_dag():
+    app = build_game_application()
+    sim = app._simulation
+    later = DefinitionId("test.research.display_stage.later")
+    earlier = DefinitionId("test.research.display_stage.earlier")
+    sim.research.definitions[later] = ResearchDefinition(
+        later,
+        "Later display stage prerequisite",
+        (ResearchTheoryStageSpec("theory", 1.0),),
+        progression_stage=3,
+    )
+    sim.research.definitions[earlier] = ResearchDefinition(
+        earlier,
+        "Earlier display stage dependent",
+        (ResearchTheoryStageSpec("theory", 1.0),),
+        prerequisites=frozenset({later}),
+        progression_stage=2,
+    )
+
+    with pytest.raises(ConfigurationError, match="display stage contradicts prerequisite direction"):
+        validate_simulation_configuration(sim)
 
 def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_stage_types():
     invalid_id = DefinitionId("test.research.invalid_stage_contract")

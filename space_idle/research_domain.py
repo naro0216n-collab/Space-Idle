@@ -192,6 +192,15 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(research_id == research.id, f"research definition key mismatch: {research_id}")
         _require(research.prerequisites.issubset(definitions), f"unknown research prerequisite: {research_id}")
         _require(research_id not in research.prerequisites, f"self research prerequisite: {research_id}")
+        for prerequisite_id in research.prerequisites:
+            prerequisite = definitions[prerequisite_id]
+            if research.progression_stage is not None and prerequisite.progression_stage is not None:
+                _require(
+                    prerequisite.progression_stage <= research.progression_stage,
+                    "research display stage contradicts prerequisite direction: "
+                    + f"{research_id} stage {research.progression_stage} depends on "
+                    + f"{prerequisite_id} stage {prerequisite.progression_stage}",
+                )
         _require(bool(research.stage_specs), f"research has no stages: {research_id}")
         stage_ids = [spec.stage_id for spec in research.stage_specs]
         _require(len(stage_ids) == len(set(stage_ids)), f"research repeats stage id: {research_id}")
