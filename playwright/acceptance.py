@@ -579,9 +579,14 @@ def run(*, browser=None) -> dict[str, object]:
             comparison_text = research_comparison.inner_text()
             for label in (
                 "研究Fleet拘束",
-                "現地利用可能Resource",
+                "現地Resource不足",
                 "Service供給による実行能力",
-                "推定所要時間",
+                "現在条件での参考所要日数",
+                "試作Resource",
+                "予約済",
+                "利用可能",
+                "不足",
+                "算定不可",
             ):
                 _assert(label in comparison_text, f"Research Comparison must expose {label}")
             site_button = page.locator(
