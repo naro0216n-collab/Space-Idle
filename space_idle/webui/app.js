@@ -6,7 +6,7 @@
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null,
-    selectedMovementPlanId:null, selectedGlobalNodeId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
+    selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
     activeDraft:null, busy:false, syncInFlight:null,
   };
@@ -111,6 +111,7 @@
   }
 
   const responseViewTokens=new Map();
+  let appliedUiSnapshotPath=null;
 
   async function api(path,options={}){
     const {viewTokenKey=null,...fetchOptions}=options;
@@ -701,7 +702,12 @@
     renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
     if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
     if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();
-    window.SpaceIdleSystemMap?.render(globalNodeSignals(state.world?.operational_nodes||[],state.globalIssues?.items||[],state.research?.items||[],state.scientificExplorations?.items||[],state.surveys?.campaigns||[]));
+    // Offscreen map geometry is UI-derived; rebuild it only when a map entrance
+    // is visible. Reactivating Overview/Transport always refreshes from the
+    // latest authoritative snapshot without resetting the shared viewport.
+    if(['global','logistics'].includes(state.activeSection)){
+      window.SpaceIdleSystemMap?.render(globalNodeSignals(state.world?.operational_nodes||[],state.globalIssues?.items||[],state.research?.items||[],state.scientificExplorations?.items||[],state.surveys?.campaigns||[]));
+    }
     restoreActiveDraftValues(); renderActiveDraftBar(); restorePreservedScrollRegions();
   }
 
@@ -710,26 +716,35 @@
     state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;state.decisionContext=null;
     if(state.sectionContexts.location)state.sectionContexts.location={...state.sectionContexts.location,inspector:null,decisionContext:null};
   }
+  function requestedSurfaceBodyId(){
+    if(state.activeSection!=='exploration'||!['surface','survey'].includes(state.activeTab))return null;
+    const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
+    return state.selectedSurfaceBodyId||locationSummary?.body_id||null;
+  }
   async function loadUiSnapshot({preserveInteraction=true}={}){
+    const surfaceBodyId=requestedSurfaceBodyId();
     while(state.syncInFlight){
       const pending=state.syncInFlight;
-      if(pending.operationalNodeId===state.operationalNodeId)return pending.promise;
+      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId)return pending.promise;
       try{await pending.promise;}catch{}
       if(state.syncInFlight===pending)state.syncInFlight=null;
     }
     const locationId=state.operationalNodeId;
-    const request={operationalNodeId:locationId,promise:null};
+    const request={operationalNodeId:locationId,surfaceBodyId,promise:null};
     request.promise=(async()=>{
-      const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===locationId);
       const params=new URLSearchParams();
       if(locationId)params.set('operational_node_id',locationId);
-      if(locationSummary?.body_id&&['surface','survey'].includes(state.activeTab))params.set('surface_body_id',locationSummary.body_id);
+      if(surfaceBodyId)params.set('surface_body_id',surfaceBodyId);
       const suffix=params.size?`?${params.toString()}`:'';
       const snapshotPath=`/api/v1/ui-state${suffix}`;
+      // A revision token is valid only while its full scoped projection is in memory.
+      // Returning to a previously visited body/node must fetch the complete view.
+      if(appliedUiSnapshotPath!==snapshotPath)responseViewTokens.delete(snapshotPath);
       const data=await api(snapshotPath,{viewTokenKey:snapshotPath});
       if(data?.unchanged===true){setConnection('ok','PC Server');return data;}
-      if(locationId!==state.operationalNodeId)return data;
+      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId())return data;
       applyUiSnapshot(data);
+      appliedUiSnapshotPath=snapshotPath;
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
         state.operationalNodeId=state.world?.operational_nodes?.[0]?.id??null;
         if(state.operationalNodeId&&data.operational_node===undefined){const nested=await api(`/api/v1/ui-state?operational_node_id=${encodeURIComponent(state.operationalNodeId)}`);applyUiSnapshot(nested);}
@@ -744,8 +759,19 @@
   }
   async function loadLocation(locationId){
     if(!locationId||locationId===state.operationalNodeId)return;
+    // Selecting a different working node must not discard the physical target.
+    // Surface geometry/knowledge is body-scoped; Location reports are node-scoped.
+    const retainSurface=state.activeSection==='exploration'&&['surface','survey'].includes(state.activeTab)
+      &&state.surfaceMap?.body_id===requestedSurfaceBodyId();
+    const surfaceMap=retainSurface?state.surfaceMap:null;
+    const surfaceInspector=retainSurface&&state.inspector?.type==='surface-cell'?{...state.inspector}:null;
+    const bodyContext=retainSurface&&state.decisionContext?.subject_kind==='celestial_body'
+      ?{...state.decisionContext}:null;
     state.operationalNodeId=locationId;
     clearLocationSnapshot();
+    if(surfaceMap)state.surfaceMap=surfaceMap;
+    if(surfaceInspector)state.inspector=surfaceInspector;
+    if(bodyContext)state.decisionContext=bodyContext;
     renderAll();
     await loadUiSnapshot({preserveInteraction:false});
   }
@@ -778,14 +804,24 @@
       return 'overview';
     }
     if(target.decision_area==='research')return 'research';
-    if(target.decision_area==='exploration')return target.subject_kind==='survey_campaign'?'survey':'scientific-exploration';
+    if(target.decision_area==='exploration'){
+      if(target.subject_kind==='celestial_body')return 'surface';
+      return target.subject_kind==='survey_campaign'?'survey':'scientific-exploration';
+    }
     return null;
   }
 
   async function openDecisionContext(target){
     if(!target?.decision_area)return;
+    const changedBody=target.decision_area==='exploration'&&target.subject_kind==='celestial_body'
+      &&state.selectedSurfaceBodyId!==target.subject_id;
     if(target.operational_node_id&&target.operational_node_id!==state.operationalNodeId){
       await loadLocation(target.operational_node_id);
+    }
+    if(target.decision_area==='exploration'&&target.subject_kind==='celestial_body'){
+      if(!(state.catalog?.celestial_bodies||[]).some((body)=>body.id===target.subject_id))return;
+      if(changedBody)state.surfaceMap=null;
+      state.selectedSurfaceBodyId=target.subject_id;
     }
     setActiveSection(target.decision_area);
     state.decisionContext={...target};
@@ -800,6 +836,7 @@
     else if(target.subject_kind==='scientific_exploration'&&target.subject_id)state.inspector={type:'scientific-exploration',id:target.subject_id};
     else if(target.subject_kind==='survey_campaign'&&target.subject_id)state.inspector={type:'survey-campaign',id:target.subject_id};
     else if(target.subject_kind==='inventory'&&target.resource_id)state.inspector={type:'resource',id:target.resource_id};
+    else if(target.subject_kind==='celestial_body'&&changedBody)state.inspector=null;
     if(target.subject_kind==='movement_plan'&&target.subject_id)state.selectedMovementPlanId=target.subject_id;
     renderAll();
     queueMicrotask(()=>{

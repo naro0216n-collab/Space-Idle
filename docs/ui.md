@@ -455,6 +455,8 @@ Survey Inspectorではselected scope、Resource scope、goal、completed / remai
 
 Surface Locationが存在しない天体でもRemote SurveyからFoundingまで同じMap文脈で追えるようにする。
 
+共通System MapではCelestial Bodyを物理的な対象として選択し、その天体のSurface Map／Surveyへ直接降りられるようにする。未設立天体をOperational Nodeへ昇格させず、地表の表示対象と、Fleet・Inventory・Founding準備を所有するstaging Operational Nodeを別の選択Contextとして保持する。同一の天体へ戻った場合は地表Cellの選択とMap表示位置を復元し、別天体へ切り替える場合は旧天体のCell選択や地表Projectionを新天体の状態として表示しない。対象天体の地表情報はその判断領域で取得し、他の画面の通常同期に含めない。
+
 基本動線:
 
 1. 天体Mapを開く。

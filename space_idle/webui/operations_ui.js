@@ -494,9 +494,10 @@
 
   function renderSurveyTab(){
     const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
-    const expectedBodyId=locationSummary?.body_id||null;
+    const expectedBodyId=state.selectedSurfaceBodyId||locationSummary?.body_id||null;
     if(expectedBodyId&&state.surfaceMap?.body_id!==expectedBodyId){
-      return `<section class="card survey-loading-card"><div class="card-heading"><div><h3>地表調査</h3><div class="cell-sub">${esc(locationSummary?.display_name||locationName(state.operationalNodeId))} に対応する地表情報を取得しています。</div></div><span class="badge">読込中</span></div><div class="empty-state">対象天体のSurface Mapが確定するまで調査範囲は編集できません。</div></section>`;
+      const bodyName=(state.catalog?.celestial_bodies||[]).find((body)=>body.id===expectedBodyId)?.display_name||expectedBodyId;
+      return `<section class="card survey-loading-card"><div class="card-heading"><div><h3>地表調査</h3><div class="cell-sub">${esc(bodyName)} に対応する地表情報を取得しています。</div></div><span class="badge">読込中</span></div><div class="empty-state">対象天体のSurface Mapが確定するまで調査範囲は編集できません。</div></section>`;
     }
     const providerFleet=state.surveys?.provider_fleet||[];
     const knowledge=state.surveys?.items||[];
@@ -568,7 +569,7 @@
     const map=state.surfaceMap;
     if(!map){
       const summary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
-      const message=summary?.body_id?'地表マップを取得しています。':'このSpatial Nodeには表示可能な地表天体がありません。';
+      const message=(state.selectedSurfaceBodyId||summary?.body_id)?'地表マップを取得しています。':'地表天体が選択されていません。';
       return `<section class="card"><div class="card-heading"><h3>地表マップ</h3></div><div class="empty-state">${message}</div></section>`;
     }
     const cells=map.cells||[];
@@ -1124,10 +1125,13 @@
       setInspector('選択項目','<div class="empty-state">地点状態の取得後に操作できます。</div>');
       return;
     }
-    $('#locationTitle').textContent=loc.display_name;
+    const bodyContext=state.activeSection==='exploration'&&['surface','survey'].includes(state.activeTab);
+    const bodyId=state.selectedSurfaceBodyId||state.surfaceMap?.body_id||null;
+    const bodyName=(state.catalog?.celestial_bodies||[]).find((body)=>body.id===bodyId)?.display_name||bodyId;
+    $('#locationTitle').textContent=bodyContext&&bodyName?bodyName:loc.display_name;
     const kind=(state.world?.operational_nodes||[]).find((x)=>x.id===loc.id)?.kind;
-    $('#locationKind').textContent=`${A.locationKindName(kind)}拠点`;
-    $('#headlineMetrics').innerHTML=[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
+    $('#locationKind').textContent=bodyContext?`地表判断 · 実行拠点 ${loc.display_name}`:`${A.locationKindName(kind)}拠点`;
+    $('#headlineMetrics').innerHTML=bodyContext?'':[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
     $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
     renderActiveTab();renderInspector();queueMicrotask(refreshVisibleSurveyIntentPreview);
   }

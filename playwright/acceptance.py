@@ -285,6 +285,7 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator("#systemMapStage").is_visible(), "global canvas must expose the shared system map")
             global_nodes = page.locator('#systemMapStage [data-system-node-id]')
             _assert(global_nodes.count() > 0, "map must expose Operational Nodes as direct targets")
+            initial_node_count = global_nodes.count()
             first_global_node = global_nodes.first
             first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
             original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
@@ -320,6 +321,73 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="global"]').click()
             first_global_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
             first_global_node.tap()
+            # A physical body is a spatial context, not an Operational Node.
+            # Its Surface Map must be reachable without changing inventory ownership
+            # or requiring an established Surface Location.
+            previous_operational_node_id = page.evaluate("() => window.SpaceIdleApp.state.operationalNodeId")
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function(
+                """body => {
+                  const state=window.SpaceIdleApp.state;
+                  return state.activeSection==='exploration' && state.activeTab==='surface'
+                    && state.surfaceMap?.body_id===body
+                    && Boolean(document.querySelector('#operationsTabContent .surface-map-card'));
+                }""",
+                arg=str(ids.MOON), timeout=10000,
+            )
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.operationalNodeId") == previous_operational_node_id,
+                    "body navigation must not turn physical targets into Operational Nodes")
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.selectedGlobalNodeId") == selected_global_node_id,
+                    "surface drill-down must preserve the shared map node context")
+            first_surface_cell = page.locator('#operationsTabContent [data-inspect="surface-cell"]').first
+            first_surface_cell.click()
+            selected_cell_id = page.evaluate("() => window.SpaceIdleApp.state.inspector?.id")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function("cell => window.SpaceIdleApp.state.inspector?.id === cell && window.SpaceIdleApp.state.activeTab === 'surface'", arg=selected_cell_id)
+            _assert(page.locator('#operationsTabContent [data-inspect="surface-cell"].is-selected').count() == 1,
+                    "returning to the same body must retain the selected Surface Cell")
+            alternate_provider = page.evaluate("""body => {
+              const state=window.SpaceIdleApp.state;
+              return state.world.operational_nodes.find(node => node.id !== state.operationalNodeId && node.body_id && node.body_id !== body)?.id || null;
+            }""", str(ids.MOON))
+            if alternate_provider:
+                page.locator(f'#locationList [data-location-id="{alternate_provider}"]').click()
+                page.wait_for_function("""([provider,body,cell]) => {
+                  const state=window.SpaceIdleApp.state;
+                  return state.operationalNodeId===provider && state.selectedSurfaceBodyId===body
+                    && state.surfaceMap?.body_id===body && state.inspector?.id===cell;
+                }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
+                _assert(page.locator('#operationsTabContent [data-inspect="surface-cell"].is-selected').count() == 1,
+                        "switching an execution provider must preserve the independently selected physical cell")
+                page.locator(f'#locationList [data-location-id="{previous_operational_node_id}"]').click()
+                page.wait_for_function("id => window.SpaceIdleApp.state.operationalNodeId===id", arg=previous_operational_node_id)
+            page.locator('[data-tab="survey"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body && document.querySelector('#operationsTabContent .survey-decision-surface') !== null", arg=str(ids.MOON))
+            _assert(page.locator('#operationsTabContent .survey-loading-card').count() == 0,
+                    "survey must use the selected celestial body, not the operational node body")
+            _assert(str(ids.MOON) == page.evaluate("() => window.SpaceIdleApp.state.selectedSurfaceBodyId"),
+                    "selected body must remain separate from the provider Operational Node")
+            _assert(page.locator('#locationTitle').inner_text() == page.evaluate(
+                "body => window.SpaceIdleApp.state.catalog.celestial_bodies.find(x => x.id === body).display_name", str(ids.MOON)),
+                    "surface workspace must identify the physical body rather than an unrelated location")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled,
+                    "surface drill-down and return must preserve map pan / zoom")
+            _assert(page.locator('#systemMapStage [data-system-node-id]').count() == initial_node_count,
+                    "body targets must not be rendered as transport Operational Nodes")
+            # Revisiting an earlier query scope must not reuse its ETag as proof
+            # that a different body's Surface Map is still displayed.
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.EARTH_BODY}"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body", arg=str(ids.EARTH_BODY))
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.inspector") is None,
+                    "switching physical bodies must not keep an inspector for another body's Surface Cell")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body", arg=str(ids.MOON))
+            _assert(page.locator('#operationsTabContent .surface-map-card').count() == 1,
+                    "revisiting Surface Map must restore that body's actual cells")
+            page.locator('.primary-nav-button[data-section="global"]').click()
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
             for width in (1024, 1180):
