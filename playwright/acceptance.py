@@ -355,8 +355,10 @@ def run(*, browser=None) -> dict[str, object]:
                 page.locator(f'#locationList [data-location-id="{alternate_provider}"]').click()
                 page.wait_for_function("""([provider,body,cell]) => {
                   const state=window.SpaceIdleApp.state;
-                  return state.operationalNodeId===provider && state.selectedSurfaceBodyId===body
-                    && state.surfaceMap?.body_id===body && state.inspector?.id===cell;
+                  return state.operationalNodeId===provider && state.operationalNode?.id===provider
+                    && state.selectedSurfaceBodyId===body && state.surfaceMap?.body_id===body
+                    && state.inspector?.id===cell
+                    && document.querySelectorAll('#operationsTabContent [data-inspect="surface-cell"].is-selected').length===1;
                 }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
                 _assert(page.locator('#operationsTabContent [data-inspect="surface-cell"].is-selected').count() == 1,
                         "switching an execution provider must preserve the independently selected physical cell")
