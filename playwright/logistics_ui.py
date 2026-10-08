@@ -112,6 +112,40 @@ def run(*, browser=None) -> None:
             requirement_resource = constraint_button.get_attribute('data-resource-id')
             assert requirement_resource
             assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            # A resource chosen at a location must resolve the same scoped
+            # Demand/Allocation context in Transport, without a second search.
+            page.locator('.primary-nav-button[data-section="location"]').click()
+            page.locator(f'[data-location-id="{LEO}"]').click()
+            page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
+            resource_card = page.locator(
+                f'#operationsTabContent [data-inspect="resource"][data-id="{requirement_resource}"]'
+            ).first
+            resource_card.wait_for(timeout=10000)
+            resource_card.click()
+            resource_link = page.locator('#inspectorContent [data-issue-area="logistics"][data-issue-subject-kind="dependency_resource"]')
+            resource_link.wait_for(timeout=10000)
+            resource_link.click()
+            assert page.locator('#logisticsView').is_visible()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            assert "関連する補給需要" in page.locator('#networkDecisionContext').inner_text()
+            assert page.locator(f'#requirementTable [data-requirement-id="{requirement_id}"]').get_attribute('class').find('is-context-target') >= 0
+            scoped_inspector = page.locator('#movementPlanInspectorContent')
+            assert '現地Resource' in scoped_inspector.inner_text()
+            assert '補給と輸送中貨物' in scoped_inspector.inner_text()
+            scoped_inspector.locator(f'[data-open-location="{LEO}"]').click()
+            assert page.locator('#operationsView').is_visible()
+            assert page.locator('#inspectorTitle').inner_text() == page.evaluate('id => window.SpaceIdleApp.resourceName(id)', requirement_resource)
+            # Project-owned supply uses the same decision identity even when
+            # reached from the construction Inspector rather than Transport.
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            page.locator(f'#operationsTabContent [data-inspect="project"][data-id="{project_id}"]').click()
+            project_requirement = page.locator(
+                f'#inspectorContent [data-issue-area="logistics"][data-issue-subject-id="{requirement_id}"]'
+            )
+            project_requirement.wait_for(timeout=10000)
+            project_requirement.click()
+            assert page.locator(f'#requirementTable [data-requirement-id="{requirement_id}"]').get_attribute('class').find('is-context-target') >= 0
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
             requirement_details = page.locator('#movementPlanInspectorContent').inner_text()
             assert all(label in requirement_details for label in ('未充足', '現地供給', '輸送系内'))
             # A supply shortfall is not evidence of an operating transport
@@ -196,6 +230,11 @@ def run(*, browser=None) -> None:
                 for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
             }
             assert rendered_usage == expected_usage
+            fleet_pool.locator('[data-fleet-map-node]').click()
+            assert page.locator(f'#systemMapStage [data-system-node-id="{pool.operational_node_id}"]').get_attribute('aria-pressed') == 'true'
+            assert page.locator('#movementPlanInspectorTitle').inner_text() == page.evaluate(
+                'id => window.SpaceIdleApp.locationName(id)', pool.operational_node_id
+            )
             assert all(
                 metric.locator("small").inner_text().strip()
                 for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
