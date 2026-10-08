@@ -83,6 +83,21 @@ class DetailedForecastInventoryRow:
 
 
 @dataclass(frozen=True)
+class DetailedForecastInventoryRangeRow:
+    """Observed stock extrema while replaying the existing plan, per node/resource."""
+
+    operational_node_id: str
+    resource_id: str
+    display_name: str
+    unit: str
+    base_available_amount: float
+    minimum_available_amount: float
+    minimum_available_day: int
+    projected_available_amount: float
+    first_depleted_day: int | None
+
+
+@dataclass(frozen=True)
 class DetailedForecastImpactRow:
     kind: str
     subject_id: str
@@ -116,6 +131,7 @@ class DetailedForecastView:
     horizon: str
     period_days: int
     inventory: tuple[DetailedForecastInventoryRow, ...]
+    inventory_ranges: tuple[DetailedForecastInventoryRangeRow, ...]
     downstream_impacts: tuple[DetailedForecastImpactRow, ...]
     logistics_impacts: tuple[DetailedForecastLogisticsRow, ...]
 

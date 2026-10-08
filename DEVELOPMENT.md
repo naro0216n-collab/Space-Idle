@@ -102,7 +102,7 @@ GitHub反映の入口は差分種別で決める。
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`で現在の `HEAD` をpublish対象として固定する。
 3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
-4. `connector-plan` が16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満になるよう複数batchへ分割して生成する。各packetにはlocal Gitで事前計算した `expected_tree` が含まれる。
+4. `connector-plan` が16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満になるよう複数batchへ分割して生成する。各packetにはlocal Gitで事前計算した `expected_tree` が含まれる。生成したJSON packet fileを完全なJSONとして読み込み、その `action_args` 全体を対応するGitHub操作の引数として渡す。packet fileのpathをGitHub操作へ渡したり、chunk本文を抜粋・再組立てしたりしない。
 5. tree packetを順番どおり実行する。各返却tree SHAはpacketの `expected_tree` とその場で比較し、一致時だけ次packetへ進む。helperへ返却SHAを戻して次packetを生成し直さない。
 6. 全tree batch成立後、`connector-plan` が同時に生成済みの `GitHub.create_commit` packetを実行する。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
 7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。

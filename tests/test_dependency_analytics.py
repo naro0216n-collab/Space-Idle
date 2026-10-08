@@ -307,6 +307,52 @@ def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_invent
         app.query(GetDetailedForecast(period_days=0))
 
 
+def test_detailed_forecast_preserves_node_specific_inventory_extrema_across_the_horizon():
+    app = build_game_application()
+    sim = app._simulation
+    base_day = sim.day
+    base_stock = dict(sim.inventory.stock)
+    selected_nodes = (EARTH, LEO)
+    days = 6
+    expected: dict[tuple[object, object], list[tuple[int, float]]] = {}
+    for node_id, resource_id in sim.inventory.stock:
+        if node_id in selected_nodes:
+            expected[(node_id, resource_id)] = []
+    # Observe an independent canonical replay rather than reproduce the
+    # forecast's internal aggregation logic or rely on scenario balance values.
+    from copy import deepcopy
+    replay = deepcopy(sim)
+    for _ in range(days + 1):
+        for key in set(expected) | {
+            key for key in replay.inventory.stock if key[0] in selected_nodes
+        }:
+            expected.setdefault(key, [])
+            expected[key].append((replay.day, replay.inventory.available(*key)))
+        if replay.day < base_day + days:
+            replay.advance_days(1)
+
+    view = app.query(GetDetailedForecast(
+        "operational_nodes", node_ids=tuple(map(str, selected_nodes)), period_days=days,
+    ))
+    assert sim.day == base_day
+    assert sim.inventory.stock == base_stock
+    assert len(view.node_ids) == len(selected_nodes)
+    assert view.inventory_ranges
+    for row in view.inventory_ranges:
+        key = (next(node for node in selected_nodes if str(node) == row.operational_node_id),
+               DefinitionId(row.resource_id))
+        timeline = {day: 0.0 for day in range(base_day, base_day + days + 1)}
+        timeline.update(expected[key])
+        minimum = min(timeline.values())
+        assert row.base_available_amount == pytest.approx(timeline[base_day])
+        assert row.projected_available_amount == pytest.approx(timeline[base_day + days])
+        assert row.minimum_available_amount == pytest.approx(minimum)
+        assert timeline[row.minimum_available_day] == pytest.approx(minimum)
+        first_depleted = next((day for day in range(base_day + 1, base_day + days + 1)
+                               if timeline.get(day - 1, 0) > 1e-9 and timeline.get(day, 0) <= 1e-9), None)
+        assert row.first_depleted_day == first_depleted
+
+
 def test_flow_report_includes_current_facility_maintenance_consumption():
     app = build_game_application()
     sim = app._simulation

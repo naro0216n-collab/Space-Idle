@@ -565,7 +565,7 @@ Fast Previewは実行可否、Targetから導出されるCapacity / required uni
 
 ### 18.3 Detailed Forecast
 
-future Inventory、downstream impact、multi-hop logistics impact、Location dependency forecast等はFast Previewから分離する。期間末日時点の生産・消費・入出荷収支は数値で表し、期間末日の収支符号のみから長期均衡・枯渇の成否を断定しない。
+future Inventory、downstream impact、multi-hop logistics impact、Location dependency forecast等はFast Previewから分離する。期間末日時点の生産・消費・入出荷収支は数値で表し、期間末日の収支符号のみから長期均衡・枯渇の成否を断定しない。 期間中の在庫変化は、拠点・Resource単位で最小利用可能量とその時点も表示できるようにする。複数拠点の残高を合計することで各拠点固有の制約を打ち消さない。利用可能在庫が0になった事実だけをResource需要の未充足と同一視せず、それぞれ別の指標として扱う。
 
 UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / 長期等の期間を選び、実期間はApplication Query filterとして扱う。
 

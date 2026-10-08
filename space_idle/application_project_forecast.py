@@ -6,6 +6,7 @@ from .application_commands import GetDependencyAnalytics, GetDetailedForecast
 from .application_views import (
     DetailedForecastImpactRow,
     DetailedForecastInventoryRow,
+    DetailedForecastInventoryRangeRow,
     DetailedForecastLogisticsRow,
     DetailedForecastView,
 )
@@ -32,7 +33,43 @@ class DetailedForecastProjectorMixin:
         current_dependency = self._dependency_analytics_view(scope_query)
 
         forecast_sim = deepcopy(base)
-        forecast_sim.advance_days(days)
+        # Snapshot the Inventory Domain's actual post-boundary available stock at
+        # each simulated day.  This is neither a second resource planner nor a
+        # speculative import forecast; arrivals, consumption and reservations
+        # are settled by the same canonical simulation used for end-day values.
+        extrema: dict[tuple[object, object], tuple[float, int, int | None, float, float]] = {}
+
+        def capture_stock() -> None:
+            keys = {
+                (node_id, resource_id)
+                for node_id, resource_id in forecast_sim.inventory.stock
+                if node_id in selected
+            } | set(extrema)
+            for node_id, resource_id in keys:
+                value = forecast_sim.inventory.available(node_id, resource_id)
+                key = (node_id, resource_id)
+                previous = extrema.get(key)
+                if previous is None:
+                    # A Resource first appearing mid-horizon had zero on-hand
+                    # stock on the earlier days; retain that earlier minimum.
+                    is_new = forecast_sim.day != base.day
+                    extrema[key] = (
+                        0.0 if is_new else value,
+                        base.day if is_new else forecast_sim.day,
+                        None, value, value,
+                    )
+                    continue
+                minimum, minimum_day, first_depleted, prior_value, peak = previous
+                if value < minimum - 1e-9:
+                    minimum, minimum_day = value, forecast_sim.day
+                if first_depleted is None and prior_value > 1e-9 and value <= 1e-9:
+                    first_depleted = forecast_sim.day
+                extrema[key] = (minimum, minimum_day, first_depleted, value, max(peak, value))
+
+        capture_stock()
+        for _ in range(days):
+            forecast_sim.advance_days(1)
+            capture_stock()
         projected = copy(self)
         projected._simulation = forecast_sim
         projected._query_projection_cache = None
@@ -70,6 +107,26 @@ class DetailedForecastProjectorMixin:
                 projected_consumption_per_day=consumption,
                 projected_external_dependency_per_day=external,
                 projected_net_per_day=net,
+            ))
+
+        range_rows: list[DetailedForecastInventoryRangeRow] = []
+        for (node_id, resource_id), (minimum, minimum_day, depleted_day, ending, peak) in sorted(
+            extrema.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+        ):
+            starting = base.inventory.available(node_id, resource_id)
+            if peak <= 1e-9:
+                continue
+            definition = self._catalog.resources.get(resource_id)
+            range_rows.append(DetailedForecastInventoryRangeRow(
+                operational_node_id=str(node_id),
+                resource_id=str(resource_id),
+                display_name=str(resource_id) if definition is None else definition.display_name,
+                unit="t" if definition is None else definition.unit,
+                base_available_amount=starting,
+                minimum_available_amount=minimum,
+                minimum_available_day=minimum_day,
+                projected_available_amount=ending,
+                first_depleted_day=depleted_day,
             ))
 
         impacts: list[DetailedForecastImpactRow] = []
@@ -145,6 +202,7 @@ class DetailedForecastProjectorMixin:
             horizon=horizon,
             period_days=days,
             inventory=tuple(inventory_rows),
+            inventory_ranges=tuple(range_rows),
             downstream_impacts=tuple(impacts),
             logistics_impacts=logistics_rows,
         )

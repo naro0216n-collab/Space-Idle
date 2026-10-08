@@ -38,7 +38,7 @@ from .app_contracts.ui_reports import DecisionContextTarget, IssueRow, ResourceF
 from .app_contracts.analytics_views import (
     CurrentDependencyMetricRow, ForecastDependencyMetricRow,
     CurrentServiceDependencyMetricRow, ForecastServiceDependencyMetricRow,
-    DependencyAnalyticsView, DetailedForecastInventoryRow, DetailedForecastImpactRow,
+    DependencyAnalyticsView, DetailedForecastInventoryRow, DetailedForecastInventoryRangeRow, DetailedForecastImpactRow,
     DetailedForecastLogisticsRow, DetailedForecastView,
 )
 from .app_contracts.surface_views import (

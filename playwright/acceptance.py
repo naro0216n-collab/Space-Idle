@@ -909,7 +909,7 @@ def run(*, browser=None) -> dict[str, object]:
                 timeout=15000,
             )
             forecast_text = forecast_surface.inner_text()
-            for heading in ("将来在庫", "波及影響", "広域物流への影響"):
+            for heading in ("予測時点の在庫・フロー", "拠点別・期間内の利用可能在庫", "波及影響", "広域物流への影響"):
                 _assert(heading in forecast_text, f"詳細予測結果に {heading} が必要です")
 
             _select_location(page, ids.LUNAR_ORBIT)
