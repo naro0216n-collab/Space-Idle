@@ -154,6 +154,32 @@ def build_vehicle_definitions() -> dict:
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
+        ids.DEEP_SPACE_PROBE: VehicleDef(
+            id=ids.DEEP_SPACE_PROBE,
+            display_name="長距離無人探査機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=3.0, payload_t=1.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=3.0,
+                propellant_t_per_total_t_per_km_s=0.015,
+                operation_capabilities=(SpaceflightCapability(20.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=20_000.0,
+                generic_capabilities=("survey_sensor", "docking_interface", "refueling_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=14.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 7.0), (ids.MACHINERY, 3.0),
+                           (ids.PRECISION_ELECTRONICS, 5.0)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=5.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0),
+                                             (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 2.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=5.0),
+        ),
         ids.SURFACE_CARGO_HAULER: VehicleDef(
             id=ids.SURFACE_CARGO_HAULER,
             display_name="地表貨物輸送車",

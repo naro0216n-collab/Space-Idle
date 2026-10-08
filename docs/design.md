@@ -439,6 +439,8 @@ Logistics
 
 同一Surface上では実際のSurface geometryとGateway / access pointを利用する。宇宙空間では各Spatial contextが持つ安定したtransport geometryから二地点間のcharacteristicな空間関係を導出する。別恒星系についても同じ考え方を一段上の空間関係へ適用する。
 
+惑星・衛星間の代表的な航行では軌道規模と重力基準からTransfer時間・ΔV・距離を一貫して導出する。これは打上げ窓や実際の天体位置を再現するものではなく、限られたEndurance・推進剤・Payload・Fleetの拘束が輸送戦略上の制約となる。個別惑星名に応じた固定航路や研究による直接通行許可を必要としない。既存地球・月の航行も同じ物理モデルで扱い、Representative Transferと暫定Vehicle性能によるゲーム上の負担を分けて評価する。
+
 Movementは少なくとも次の要素へ分解できる。
 
 ```text
@@ -542,6 +544,8 @@ UIでは所在Operational Node、総数、free数量、owner activity別commitme
 Scientific Explorationは必要性能を満たすFleet unitをFleet Domainへ排他的にcommitし、往路・科学活動・必要な帰還を含むCampaignを進行させて有限量のResearch Pointを得るシステムとする。物流とScientific Explorationは同じFleet資産を競合するため、輸送capacityを維持するか研究獲得へ回すかが明示的な資産配分判断になる。
 
 Campaignは必要に応じて、探査対象・科学目的、必要Operation / Endurance / Payload、必要環境・Infrastructure / Capability、所要期間、有限Research Point総量と生成率、消耗Resource、完了後Fleet dispositionを持つ。
+
+探査対象は、運用済みOperational Nodeだけでなく、未設立のSurface Cellやnon-surface物理Contextも指定できる。科学上の観測対象と実際の航行endpointを区別し、未運用地点を通常物流のNodeにはしない。未運用地点での滞在Fleetは専有状態のまま保持し、帰還までに必要な推進剤・消耗品は出発時に有効な補給拠点で確保する。到着だけでFleetPool、Inventory、拠点を生成しない。AbortやReturnは既に始まった航行を取消さず、物理的な帰還を通してsettleする。
 
 科学活動中に生成するResearch Pointは共有Knowledge Poolのadmissionと同じexecution settlementへ接続する。Research Point貯蔵余力が不足している量についてCampaignのproductive science progressだけを進めて有限報酬を消失させず、RP admission不足をlimiting factorとして表示する。移動progressは科学活動progressと分離し、開始済みMovementをRP容量不足で物理的に停止させない。
 

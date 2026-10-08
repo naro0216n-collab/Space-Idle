@@ -187,7 +187,7 @@ class MovementResolver:
         """Derive one-shot Movement to a non-surface Spatial context before it is operational."""
         if not self.graph.has_operational_node(origin_id):
             return ()
-        if target_node_id not in self.graph.nodes or self.graph.has_operational_node(target_node_id):
+        if target_node_id not in self.graph.nodes:
             return ()
         destination = MovementEndpoint(physical_target_node_id=target_node_id)
         rows: list[MovementPlan] = []
@@ -199,6 +199,29 @@ class MovementResolver:
                     origin_endpoint, destination, origin_rule=origin_rule, destination_rule=None, space_rule=space_rule
                 ))
         return tuple(sorted(rows, key=lambda row: str(row.id)))
+
+    def plans_from_physical_target(
+        self, target: MovementEndpoint, destination_id: SpatialNodeId,
+    ) -> tuple[MovementPlan, ...]:
+        """Derive the return leg for a one-shot visitor, without founding a Node."""
+        if target.operational_node_id is not None or not self.graph.has_operational_node(destination_id):
+            return ()
+        resolved = resolve_movement_endpoint(target, self.facilities)
+        origin_rules = (
+            self._access_rules_for_body(self.graph.context_body_id(resolved.environment_context_id))
+            if target.physical_target_cell_id is not None else (None,)
+        )
+        plans: list[MovementPlan] = []
+        for destination, destination_rule in self._space_destination_endpoints(destination_id):
+            for origin_rule in origin_rules:
+                for space_rule in self._spaceflight_rules_for(
+                    target, destination, require_spaceflight=self._requires_spaceflight(target, destination),
+                ):
+                    plans.append(self._build_space_connected_plan(
+                        target, destination, origin_rule=origin_rule,
+                        destination_rule=destination_rule, space_rule=space_rule,
+                    ))
+        return tuple(sorted(plans, key=lambda plan: str(plan.id)))
 
     def outbound_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         if not self.graph.has_operational_node(origin_id):
@@ -431,7 +454,9 @@ class MovementResolver:
             rule_ids.append(space_rule.id)
             transit_days += max(
                 space_rule.minimum_transit_days,
-                ceil(separation.distance_km / space_rule.characteristic_speed_km_per_day - 1e-12),
+                ceil((separation.representative_transit_days
+                      if separation.representative_transit_days is not None
+                      else separation.distance_km / space_rule.characteristic_speed_km_per_day) - 1e-12),
             )
 
         if destination_rule is not None:

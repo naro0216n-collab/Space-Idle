@@ -94,14 +94,19 @@ class FleetCommitmentState:
     quantity: int
     operational_node_id: SpatialNodeId | None = None
     movement_execution_id: EntityId | None = None
+    physical_target: MovementEndpoint | None = None
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
             raise ValueError("fleet commitment quantity must be positive")
-        if (self.operational_node_id is None) == (self.movement_execution_id is None):
+        if sum(value is not None for value in (
+            self.operational_node_id, self.movement_execution_id, self.physical_target,
+        )) != 1:
             raise ValueError(
-                "fleet commitment must be at exactly one Operational Node or Movement execution"
+                "fleet commitment must occupy one Operational Node, Movement or physical target"
             )
+        if self.physical_target is not None and self.physical_target.operational_node_id is not None:
+            raise ValueError("fleet physical target must not be an Operational Node")
 
     @property
     def in_movement(self) -> bool:
@@ -116,6 +121,7 @@ class FleetCommitmentSnapshot:
     quantity: int
     operational_node_id: SpatialNodeId | None
     movement_execution_id: EntityId | None
+    physical_target: MovementEndpoint | None = None
 
     @property
     def in_movement(self) -> bool:

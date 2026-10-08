@@ -550,3 +550,127 @@ def test_scientific_exploration_abort_return_and_completion_disposition_are_doma
     assert state.fleet_commitment_id is None
     assert sim.transport.fleet_commitment_snapshot(commitment_id) is None
     validate_runtime_state(sim)
+
+
+def _start_unoperated_science(app):
+    sim = app._simulation
+    mission_id = ids.MARS_ORBIT_SCIENCE_EXPLORATION
+    vehicle_id = ids.DEEP_SPACE_PROBE
+    sim.transport.add_fleet_units(vehicle_id, 1, ids.LEO)
+    app.execute(StartScientificExploration(str(mission_id)))
+    app.execute(AssignExplorationFleet(str(mission_id), str(vehicle_id)))
+    definition = sim.scientific_exploration.definitions[mission_id]
+    state = sim.scientific_exploration.campaigns[mission_id]
+    needs = sim.scientific_exploration._preparation_requirements(definition, state, sim.day)
+    for node, resource, amount, _ in needs:
+        sim.inventory.add(node, resource, amount + 1.0)
+    start_balances = {(node, resource): sim.inventory.amount(node, resource)
+                      for node, resource, _amount, _ in needs}
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == "outbound"
+    return state, start_balances, needs
+
+
+def _arrive_unoperated_science(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "active"
+    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert commitment.operational_node_id is None
+    assert commitment.physical_target.physical_target_node_id == ids.MARS_ORBIT
+    view = next(row for row in app.query(GetScientificExplorations()).items
+                if row.id == str(ids.MARS_ORBIT_SCIENCE_EXPLORATION))
+    assert view.destination_kind == "non_surface_spatial_node"
+    assert view.fleet_location_kind == "physical_target"
+    assert view.fleet_location_id == str(ids.MARS_ORBIT)
+    assert not view.can_set_completion_disposition
+    assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
+    assert not any(node == ids.MARS_ORBIT for node, _vehicle in sim.transport.fleet_pools)
+    assert not any(node == ids.MARS_ORBIT for node, _resource in sim.inventory.stock)
+    validate_runtime_state(sim)
+
+
+def _finish_unoperated_science(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    if state.phase.value == "active":
+        sim.research.stored_points = 0.0
+        app.execute(AdvanceTime(12))
+        assert state.phase.value == "return_preparing"
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == "returning"
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    validate_runtime_state(sim)
+    assert state.fleet_commitment_id is None
+    assert state.movement_execution_id is None
+    assert sim.transport.fleet_free_units(ids.DEEP_SPACE_PROBE, ids.LEO) == 1
+    assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
+
+
+def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources():
+    app = build_game_application()
+    sim = app._simulation
+    before_survey = capture_state(sim)["survey"]
+    initial_owned_nodes = set(sim.graph.operational_node_ids())
+    assert ids.MARS_ORBIT not in initial_owned_nodes
+    state, initial_balances, needs = _start_unoperated_science(app)
+    assert needs and all(node == ids.LEO for node, _, _, _ in needs)
+    for node, resource, amount, _ in needs:
+        # Ordinary Facility maintenance may consume the same stock that day.
+        assert initial_balances[node, resource] - sim.inventory.amount(node, resource) + 1e-9 >= amount
+    _arrive_unoperated_science(app)
+    _finish_unoperated_science(app)
+    assert state.phase.value == "complete"
+    assert state.research_points_awarded == pytest.approx(180.0)
+    assert capture_state(sim)["survey"] == before_survey
+    assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
+    for node, resource, _, _ in needs:
+        assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
+
+
+def test_unoperated_science_save_load_and_abort_preserve_fleet(tmp_path):
+    app = build_game_application()
+    state, _, _ = _start_unoperated_science(app)
+    _arrive_unoperated_science(app)
+    path = tmp_path / "unoperated-science.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    for current in (app, loaded):
+        current._simulation.research.stored_points = 0.0
+        current.execute(AdvanceTime(12))
+        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "return_preparing"
+        current.execute(AdvanceTime(1))
+        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "returning"
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    returning_load, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    for current in (app, loaded, returning_load):
+        _finish_unoperated_science(current)
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+
+    aborted = build_game_application()
+    _start_unoperated_science(aborted)
+    aborted.execute(AbortScientificExploration(str(ids.MARS_ORBIT_SCIENCE_EXPLORATION)))
+    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "outbound"
+    _arrive_unoperated_science_on_abort(aborted)
+    _finish_unoperated_science(aborted)
+    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "aborted"
+
+
+def _arrive_unoperated_science_on_abort(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "return_preparing"
+    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert commitment.physical_target.physical_target_node_id == ids.MARS_ORBIT
+    validate_runtime_state(sim)

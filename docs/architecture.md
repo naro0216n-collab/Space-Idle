@@ -309,6 +309,8 @@ SurfaceCellState / overlays
 
 軌道規模・代表重力の物理入力をStatic Worldの正本とする。太陽中心軌道・母天体周回軌道から代表距離、Transfer、Map用配置を用途別に導出し、互いに独立したOD表・物理座標を正本化しない。代表航行は実暦ephemerisとは異なり、具体的なMovement time、Delta-V、Resource、Payload、Enduranceは共通Movement Plan/OperationとVehicleから評価する。移動計算を実装していない物理対象に対して暫定的な瞬間距離や無条件の航路を生成しない。別Star System間のinterstellar transport geometryは引き続きStar Systemが所有する。
 
+代表Transferの近似は円軌道間の半楕円Transferを基本とする。恒星系中心の重力パラメータ、惑星公転長半径、衛星の母天体周回長半径と親の重力基準から移動日数・ΔV・代表航行距離を一組で導出する。異惑星圏の衛星端点では、同じ物理投影内で衛星圏からの出発・到着に対応する局所legを含める。軌道傾斜・打上げ窓・瞬間的な位置は再現しない。抽象的な座標関係だけを持つStar Systemでは既存characteristic geometryを利用できるが、同一天体の軌道物理と直交座標を独立正本として同時登録しない。
+
 地表を `SurfaceCell` graphとして表現する。UIはヘックス主体で表示してよいが、Coreは完全六角格子、同一Cell面積、常時6隣接を仮定しない。Celestial BodyごとにCell数を変えてよい。
 
 Surface CellはInventory Nodeではなく、Facility一般の配置スロットでもない。資源、地形、可変Environment、Survey Knowledge、Surface Location開発領域の物理単位とする。
@@ -687,6 +689,8 @@ Surface Cell自体を通常Transport Capacity Network Nodeにはしない。Loca
 
 Movement Planはauthoritative StateではなくSpatial / Facility / Definitionからの派生結果である。同一physical state内では、全候補、OD別候補、Plan ID参照等が同じ導出結果を再利用できる索引をTransport Domainが保持してよい。Plan ID参照のたびに全Operational Node pairを再列挙する方式をQuery契約にはしない。Spatial topology、Movement Endpointを構成するFacility、その他Plan内容へ影響するphysical stateが変化したときだけ派生索引を無効化し、必要時に再導出する。派生索引はSave対象にしない。
 
+代表Transferに必要な日数が存在する場合、Spaceflight Movementはその日数を採用する。抽象geometryだけを持つStar SystemではOperation profileのcharacteristic speedを用いる。一つのODへ双方の時間計算を重複適用しない。同じMovement PlanのOperation・時間をVehicle性能評価、Propellant、Payload、Endurance、Transport Serviceへ利用し、物理Targetを通常Allocation端点として生成しない。
+
 ### 10.2 Vehicle Definition / Fleet State
 
 Vehicle DefinitionはMovement適合性、Payload、Propellant、Endurance、Operation interface、turnaround / maintenance、Production Requirement等の性能・物理要件を持つ。Funds costは一般Vehicle要件へ含めない。
@@ -720,6 +724,8 @@ Fleet RetirementはTransport / Fleet Domainが所有する永続Intentとする�
 salvage量はVehicle Definitionのretirement recovery定義とunit数からrecovery potentialを導出する。Facility Decommissionと同じdisposal settlement契約を用い、全salvage Resourceのcompatible admissionを共通Allocationへ提出して0..1のrecoverable fractionを決め、全Resourceへ比例適用する。admission成立量だけInventoryへ生成し、recoverable fractionが1未満でもFleet unit removalを完了できる。Resource列挙順によって回収構成が変化してはならない。
 
 Fleet Relocation、Scientific Exploration等の有限操作はone-shot Movement Executionを利用し、開始時にFleet unitをsourceのfree poolから外し、完了時に定義されたdispositionへsettleする。in-transit unitをsource / destination Fleetへ同時に計上しない。
+
+一回限りのMovementでは未運用の物理Surface Cellやnon-surface Spatial contextも到達対象にできる。Transit中はMovementExecution、対象到着後はFleet Domainの排他Commitmentが`physical target`として所在を所有する。この所在は運用NodeのInventoryやFleetPoolではなく、通常Transport Allocationの端点でもない。帰還するときは同じMovement Plan / Executionで出発元など実在Operational Nodeへ戻し、そこでのみFleetPoolへreleaseする。
 
 ### 10.4 Transport Allocation / Transport Service / Capacity
 
@@ -944,6 +950,8 @@ Domainごとに同じExperience値を重複保存しない。Experience category
 Scientific Exploration Campaignは必要性能を満たすFleet unitをFleet Domainへ排他的にcommitし、one-shot Movement Executionとactive science executionを経て有限量のResearch Pointを得る。
 
 Definitionは対象、必要Operation / Endurance / Payload、Capability / Environment、期間、有限RP総量 / 生成率、Resource / Service requirement、完了後Fleet disposition等を持てる。
+
+Campaign DefinitionはOperational Nodeを目的地とする型と未運用Physical Movement Targetを目的地とする型を区別する。観測subjectとEndpointの意味は混在させない。後者では出発元で往復Movementの有限Resource requirementを予約・消費してから出発し、到着先に燃料・在庫を無償追加しない。Transport/Fleetが航行と所在を所有し、Scientific Explorationは科学進行・RP・帰還/中止Intentを所有する。到着後の観測・帰還・Abort/ReturnはFleetをphysical commitmentとして保持して処理し、帰還先Operational Nodeで解放する。
 
 Exploration DomainはFleet総数を直接所有せず、Fleet Domainのcommitmentを参照する。拘束中unitはTransport Allocationや別Exploration等へ同時利用できない。適合判定は用途タグではなくVehicle性能とMovement Planから行う。
 

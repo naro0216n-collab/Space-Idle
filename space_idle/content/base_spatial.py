@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..shared import DefinitionId
+from ..shared import CelestialBodyId, DefinitionId
 from ..spatial import (
     AtmosphereField,
     CelestialBodyDef,
@@ -68,40 +68,33 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         ids.SOL_SYSTEM,
         "太陽系",
         CharacteristicTransportGeometry((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+        central_gravitational_parameter_km3_s2=132_712_440_018.0,
     ))
-    earth_geometry = CharacteristicTransportGeometry(
-        (0.0, 0.0, 0.0),
-        (0.0, 0.0, 0.0),
-    )
-    moon_geometry = CharacteristicTransportGeometry(
-        (384_400.0, 0.0, 0.0),
-        (4.1, 0.0, 0.0),
-    )
     graph.add_body(CelestialBodyDef(
-        ids.EARTH_BODY, "地球", 6371.0, ids.SOL_SYSTEM, earth_geometry,
+        ids.EARTH_BODY, "地球", 6371.0, ids.SOL_SYSTEM, None,
         heliocentric_semimajor_axis_au=1.0,
         reference_gravity_m_s2=9.80,
     ))
     graph.add_body(CelestialBodyDef(
-        ids.MOON, "月", 1737.4, ids.SOL_SYSTEM, moon_geometry,
+        ids.MOON, "月", 1737.4, ids.SOL_SYSTEM, None,
         parent_body_id=ids.EARTH_BODY,
         parent_orbit_semimajor_axis_km=384_400.0,
         standard_gravitational_parameter_km3_s2=4902.800,
     ))
     register_solar_system_bodies(graph)
 
-    # Non-surface nodes provide their own stable transport anchors.  Current
-    # baseline orbits use their parent body's characteristic system position;
-    # local surface-access effort is represented by Movement operations.
+    # Baseline orbital contexts inherit their physical body's transfer scale;
+    # they do not duplicate an independent Cartesian transport baseline.
     graph.add(
         SpatialNodeDef(
             ids.LEO,
             "地球低軌道",
             ids.SOL_SYSTEM,
-            earth_geometry,
+            None,
             body_id=ids.EARTH_BODY,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,
+            body_center_orbit_radius_km=6_771.0,
         )
     )
     graph.add(
@@ -109,12 +102,21 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             ids.LUNAR_ORBIT,
             "月周回軌道",
             ids.SOL_SYSTEM,
-            moon_geometry,
+            None,
             body_id=ids.MOON,
             kind=SpatialNodeKind.ORBITAL,
             inherits_parent_environment=False,
+            body_center_orbit_radius_km=1_837.4,
         )
     )
+    # Mars encounter is a physical target, not an owned transport/logistics node.
+    graph.add(SpatialNodeDef(
+        ids.MARS_ORBIT, "火星周回軌道", ids.SOL_SYSTEM, None,
+        body_id=ids.MARS_BODY,
+        kind=SpatialNodeKind.ORBITAL,
+        inherits_parent_environment=False,
+        body_center_orbit_radius_km=3_789.5,
+    ))
 
     earth_cells = (
         _earth_cell(
@@ -209,7 +211,36 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
             {ids.VOLATILE_BEARING_MATERIAL: 0.08, ids.MINERAL_FEEDSTOCK: 28.0, ids.METAL_ORE: 6.8},
         ),
     )
-    for cell in earth_cells + moon_cells:
+    mars_cells = (
+        SurfaceCellDef(
+            ids.MARS_CELL_EQUATORIAL_PLAIN, ids.MARS_BODY, 4_000_000.0,
+            SurfacePoint(2.0, 135.0),
+            frozenset((ids.MARS_CELL_NORTHERN_BASIN, ids.MARS_CELL_POLAR_HIGHLANDS)),
+            SurfaceTerrain(0.86, 0.82, 0.48, 0.13),
+            {"crust_accessibility": 1.0, "regolith_accessibility": 0.85},
+            {ids.MINERAL_FEEDSTOCK: 40.0, ids.METAL_ORE: 16.0, ids.VOLATILE_BEARING_MATERIAL: 0.35},
+            "赤道平原",
+        ),
+        SurfaceCellDef(
+            ids.MARS_CELL_NORTHERN_BASIN, ids.MARS_BODY, 5_000_000.0,
+            SurfacePoint(42.0, 50.0),
+            frozenset((ids.MARS_CELL_EQUATORIAL_PLAIN,)),
+            SurfaceTerrain(0.92, 0.90, 0.46, 0.08),
+            {"crust_accessibility": 0.9, "regolith_accessibility": 0.95},
+            {ids.MINERAL_FEEDSTOCK: 34.0, ids.METAL_ORE: 10.0, ids.VOLATILE_BEARING_MATERIAL: 0.55},
+            "北部低地",
+        ),
+        SurfaceCellDef(
+            ids.MARS_CELL_POLAR_HIGHLANDS, ids.MARS_BODY, 3_000_000.0,
+            SurfacePoint(-78.0, 110.0),
+            frozenset((ids.MARS_CELL_EQUATORIAL_PLAIN,)),
+            SurfaceTerrain(0.65, 0.72, 0.61, 0.30),
+            {"crust_accessibility": 0.75, "regolith_accessibility": 0.75},
+            {ids.MINERAL_FEEDSTOCK: 18.0, ids.METAL_ORE: 7.0, ids.VOLATILE_BEARING_MATERIAL: 2.8},
+            "南極高地",
+        ),
+    )
+    for cell in earth_cells + moon_cells + mars_cells:
         graph.add_surface_cell(cell)
 
 
@@ -268,5 +299,24 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     facets.set(ids.MOON_CELL_POLAR_COLD_TRAP, CommunicationField(1.3, 0.15))
     facets.set(ids.MOON_CELL_NEARSIDE_MARE, IlluminationField(1361.0, 0.52))
     facets.set(ids.MOON_CELL_NEARSIDE_MARE, CommunicationField(1.3, 1.0))
+
+    facets.set_body(ids.MARS_BODY, GravityField(3.71, 5030.0))
+    facets.set_body(ids.MARS_BODY, AtmosphereField(
+        610.0, 0.020, {DefinitionId("base.species.co2"): 0.953},
+    ))
+    facets.set_body(ids.MARS_BODY, ThermalField(210.0, 145.0, 290.0))
+    facets.set_body(ids.MARS_BODY, CommunicationField(750.0, 0.80))
+    solar_flux = graph.representative_solar_flux_w_m2(ids.MARS_BODY)
+    assert solar_flux is not None
+    for cell in mars_cells:
+        facets.set(cell.id, IlluminationField(solar_flux, 0.48))
+    facets.set(ids.MARS_CELL_POLAR_HIGHLANDS, IlluminationField(solar_flux, 0.23))
+    facets.set(ids.MARS_CELL_POLAR_HIGHLANDS, ThermalField(168.0, 125.0, 230.0))
+    facets.set(ids.MARS_ORBIT, OrbitalField(7500.0))
+    facets.set(ids.MARS_ORBIT, GravityField(2.95, 4500.0))
+    facets.set(ids.MARS_ORBIT, AtmosphereField(0.0, 0.0, {}))
+    facets.set(ids.MARS_ORBIT, ThermalField(235.0))
+    facets.set(ids.MARS_ORBIT, IlluminationField(solar_flux, 0.69))
+    facets.set(ids.MARS_ORBIT, CommunicationField(750.0, 0.90))
 
     return graph, EnvironmentResolver(graph, facets)

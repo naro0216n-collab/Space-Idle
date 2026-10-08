@@ -29,6 +29,8 @@ class ScientificExplorationProjectorMixin:
         rows: list[ScientificExplorationRow] = []
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
             state = service.campaigns.get(definition.id)
+            commitment = None
+            physical_target = service._physical_target(definition)
             if state is None:
                 status = "available"
                 paused = False
@@ -63,6 +65,19 @@ class ScientificExplorationProjectorMixin:
                     day=sim.day,
                     power_by_location=power_by_location,
                 )
+
+            fleet_location_kind = None
+            fleet_location_id = None
+            if commitment is not None:
+                if commitment.physical_target is not None:
+                    fleet_location_kind = "physical_target"
+                    fleet_location_id = str(commitment.physical_target.locator_id)
+                elif commitment.movement_execution_id is not None:
+                    fleet_location_kind = "in_transit"
+                    fleet_location_id = str(commitment.movement_execution_id)
+                else:
+                    fleet_location_kind = "operational_node"
+                    fleet_location_id = str(commitment.operational_node_id)
 
             rp_requested_today = 0.0
             rp_admitted_today = 0.0
@@ -218,6 +233,13 @@ class ScientificExplorationProjectorMixin:
                     can_set_priority=can_set_priority,
                     origin_id=str(definition.origin_id),
                     destination_id=str(definition.destination_id),
+                    destination_kind=(
+                        "operational_node" if physical_target is None else
+                        "surface_cell" if physical_target.physical_target_cell_id is not None else
+                        "non_surface_spatial_node"
+                    ),
+                    fleet_location_kind=fleet_location_kind,
+                    fleet_location_id=fleet_location_id,
                     movement_operations=movement_operations,
                     outbound_latency_days=outbound_latency_days,
                     return_latency_days=return_latency_days,
@@ -256,7 +278,7 @@ class ScientificExplorationProjectorMixin:
                     can_resume=service.can_resume(definition.id),
                     can_abort=service.can_abort(definition.id),
                     can_return=service.can_return(definition.id),
-                    can_set_completion_disposition=(state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
+                    can_set_completion_disposition=(physical_target is None and state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
                     can_unassign=service.can_unassign_fleet(definition.id),
                     fleet_options=tuple(fleet_options),
                 )

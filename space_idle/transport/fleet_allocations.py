@@ -21,6 +21,7 @@ from .models import (
     FleetActivityRef,
     FleetCommitmentSnapshot,
     FleetCommitmentState,
+    MovementEndpoint,
     OperationAssetDisposition,
     OperationSupportLocation,
     TransportAllocation,
@@ -151,6 +152,7 @@ class FleetAllocationMixin:
             commitment.quantity,
             commitment.operational_node_id,
             commitment.movement_execution_id,
+            commitment.physical_target,
         )
 
     def fleet_commitment_snapshots(self) -> tuple[FleetCommitmentSnapshot, ...]:
@@ -162,6 +164,7 @@ class FleetAllocationMixin:
                 commitment.quantity,
                 commitment.operational_node_id,
                 commitment.movement_execution_id,
+                commitment.physical_target,
             )
             for commitment in sorted(
                 self.fleet_commitments.values(), key=lambda row: str(row.id)
@@ -360,7 +363,18 @@ class FleetAllocationMixin:
             raise KeyError(commitment_id)
         source_id = commitment.operational_node_id
         if source_id is None:
-            raise ValueError("Fleet commitment is already in Movement")
+            if commitment.physical_target is None:
+                raise ValueError("Fleet commitment is already in Movement")
+            execution = self.movement_executions.get(execution_id)
+            if execution is None or execution.fleet_commitment_id != commitment_id:
+                raise ValueError("MovementExecution Fleet commitment mismatch")
+            if execution.origin != commitment.physical_target:
+                raise ValueError("physical departure does not match Fleet position")
+            snapshot = self.fleet_commitment_snapshot(commitment_id)
+            assert snapshot is not None
+            commitment.physical_target = None
+            commitment.movement_execution_id = execution_id
+            return snapshot
         execution = self.movement_executions.get(execution_id)
         if execution is None:
             raise KeyError(execution_id)
@@ -378,6 +392,20 @@ class FleetAllocationMixin:
         commitment.movement_execution_id = execution_id
         self.reconcile_fleet_allocations(day)
         return snapshot
+
+    def receive_fleet_commitment_at_physical_target(
+        self, commitment_id: EntityId, *, execution_id: EntityId,
+    ) -> None:
+        """Keep one-shot Fleet physically present without inventing an Inventory/FleetPool."""
+        commitment = self.fleet_commitments[commitment_id]
+        if commitment.movement_execution_id != execution_id:
+            raise ValueError("Fleet commitment MovementExecution mismatch")
+        execution = self.movement_executions[execution_id]
+        endpoint = execution.destination
+        if endpoint.operational_node_id is not None:
+            raise ValueError("physical settlement requires a non-operational destination")
+        commitment.movement_execution_id = None
+        commitment.physical_target = endpoint
 
     def receive_fleet_commitment(
         self,

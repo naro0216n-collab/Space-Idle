@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import asin, cos, dist, isfinite, radians, sin, sqrt
+from math import asin, cos, dist, isfinite, pi, radians, sin, sqrt
 from enum import Enum
 from typing import Any, ClassVar, Mapping, Protocol, TypeAlias, TypeVar, cast
 
@@ -191,6 +191,7 @@ class CharacteristicTransportSeparation:
     scope: str
     distance_km: float
     delta_v_km_s: float
+    representative_transit_days: float | None = None
 
 
 @dataclass(frozen=True)
@@ -198,10 +199,15 @@ class StarSystemDef:
     id: StarSystemId
     display_name: str
     interstellar_transport_geometry: CharacteristicTransportGeometry
+    central_gravitational_parameter_km3_s2: float | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name.strip():
             raise ValueError("star system display name must not be empty")
+        if (self.central_gravitational_parameter_km3_s2 is not None
+                and (not isfinite(self.central_gravitational_parameter_km3_s2)
+                     or self.central_gravitational_parameter_km3_s2 <= 0)):
+            raise ValueError("star system central gravitational parameter must be positive")
 
 
 @dataclass(frozen=True)
@@ -240,6 +246,10 @@ class CelestialBodyDef:
         if (self.standard_gravitational_parameter_km3_s2 is not None
                 and self.reference_gravity_m_s2 is not None):
             raise ValueError("gravity must have one physical input")
+        if (self.system_local_transport_geometry is not None
+                and (self.heliocentric_semimajor_axis_au is not None
+                     or self.parent_orbit_semimajor_axis_km is not None)):
+            raise ValueError("orbital scale and Cartesian transport position cannot be independent baselines")
 
     @property
     def representative_gravity_m_s2(self) -> float | None:
@@ -322,17 +332,23 @@ class SpatialNodeDef:
     id: SpatialNodeId
     display_name: str
     star_system_id: StarSystemId
-    system_local_transport_geometry: CharacteristicTransportGeometry
+    system_local_transport_geometry: CharacteristicTransportGeometry | None
     parent_id: SpatialNodeId | None = None
     body_id: CelestialBodyId | None = None
     kind: SpatialNodeKind = SpatialNodeKind.GENERIC
     inherits_parent_environment: bool = True
+    body_center_orbit_radius_km: float | None = None
 
     def __post_init__(self) -> None:
         if self.kind is SpatialNodeKind.SURFACE:
             raise ValueError("surface geography must use SurfaceCellDef and SurfaceLocationState")
         if not self.display_name.strip():
             raise ValueError("spatial node display name must not be empty")
+        if self.body_center_orbit_radius_km is not None:
+            if (self.body_id is None or self.kind is not SpatialNodeKind.ORBITAL
+                    or not isfinite(self.body_center_orbit_radius_km)
+                    or self.body_center_orbit_radius_km <= 0):
+                raise ValueError("reference orbital radius requires a body-owned orbit")
 
 
 @dataclass(frozen=True)
@@ -377,6 +393,9 @@ class SpatialGraph:
                 raise ValueError(f"unknown celestial parent {body.parent_body_id} for {body.id}")
             if parent.star_system_id != body.star_system_id:
                 raise ValueError(f"celestial parent belongs to another star system: {body.id}")
+            if (body.parent_orbit_semimajor_axis_km is not None
+                    and body.parent_orbit_semimajor_axis_km <= parent.mean_radius_km):
+                raise ValueError("satellite orbit must lie outside the reference parent radius")
             self.body_lineage(body.parent_body_id)
         self.bodies[body.id] = body
 
@@ -415,6 +434,15 @@ class SpatialGraph:
             raise ValueError(f"unknown celestial body {node.body_id} for {node.id}")
         if node.body_id is not None and self.bodies[node.body_id].star_system_id != node.star_system_id:
             raise ValueError(f"spatial node body belongs to another star system: {node.id}")
+        if node.body_id is not None:
+            body = self.bodies[node.body_id]
+            if node.body_center_orbit_radius_km is not None:
+                if node.body_center_orbit_radius_km <= body.mean_radius_km:
+                    raise ValueError("orbital radius must lie outside the reference body radius")
+            if (node.system_local_transport_geometry is not None
+                    and (body.heliocentric_semimajor_axis_au is not None
+                         or body.parent_orbit_semimajor_axis_km is not None)):
+                raise ValueError("body orbit and spatial-node Cartesian geometry cannot be independent baselines")
         self.nodes[node.id] = node
 
     def add_surface_cell(self, cell: SurfaceCellDef) -> None:
@@ -710,18 +738,133 @@ class SpatialGraph:
             raise ValueError(f"representative movement not defined for context: {context_id}")
         return geometry
 
+    @staticmethod
+    def _circular_transfer(
+        origin_radius_km: float, destination_radius_km: float, mu_km3_s2: float,
+    ) -> CharacteristicTransportSeparation:
+        """Characteristic half-ellipse transfer, not a date-specific ephemeris.
+
+        The delta-v is the sum of the two impulsive changes from circular orbits;
+        the distance is the characteristic half-orbit path, not an instantaneous
+        separation. The launch window and orbital inclination are not modeled.
+        """
+        r1, r2 = origin_radius_km, destination_radius_km
+        if r1 == r2:
+            return CharacteristicTransportSeparation("circular_orbit_transfer", 0.0, 0.0, 0.0)
+        a = (r1 + r2) / 2.0
+        v1 = sqrt(mu_km3_s2 / r1)
+        v2 = sqrt(mu_km3_s2 / r2)
+        transfer_v1 = sqrt(mu_km3_s2 * (2.0 / r1 - 1.0 / a))
+        transfer_v2 = sqrt(mu_km3_s2 * (2.0 / r2 - 1.0 / a))
+        return CharacteristicTransportSeparation(
+            "circular_orbit_transfer",
+            pi * a,  # characteristic arc scale, not a straight-line displacement
+            abs(transfer_v1 - v1) + abs(v2 - transfer_v2),
+            pi * sqrt(a ** 3 / mu_km3_s2) / 86400.0,
+        )
+
+    def _body_orbit_transfer(
+        self, origin_body_id: CelestialBodyId, destination_body_id: CelestialBodyId,
+    ) -> CharacteristicTransportSeparation:
+        origin_root = self.body_lineage(origin_body_id)[-1]
+        destination_root = self.body_lineage(destination_body_id)[-1]
+        if origin_root != destination_root:
+            source = self.bodies[origin_root]
+            target = self.bodies[destination_root]
+            system = self.star_systems[source.star_system_id]
+            if (source.heliocentric_semimajor_axis_au is None
+                    or target.heliocentric_semimajor_axis_au is None
+                    or system.central_gravitational_parameter_km3_s2 is None):
+                raise ValueError("heliocentric transfer physical baseline is incomplete")
+            heliocentric = self._circular_transfer(
+                source.heliocentric_semimajor_axis_au * 149_597_870.7,
+                target.heliocentric_semimajor_axis_au * 149_597_870.7,
+                system.central_gravitational_parameter_km3_s2,
+            )
+            legs = [heliocentric]
+            for body_id, root_id in ((origin_body_id, origin_root), (destination_body_id, destination_root)):
+                if body_id == root_id:
+                    continue
+                root = self.bodies[root_id]
+                moon = self.bodies[body_id]
+                radius = moon.parent_orbit_semimajor_axis_km
+                gravity = root.representative_gravity_m_s2
+                if radius is None or gravity is None:
+                    raise ValueError("satellite departure/arrival baseline is incomplete")
+                legs.append(self._circular_transfer(
+                    root.mean_radius_km, radius, gravity * root.mean_radius_km ** 2 / 1000.0,
+                ))
+            return CharacteristicTransportSeparation(
+                "interplanetary_transfer",
+                sum(leg.distance_km for leg in legs),
+                sum(leg.delta_v_km_s for leg in legs),
+                sum(leg.representative_transit_days or 0.0 for leg in legs),
+            )
+
+        parent = self.bodies[origin_root]
+        gravity = parent.representative_gravity_m_s2
+        if gravity is None:
+            raise ValueError("parent body gravity baseline is missing for satellite transfer")
+        origin = self.bodies[origin_body_id]
+        destination = self.bodies[destination_body_id]
+        r1 = parent.mean_radius_km if origin_body_id == origin_root else origin.parent_orbit_semimajor_axis_km
+        r2 = parent.mean_radius_km if destination_body_id == destination_root else destination.parent_orbit_semimajor_axis_km
+        if r1 is None or r2 is None:
+            raise ValueError("satellite transfer orbital scale is missing")
+        leg = self._circular_transfer(r1, r2, gravity * parent.mean_radius_km ** 2 / 1000.0)
+        return CharacteristicTransportSeparation(
+            "planetary_system_transfer", leg.distance_km, leg.delta_v_km_s,
+            leg.representative_transit_days,
+        )
+
+    def _local_orbit_transfer(
+        self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId,
+        body_id: CelestialBodyId,
+    ) -> CharacteristicTransportSeparation | None:
+        # Surface access has its own operations; it is not a second orbit leg.
+        if origin_context_id not in self.nodes or destination_context_id not in self.nodes:
+            return None
+        origin = self.nodes[cast(SpatialNodeId, origin_context_id)]
+        destination = self.nodes[cast(SpatialNodeId, destination_context_id)]
+        r1, r2 = origin.body_center_orbit_radius_km, destination.body_center_orbit_radius_km
+        if r1 is None or r2 is None:
+            return None
+        body = self.bodies[body_id]
+        gravity = body.representative_gravity_m_s2
+        if gravity is None:
+            raise ValueError("body gravity baseline is missing for local orbital transfer")
+        leg = self._circular_transfer(r1, r2, gravity * body.mean_radius_km ** 2 / 1000.0)
+        return CharacteristicTransportSeparation(
+            "local_orbit_transfer", leg.distance_km, leg.delta_v_km_s,
+            leg.representative_transit_days,
+        )
+
     def characteristic_transport_separation(
         self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId
     ) -> CharacteristicTransportSeparation:
         origin_system = self.context_star_system_id(origin_context_id)
         destination_system = self.context_star_system_id(destination_context_id)
         if origin_system == destination_system:
+            origin_body = self.context_body_id(origin_context_id)
+            destination_body = self.context_body_id(destination_context_id)
+            if origin_body is not None and destination_body is not None:
+                # One physical relation per OD. A body-owned orbital baseline
+                # is authoritative whenever it exists, rather than substituting
+                # fabricated Cartesian coordinates for new planetary systems.
+                origin_def = self.bodies[origin_body]
+                destination_def = self.bodies[destination_body]
+                if origin_body == destination_body:
+                    local = self._local_orbit_transfer(origin_context_id, destination_context_id, origin_body)
+                    if local is not None:
+                        return local
+                if origin_def.system_local_transport_geometry is None or destination_def.system_local_transport_geometry is None:
+                    if origin_body == destination_body:
+                        return CharacteristicTransportSeparation("body_local", 0.0, 0.0)
+                    return self._body_orbit_transfer(origin_body, destination_body)
             origin_geometry = self.transport_geometry_for_context(origin_context_id)
             destination_geometry = self.transport_geometry_for_context(destination_context_id)
             distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)
-            return CharacteristicTransportSeparation(
-                "system_local", distance_km, delta_v_km_s
-            )
+            return CharacteristicTransportSeparation("system_local", distance_km, delta_v_km_s)
         origin_geometry = self.star_systems[origin_system].interstellar_transport_geometry
         destination_geometry = self.star_systems[destination_system].interstellar_transport_geometry
         distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)

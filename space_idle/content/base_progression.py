@@ -34,6 +34,17 @@ def build_survey_targets() -> dict:
             targets[(cell_id, resource_id)] = SurveyTarget(
                 cell_id, resource_id, _LUNAR_SURVEY_THRESHOLDS, probability
             )
+    # Potential remains a World fact; these Survey targets begin with no
+    # player-owned Knowledge and are not an inventory or mining allowance.
+    for cell_id in (
+        ids.MARS_CELL_EQUATORIAL_PLAIN,
+        ids.MARS_CELL_NORTHERN_BASIN,
+        ids.MARS_CELL_POLAR_HIGHLANDS,
+    ):
+        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.VOLATILE_BEARING_MATERIAL):
+            targets[(cell_id, resource_id)] = SurveyTarget(
+                cell_id, resource_id, (15.0, 45.0, 110.0), 0.5,
+            )
     return targets
 
 
@@ -63,10 +74,17 @@ def build_survey_providers() -> dict:
         minimum_source_units=1,
         display_name="機動遠隔マッピング",
     )
+    deep_space_remote = SurveyObservationModeSpec(
+        "interplanetary_remote_spectrometry", 2.0,
+        SurveyReachSpec(SurveyReachScope.SAME_SYSTEM, max_characteristic_distance_km=1_000_000_000.0),
+        KnowledgeLevel.PRESENCE_PROBABILITY, 0.65, 0.35,
+        required_source_capabilities=frozenset(("survey_sensor",)),
+        display_name="惑星間遠隔分光観測",
+    )
     return {
         ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(
             ids.LUNAR_RESOURCE_SURVEY_ORBITER, SurveyProviderSourceKind.FACILITY,
-            ids.LUNAR_RESOURCE_SURVEY_ORBITER, (remote_orbital,),
+            ids.LUNAR_RESOURCE_SURVEY_ORBITER, (remote_orbital, deep_space_remote),
         ),
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
             ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,

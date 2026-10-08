@@ -141,10 +141,11 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
         target_id,
         "Test orbital founding target",
         ids.SOL_SYSTEM,
-        CharacteristicTransportGeometry((12000.0, 0.0, 0.0), (0.2, 0.0, 0.0)),
+        None,
         body_id=ids.EARTH_BODY,
         kind=SpatialNodeKind.ORBITAL,
         inherits_parent_environment=False,
+        body_center_orbit_radius_km=12_000.0,
     ))
     recipe_id = DefinitionId("test.deployment_recipe.non_surface")
     sim.founding.deployment_recipes[recipe_id] = DeploymentRecipe(
@@ -352,8 +353,9 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
         target_id = SpatialNodeId(name)
         sim.graph.add(SpatialNodeDef(
             target_id, name, ids.SOL_SYSTEM,
-            CharacteristicTransportGeometry((9000.0 + offset, 0.0, 0.0), (0.1, 0.0, 0.0)),
+            None,
             body_id=ids.EARTH_BODY, kind=SpatialNodeKind.ORBITAL, inherits_parent_environment=False,
+            body_center_orbit_radius_km=9_000.0 + offset,
         ))
         return target_id
 

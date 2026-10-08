@@ -84,10 +84,70 @@ def test_body_parent_validation_and_surface_capability_have_distinct_semantics()
         graph.body_lineage(giant_id)
 
 
-def test_base_earth_moon_characteristic_transport_is_unchanged_by_new_physical_subjects():
+def test_earth_moon_transfer_uses_same_physical_orbit_inputs_as_other_satellites():
     graph, _ = build_world_definition()
     earth = graph.bodies[ids.EARTH_BODY]
     moon = graph.bodies[ids.MOON]
-    assert earth.system_local_transport_geometry.separation_to(moon.system_local_transport_geometry) == (384400.0, 4.1)
-    assert graph.characteristic_transport_separation(ids.EARTH_CELL_INDUSTRIAL, ids.MOON_CELL_SOUTH_POLAR_RIDGE).distance_km == 384400.0
-    assert all(body.system_local_transport_geometry is None for body in graph.bodies.values() if body.id not in {ids.EARTH_BODY, ids.MOON})
+    assert earth.system_local_transport_geometry is moon.system_local_transport_geometry is None
+    assert moon.parent_orbit_semimajor_axis_km == 384_400.0
+    transfer = graph.characteristic_transport_separation(ids.EARTH_CELL_INDUSTRIAL, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
+    assert transfer.scope == "planetary_system_transfer"
+    assert 3.8 < transfer.delta_v_km_s < 4.2
+    assert 4.5 < transfer.representative_transit_days < 5.5
+    assert all(body.system_local_transport_geometry is None for body in graph.bodies.values())
+
+
+def test_representative_transfer_uses_orbital_physics_and_existing_movement_execution_contract():
+    app = build_game_application()
+    sim = app._simulation
+    graph = sim.graph
+
+    assert ids.MARS_ORBIT in graph.nodes
+    assert not graph.has_operational_node(ids.MARS_ORBIT)
+    assert ids.MARS_ORBIT not in graph.operational_node_ids()
+
+    plans = sim.transport.movement_plans_to_non_surface_physical_target(ids.LEO, ids.MARS_ORBIT)
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.destination.physical_target_node_id == ids.MARS_ORBIT
+    assert plan.relation.movement_context == "interplanetary_transfer"
+    assert plan.relation.characteristic_delta_v_km_s > 0
+    assert 200 < plan.transit_days < 400  # Hohmann-scale, not instantaneous separation / tug speed
+    assert plan.operations[0].delta_v_km_s == plan.relation.characteristic_delta_v_km_s
+    assert plan.operations[0].operation_type == "spaceflight"
+    assert "endurance:" in " ".join(sim.transport.vehicle_movement_physical_failures(
+        plan.id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
+    ))
+    assert not sim.transport.vehicle_movement_physical_failures(
+        plan.id, ids.DEEP_SPACE_PROBE, sim.day,
+    )
+
+    # The sole physical subject did not create an allocation endpoint.
+    assert all(ids.MARS_ORBIT not in (p.origin_id, p.destination_id)
+               for p in sim.transport.movement_resolver().all_direct_plans())
+
+    # There is one symmetric physical definition for both directions.
+    mars = CelestialBodyId("base.body.mars")
+    phobos = CelestialBodyId("base.body.phobos")
+    deimos = CelestialBodyId("base.body.deimos")
+    for body_id, node_id in ((phobos, "test.phobos.orbit"), (deimos, "test.deimos.orbit")):
+        from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
+        graph.add(SpatialNodeDef(SpatialNodeId(node_id), node_id, ids.SOL_SYSTEM, None,
+                                 body_id=body_id, kind=SpatialNodeKind.ORBITAL))
+    p2d = graph.characteristic_transport_separation(SpatialNodeId("test.phobos.orbit"), SpatialNodeId("test.deimos.orbit"))
+    d2p = graph.characteristic_transport_separation(SpatialNodeId("test.deimos.orbit"), SpatialNodeId("test.phobos.orbit"))
+    assert p2d == d2p
+    assert p2d.scope == "planetary_system_transfer"
+    assert p2d.representative_transit_days is not None and p2d.representative_transit_days > 0
+    assert graph.bodies[mars].parent_body_id is None
+
+    # Same-orbit contexts require only the minimum maneuver duration, without
+    # a fictitious half-period transfer and without new Operational Nodes.
+    same = SpatialNodeId("test.same.mars.orbit")
+    from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
+    graph.add(SpatialNodeDef(same, "Same Martian orbit", ids.SOL_SYSTEM, None,
+                             body_id=mars, kind=SpatialNodeKind.ORBITAL,
+                             body_center_orbit_radius_km=3_789.5))
+    local = graph.characteristic_transport_separation(ids.MARS_ORBIT, same)
+    assert local.scope == "local_orbit_transfer"
+    assert local.delta_v_km_s == 0.0 and local.representative_transit_days == 0.0

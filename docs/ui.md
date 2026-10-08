@@ -453,6 +453,8 @@ Survey Inspectorではselected scope、Resource scope、goal、completed / remai
 
 同じContextでtarget / mission、phase、science progress、RP budget / admission、Fleet commitment、Movement / return、Pause / Abort / Return / completion dispositionを確認する。Fleet数量だけの設定画面にしない。
 
+未開発のBody/Cell/軌道Contextも対象候補として提示し、観測対象とFleetが訪れる物理endpointを明示する。Outbound・観測中・帰還中の実Fleet所在、往復の推進剤・所要日数、帰還可否とblocker、出発元での補給量をApplication projectionから示す。未運用地点でのFleet滞在は通常FleetPoolや物流ノードとして表示しない。
+
 ---
 
 ## 13. Founding / Surface Development

@@ -187,6 +187,9 @@ class ScientificExplorationRow:
     can_set_priority: bool
     origin_id: str
     destination_id: str
+    destination_kind: str
+    fleet_location_kind: str | None
+    fleet_location_id: str | None
     movement_operations: tuple[tuple[str, float], ...]
     outbound_latency_days: int | None
     return_latency_days: int | None

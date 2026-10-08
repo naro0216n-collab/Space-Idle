@@ -269,6 +269,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "quantity": row.quantity,
                 "operational_node_id": None if row.operational_node_id is None else str(row.operational_node_id),
                 "movement_execution_id": None if row.movement_execution_id is None else str(row.movement_execution_id),
+                "physical_target": None if row.physical_target is None else _capture_movement_endpoint(row.physical_target),
             }
             for row in sorted(tr.fleet_commitments.values(), key=lambda row: str(row.id))
         ],
@@ -400,7 +401,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr.fleet_commitments = {}
     commitment_fields = {
         "id", "owner_activity_type", "owner_activity_id", "vehicle_definition_id",
-        "quantity", "operational_node_id", "movement_execution_id",
+        "quantity", "operational_node_id", "movement_execution_id", "physical_target",
     }
     for index, raw in enumerate(
         decode_list(data["fleet_commitments"], "transport fleet_commitments")
@@ -435,6 +436,11 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
                     decode_str(
                         row["movement_execution_id"], "transport movement_execution_id"
                     )
+                )
+            ),
+            physical_target=(
+                None if row["physical_target"] is None else _restore_movement_endpoint(
+                    row["physical_target"], "transport fleet physical_target",
                 )
             ),
         )
@@ -885,9 +891,18 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"fleet commitment references unknown vehicle definition: {commitment_id}")
         _require(commitment.quantity > 0, f"fleet commitment has non-positive quantity: {commitment_id}")
         _require(
-            (commitment.operational_node_id is None) != (commitment.movement_execution_id is None),
+            sum(value is not None for value in (
+                commitment.operational_node_id, commitment.movement_execution_id,
+                commitment.physical_target,
+            )) == 1,
             f"fleet commitment location ownership is ambiguous: {commitment_id}",
         )
+        if commitment.physical_target is not None:
+            from .endpoints import resolve_movement_endpoint
+            try:
+                resolve_movement_endpoint(commitment.physical_target, sim.facilities)
+            except ValueError as exc:
+                _require(False, f"fleet physical target is invalid: {commitment_id}: {exc}")
         if commitment.operational_node_id is not None:
             _require(sim.graph.has_operational_node(commitment.operational_node_id), f"fleet commitment references unknown location: {commitment_id}")
         if commitment.movement_execution_id is not None:
