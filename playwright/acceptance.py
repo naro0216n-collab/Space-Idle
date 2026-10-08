@@ -507,6 +507,19 @@ def run(*, browser=None) -> dict[str, object]:
                 first_research_node.evaluate("node => node === window.__spaceIdleResearchNode"),
                 "periodic sync must preserve research decision targets while progress projections refresh",
             )
+            selected_research_name = first_research_node.locator('.research-node-title').inner_text().strip()
+            search_input = page.locator('#researchTreeSearch')
+            search_input.fill(selected_research_name)
+            _assert(page.locator('#researchSearchResults [data-research-jump]').count() >= 1, "research search must find an existing technology without removing the DAG")
+            page.locator('#researchSearchResults [data-research-jump]').first.click()
+            selected_research_id = first_research_node.get_attribute('data-id')
+            _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "search jump must select the matching Research node")
+            page.wait_for_timeout(1200)
+            _assert(search_input.input_value() == selected_research_name, "periodic refresh must retain an edited search query")
+            search_input.fill('nonexistent-research-node-987654321')
+            _assert(page.locator('#researchSearchResults [data-research-jump]').count() == 0, "zero search matches must be represented without filtering the DAG")
+            _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "zero search matches must not discard the selected Research node")
+            search_input.fill('')
             unlock_node = page.locator(
                 f'#researchTree [data-inspect="research"][data-id="{unlock_fixture.id}"]'
             )
