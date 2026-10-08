@@ -115,6 +115,15 @@ class MovementPlanDefinitionRow:
 class CelestialBodyDefinitionRow:
     id: str
     display_name: str
+    star_system_id: str | None = None
+    parent_body_id: str | None = None
+    physical_surface: str = "solid"
+    surface_cell_count: int = 0
+    mean_radius_km: float | None = None
+    reference_gravity_m_s2: float | None = None
+    heliocentric_semimajor_axis_au: float | None = None
+    parent_orbit_semimajor_axis_km: float | None = None
+    representative_solar_flux_w_m2: float | None = None
 
 
 @dataclass(frozen=True)

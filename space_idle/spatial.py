@@ -145,6 +145,13 @@ class SpatialNodeKind(str, Enum):
     ORBITAL = "orbital"
 
 
+class PhysicalSurface(str, Enum):
+    """Physical substrate of a body, independent of Cell coverage or Founding."""
+
+    SOLID = "solid"
+    NO_SOLID_SURFACE = "no_solid_surface"
+
+
 @dataclass(frozen=True)
 class CharacteristicTransportGeometry:
     """Stable transport coordinates used to derive characteristic separation.
@@ -203,13 +210,42 @@ class CelestialBodyDef:
     display_name: str
     mean_radius_km: float
     star_system_id: StarSystemId
-    system_local_transport_geometry: CharacteristicTransportGeometry
+    system_local_transport_geometry: CharacteristicTransportGeometry | None
+    parent_body_id: CelestialBodyId | None = None
+    physical_surface: PhysicalSurface = PhysicalSurface.SOLID
+    heliocentric_semimajor_axis_au: float | None = None
+    parent_orbit_semimajor_axis_km: float | None = None
+    standard_gravitational_parameter_km3_s2: float | None = None
+    reference_gravity_m_s2: float | None = None
 
     def __post_init__(self) -> None:
         if self.mean_radius_km <= 0:
             raise ValueError("celestial body mean radius must be positive")
         if not self.display_name.strip():
             raise ValueError("celestial body display name must not be empty")
+        if not isinstance(self.physical_surface, PhysicalSurface):
+            raise ValueError("unknown physical surface classification")
+        for name in (
+            "heliocentric_semimajor_axis_au", "parent_orbit_semimajor_axis_km",
+            "standard_gravitational_parameter_km3_s2", "reference_gravity_m_s2",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isfinite(value) or value <= 0):
+                raise ValueError(f"invalid celestial body physical parameter: {name}")
+        if self.parent_body_id is not None:
+            if self.heliocentric_semimajor_axis_au is not None:
+                raise ValueError("satellite must use parent orbit, not heliocentric orbit")
+        elif self.parent_orbit_semimajor_axis_km is not None:
+            raise ValueError("primary body cannot specify a parent orbit")
+        if (self.standard_gravitational_parameter_km3_s2 is not None
+                and self.reference_gravity_m_s2 is not None):
+            raise ValueError("gravity must have one physical input")
+
+    @property
+    def representative_gravity_m_s2(self) -> float | None:
+        if self.standard_gravitational_parameter_km3_s2 is not None:
+            return self.standard_gravitational_parameter_km3_s2 * 1000 / self.mean_radius_km ** 2
+        return self.reference_gravity_m_s2
 
 
 @dataclass(frozen=True)
@@ -335,7 +371,36 @@ class SpatialGraph:
             raise ValueError(f"duplicate celestial body: {body.id}")
         if body.star_system_id not in self.star_systems:
             raise ValueError(f"unknown star system {body.star_system_id} for {body.id}")
+        if body.parent_body_id is not None:
+            parent = self.bodies.get(body.parent_body_id)
+            if parent is None:
+                raise ValueError(f"unknown celestial parent {body.parent_body_id} for {body.id}")
+            if parent.star_system_id != body.star_system_id:
+                raise ValueError(f"celestial parent belongs to another star system: {body.id}")
+            self.body_lineage(body.parent_body_id)
         self.bodies[body.id] = body
+
+    def body_lineage(self, body_id: CelestialBodyId) -> tuple[CelestialBodyId, ...]:
+        """Physical hierarchy only; it is not an Environment inheritance chain."""
+        lineage: list[CelestialBodyId] = []
+        seen: set[CelestialBodyId] = set()
+        current: CelestialBodyId | None = body_id
+        while current is not None:
+            if current in seen:
+                raise ValueError("celestial body hierarchy cycle")
+            seen.add(current)
+            body = self.bodies.get(current)
+            if body is None:
+                raise ValueError(f"unknown celestial body in hierarchy: {current}")
+            lineage.append(current)
+            current = body.parent_body_id
+        return tuple(lineage)
+
+    def representative_solar_flux_w_m2(self, body_id: CelestialBodyId) -> float | None:
+        """Baseline at orbital distance, not local illumination or generation."""
+        primary = self.bodies[self.body_lineage(body_id)[-1]]
+        a = primary.heliocentric_semimajor_axis_au
+        return None if a is None else 1361.0 / (a * a)
 
     def add(self, node: SpatialNodeDef) -> None:
         if node.id in self.nodes or node.id in self.locations:
@@ -357,6 +422,8 @@ class SpatialGraph:
             raise ValueError(f"duplicate surface cell: {cell.id}")
         if cell.body_id not in self.bodies:
             raise ValueError(f"unknown celestial body {cell.body_id} for {cell.id}")
+        if self.bodies[cell.body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            raise ValueError(f"celestial body has no solid surface: {cell.body_id}")
         self.surface_cells[cell.id] = cell
 
     def _add_location_state(self, location: SurfaceLocationState) -> None:
@@ -414,6 +481,8 @@ class SpatialGraph:
         failures: list[tuple[str, str]] = []
         if body_id not in self.bodies:
             return (("unknown_body", f"unknown celestial body: {body_id}"),)
+        if self.bodies[body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            return (("no_solid_surface", f"celestial body has no solid surface: {body_id}"),)
         cell = self.surface_cells.get(core_cell_id)
         if cell is None:
             return (("unknown_cell", f"unknown surface cell: {core_cell_id}"),)
@@ -626,15 +695,20 @@ class SpatialGraph:
     def transport_geometry_for_context(
         self, context_id: SpatialContextId
     ) -> CharacteristicTransportGeometry:
+        geometry: CharacteristicTransportGeometry | None
         if context_id in self.locations:
             body_id = self.locations[cast(SpatialNodeId, context_id)].body_id
-            return self.bodies[body_id].system_local_transport_geometry
-        if context_id in self.surface_cells:
+            geometry = self.bodies[body_id].system_local_transport_geometry
+        elif context_id in self.surface_cells:
             body_id = self.surface_cells[cast(SurfaceCellId, context_id)].body_id
-            return self.bodies[body_id].system_local_transport_geometry
-        if context_id in self.nodes:
-            return self.nodes[cast(SpatialNodeId, context_id)].system_local_transport_geometry
-        raise KeyError(context_id)
+            geometry = self.bodies[body_id].system_local_transport_geometry
+        elif context_id in self.nodes:
+            geometry = self.nodes[cast(SpatialNodeId, context_id)].system_local_transport_geometry
+        else:
+            raise KeyError(context_id)
+        if geometry is None:
+            raise ValueError(f"representative movement not defined for context: {context_id}")
+        return geometry
 
     def characteristic_transport_separation(
         self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId
@@ -665,6 +739,8 @@ class SpatialGraph:
     def _validate_location_shape(self, location: SurfaceLocationState, *, allow_unknown_neighbors: bool) -> None:
         if location.body_id not in self.bodies:
             raise ValueError(f"unknown celestial body {location.body_id} for {location.operational_node_id}")
+        if self.bodies[location.body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            raise ValueError(f"celestial body has no solid surface: {location.body_id}")
         if location.core_cell_id not in self.surface_cells:
             raise ValueError(f"unknown core surface cell {location.core_cell_id} for {location.operational_node_id}")
         if location.core_cell_id not in location.developed_cell_ids:

@@ -91,9 +91,17 @@ def project_research(projector):
 
 
 def project_celestial_bodies(projector):
+    graph = projector._simulation.graph
     return tuple(
-        CelestialBodyDefinitionRow(str(body.id), body.display_name)
-        for body in sorted(projector._simulation.graph.bodies.values(), key=lambda body: str(body.id))
+        CelestialBodyDefinitionRow(
+            str(body.id), body.display_name, str(body.star_system_id),
+            None if body.parent_body_id is None else str(body.parent_body_id),
+            body.physical_surface.value, len(graph.cells_for_body(body.id)),
+            body.mean_radius_km, body.representative_gravity_m_s2,
+            body.heliocentric_semimajor_axis_au, body.parent_orbit_semimajor_axis_km,
+            graph.representative_solar_flux_w_m2(body.id),
+        )
+        for body in sorted(graph.bodies.values(), key=lambda body: str(body.id))
     )
 
 

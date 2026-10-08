@@ -16,9 +16,16 @@ from .shared import CelestialBodyId
 class SurfaceProjectorMixin:
     def _surface_map_view(self, body_id: CelestialBodyId) -> SurfaceMapView:
         sim = self._simulation
+        body = sim.graph.bodies[body_id]
+        cells = sim.graph.cells_for_body(body_id)
+        if not cells:
+            # An absent physical surface and an unregistered Cell topology are
+            # distinct states. Neither warrants an all-world decision snapshot.
+            return SurfaceMapView(
+                str(body.id), body.display_name, (), (), physical_surface=body.physical_surface.value,
+            )
         decision = self._tick_decision_projection()
         powers = decision.allocations.power_by_location
-        body = sim.graph.bodies[body_id]
         locations = tuple(
             SurfaceLocationTerritoryRow(
                 str(location.operational_node_id),
@@ -34,7 +41,7 @@ class SurfaceProjectorMixin:
         )
         rows: list[SurfaceCellRow] = []
         founding_comparison_values: list[tuple[ComparisonValueRow, ...]] = []
-        for cell in sim.graph.cells_for_body(body_id):
+        for cell in cells:
             owner = sim.graph.owner_of_cell(cell.id)
             owner_state = None if owner is None else sim.graph.locations[owner]
             development_options_list = []
@@ -312,5 +319,6 @@ class SurfaceProjectorMixin:
             founding_comparison_values,
         )
         return SurfaceMapView(
-            str(body.id), body.display_name, tuple(rows), locations, founding_comparison_axes
+            str(body.id), body.display_name, tuple(rows), locations, founding_comparison_axes,
+            body.physical_surface.value,
         )

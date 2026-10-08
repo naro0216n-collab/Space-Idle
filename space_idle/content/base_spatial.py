@@ -10,6 +10,7 @@ from ..spatial import (
     GravityField,
     IlluminationField,
     OrbitalField,
+    PhysicalSurface,
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
@@ -21,6 +22,7 @@ from ..spatial import (
     ThermalField,
 )
 from . import base_ids as ids
+from .solar_system_bodies import register_solar_system_bodies
 
 
 def _earth_cell(
@@ -76,11 +78,17 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         (4.1, 0.0, 0.0),
     )
     graph.add_body(CelestialBodyDef(
-        ids.EARTH_BODY, "地球", 6371.0, ids.SOL_SYSTEM, earth_geometry
+        ids.EARTH_BODY, "地球", 6371.0, ids.SOL_SYSTEM, earth_geometry,
+        heliocentric_semimajor_axis_au=1.0,
+        reference_gravity_m_s2=9.80,
     ))
     graph.add_body(CelestialBodyDef(
-        ids.MOON, "月", 1737.4, ids.SOL_SYSTEM, moon_geometry
+        ids.MOON, "月", 1737.4, ids.SOL_SYSTEM, moon_geometry,
+        parent_body_id=ids.EARTH_BODY,
+        parent_orbit_semimajor_axis_km=384_400.0,
+        standard_gravitational_parameter_km3_s2=4902.800,
     ))
+    register_solar_system_bodies(graph)
 
     # Non-surface nodes provide their own stable transport anchors.  Current
     # baseline orbits use their parent body's characteristic system position;

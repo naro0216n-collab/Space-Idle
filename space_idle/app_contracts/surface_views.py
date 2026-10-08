@@ -105,3 +105,4 @@ class SurfaceMapView:
     cells: tuple[SurfaceCellRow, ...]
     locations: tuple[SurfaceLocationTerritoryRow, ...]
     founding_comparison_axes: tuple[ComparisonAxisRow, ...] = ()
+    physical_surface: str = "solid"

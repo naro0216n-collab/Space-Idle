@@ -317,6 +317,10 @@ Surface Infrastructure不足はResource Opportunityを書き換えず、採掘ex
 - Operational Node：Inventory、Facility、Fleet、Storage、Power等を所有し、産業・研究・物流活動の端点となる運用拠点。
 - Surface Location：Surface Cell上にプレイヤーが設立・拡張するOperational Nodeであり、連結した開発領域を追加で持つ。
 
+太陽系のWorldは8惑星と主要21衛星を静的な物理対象として持つ。惑星・衛星の親子関係は天体の物理的な所属を表し、設備・Fleet・Inventoryの所属や環境の自動継承を意味しない。物理的に固体地表がない巨大惑星と、固体地表はあるがまだSurface Cellが登録されていない天体を区別する。前者も科学観測・軌道運用の対象にはなれるが、通常の地表設立先にはならない。
+
+太陽からの代表日射、軌道規模、代表重力等は物理基準であり、地点ごとの発電量や実航行時間そのものではない。観測対象として存在すること、Player Knowledgeが成立したこと、移動手段で到達できること、Operational Nodeを設立したことは別の状態として扱う。新たな物理対象の存在だけで初期在庫、Fleet、需要、自動物流の相手先を増やさない。
+
 すべてのSpatial NodeがOperational Nodeである必要はない。単なる軌道上の位置や未開発Surface Cellは物理的targetにはなれても、Inventoryや通常物流のNodeにはならない。一方、軌道研究所・Depot・Service Station等が存在する地点はnon-surface Spatial contextに結び付いたOperational Nodeとして扱える。
 
 地表をSurface Cellへ分割し、資源・地形・環境・Survey・開発領域の正準単位とする。UIではヘックス主体の天体マップとして表現してよいが、球面を完全な六角形だけで覆うことや、全Cellが同面積・常に6隣接であることをCore仕様にはしない。天体ごとにSurface Cell数を変えてよく、各Cellは面積、隣接関係、天体上の位置を持つ。

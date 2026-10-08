@@ -278,9 +278,11 @@ StarSystemDef
 CelestialBodyDef
   id
   star_system_id
-  parent_spatial_context?
-  system_local_transport_geometry
-  ...
+  parent_body_id?
+  physical_surface
+  mean_radius_km
+  reference gravity / GM
+  heliocentric orbit scale OR parent-body orbit scale
 
 NonSurfaceSpatialNodeDef
   id
@@ -303,7 +305,9 @@ SurfaceCellState / overlays
   dynamic_environment
 ```
 
-`system_local_transport_geometry` は瞬間的な天体位置の時系列そのものではなく、任意二地点間Movementのcharacteristicな空間関係を一貫して導出するためのSpatial Definitionとする。別Star System間はStar System側のinterstellar transport geometryを利用する。具体的なMovement time、Payload、Resource消費はSpatialだけでは決めず、Movement OperationとVehicle性能を組み合わせて導出する。
+天体の親関係は天体間の物理階層を所有し、`NonSurfaceSpatialNodeDef.parent_id` が持つContext lineageともEnvironmentの継承とも別である。親の不存在、所属Star Systemの不一致、循環を検証する。固体地表の物理区分はBodyに単一で定義し、Surface Cell登録可否はそこから導出する。Cell未登録、Survey Knowledge不足、Founding要件未充足を同じ状態として扱わない。
+
+軌道規模・代表重力の物理入力をStatic Worldの正本とする。太陽中心軌道・母天体周回軌道から代表距離、Transfer、Map用配置を用途別に導出し、互いに独立したOD表・物理座標を正本化しない。代表航行は実暦ephemerisとは異なり、具体的なMovement time、Delta-V、Resource、Payload、Enduranceは共通Movement Plan/OperationとVehicleから評価する。移動計算を実装していない物理対象に対して暫定的な瞬間距離や無条件の航路を生成しない。別Star System間のinterstellar transport geometryは引き続きStar Systemが所有する。
 
 地表を `SurfaceCell` graphとして表現する。UIはヘックス主体で表示してよいが、Coreは完全六角格子、同一Cell面積、常時6隣接を仮定しない。Celestial BodyごとにCell数を変えてよい。
 

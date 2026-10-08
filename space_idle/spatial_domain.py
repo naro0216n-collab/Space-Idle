@@ -4,7 +4,7 @@ from typing import Any
 
 from .domain import DomainExtension, StateCodec, decode_list, decode_str, require_fields
 from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
-from .spatial import OperationalNodeState, SurfaceLocationState
+from .spatial import OperationalNodeState, PhysicalSurface, SurfaceLocationState
 from .validation_support import ValidationContext, require as _require
 
 
@@ -80,6 +80,14 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     _require(sim.environment.graph is sim.graph, "simulation/environment spatial graph mismatch")
     for body_id, body in sim.graph.bodies.items():
         _require(body_id == body.id, f"celestial body key mismatch: {body_id}")
+        _require(body.star_system_id in sim.graph.star_systems, f"celestial body has unknown system: {body_id}")
+        if body.parent_body_id is not None:
+            _require(body.parent_body_id in sim.graph.bodies, f"celestial body has unknown parent: {body_id}")
+            _require(
+                sim.graph.bodies[body.parent_body_id].star_system_id == body.star_system_id,
+                f"celestial body parent belongs to another system: {body_id}",
+            )
+        sim.graph.body_lineage(body_id)
     for node_id, node in sim.graph.nodes.items():
         _require(node_id == node.id, f"spatial node key mismatch: {node_id}")
         _require(
@@ -96,6 +104,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for cell_id, cell in sim.graph.surface_cells.items():
         _require(cell_id == cell.id, f"surface cell key mismatch: {cell_id}")
         _require(cell.body_id in sim.graph.bodies, f"surface cell has unknown body: {cell_id}")
+        _require(
+            sim.graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID,
+            f"surface cell on body without solid surface: {cell_id}",
+        )
         _require(cell.area_km2 > 0, f"surface cell has invalid area: {cell_id}")
         _require(cell_id not in cell.neighbor_ids, f"surface cell self adjacency: {cell_id}")
         for neighbor_id in cell.neighbor_ids:
@@ -154,6 +166,10 @@ def validate_runtime(sim: Any) -> None:
             f"surface location lacks operational node state: {location_id}",
         )
         _require(location.body_id in sim.graph.bodies, f"location has unknown body: {location_id}")
+        _require(
+            sim.graph.bodies[location.body_id].physical_surface is PhysicalSurface.SOLID,
+            f"surface location on body without solid surface: {location_id}",
+        )
         _require(location.core_cell_id in location.developed_cell_ids, f"location core cell is not developed: {location_id}")
         _require(location.core_cell_id in sim.graph.surface_cells, f"location has unknown core cell: {location_id}")
         for cell_id in location.developed_cell_ids:
