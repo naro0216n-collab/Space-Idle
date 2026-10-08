@@ -562,10 +562,25 @@ def run(*, browser=None) -> dict[str, object]:
                 research_pins.count() >= 2,
                 "Research execution context with strategic differences must expose Comparison pins",
             )
-            research_pins.first.click()
-            page.locator(
-                '#inspectorContent [data-research-compare-pin][aria-pressed="false"]'
-            ).first.click()
+            research_row = next(
+                row for row in runtime._app.query(GetResearch()).items
+                if row.id == str(RESEARCH_COMPARISON_FIXTURE_ID)
+            )
+            ready_site = unavailable_site = None
+            for site in research_row.execution_context_options:
+                estimate = next(value for value in site.comparison_values if value.axis_key == "estimated_days")
+                if estimate.number_value is None and unavailable_site is None:
+                    unavailable_site = site
+                elif estimate.number_value is not None and ready_site is None:
+                    ready_site = site
+            _assert(
+                ready_site is not None and unavailable_site is not None,
+                "Research browser fixture must contain both estimable and blocked execution contexts",
+            )
+            for site in (ready_site, unavailable_site):
+                page.locator(
+                    f'#inspectorContent [data-research-compare-pin][data-comparison-key="{site.comparison_key}"]'
+                ).click()
             research_comparison = page.locator('#inspectorContent .comparison-surface')
             research_comparison.wait_for(timeout=10000)
             _assert(
