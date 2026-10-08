@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
 from space_idle import (
     AdvanceTime,
@@ -558,6 +559,50 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     assert "pools" in payload["fleet"]
     assert "items" in payload["transport_allocations"]
     assert "items" in payload["cargo_flows"]
+
+
+def test_logistics_projections_share_scoped_derivations_without_changing_read_contracts():
+    app = build_game_application()
+    sim = app._simulation
+    plan_count = len(sim.transport.movement_plan_options())
+    vehicle_count = len(sim.transport.vehicle_definitions())
+    from space_idle import application_project_movement_plans
+
+    # A snapshot that uses the logistics summary, details, and Movement view
+    # must expand each plan's vehicle modes only once, not once per consumer.
+    with patch.object(
+        application_project_movement_plans, "vehicle_concept",
+        wraps=application_project_movement_plans.vehicle_concept,
+    ) as modes, patch.object(
+        sim.transport, "movement_geometry",
+        wraps=sim.transport.movement_geometry,
+    ) as geometries, patch.object(
+        sim.transport, "fleet_commitment_snapshots",
+        wraps=sim.transport.fleet_commitment_snapshots,
+    ) as commitments:
+        batched = app.query_many({
+            "summary": GetLogisticsSummary(),
+            "logistics": GetLogistics(),
+            "movement": GetMovementPlans(include_modes=True),
+            "fleet": GetFleet(),
+            "allocations": GetTransportAllocations(),
+            "cargo": GetCargoFlows(),
+        })
+        assert modes.call_count == plan_count * vehicle_count
+        assert geometries.call_count == plan_count
+        # Fleet pools aggregate commitments once, not once for each pool or
+        # every read model. GetFleet commitments are projected separately.
+        assert commitments.call_count == 2
+
+    assert batched["logistics"] == app.query(GetLogistics())
+    assert batched["movement"] == app.query(GetMovementPlans(include_modes=True))
+    assert batched["fleet"] == app.query(GetFleet())
+    assert batched["allocations"] == app.query(GetTransportAllocations())
+    assert batched["cargo"] == app.query(GetCargoFlows())
+
+    # The cache belongs to one query snapshot, not the authoritative state.
+    app.execute(AdvanceTime(1))
+    assert app.query(GetLogisticsSummary()) == app.query_many({"summary": GetLogisticsSummary()})["summary"]
 
 
 def test_construction_queries_expose_authoritative_project_controls():
