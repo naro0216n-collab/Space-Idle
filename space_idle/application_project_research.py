@@ -161,7 +161,11 @@ class ResearchProgressionProjectorMixin:
                     ComparisonValueRow("resource_required_t", number_value=float(resource_required)),
                     ComparisonValueRow("resource_shortfall_t", number_value=float(resource_shortfall)),
                     ComparisonValueRow("service_work_capacity", number_value=float(service_work_capacity)),
-                    ComparisonValueRow("estimated_days", number_value=None if estimated_days is None else float(estimated_days)),
+                    ComparisonValueRow(
+                        "estimated_days",
+                        number_value=None if estimated_days is None else float(estimated_days),
+                        text_value="算定不可" if estimated_days is None else None,
+                    ),
                 )
                 rows.append(ResearchSiteOptionRow(
                     str(node.id), None if surface_cell_id is None else str(surface_cell_id),

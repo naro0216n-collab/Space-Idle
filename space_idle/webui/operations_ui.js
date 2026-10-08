@@ -864,8 +864,9 @@
       const compareAction=comparisonAvailable
         ?`<button type="button" data-research-compare-pin="${esc(r.id)}" data-comparison-key="${esc(site.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`
         :'';
-      const estimatedDays=comparisonValue(site,'estimated_days')?.number_value;
-      const timeLabel=estimatedDays==null?'算定不可':`${fmt(estimatedDays,2)} 日`;
+      const estimate=comparisonValue(site,'estimated_days');
+      const timeLabel=estimate?.text_value||
+        (estimate?.number_value==null?'—':`${fmt(estimate.number_value,2)} 日`);
       return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>`+
         `${blocked?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}`+
         `${researchSiteResourceHtml(site)}<div class="cell-sub">現在条件での参考所要日数: ${timeLabel}</div>`+

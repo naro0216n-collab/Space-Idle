@@ -476,6 +476,7 @@ def test_prototype_site_comparison_uses_per_resource_readiness_and_does_not_prom
     values = {value.axis_key: value.number_value for value in earth.comparison_values}
     assert values["resource_shortfall_t"] == pytest.approx(2.0)
     assert values["estimated_days"] is None
+    assert next(value for value in earth.comparison_values if value.axis_key == "estimated_days").text_value == "算定不可"
     assert earth.can_select  # Shortage blocks operation, not planning a site.
     assert sim.inventory.stock == before  # Read projections never reserve material.
 
@@ -541,6 +542,8 @@ def test_research_execution_context_projects_strategic_comparison_axes_from_appl
     assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
     assert earth_values["estimated_days"].number_value == pytest.approx(2.0)
     assert leo_values["estimated_days"].number_value is None
+    assert earth_values["estimated_days"].text_value is None
+    assert leo_values["estimated_days"].text_value == "算定不可"
     assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
             for item in earth.resources] == [(2.0, 0.0, 2.0, 0.0)]
     assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
