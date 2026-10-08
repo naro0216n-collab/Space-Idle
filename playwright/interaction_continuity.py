@@ -66,6 +66,12 @@ def run(*, browser=None) -> None:
             first_research = page.locator('#researchTree [data-inspect="research"]').first
             first_research.click()
             research_title = page.locator("#inspectorTitle").inner_text()
+            # Exercise genuine horizontal DAG scrolling in the supported 1024px
+            # landscape workspace with an expanded inspector. At 1194px the
+            # currently loaded DAG can fit entirely in WebKit, so overflow is
+            # not a universal property of the same research catalog.
+            page.set_viewport_size({"width": 1024, "height": 834})
+            page.locator('#operationsView [data-toggle-inspector]').click()
             scroller = page.locator("#researchTreeScroll")
             scroll_metrics = page.evaluate(
                 "el => ({width: el.clientWidth, scrollWidth: el.scrollWidth})", scroller.element_handle()
@@ -94,6 +100,8 @@ def run(*, browser=None) -> None:
             page.locator('.primary-nav-button[data-section="research"]').click()
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1
+            page.locator('#operationsView [data-toggle-inspector]').click()
+            page.set_viewport_size({"width": 1194, "height": 834})
 
             # A structured-decision draft must keep its unsaved priority and focus
             # while the authoritative clock refreshes the surrounding projection.
