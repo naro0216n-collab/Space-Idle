@@ -54,6 +54,12 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             raise ApiPayloadError("surface_body_id must appear once")
         surface_body_id = surface_body_values[0] if surface_body_values else None
 
+        founding_cell_ids = tuple(dict.fromkeys(params.get("founding_cell_id", ())))
+        selected_context = params.get("founding_context_id", [""])
+        if len(selected_context) != 1:
+            raise ApiPayloadError("founding Context must appear at most once")
+        founding_context_id = selected_context[0]
+
         # Map/Inspector reference one selected node without changing the
         # execution node. Selection scopes the Movement candidates as well.
         inspect_values = params.get("inspect_node_id", [])
@@ -61,7 +67,7 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             raise ApiPayloadError("inspect_node_id must appear once")
         inspect_node_id = inspect_values[0] if inspect_values else None
 
-        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}\0{inspect_node_id or ''}"
+        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}\0{inspect_node_id or ''}\0{','.join(founding_cell_ids)}\0{founding_context_id}"
         scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
         known_revision = None
         known_view = self.headers.get("X-Space-Idle-Known-View", "").strip()
@@ -99,8 +105,8 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
                 "surveys": GetSurveys(operational_node_id, surface_body_id),
             })
         if surface_body_id:
-            queries["surface_map"] = GetSurfaceMap(surface_body_id)
-            queries["non_surface_founding"] = GetNonSurfaceFoundingOptions(surface_body_id)
+            queries["surface_map"] = GetSurfaceMap(surface_body_id, founding_cell_ids)
+            queries["non_surface_founding"] = GetNonSurfaceFoundingOptions(surface_body_id, founding_context_id)
 
         result = self.server.runtime.snapshot_if_changed(
             queries,

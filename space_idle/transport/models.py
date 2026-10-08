@@ -618,6 +618,7 @@ class PoweredAscentCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=POWERED_ASCENT)
 
@@ -634,6 +635,7 @@ class LandingCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=LANDING)
 
@@ -641,6 +643,8 @@ class LandingCapability:
 @dataclass(frozen=True)
 class AtmosphericEntryCapability:
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
+    max_entry_specific_energy_mj_per_kg: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=ATMOSPHERIC_ENTRY)
 

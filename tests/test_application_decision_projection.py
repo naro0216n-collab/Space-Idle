@@ -107,7 +107,7 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
             endurance_days=30.0,
             operation_capabilities=(
                 PoweredAscentCapability(
-                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0
+                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0, 400.0
                 ),
             ),
         ),

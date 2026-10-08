@@ -229,7 +229,8 @@ def test_orbital_founding_preview_is_a_scoped_physical_target_not_a_player_node(
     stock = dict(sim.inventory.stock)
 
     for body_id in ("base.body.jupiter", "base.body.saturn", "base.body.uranus", "base.body.neptune"):
-        options = app.query(GetNonSurfaceFoundingOptions(body_id))
+        context_id = f"base.spatial.{body_id.rsplit('.', 1)[-1]}.orbit"
+        options = app.query(GetNonSurfaceFoundingOptions(body_id, context_id))
         assert options.body_id == body_id
         assert len(options.contexts) == 1
         context = options.contexts[0]
@@ -529,3 +530,46 @@ def test_giant_planet_orbit_operates_without_surface_and_with_local_environment(
     assert sim.inventory.admission_state(target, ids.MACHINERY).admission_capacity_t > 0
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
+
+
+def test_founding_projections_are_scoped_to_explicit_targets_without_losing_other_cell_geography(monkeypatch):
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.founding is not None
+    original = sim.founding.planning_failures
+    visited = []
+
+    def tracked(staging_id, target, recipe_id, vehicle_id, day=0, power=None):
+        visited.append(sim.founding.target_context_id(target))
+        return original(staging_id, target, recipe_id, vehicle_id, day, power)
+
+    monkeypatch.setattr(sim.founding, "planning_failures", tracked)
+    moon = str(ids.MOON)
+    unselected = app.query(GetSurfaceMap(moon, ()))
+    assert len(unselected.cells) == len(sim.graph.cells_for_body(ids.MOON))
+    assert not visited
+    assert all(not row.foundation_options for row in unselected.cells)
+    cells = [str(row.id) for row in sim.graph.cells_for_body(ids.MOON)]
+    selected = app.query(GetSurfaceMap(moon, (cells[0],)))
+    assert visited and {str(value) for value in visited} == {cells[0]}
+    assert next(row for row in selected.cells if row.id == cells[0]).foundation_options
+    assert all(not row.foundation_options for row in selected.cells if row.id != cells[0])
+    visited.clear()
+    pinned = app.query(GetSurfaceMap(moon, (cells[0], cells[1])))
+    assert {str(value) for value in visited} == set(cells[:2])
+    assert all(next(row for row in pinned.cells if row.id == cell).foundation_options for cell in cells[:2])
+    from space_idle.app_contracts.common import ApplicationError
+    with pytest.raises(ApplicationError, match="selected body"):
+        app.query(GetSurfaceMap(moon, ("base.cell.venus.highland",)))
+
+    visited.clear()
+    jupiter = "base.body.jupiter"
+    listed = app.query(GetNonSurfaceFoundingOptions(jupiter, ""))
+    assert len(listed.contexts) == 1 and not listed.contexts[0].foundation_options
+    assert not visited
+    context_id = listed.contexts[0].spatial_node_id
+    detailed = app.query(GetNonSurfaceFoundingOptions(jupiter, context_id))
+    assert detailed.contexts[0].foundation_options
+    assert {str(value) for value in visited} == {context_id}
+    with pytest.raises(ApplicationError, match="selected body"):
+        app.query(GetNonSurfaceFoundingOptions(jupiter, str(ids.LUNAR_ORBIT)))

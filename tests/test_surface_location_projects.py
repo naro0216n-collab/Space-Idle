@@ -431,7 +431,7 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
 def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     app = build_game_application()
     cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    cell = next(row for row in app.query(GetSurfaceMap(str(ids.MOON))).cells if row.id == str(cell_id))
+    cell = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell_id),))).cells if row.id == str(cell_id))
     option = next(
         row for row in cell.foundation_options
         if row.staging_node_id == str(ids.LUNAR_ORBIT)
@@ -458,7 +458,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert str(ids.PROPELLANT) in displayed_resources
     assert not any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
 
-    surface = app.query(GetSurfaceMap(str(ids.MOON)))
+    surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell_id),)))
     assert surface.founding_comparison_axes
     assert any(axis.differs for axis in surface.founding_comparison_axes)
     assert {axis.key for axis in surface.founding_comparison_axes} == {

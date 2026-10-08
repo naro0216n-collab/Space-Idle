@@ -204,7 +204,9 @@ def run(*, browser=None) -> dict[str, object]:
             fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
                 target.thresholds[int(requirement.minimum_level) - 1]
             )
-    founding_surface_projection = runtime._app.query(GetSurfaceMap(str(ids.MOON)))
+    founding_surface_projection = runtime._app.query(GetSurfaceMap(
+        str(ids.MOON), (str(founding_fixture_cell), str(founding_comparison_cell)),
+    ))
     founding_cell_projection = next(
         cell for cell in founding_surface_projection.cells
         if cell.id == str(founding_fixture_cell)
@@ -992,6 +994,12 @@ def run(*, browser=None) -> dict[str, object]:
             surface_decision_found = False
             for index in range(surface_cells.count()):
                 surface_cells.nth(index).click()
+                selected = surface_cells.nth(index).get_attribute('data-id')
+                page.wait_for_function("""cell => {
+                  const state = window.SpaceIdleApp.state;
+                  return state.inspector?.id === cell && state.surfaceMap?.cells?.some(
+                    row => row.id === cell && row.foundation_options?.length > 0);
+                }""", arg=selected, timeout=10000)
                 if (
                     page.locator('#inspectorContent [data-surface-found]').count() > 0
                     and "新拠点設立" in page.locator("#inspectorContent").inner_text()
@@ -1245,6 +1253,7 @@ def run(*, browser=None) -> dict[str, object]:
                 '#inspectorContent '
                 f'[data-founding-compare-pin="{founding_fixture_option.comparison_key}"]'
             ).first
+            first_founding_pin.wait_for(timeout=10000)
             _assert(first_founding_pin.count() == 1, "Founding option must expose Comparison pin")
             first_founding_pin.click()
             comparison_cell = page.locator(
@@ -1255,6 +1264,7 @@ def run(*, browser=None) -> dict[str, object]:
                 '#inspectorContent '
                 f'[data-founding-compare-pin="{founding_comparison_option.comparison_key}"]'
             ).first
+            second_founding_pin.wait_for(timeout=10000)
             _assert(second_founding_pin.count() == 1, "second Founding Cell must expose Comparison pin")
             second_founding_pin.click()
             page.wait_for_function(

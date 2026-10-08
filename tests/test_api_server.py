@@ -72,6 +72,43 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert data["dependency_analytics_current"]["time_basis"] == "CURRENT"
         assert data["dependency_analytics_forecast"]["time_basis"] == "FORECAST"
 
+        # UI snapshot stays geographic when no Founding decision is selected;
+        # a focused target requests only its own actionable candidates.
+        status, _, unselected_payload = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}",
+        )
+        assert status == 200
+        assert all(not row["foundation_options"] for row in unselected_payload["data"]["surface_map"]["cells"])
+        target_cell_id = str(ids.MOON_CELL_FARSIDE_HIGHLANDS)
+        status, _, selected_payload = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id={target_cell_id}",
+        )
+        assert status == 200
+        focused = selected_payload["data"]["surface_map"]["cells"]
+        assert next(row for row in focused if row["id"] == target_cell_id)["foundation_options"]
+        assert all(not row["foundation_options"] for row in focused if row["id"] != target_cell_id)
+        status, _, direct_unselected = _request(port, "GET", f"/api/v1/surfaces/{ids.MOON}")
+        assert status == 200
+        assert all(not row["foundation_options"] for row in direct_unselected["data"]["cells"])
+        status, _, direct_selected = _request(
+            port, "GET", f"/api/v1/surfaces/{ids.MOON}?founding_cell_id={target_cell_id}",
+        )
+        assert status == 200
+        assert next(row for row in direct_selected["data"]["cells"] if row["id"] == target_cell_id)["foundation_options"]
+        status, _, orbit_unselected = _request(port, "GET", "/api/v1/non-surface-founding-options?body_id=base.body.jupiter")
+        assert status == 200
+        assert all(not row["foundation_options"] for row in orbit_unselected["data"]["contexts"])
+        orbit_id = orbit_unselected["data"]["contexts"][0]["spatial_node_id"]
+        status, _, orbit_selected = _request(
+            port, "GET", f"/api/v1/non-surface-founding-options?body_id=base.body.jupiter&founding_context_id={orbit_id}",
+        )
+        assert status == 200
+        assert orbit_selected["data"]["contexts"][0]["foundation_options"]
+        status, _, invalid = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id=base.cell.venus.highland",
+        )
+        assert status in (400, 422)
+
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/target-stock-options?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",

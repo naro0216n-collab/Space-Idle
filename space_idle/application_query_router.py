@@ -55,13 +55,22 @@ class ApplicationQueryRouterMixin:
             body_id = CelestialBodyId(query.body_id)
             if body_id not in self._simulation.graph.bodies:
                 raise KeyError(body_id)
-            return self._surface_map_view(body_id)
+            if not set(query.founding_cell_ids) <= {
+                str(cell.id) for cell in self._simulation.graph.cells_for_body(body_id)
+            }:
+                raise ValueError("founding Cell must belong to the selected body")
+            return self._surface_map_view(body_id, founding_cell_ids=query.founding_cell_ids)
         if isinstance(query, GetNonSurfaceFoundingOptions):
             from .shared import CelestialBodyId
             body_id = CelestialBodyId(query.body_id)
             if body_id not in self._simulation.graph.bodies:
                 raise KeyError(body_id)
-            return self._non_surface_founding_view(body_id)
+            if query.founding_context_id and query.founding_context_id not in {
+                str(node.id) for node in self._simulation.graph.nodes.values()
+                if node.body_id == body_id
+            }:
+                raise ValueError("founding Context must belong to the selected body")
+            return self._non_surface_founding_view(body_id, founding_context_id=query.founding_context_id)
         if isinstance(query, GetOperationalNode):
             return self._operational_node_view(self._require_operational_node(query.operational_node_id))
         if isinstance(query, GetFlowReport):

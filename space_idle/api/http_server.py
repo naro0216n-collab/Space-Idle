@@ -266,7 +266,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             body_id = unquote(path[len(surface_prefix):])
             if not body_id:
                 raise ApiPayloadError("body id is required")
-            self._query_result(GetSurfaceMap(body_id))
+            self._query_result(GetSurfaceMap(body_id, tuple(params.get("founding_cell_id", ()))))
             return
         if path == "/api/v1/dependency-analytics":
             scope_kind = _one(params, "scope_kind") or "player"
@@ -364,7 +364,9 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             self._query_result(GetResearch())
             return
         if path == "/api/v1/non-surface-founding-options":
-            self._query_result(GetNonSurfaceFoundingOptions(_required(params, "body_id")))
+            self._query_result(GetNonSurfaceFoundingOptions(
+                _required(params, "body_id"), _one(params, "founding_context_id") or "",
+            ))
             return
         if path == "/api/v1/surveys":
             self._query_result(GetSurveys(_one(params, "provider_operational_node_id"), _one(params, "body_id")))

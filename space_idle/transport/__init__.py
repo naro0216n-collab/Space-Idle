@@ -18,7 +18,7 @@ from .models import (
 )
 from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .operations import (
-    OperationEvaluationContext, OperationEvaluatorRegistry,
+    OperationEvaluationContext, SurfaceOperationEnvironment, OperationEvaluatorRegistry,
     build_default_operation_registry,
 )
 
@@ -40,7 +40,7 @@ __all__ = [
     'TransportCapacitySnapshot', 'TransportServiceSupply',
     'TransportOperationDependencyProjection', 'TransportOperationUsageRequirements',
     'MovementResolver', 'SpaceflightMovementRule', 'SurfaceAccessMovementRule', 'SurfaceTransportMovementRule',
-    'OperationEvaluationContext', 'OperationEvaluatorRegistry',
+    'OperationEvaluationContext', 'SurfaceOperationEnvironment', 'OperationEvaluatorRegistry',
     'build_default_operation_registry', 'TransportService',
 ]
 

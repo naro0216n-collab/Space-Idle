@@ -4,7 +4,7 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, selectedNonSurfaceContextId:null, foundingPinnedCellIds:[], contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null, inspectedNode:null, inspectedFlow:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
@@ -716,7 +716,7 @@
 
   function clearLocationSnapshot(){
     state.operationalNode=null; state.flow=null; state.dependencyAnalyticsCurrent=null; state.dependencyAnalyticsForecast=null; state.bottlenecks=null; state.projects=null;
-    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.nonSurfaceFounding=null; state.inspector=null;state.decisionContext=null;
+    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.nonSurfaceFounding=null; state.selectedNonSurfaceContextId=null; state.foundingPinnedCellIds=[]; state.inspector=null;state.decisionContext=null;
     if(state.sectionContexts.location)state.sectionContexts.location={...state.sectionContexts.location,inspector:null,decisionContext:null};
   }
   function requestedSurfaceBodyId(){
@@ -727,18 +727,26 @@
   async function loadUiSnapshot({preserveInteraction=true}={}){
     const surfaceBodyId=requestedSurfaceBodyId();
     const inspectedNodeId=state.selectedGlobalNodeId||state.operationalNodeId;
+    const foundingCellId=state.inspector?.type==='surface-cell'
+      ?state.inspector.id:(state.inspector?.type==='founding-candidate'?state.inspector.id.split('|')[0]:'');
+    const foundingCellIds=[...new Set([foundingCellId,...(state.foundingPinnedCellIds||[])].filter(Boolean))].sort();
+    const foundingContextId=state.selectedNonSurfaceContextId||'';
     while(state.syncInFlight){
       const pending=state.syncInFlight;
-      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId&&pending.inspectedNodeId===inspectedNodeId)return pending.promise;
+      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId&&pending.inspectedNodeId===inspectedNodeId&&pending.foundingCellIds.join('|')===foundingCellIds.join('|')&&pending.foundingContextId===foundingContextId)return pending.promise;
       try{await pending.promise;}catch{}
       if(state.syncInFlight===pending)state.syncInFlight=null;
     }
     const locationId=state.operationalNodeId;
-    const request={operationalNodeId:locationId,surfaceBodyId,inspectedNodeId,promise:null};
+    const request={operationalNodeId:locationId,surfaceBodyId,inspectedNodeId,foundingCellIds,foundingContextId,promise:null};
     request.promise=(async()=>{
       const params=new URLSearchParams();
       if(locationId)params.set('operational_node_id',locationId);
-      if(surfaceBodyId)params.set('surface_body_id',surfaceBodyId);
+      if(surfaceBodyId){
+        params.set('surface_body_id',surfaceBodyId);
+        for(const cellId of foundingCellIds)params.append('founding_cell_id',cellId);
+        if(foundingContextId)params.set('founding_context_id',foundingContextId);
+      }
       if(inspectedNodeId)params.set('inspect_node_id',inspectedNodeId);
       const suffix=params.size?`?${params.toString()}`:'';
       const snapshotPath=`/api/v1/ui-state${suffix}`;
@@ -747,7 +755,11 @@
       if(appliedUiSnapshotPath!==snapshotPath)responseViewTokens.delete(snapshotPath);
       const data=await api(snapshotPath,{viewTokenKey:snapshotPath});
       if(data?.unchanged===true){setConnection('ok','PC Server');return data;}
-      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId()||inspectedNodeId!==(state.selectedGlobalNodeId||state.operationalNodeId))return data;
+      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId()||inspectedNodeId!==(state.selectedGlobalNodeId||state.operationalNodeId)||
+        foundingCellIds.join('|')!==[...new Set([
+          state.inspector?.type==='surface-cell'?state.inspector.id:state.inspector?.type==='founding-candidate'?state.inspector.id.split('|')[0]:'',
+          ...(state.foundingPinnedCellIds||[])].filter(Boolean))].sort().join('|')||
+        foundingContextId!==(state.selectedNonSurfaceContextId||''))return data;
       applyUiSnapshot(data);
       appliedUiSnapshotPath=snapshotPath;
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
@@ -825,7 +837,7 @@
     }
     if(target.decision_area==='exploration'&&target.subject_kind==='celestial_body'){
       if(!(state.catalog?.celestial_bodies||[]).some((body)=>body.id===target.subject_id))return;
-      if(changedBody){state.surfaceMap=null;state.nonSurfaceFounding=null;}
+      if(changedBody){state.surfaceMap=null;state.nonSurfaceFounding=null;state.selectedNonSurfaceContextId=null;state.foundingPinnedCellIds=[];}
       state.selectedSurfaceBodyId=target.subject_id;
     }
     setActiveSection(target.decision_area);

@@ -5,7 +5,7 @@ import math
 from ..power import PowerSnapshot
 from ..shared import DefinitionId, MovementPlanId, SpatialNodeId
 from ..site import evaluate_physical_site_requirements, evaluate_site_requirements
-from ..spatial import AtmosphereField, GravityField
+from ..spatial import AtmosphereField, GravityField, ThermalField
 from .endpoints import movement_geometry, resolve_movement_endpoint
 from .models import (
     OperationAssetDisposition,
@@ -15,7 +15,7 @@ from .models import (
     SurfaceTransportCapability,
     SURFACE_TRANSPORT,
 )
-from .operations import OperationEvaluationContext
+from .operations import OperationEvaluationContext, SurfaceOperationEnvironment
 
 class TransportCompatibilityMixin:
     def resource_support_failures(
@@ -117,15 +117,31 @@ class TransportCompatibilityMixin:
                 return max(1, math.ceil(geometry.distance_km * multiplier / capability.speed_km_per_day))
         return max(1, math.ceil(plan.transit_days * multiplier - 1e-12))
 
-    def _surface_environment(self, context_id, day: int) -> tuple[float, float] | None:
+    def _surface_environment(self, context_id, day: int) -> SurfaceOperationEnvironment | None:
         environment = self.facilities.environment
         if not environment.graph.is_surface_context(context_id):
             return None
         gravity = environment.get(context_id, GravityField, day)
         atmosphere = environment.get(context_id, AtmosphereField, day)
-        return (
-            0.0 if gravity is None else gravity.local_acceleration_m_s2,
-            0.0 if atmosphere is None else atmosphere.pressure_pa,
+        thermal = environment.get(context_id, ThermalField, day)
+        body_id = environment.graph.context_body_id(context_id)
+        body = environment.graph.bodies.get(body_id) if body_id is not None else None
+        gravity_value = None if gravity is None else gravity.local_acceleration_m_s2
+        # Energy needed to decelerate from a representative circular orbit:
+        # v^2/2 = g*r/2. This is a reference load for vehicle rating, not an
+        # atmospheric heating simulation or a second Movement delta-v charge.
+        entry_energy = (
+            None if gravity_value is None or body is None else
+            gravity_value * body.mean_radius_km / 2000.0
+        )
+        return SurfaceOperationEnvironment(
+            gravity_m_s2=gravity_value,
+            pressure_pa=None if atmosphere is None else atmosphere.pressure_pa,
+            maximum_temperature_k=None if thermal is None else (
+                thermal.max_temperature_k if thermal.max_temperature_k is not None
+                else thermal.nominal_temperature_k
+            ),
+            characteristic_entry_energy_mj_per_kg=entry_energy,
         )
 
     def performance_movement_failures(

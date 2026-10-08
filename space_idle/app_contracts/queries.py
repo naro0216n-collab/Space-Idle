@@ -6,9 +6,16 @@ class GetCatalog: pass
 @dataclass(frozen=True)
 class GetWorld: pass
 @dataclass(frozen=True)
-class GetSurfaceMap: body_id: str
+class GetSurfaceMap:
+    body_id: str
+    # A map query never expands every staging/recipe/vehicle combination.
+    # Request the specific Cell(s) whose Founding candidates are needed.
+    founding_cell_ids: tuple[str, ...] = ()
 @dataclass(frozen=True)
-class GetNonSurfaceFoundingOptions: body_id: str
+class GetNonSurfaceFoundingOptions:
+    body_id: str
+    # Without a selected Context, return its physical identity only.
+    founding_context_id: str = ""
 @dataclass(frozen=True)
 class GetOperationalNode: operational_node_id: str
 @dataclass(frozen=True)

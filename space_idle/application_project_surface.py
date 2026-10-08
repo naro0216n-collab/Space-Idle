@@ -15,7 +15,7 @@ from .shared import CelestialBodyId
 
 
 class SurfaceProjectorMixin:
-    def _non_surface_founding_view(self, body_id: CelestialBodyId) -> NonSurfaceFoundingView:
+    def _non_surface_founding_view(self, body_id: CelestialBodyId, *, founding_context_id: str = "") -> NonSurfaceFoundingView:
         """Scoped physical orbital targets; economic state exists only after founding."""
         sim = self._simulation
         contexts = []
@@ -25,7 +25,8 @@ class SurfaceProjectorMixin:
         ):
             operational = sim.graph.has_operational_node(node.id)
             candidates = []
-            if not operational and sim.founding is not None:
+            if (not operational and sim.founding is not None
+                and founding_context_id == str(node.id)):
                 target = NonSurfaceOperationalNodeTargetSpec(node.id)
                 active = sim.founding.active_project_for_target_node(node.id)
                 for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
@@ -75,7 +76,7 @@ class SurfaceProjectorMixin:
             ))
         return NonSurfaceFoundingView(str(body_id), tuple(contexts))
 
-    def _surface_map_view(self, body_id: CelestialBodyId) -> SurfaceMapView:
+    def _surface_map_view(self, body_id: CelestialBodyId, *, founding_cell_ids: tuple[str, ...] = ()) -> SurfaceMapView:
         sim = self._simulation
         body = sim.graph.bodies[body_id]
         cells = sim.graph.cells_for_body(body_id)
@@ -236,7 +237,7 @@ class SurfaceProjectorMixin:
             foundation_options = ()
             movement_accessible = None
             minimum_transit_days = None
-            if sim.founding is not None:
+            if (sim.founding is not None and str(cell.id) in founding_cell_ids):
                 movement_accessible = False
                 foundation_rows = []
                 active_founding = sim.founding.active_project_for_cell(cell.id)

@@ -83,6 +83,7 @@
     const valid=new Set((candidates||[]).map((row)=>row.comparison_key));
     const pins=(comparisonPins.get(scopeKey)||[]).filter((key)=>valid.has(key)).slice(0,4);
     comparisonPins.set(scopeKey,pins);
+    if(scopeKey.startsWith('founding:'))state.foundingPinnedCellIds=[...new Set(pins.map((item)=>item.split('|')[0]))];
     return pins;
   }
   function toggleComparisonPin(scopeKey,candidates,key){
@@ -608,6 +609,7 @@
     const contexts=context.contexts||[];
     const cards=contexts.map((node)=>{
       if(node.operational)return `<div class="detail-card"><strong>${esc(node.display_name)}</strong><div class="cell-sub">運用拠点設立済み · 通常の在庫・Fleet管理は運用拠点で行います。</div></div>`;
+      if(state.selectedNonSurfaceContextId!==node.spatial_node_id)return `<div class="detail-card"><strong>${esc(node.display_name)}</strong><div class="cell-sub">物理Context・未運用</div><button type="button" data-nonsurface-context="${esc(node.spatial_node_id)}">設立候補と条件を確認</button></div>`;
       const candidates=(node.foundation_options||[]).slice().sort((a,b)=>
         Number(b.can_plan)-Number(a.can_plan)||(a.blockers||[]).length-(b.blockers||[]).length
         ||String(a.comparison_key).localeCompare(String(b.comparison_key)));
@@ -1272,9 +1274,10 @@
     const forecastHorizon=event.target.closest('[data-detailed-forecast-horizon]');if(forecastHorizon){detailedForecastHorizon=forecastHorizon.dataset.detailedForecastHorizon||'SHORT_TERM';renderActiveTab();return;}
     const runForecast=event.target.closest('[data-run-detailed-forecast]');if(runForecast){if(detailedForecastLoading)return;detailedForecastLoading=true;renderActiveTab();try{const nodeId=state.operationalNodeId;detailedForecast=await api(`/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id=${encodeURIComponent(nodeId)}&horizon=${encodeURIComponent(detailedForecastHorizon)}`);}catch(error){banner(error.message||'詳細予測の取得に失敗しました','error');}finally{detailedForecastLoading=false;renderActiveTab();}return;}
     const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();if(['surface','survey'].includes(state.activeTab)){try{await A.loadUiSnapshot({preserveInteraction:false});}catch(e){banner(e.message,'error');}}return;}
-    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell')render();else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
+    const contextPick=event.target.closest('[data-nonsurface-context]');if(contextPick){state.selectedNonSurfaceContextId=contextPick.dataset.nonsurfaceContext;await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));return;}
+    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell'){render();await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));}else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
     const foundingCandidateDetail=event.target.closest('[data-founding-candidate-detail]');if(foundingCandidateDetail){state.inspector={type:'founding-candidate',id:foundingCandidateDetail.dataset.foundingCandidateDetail};renderInspector();return;}
-    const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);renderInspector();return;}
+    const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));renderInspector();return;}
     const constructionComparePin=event.target.closest('[data-construction-compare-pin]');if(constructionComparePin){toggleComparisonPin(constructionComparisonScope(),constructionComparisonCandidates(),constructionComparePin.dataset.constructionComparePin);renderInspector();return;}
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
