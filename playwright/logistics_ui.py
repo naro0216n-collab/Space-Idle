@@ -236,6 +236,9 @@ def run(*, browser=None) -> None:
             assert page.locator('#movementPlanInspectorTitle').inner_text() == page.evaluate(
                 'id => window.SpaceIdleApp.locationName(id)', pool.operational_node_id
             )
+            # An explicit Resource choice is carried between entrances; the
+            # earlier Fleet decision intentionally cleared the stale filter.
+            page.locator('#systemMapResourceFilter').select_option(requirement_resource)
             assert all(
                 metric.locator("small").inner_text().strip()
                 for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
