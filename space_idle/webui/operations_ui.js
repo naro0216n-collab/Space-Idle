@@ -24,6 +24,43 @@
   const environmentFacetLabels={gravity:'重力',atmosphere:'大気',thermal:'温度',illumination:'日照',radiation:'放射線'};
   const environmentFacetName=(key)=>environmentFacetLabels[key]||A.userFacingText(key);
   const surveyLayerNames={environment:'環境',knowledge:'調査知識',potential:'資源ポテンシャル',territory:'拠点領域',movement:'移動到達性'};
+  // Shared Surface/Survey schematic: every physical cell gets its own hit target.
+  // The true latitude/longitude are retained in the Application Inspector.
+  function surfaceDecisionLayout(cells){
+    const count=cells.length;
+    const columns=Math.max(1,Math.ceil(Math.sqrt(count*1.2)));
+    const rows=Math.ceil(count/columns);
+    const coordinate=(value)=>Number.isFinite(Number(value))?Number(value):0;
+    // Latitude bands preserve north/south order and longitude orders each band.
+    // Sorting by physical values + stable ID avoids input registration dependence.
+    const ordered=[...cells].sort((a,b)=>
+      coordinate(b.latitude_deg)-coordinate(a.latitude_deg)
+      ||coordinate(a.longitude_deg)-coordinate(b.longitude_deg)
+      ||String(a.id).localeCompare(String(b.id)));
+    const positions={};
+    for(let row=0;row<rows;row++){
+      const band=ordered.slice(row*columns,(row+1)*columns).sort((a,b)=>
+        coordinate(a.longitude_deg)-coordinate(b.longitude_deg)
+        ||coordinate(b.latitude_deg)-coordinate(a.latitude_deg)
+        ||String(a.id).localeCompare(String(b.id)));
+      for(let col=0;col<band.length;col++){
+        const centeredCol=col+(columns-band.length)/2;
+        positions[band[col].id]={x:(centeredCol+0.5)*100/columns,y:(row+0.5)*100/rows};
+      }
+    }
+    return {positions,width:columns*178,height:Math.max(420,rows*112)};
+  }
+  function surfaceAdjacencyLines(cells,positions){
+    const lines=[],seen=new Set();
+    for(const cell of cells)for(const neighbor of cell.neighbor_ids||[]){
+      if(!positions[neighbor])continue;
+      const key=[cell.id,neighbor].sort().join('::');
+      if(seen.has(key))continue;
+      seen.add(key);
+      lines.push(`<line x1="${positions[cell.id].x*10}" y1="${positions[cell.id].y*10}" x2="${positions[neighbor].x*10}" y2="${positions[neighbor].y*10}"></line>`);
+    }
+    return lines.join('');
+  }
   function surveyLayerSummary(cell,knowledgeRows){
     const levels=(knowledgeRows||[]).map((row)=>Number(row.knowledge_level||0));
     const measured=(knowledgeRows||[]).filter((row)=>row.visible_potential!=null&&Number(row.visible_potential_precision_fraction||0)<=0).length;
@@ -40,6 +77,7 @@
   let detailedForecastLoading=false;
   let detailedForecastHorizon='SHORT_TERM';
   let surveyMapLayer='knowledge';
+  const surfaceMapScrollByContext=new Map();
   const comparisonPins=new Map();
   function comparisonPinnedKeys(scopeKey,candidates){
     const valid=new Set((candidates||[]).map((row)=>row.comparison_key));
@@ -511,17 +549,16 @@
 
     let scopeMap='';
     if(cells.length){
-      const minLon=Math.min(...cells.map((c)=>Number(c.longitude_deg))),maxLon=Math.max(...cells.map((c)=>Number(c.longitude_deg)));
-      const minLat=Math.min(...cells.map((c)=>Number(c.latitude_deg))),maxLat=Math.max(...cells.map((c)=>Number(c.latitude_deg)));
-      const lonSpan=Math.max(1,maxLon-minLon),latSpan=Math.max(1,maxLat-minLat);
-      const pos=Object.fromEntries(cells.map((c)=>[c.id,{x:8+84*(Number(c.longitude_deg)-minLon)/lonSpan,y:8+84*(maxLat-Number(c.latitude_deg))/latSpan}]));
-      const seen=new Set(),lines=[];
-      for(const cell of cells){for(const neighbor of cell.neighbor_ids||[]){if(!pos[neighbor])continue;const key=[cell.id,neighbor].sort().join('::');if(seen.has(key))continue;seen.add(key);lines.push(`<line x1="${pos[cell.id].x*10}" y1="${pos[cell.id].y*4.2}" x2="${pos[neighbor].x*10}" y2="${pos[neighbor].y*4.2}"></line>`);}}
+      // Keep physical positions stable across Surface and Survey, even when
+      // only a subset of the body's cells currently has Survey controls.
+      const layout=surfaceDecisionLayout(state.surfaceMap.cells||cells),pos=layout.positions;
+      const links=surfaceAdjacencyLines(cells,pos);
       const knowledgeByCell=new Map();
       for(const row of visibleKnowledge){if(!knowledgeByCell.has(row.cell_id))knowledgeByCell.set(row.cell_id,[]);knowledgeByCell.get(row.cell_id).push(row);}
       const nodes=cells.map((cell)=>{const layers=surveyLayerSummary(cell,knowledgeByCell.get(cell.id)||[]);return `<label class="survey-scope-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(cell.id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(cell.id)}"><span><strong>${esc(cellMap.get(cell.id)||cell.display_name||'地域')}</strong>${Object.entries(layers).map(([layer,value])=>`<small data-survey-layer-value="${esc(layer)}">${esc(value)}</small>`).join('')}</span></label>`;}).join('');
       const layerButtons=Object.entries(surveyLayerNames).map(([key,label])=>`<button type="button" class="survey-layer-button ${surveyMapLayer===key?'is-active':''}" data-survey-map-layer="${esc(key)}" aria-pressed="${surveyMapLayer===key?'true':'false'}">${esc(label)}</button>`).join('');
-      scopeMap=`<div class="survey-layer-toolbar" role="group" aria-label="地表Map表示Layer">${layerButtons}</div><div class="survey-scope-map" data-survey-layer="${esc(surveyMapLayer)}"><svg viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg>${nodes}</div>`;
+      const cellIndex=cells.map((cell)=>`<button type="button" data-survey-focus-cell="${esc(cell.id)}" class="surface-cell-index-item">${esc(cellMap.get(cell.id)||cell.display_name||'地域')}</button>`).join('');
+      scopeMap=`<div class="survey-layer-toolbar" role="group" aria-label="地表Map表示Layer">${layerButtons}</div><div class="surface-map-viewport"><div class="survey-scope-map" style="min-width:${layout.width}px;height:${layout.height}px" data-survey-layer="${esc(surveyMapLayer)}"><svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${nodes}</div></div><div class="surface-cell-index" aria-label="地表調査の地域一覧">${cellIndex}</div><div class="cell-sub">地域の配置は地理的関係の概略です。正確な緯度・経度は地域詳細で確認できます。</div>`;
     }
     const fallbackHtml=fallbackCells.map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
     const resourceChoices=[...resourceMap].map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-resource data-draft-key="survey:new:resource:${esc(id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
@@ -574,28 +611,16 @@
     }
     const cells=map.cells||[];
     if(!cells.length)return `<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">地表区画が定義されていません。</div></section>`;
-    const minLon=Math.min(...cells.map((c)=>Number(c.longitude_deg))),maxLon=Math.max(...cells.map((c)=>Number(c.longitude_deg)));
-    const minLat=Math.min(...cells.map((c)=>Number(c.latitude_deg))),maxLat=Math.max(...cells.map((c)=>Number(c.latitude_deg)));
-    const lonSpan=Math.max(1,maxLon-minLon),latSpan=Math.max(1,maxLat-minLat);
-    const pos=Object.fromEntries(cells.map((c)=>[c.id,{
-      x:8+84*(Number(c.longitude_deg)-minLon)/lonSpan,
-      y:8+84*(maxLat-Number(c.latitude_deg))/latSpan,
-    }]));
-    const seen=new Set(),lines=[];
-    for(const cell of cells){
-      for(const neighbor of cell.neighbor_ids||[]){
-        if(!pos[neighbor])continue;
-        const key=[cell.id,neighbor].sort().join('::');if(seen.has(key))continue;seen.add(key);
-        lines.push(`<line x1="${pos[cell.id].x*10}" y1="${pos[cell.id].y*4.8}" x2="${pos[neighbor].x*10}" y2="${pos[neighbor].y*4.8}"></line>`);
-      }
-    }
+    const layout=surfaceDecisionLayout(cells),pos=layout.positions;
+    const links=surfaceAdjacencyLines(cells,pos);
     const buttons=cells.map((cell)=>{
       const classes=['surface-cell-button',cell.developed?'is-developed':'',cell.is_location_core?'is-core':'',state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''].filter(Boolean).join(' ');
       const owner=cell.location_id?locationName(cell.location_id):'未所属';
-      return `<div class="surface-cell-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><button type="button" class="${classes}" data-inspect="surface-cell" data-id="${esc(cell.id)}"><span class="surface-cell-name">${esc(surfaceCellLabel(cell.id))}</span><span class="surface-cell-meta">${esc(owner)} · ${fmt(cell.area_km2,0)} km²</span></button></div>`;
+      return `<div class="surface-cell-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><button type="button" class="${classes}" data-inspect="surface-cell" data-id="${esc(cell.id)}" aria-pressed="${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'true':'false'}"><span class="surface-cell-name">${esc(surfaceCellLabel(cell.id))}</span><span class="surface-cell-meta">${esc(owner)} · ${fmt(cell.area_km2,0)} km²</span></button></div>`;
     }).join('');
+    const cellIndex=cells.map((cell)=>`<button type="button" class="surface-cell-index-item ${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''}" data-inspect="surface-cell" data-id="${esc(cell.id)}" data-surface-choice-kind="index" aria-pressed="${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'true':'false'}">${esc(surfaceCellLabel(cell.id))}</button>`).join('');
     const locations=(map.locations||[]).map((loc)=>`<span class="badge">${esc(loc.display_name)} ${loc.developed_cell_ids?.length||0} 地域</span>`).join(' ');
-    return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-stage"><svg class="surface-map-links" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg><div class="surface-map-nodes">${buttons}</div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>`;
+    return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-viewport"><div class="surface-map-stage" style="min-width:${layout.width}px;height:${layout.height}px"><svg class="surface-map-links" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg><div class="surface-map-nodes">${buttons}</div></div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div><div class="cell-sub surface-map-caption">位置は地理的関係の概略です。緯度・経度は地域詳細の数値を参照してください。</div><div class="surface-cell-index" aria-label="地表地域の一覧">${cellIndex}</div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>`;
   }
 
   function patchSurveyDecisionSurface(root,html){
@@ -628,10 +653,28 @@
     const root=$('#operationsTabContent');
     const html=(renderers[state.activeTab]||renderOverviewTab)();
     if(state.activeTab==='survey'&&patchSurveyDecisionSurface(root,html)){root.dataset.renderedTab=state.activeTab;return;}
+    const viewport=root.querySelector('.surface-map-viewport');
+    const oldScrollKey=root.dataset.surfaceMapScrollKey;
+    if(viewport&&oldScrollKey)surfaceMapScrollByContext.set(oldScrollKey,{left:viewport.scrollLeft,top:viewport.scrollTop});
+    const scrollKey=['surface','survey'].includes(state.activeTab)&&state.surfaceMap?.body_id
+      ?`${state.activeTab}:${state.surfaceMap.body_id}`:null;
+    const focused=root.contains(document.activeElement)?document.activeElement:null;
+    const focusKey=focused?.getAttribute('data-id')&&focused?.getAttribute('data-inspect')
+      ?{id:focused.dataset.id,type:focused.dataset.inspect,onMap:focused.classList.contains('surface-cell-button')}:null;
     if(root.dataset.renderedTab===state.activeTab){
-      A.replaceHtmlPreservingKeyed(root,html,[{selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id']}]);
+      A.replaceHtmlPreservingKeyed(root,html,[{selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id','data-surface-choice-kind']}]);
     }else if(root.innerHTML!==html){
       root.innerHTML=html;
+    }
+    const nextViewport=root.querySelector('.surface-map-viewport');
+    const mapScroll=scrollKey?surfaceMapScrollByContext.get(scrollKey):null;
+    if(mapScroll&&nextViewport){nextViewport.scrollLeft=mapScroll.left;nextViewport.scrollTop=mapScroll.top;}
+    if(scrollKey)root.dataset.surfaceMapScrollKey=scrollKey;else delete root.dataset.surfaceMapScrollKey;
+    if(focusKey&&!root.contains(focused)){
+      const target=[...root.querySelectorAll('[data-inspect][data-id]')].find((node)=>
+        node.dataset.id===focusKey.id&&node.dataset.inspect===focusKey.type
+          &&node.classList.contains('surface-cell-button')===focusKey.onMap);
+      target?.focus({preventScroll:true});
     }
     root.dataset.renderedTab=state.activeTab;
   }
@@ -1173,6 +1216,12 @@
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
     const surveyLayer=event.target.closest('[data-survey-map-layer]');if(surveyLayer){surveyMapLayer=surveyLayer.dataset.surveyMapLayer||'knowledge';const map=$('.survey-scope-map');if(map)map.dataset.surveyLayer=surveyMapLayer;$$('[data-survey-map-layer]').forEach((button)=>{const active=button.dataset.surveyMapLayer===surveyMapLayer;button.classList.toggle('is-active',active);button.setAttribute('aria-pressed',active?'true':'false');});return;}
+    const surveyCellIndex=event.target.closest('[data-survey-focus-cell]');
+    if(surveyCellIndex){
+      const input=$$('[data-survey-draft-cell]').find((node)=>node.value===surveyCellIndex.dataset.surveyFocusCell);
+      if(input){input.click();input.focus({preventScroll:true});input.closest('.survey-scope-node')?.scrollIntoView({block:'nearest',inline:'nearest'});}
+      return;
+    }
     const dependencyToggle=event.target.closest('[data-dependency-view]');if(dependencyToggle){dependencyView=dependencyToggle.dataset.dependencyView==='forecast'?'forecast':'current';renderActiveTab();renderInspector();return;}
     const dependencyTransport=event.target.closest('[data-dependency-transport]');if(dependencyTransport){const id=state.inspector?.type==='dependency-resource'?state.inspector.id:null;if(!id)return;const rows=dependencyTransport.dataset.dependencyTransport==='forecast'?(state.dependencyAnalyticsForecast?.forecast_resources||[]):(state.dependencyAnalyticsCurrent?.current_resources||[]);const row=rows.find((item)=>item.id===id);if(row?.navigation)await A.openDecisionContext(row.navigation);return;}
     const forecastHorizon=event.target.closest('[data-detailed-forecast-horizon]');if(forecastHorizon){detailedForecastHorizon=forecastHorizon.dataset.detailedForecastHorizon||'SHORT_TERM';renderActiveTab();return;}

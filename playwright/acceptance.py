@@ -61,6 +61,25 @@ def _assert_inspector_section_order(page, expected_prefix: list[str], message: s
     _assert(headings[: len(expected_prefix)] == expected_prefix, f"{message}: {headings}")
 
 
+def _assert_surface_targets_are_independent(page, selector: str) -> None:
+    """Every map target must remain a direct hit target, regardless of geography."""
+    collisions = page.locator(selector).evaluate_all("""nodes => {
+      const boxes=nodes.map(node=>node.getBoundingClientRect());
+      const failures=[];
+      for(let i=0;i<boxes.length;i++){
+        if(boxes[i].width<44||boxes[i].height<44)failures.push(`undersized ${i}`);
+        for(let j=i+1;j<boxes.length;j++){
+          const a=boxes[i],b=boxes[j];
+          const dx=Math.min(a.right,b.right)-Math.max(a.left,b.left);
+          const dy=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);
+          if(dx>0.5&&dy>0.5)failures.push(`overlap ${i}/${j}`);
+        }
+      }
+      return failures;
+    }""")
+    _assert(not collisions, f"Surface targets must not obscure one another: {collisions}")
+
+
 def _select_location(page, location_id: object) -> None:
     button = page.locator(f'[data-location-id="{location_id}"]')
     target_name = button.locator('.location-name').inner_text().strip()
@@ -339,13 +358,35 @@ def run(*, browser=None) -> dict[str, object]:
                     "body navigation must not turn physical targets into Operational Nodes")
             _assert(page.evaluate("() => window.SpaceIdleApp.state.selectedGlobalNodeId") == selected_global_node_id,
                     "surface drill-down must preserve the shared map node context")
-            first_surface_cell = page.locator('#operationsTabContent [data-inspect="surface-cell"]').first
+            first_surface_cell = page.locator('#operationsTabContent .surface-cell-button').first
+            _assert_surface_targets_are_independent(page, '.surface-cell-button')
+            _assert(page.locator('.surface-cell-index [data-inspect="surface-cell"]').count() ==
+                    page.locator('.surface-cell-button').count(),
+                    "each map cell must have an alternative selection in the same physical context")
+            for width in (1024, 1180, 1194):
+                page.set_viewport_size({"width": width, "height": 834})
+                _assert_surface_targets_are_independent(page, '.surface-cell-button')
+                _assert(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"),
+                        f"Surface map must scroll internally rather than widen {width}px landscape")
+                page.locator('.surface-cell-button').last.click()
+            page.set_viewport_size({"width": 1024, "height": 834})
+            map_offset = page.locator('.surface-map-viewport').evaluate("""node => {
+              node.scrollLeft=Math.min(100,node.scrollWidth-node.clientWidth);
+              return node.scrollLeft;
+            }""")
+            page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
+            page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
+            page.wait_for_function("() => document.querySelector('.surface-map-viewport') !== null")
+            _assert(page.locator('.surface-map-viewport').evaluate("node => node.scrollLeft") == map_offset,
+                    "Surface map pan/scroll must survive a Survey round trip")
+            page.set_viewport_size({"width": 1194, "height": 834})
             first_surface_cell.click()
             selected_cell_id = page.evaluate("() => window.SpaceIdleApp.state.inspector?.id")
             page.locator('.primary-nav-button[data-section="global"]').click()
             page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
             page.wait_for_function("cell => window.SpaceIdleApp.state.inspector?.id === cell && window.SpaceIdleApp.state.activeTab === 'surface'", arg=selected_cell_id)
-            _assert(page.locator('#operationsTabContent [data-inspect="surface-cell"].is-selected').count() == 1,
+            _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1
+                    and page.locator('#operationsTabContent .surface-cell-index-item.is-selected').count() == 1,
                     "returning to the same body must retain the selected Surface Cell")
             alternate_provider = page.evaluate("""body => {
               const state=window.SpaceIdleApp.state;
@@ -358,9 +399,9 @@ def run(*, browser=None) -> dict[str, object]:
                   return state.operationalNodeId===provider && state.operationalNode?.id===provider
                     && state.selectedSurfaceBodyId===body && state.surfaceMap?.body_id===body
                     && state.inspector?.id===cell
-                    && document.querySelectorAll('#operationsTabContent [data-inspect="surface-cell"].is-selected').length===1;
+                    && document.querySelectorAll('#operationsTabContent .surface-cell-button.is-selected').length===1;
                 }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
-                _assert(page.locator('#operationsTabContent [data-inspect="surface-cell"].is-selected').count() == 1,
+                _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1,
                         "switching an execution provider must preserve the independently selected physical cell")
                 page.locator(f'#locationList [data-location-id="{previous_operational_node_id}"]').click()
                 page.wait_for_function("id => window.SpaceIdleApp.state.operationalNodeId===id", arg=previous_operational_node_id)
@@ -894,6 +935,15 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
             page.locator('.survey-scope-map').wait_for(timeout=10000)
             _assert(page.locator('.survey-scope-map').count() == 1, "Survey must use the surface map as the primary scope-selection canvas")
+            _assert_surface_targets_are_independent(page, '.survey-scope-node')
+            _assert(page.locator('[data-survey-focus-cell]').count() == page.locator('.survey-scope-node').count(),
+                    "Survey region index must lead to each actual map checkbox")
+            first_survey_cell = page.locator('[data-survey-focus-cell]').first
+            target_survey_cell = first_survey_cell.get_attribute('data-survey-focus-cell')
+            first_survey_cell.click()
+            _assert(page.locator('[data-survey-draft-cell]').evaluate_all(
+                "(nodes,id) => nodes.find(node=>node.value===id)?.checked || false", target_survey_cell),
+                "alternative Survey list must toggle the same editable scope as the map")
             _assert(page.locator('[data-survey-map-layer]').count() == 5, "Survey surface canvas must expose the five canonical information layers")
             movement_layer = page.locator('[data-survey-map-layer="movement"]')
             movement_layer.click()
@@ -912,6 +962,9 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             surface_cells = page.locator('.surface-cell-button')
             surface_cells.first.wait_for(timeout=10000)
+            _assert_surface_targets_are_independent(page, '.surface-cell-button')
+            _assert(page.locator('.surface-cell-index-item[data-inspect="surface-cell"]').count() == surface_cells.count(),
+                    "all physical cells must be reachable without aiming at an edge")
             _assert(surface_cells.count() > 0, "surface map must render Application-projected body cells")
             _assert("base.cell." not in surface_cells.first.inner_text(), "surface map must present labels rather than internal cell ids")
             surface_decision_found = False

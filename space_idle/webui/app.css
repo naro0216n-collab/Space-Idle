@@ -172,6 +172,8 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 
 .surface-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; }
 .surface-map-card { min-width: 0; }
+.surface-map-viewport { min-width: 0; margin: 12px; overflow: auto; overscroll-behavior: contain; }
+.surface-map-viewport .surface-map-stage { margin: 0; }
 .surface-map-stage { position: relative; min-height: 480px; margin: 12px; border: 1px solid var(--line-soft); border-radius: 9px; overflow: hidden; background: #09131d; isolation: isolate; }
 .surface-map-links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .surface-map-nodes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
@@ -183,6 +185,10 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .surface-cell-button.is-selected { border-color: var(--accent); background: #163249; }
 .surface-cell-name { display: block; font-size: 11px; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
 .surface-cell-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
+.surface-map-caption { padding: 0 12px 8px; }
+.surface-cell-index { display: flex; flex-wrap: wrap; gap: 7px; padding: 8px 12px 12px; }
+.surface-cell-index-item { min-height: 44px; padding: 8px 11px; border: 1px solid var(--line-soft); background: #101b25; text-align: left; font-size: 11px; }
+.surface-cell-index-item.is-selected, .surface-cell-index-item[aria-pressed="true"] { border-color: var(--accent); background: #163249; }
 .surface-map-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 0 12px 12px; color: var(--muted); font-size: 11px; }
 .surface-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--line); background: #101b25; }
@@ -393,6 +399,8 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .survey-scope-node > span { min-height: 60px; display: grid; align-content: center; padding: 8px 10px; border: 1px solid #36566d; border-radius: 9px; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
 .survey-scope-node strong { font-size: 11px; line-height: 1.25; }
 .survey-scope-node small { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.3; }
+.survey-scope-map .survey-scope-node { width: 154px; }
+.survey-scope-map .survey-scope-node > span { min-height: 82px; }
 .survey-scope-node [data-survey-layer-value] { display: none; }
 .survey-scope-map[data-survey-layer="environment"] [data-survey-layer-value="environment"],
 .survey-scope-map[data-survey-layer="knowledge"] [data-survey-layer-value="knowledge"],
