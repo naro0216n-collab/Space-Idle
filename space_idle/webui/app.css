@@ -621,6 +621,8 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .system-map-edge.is-candidate { stroke: #a2c0d5; stroke-dasharray: 1.5 1; stroke-width: 1.8; }
 .system-map-pair-button { width: fit-content; min-height: 44px; text-align: left; }
 .system-map-edge.is-context-related { stroke: #f2c26b; stroke-width: 1.8; }
+.system-map-edge.is-cargo-in-transit { stroke: #e8a3d0; stroke-width: 2.8; stroke-dasharray: 3 1; pointer-events: none; }
+.system-map-edge.is-cargo-waiting { stroke: #e8a3d0; stroke-width: 2.4; stroke-dasharray: 1 2; pointer-events: none; }
 .system-map-nodes { position: absolute; inset: 0; pointer-events: none; }
 .system-map-node-shell { width: 142px; position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
 .system-map-legend { padding: 8px 14px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line-soft); }
@@ -631,3 +633,17 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .system-map-relation-options button { display: grid; text-align: left; gap: 3px; min-height: 44px; }
 .system-map-relation-options button small { color: var(--muted); }
 .system-map-relation-options button.is-selected { outline: 2px solid var(--accent); }
+
+/* Common System Map: stable touch targets and independently scrollable relation comparisons. */
+.system-map-resource-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.system-map-resource-label select { min-height: 44px; min-width: 118px; max-width: 180px; }
+.system-map-controls { align-items: center; flex-wrap: wrap; }
+.system-map-toolbar { flex-wrap: wrap; }
+.system-map-relation > .system-map-pair-button.is-selected { outline: 2px solid var(--accent); }
+.cargo-flow-card.is-context-target { outline: 2px solid var(--accent); }
+.system-map-node-shell .is-related { outline: 2px dashed var(--accent); }
+@media (max-width: 1100px) {
+  .system-map-toolbar { align-items: start; }
+  .system-map-resource-label select { max-width: 142px; }
+  .system-map-stage { height: 390px; }
+}

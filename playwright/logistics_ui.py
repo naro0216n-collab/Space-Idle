@@ -109,6 +109,11 @@ def run(*, browser=None) -> None:
             decision_item.click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "補給需要" in page.locator("#networkDecisionContext").inner_text()
+            requirement_resource = constraint_button.get_attribute('data-resource-id')
+            assert requirement_resource
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            requirement_details = page.locator('#movementPlanInspectorContent').inner_text()
+            assert all(label in requirement_details for label in ('未充足', '現地供給', '輸送系内'))
             # A supply shortfall is not evidence of an operating transport
             # connection. The spatial canvas must remain available even when
             # there is no allocated service for this requirement.
@@ -209,10 +214,24 @@ def run(*, browser=None) -> None:
             allocation_map_entry.wait_for(state="visible", timeout=10000)
             assert allocation_map_entry.get_attribute("aria-pressed") == "true"
             assert page.locator("#systemMapStage .system-map-edge.is-context-related").count() > 0
-            assert "利用可能" in page.locator("#movementPlanInspectorContent").inner_text()
+            allocation_details = page.locator("#movementPlanInspectorContent").inner_text()
+            assert all(label in allocation_details for label in (
+                '目標', 'Nominal', '利用可能', '使用中', '余力', '必要Fleet', '運用Resource',
+            ))
+            # Shared Resource selection is UI context; it must survive a round trip
+            # through the overview entrance without creating another spatial map.
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            assert page.locator('#systemMapRelations [data-system-allocation-id]').count() > 0
 
+            allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            page.locator('#allocationPreview .kv-grid dt').first.wait_for(timeout=10000)
+            assert '現在のCapacity target' in page.locator('#allocationPreview').inner_text()
+            assert '輸送能力目標' in page.locator('#allocationPreview').inner_text()
             page.locator('[data-allocation-priority="4"]').click()
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -240,6 +259,18 @@ def run(*, browser=None) -> None:
                 arg=allocation_id,
                 timeout=10000,
             )
+
+            # Cargo is not admitted Inventory; inspect the physical leg and final
+            # destination separately when this state contains an in-flight parcel.
+            cargo_card = page.locator('#cargoTable .cargo-flow-card').first
+            if cargo_card.count():
+                assert '最終目的地' in cargo_card.inner_text()
+                assert '次のhandoff' in cargo_card.inner_text()
+                cargo_card.locator('[data-cargo-inspect]').click()
+                cargo_inspector = page.locator('#movementPlanInspectorContent').inner_text()
+                assert all(label in cargo_inspector for label in (
+                    '輸送中のResource', '最終目的地', '次の引継先', '輸送量',
+                ))
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
             page.get_by_role("button", name="追加備蓄を設定").click()
