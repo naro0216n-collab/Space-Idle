@@ -84,7 +84,7 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         power=power,
         service_capacity_registry=service_capacity_registry,
         surface_movement_rules=build_surface_movement_rules(),
-        surface_access_movement_rules=build_surface_access_movement_rules(),
+        surface_access_movement_rules=build_surface_access_movement_rules(graph, environment),
         spaceflight_movement_rules=build_spaceflight_movement_rules(),
         technology_state=technology,
     )

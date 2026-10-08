@@ -244,7 +244,7 @@ CI通過や特定Gameplay Scenarioの完走だけを完了判定には使わな�
 
 publish対象はcommit済みtarget treeとし、publish transportの都合をゲーム実装の構造、commit境界、State ownershipへ持ち込まない。成立済みlocal commitは履歴整理やtransport都合で作り直さず、責務境界に沿ったcheckpointとして保持する。
 
-通常publishの操作手順、Publish Gatewayのtransport protocol、source-snapshotの復元方法、workflow maintenance、失敗時のrecoveryは `DEVELOPMENT.md` と各helperの生成手順を運用上の正本とする。開発原則はそれらの具体的なpacket形式、chunkサイズ、Connector実装、GitHub API呼出順へ依存しない。
+通常publishの操作手順、Publish Gatewayのtransport protocol、source-snapshotの復元方法、workflow maintenance、失敗時のrecoveryは `DEVELOPMENT.md` と各helperの生成手順を唯一の運用正本とする。実行者はそこに記載された操作と生成済みpacketだけを記載順に実行し、独自の確認・中継・代替・追加検証・操作順変更を行わない。手順が実行できない場合も独自の迂回は作らず、`DEVELOPMENT.md` の指定されたrecoveryを使用する。
 
 branchの役割は次の通りとする。
 

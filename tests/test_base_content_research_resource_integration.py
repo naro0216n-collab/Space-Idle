@@ -94,3 +94,21 @@ def test_base_resource_methods_connect_surveyed_geology_to_processing_and_constr
         and recipe.prerequisite_technologies.isdisjoint(resource_ids)
         for recipe in sim.projects.recipes.values()
     )
+
+
+def test_research_display_stage_does_not_derive_cost_or_limit_stage_range(monkeypatch):
+    """Cost is a typed Research Stage requirement, not a table indexed by display stage."""
+    from space_idle.content import base_research
+    from space_idle.research import ResearchTheoryStageSpec
+    from space_idle.shared import DefinitionId
+
+    stage = 9
+    explicit_cost = 425.0
+    additional_row = (
+        "test.future-stage", stage, "advanced", "independent", "Future research", (), explicit_cost,
+    )
+    monkeypatch.setattr(base_research, "RESEARCH_DAG_ROWS", (additional_row,))
+    definition = base_research.build_research_definitions()[DefinitionId("test.future-stage")]
+    assert definition.progression_stage == stage
+    assert isinstance(definition.stage_specs[0], ResearchTheoryStageSpec)
+    assert definition.stage_specs[0].research_point_cost == explicit_cost

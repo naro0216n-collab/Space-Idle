@@ -17,6 +17,7 @@ def build_power_specs() -> dict:
         ids.EARTH_LAUNCH_SUPPORT: PowerSpec(None, 0.08),
         ids.VEHICLE_ASSEMBLY_FACILITY: PowerSpec(None, 0.18),
         ids.GRID_POWER_SUPPLY: PowerSpec(FixedGeneration(20.0), 0.0),
+        ids.ORBITAL_FISSION_POWER: PowerSpec(FixedGeneration(0.6), 0.03),
         ids.ORBITAL_LOGISTICS_NODE: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.12),
         ids.ROBOTIC_SURVEY_PACKAGE: PowerSpec(SolarGeneration(0.55 / 0.78, 1361.0), 0.08),
         ids.SURFACE_POWER_GRID: PowerSpec(SolarGeneration(1.0 / 0.78, 1361.0), 0.05),

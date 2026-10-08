@@ -13,10 +13,12 @@ Cartesian baseline or per-origin/destination route table.
 
 from __future__ import annotations
 
+from math import sqrt
+
 from ..shared import CelestialBodyId, SpatialNodeId
 from ..spatial import (
     AtmosphereField, CelestialBodyDef, GravityField, PhysicalSurface,
-    RadiationField, SpatialGraph, SpatialNodeDef, SpatialNodeKind, StaticFacetStore, ThermalField,
+    RadiationField, SpatialGraph, SpatialNodeDef, SpatialNodeKind, StaticFacetStore, ThermalField, IlluminationField, CommunicationField,
 )
 from . import base_ids as ids
 
@@ -100,6 +102,33 @@ def register_giant_orbital_contexts(graph: SpatialGraph) -> None:
             inherits_parent_environment=False,
             body_center_orbit_radius_km=radius+5000.0,
         ))
+
+
+def register_giant_orbital_environment(graph: SpatialGraph, facets: StaticFacetStore) -> None:
+    """Physical conditions of explicit orbital contexts, never imaginary surfaces.
+
+    Radiation is representative Context-local Content. Sunlight is derived
+    exclusively from the body's heliocentric scale; the availability factor
+    only describes orbital illumination, not a second inverse-square loss.
+    """
+    representative_orbital_radiation_msv_day = {
+        "jupiter": 1000.0,
+        "saturn": 8.0,
+        "uranus": 1.0,
+        "neptune": 0.8,
+    }
+    for slug, _name, _radius, axis_au, _gravity, solid in _PLANETS:
+        if solid:
+            continue
+        context = SpatialNodeId(f"base.spatial.{slug}.orbit")
+        body_id = CelestialBodyId(f"base.body.{slug}")
+        flux = graph.representative_solar_flux_w_m2(body_id)
+        assert flux is not None
+        facets.set(context, AtmosphereField(0.0, 0.0, {}))
+        facets.set(context, ThermalField(278.0 / sqrt(axis_au)))
+        facets.set(context, RadiationField(representative_orbital_radiation_msv_day[slug]))
+        facets.set(context, IlluminationField(flux, 0.70))
+        facets.set(context, CommunicationField(axis_au * 499.0, 0.8))
 
 
 # Static Environmental reference conditions, not newly discovered player knowledge.

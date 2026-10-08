@@ -23,7 +23,7 @@ from ..spatial import (
     ThermalField,
 )
 from . import base_ids as ids
-from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions, register_giant_orbital_contexts
+from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions, register_giant_orbital_contexts, register_giant_orbital_environment
 
 
 def _earth_cell(
@@ -248,6 +248,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
 
     facets = StaticFacetStore()
     register_solar_system_environment(graph, facets)
+    register_giant_orbital_environment(graph, facets)
     register_solar_system_regions(graph, facets)
 
     # Body-global Physical Environment is defined once per body.  Surface Cell

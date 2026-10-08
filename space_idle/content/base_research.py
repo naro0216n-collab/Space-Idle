@@ -25,21 +25,16 @@ def research_id(code: str) -> DefinitionId:
     return DefinitionId(code)
 
 
-def _theory_cost(progression_stage: int) -> float:
-    # Base-content balance only; stage is metadata, not an implicit gate.
-    return {1: 180.0, 2: 480.0, 3: 1200.0, 4: 3000.0}[progression_stage]
-
-
 def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
     definitions: dict[DefinitionId, ResearchDefinition] = {}
-    for code, progression_stage, category, series, display_name, prerequisites in RESEARCH_DAG_ROWS:
+    for code, progression_stage, category, series, display_name, prerequisites, theory_cost in RESEARCH_DAG_ROWS:
         definition_id = research_id(code)
         if definition_id in definitions:
             raise ValueError(f"duplicate research definition id: {definition_id}")
         definitions[definition_id] = ResearchDefinition(
             definition_id,
             display_name,
-            (ResearchTheoryStageSpec("theory", _theory_cost(progression_stage)),),
+            (ResearchTheoryStageSpec("theory", theory_cost),),
             prerequisites=frozenset(research_id(prerequisite) for prerequisite in prerequisites),
             progression_stage=progression_stage,
             category=category,

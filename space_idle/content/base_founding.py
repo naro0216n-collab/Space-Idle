@@ -47,11 +47,22 @@ def build_deployment_recipes() -> dict:
                 (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5),
                  _r(ids.PRECISION_ELECTRONICS, 0.4)),
             ),
+            FoundingFacilityDeployment(
+                ids.ORBITAL_FISSION_POWER,
+                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.6),
+                 _r(ids.PRECISION_ELECTRONICS, 0.2)),
+            ),
         ),
         preparation_work=3.0,
         preparation_service_type="cargo_transfer",
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.ORBIT_SITE,
+        initial_inventory=(
+            _r(ids.PROPELLANT, 3.0),
+            _r(ids.STRUCTURAL_COMPONENTS, 1.0),
+            _r(ids.MACHINERY, 0.8),
+            _r(ids.PRECISION_ELECTRONICS, 0.5),
+        ),
         required_units=1,
     )
     return {row.id: row for row in (recipe, orbital)}

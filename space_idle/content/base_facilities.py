@@ -20,6 +20,7 @@ def build_facility_definitions() -> dict:
         ids.SAMPLE_ANALYSIS_LABORATORY: FacilityDef(ids.SAMPLE_ANALYSIS_LABORATORY, "試料分析研究所", req._capabilities("research_lab"), surface, surface),
         ids.VACUUM_REGOLITH_PROCESS_LABORATORY: FacilityDef(ids.VACUUM_REGOLITH_PROCESS_LABORATORY, "真空レゴリスプロセス研究所", req._capabilities("research_lab"), surface, req.VACUUM_SURFACE_SITE),
         ids.GRID_POWER_SUPPLY: FacilityDef(ids.GRID_POWER_SUPPLY, "外部電力網接続", req._capabilities("grid_power"), surface, surface),
+        ids.ORBITAL_FISSION_POWER: FacilityDef(ids.ORBITAL_FISSION_POWER, "軌道核分裂電源", req._capabilities("orbital_power_supply"), orbit, orbit),
         ids.ORBITAL_LOGISTICS_NODE: FacilityDef(ids.ORBITAL_LOGISTICS_NODE, "軌道物流・整備ノード", req._capabilities("cargo_transfer", "vehicle_refueling", "spacecraft_servicing"), orbit, orbit, service_capacity_supplies=req._services(cargo_transfer=1.0, spacecraft_servicing=1.0)),
         ids.EARTH_LAUNCH_SUPPORT: FacilityDef(ids.EARTH_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations", "surface_access_anchor"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
         ids.VEHICLE_ASSEMBLY_FACILITY: FacilityDef(ids.VEHICLE_ASSEMBLY_FACILITY, "宇宙輸送機製造・組立設備", req._capabilities("vehicle_assembly"), surface, surface, service_capacity_supplies=req._services(vehicle_assembly=1.0)),

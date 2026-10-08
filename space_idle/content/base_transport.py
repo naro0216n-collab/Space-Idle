@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from math import sqrt
+
 from ..shared import DefinitionId
+from ..spatial import AtmosphereField, EnvironmentResolver, PhysicalSurface, SpatialGraph
 from ..transport import (
+    AtmosphericEntryCapability,
     LandingCapability,
     OperationSupportLocation,
     OperationSupportRequirement,
@@ -34,8 +38,18 @@ def build_surface_movement_rules() -> tuple[SurfaceTransportMovementRule, ...]:
     )
 
 
-def build_surface_access_movement_rules() -> tuple[SurfaceAccessMovementRule, ...]:
-    return (
+def build_surface_access_movement_rules(
+    graph: SpatialGraph, environment: EnvironmentResolver,
+) -> tuple[SurfaceAccessMovementRule, ...]:
+    """Build one surface/space operation profile per physical surface.
+
+    The existing Earth/Moon access Content retains its established profile.
+    Additional bodies derive the orbital-access Delta-V scale from the *same*
+    Body gravitational input used by Spatial transfer, and their atmosphere
+    selects an entry or powered landing operation. No OD-specific routes or
+    additional planet-specific Movement evaluators are registered.
+    """
+    baseline = (
         SurfaceAccessMovementRule(
             id=DefinitionId("base.movement.earth_surface_access"),
             display_name="地球地表アクセス",
@@ -67,6 +81,42 @@ def build_surface_access_movement_rules() -> tuple[SurfaceAccessMovementRule, ..
             surface_requirements=req.SURFACE_SITE,
         ),
     )
+    derived: list[SurfaceAccessMovementRule] = []
+    for body in sorted(graph.bodies.values(), key=lambda row: str(row.id)):
+        if body.physical_surface is not PhysicalSurface.SOLID or body.id in (ids.EARTH_BODY, ids.MOON):
+            continue
+        gravity = body.representative_gravity_m_s2
+        if gravity is None:
+            continue  # Unknown physical input is not an artificial zero-gravity route.
+        # Body definitions are physical subjects rather than Environment query
+        # contexts. Read their statically owned BODY_GLOBAL facet directly.
+        atmosphere = environment.static.body_facets.get((body.id, AtmosphereField))
+        if atmosphere is None:
+            continue  # The operation type cannot be selected without a known atmosphere.
+        # Approximate powered access to a low orbit as 80% of local escape
+        # speed. This is a Content operating assumption, not an ephemeris or
+        # instant distance; Vehicle Delta-V and propellant share this one value.
+        characteristic_delta_v = max(0.05, 0.8 * sqrt(2.0 * gravity * body.mean_radius_km * 1000.0) / 1000.0)
+        has_dense_atmosphere = atmosphere.pressure_pa >= 50_000.0
+        descent_kind = (
+            TransportOperationKind.ATMOSPHERIC_ENTRY if has_dense_atmosphere
+            else TransportOperationKind.LANDING
+        )
+        derived.append(SurfaceAccessMovementRule(
+            id=DefinitionId(f"base.movement.{str(body.id).split('.')[-1]}_surface_access"),
+            display_name=f"{body.display_name}地表アクセス",
+            body_id=body.id,
+            descent_operations=(TransportOperationRequirement(
+                descent_kind, 0.0 if has_dense_atmosphere else characteristic_delta_v,
+            ),),
+            ascent_operations=(TransportOperationRequirement(
+                TransportOperationKind.POWERED_ASCENT, characteristic_delta_v,
+            ),),
+            transit_days=2,
+            space_requirements=req.ORBIT_SITE,
+            surface_requirements=req.ATMOSPHERIC_SURFACE_SITE if has_dense_atmosphere else req.SURFACE_SITE,
+        ))
+    return baseline + tuple(derived)
 
 
 def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:
@@ -131,6 +181,63 @@ def build_vehicle_definitions() -> dict:
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.0), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+        ),
+        ids.DEEP_SPACE_FREIGHTER: VehicleDef(
+            id=ids.DEEP_SPACE_FREIGHTER,
+            display_name="長距離軌道間貨物船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=12.0, payload_t=16.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=18.0,
+                propellant_t_per_total_t_per_km_s=0.008,
+                operation_capabilities=(SpaceflightCapability(35.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=30_000.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=18.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 12.0),
+                           (ids.MACHINERY, 5.0), (ids.PRECISION_ELECTRONICS, 4.0)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=8.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 6.0),
+                                            (ids.MACHINERY, 2.5), (ids.PRECISION_ELECTRONICS, 2.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=8.0),
+        ),
+        ids.INTERPLANETARY_LANDER: VehicleDef(
+            id=ids.INTERPLANETARY_LANDER,
+            display_name="惑星間地表輸送機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=8.0, payload_t=8.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=13.0,
+                propellant_t_per_total_t_per_km_s=0.012,
+                operation_capabilities=(
+                    SpaceflightCapability(25.0),
+                    PoweredAscentCapability(9.0, 12.0, 500_000.0),
+                    LandingCapability(9.0, 12.0, 500_000.0),
+                    AtmosphericEntryCapability(500_000.0),
+                ),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=2_000.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=12.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 8.0),
+                           (ids.MACHINERY, 3.0), (ids.PRECISION_ELECTRONICS, 3.0)),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=6.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 4.0),
+                                            (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 1.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=6.0),
         ),
         ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT: VehicleDef(
             id=ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,

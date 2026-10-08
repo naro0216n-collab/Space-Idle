@@ -60,6 +60,15 @@ def build_construction_recipes() -> dict:
             technologies=frozenset({ids.RP_RESOURCE_CHAIN_03}),
             capabilities=frozenset({"granular_mineral_extraction"}),
         ),
+        ids.ORBITAL_FISSION_POWER: ConstructionRecipe(
+            ids.ORBITAL_FISSION_POWER,
+            (req._structure_resource(3.0), req._machinery_resource(2.0),
+             req._electronics_resource(0.8)),
+            0.0,
+            req.ORBIT_SITE,
+            frozenset({ids.FP_REACTOR_POWER_02}),
+            True,
+        ),
         ids.ORBITAL_LOGISTICS_NODE: ConstructionRecipe(
             ids.ORBITAL_LOGISTICS_NODE,
             (req._structure_resource(3.0), req._machinery_resource(2.0), req._electronics_resource(1.0)),
