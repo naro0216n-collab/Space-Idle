@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PLAYWRIGHT_DIR = ROOT / "playwright"
 
@@ -60,26 +62,13 @@ def test_suite_runner_accepts_scenario_modules_without_registry_changes(
     assert "one lazily launched browser process with a fresh context per scenario" in output
     assert "E2E suite complete: 2 scenario(s)" in output
 
-
-def test_suite_runner_rejects_missing_or_non_runnable_modules(monkeypatch, tmp_path) -> None:
-    runner = _load_module("space_idle_e2e_suite_validation_test", PLAYWRIGHT_DIR / "run_suite.py")
-    runner.PLAYWRIGHT_DIR = tmp_path
-
-    try:
+    # The same runner must reject missing and non-runnable scenario entries.
+    with pytest.raises(ValueError, match="does not exist"):
         runner.run_scenarios(["missing_future_scenario"])
-    except ValueError as exc:
-        assert "does not exist" in str(exc)
-    else:
-        raise AssertionError("missing scenarios must fail instead of being silently skipped")
-
     (tmp_path / "future_scenario.py").write_text("VALUE = 1\n", encoding="utf-8")
     monkeypatch.setattr(runner.importlib, "import_module", lambda _name: SimpleNamespace(VALUE=1))
-    try:
+    with pytest.raises(ValueError, match=r"callable run\(\)"):
         runner.run_scenarios(["future_scenario"])
-    except ValueError as exc:
-        assert "callable run()" in str(exc)
-    else:
-        raise AssertionError("scenario modules without run() must fail closed")
 
 
 def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeypatch) -> None:
@@ -95,44 +84,9 @@ def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeyp
     assert support.browser_launch_kwargs("webkit") == {"headless": True}
 
 
-def test_isolated_browser_context_standalone_owns_a_fresh_browser(monkeypatch) -> None:
+def test_browser_context_lifecycle_owns_independent_contexts_with_or_without_suite_browser(monkeypatch) -> None:
     support = _load_module("space_idle_e2e_support_context_test", PLAYWRIGHT_DIR / "e2e_support.py")
     opened: list[object] = []
-
-    class FakeContext:
-        def __init__(self):
-            self.closed = False
-
-        def close(self):
-            self.closed = True
-
-    class FakeBrowser:
-        def __init__(self):
-            self.context = FakeContext()
-
-        def new_context(self, **_options):
-            return self.context
-
-    @contextmanager
-    def fake_managed_browser(_browser_name):
-        browser = FakeBrowser()
-        opened.append(browser)
-        yield browser
-
-    monkeypatch.setattr(support, "managed_browser", fake_managed_browser)
-
-    with support.isolated_browser_context("chromium", locale="ja-JP") as first:
-        pass
-    with support.isolated_browser_context("chromium", locale="ja-JP") as second:
-        pass
-
-    assert first is not second
-    assert len(opened) == 2
-    assert first.closed and second.closed
-
-
-def test_isolated_browser_context_reuses_suite_browser_without_relaunch(monkeypatch) -> None:
-    support = _load_module("space_idle_e2e_support_reuse_test", PLAYWRIGHT_DIR / "e2e_support.py")
 
     class FakeContext:
         def __init__(self):
@@ -151,21 +105,32 @@ def test_isolated_browser_context_reuses_suite_browser_without_relaunch(monkeypa
             return context
 
     @contextmanager
-    def forbidden_managed_browser(_browser_name):
-        raise AssertionError("suite-owned browser must not relaunch per scenario")
-        yield
+    def fake_managed_browser(_browser_name):
+        browser = FakeBrowser()
+        opened.append(browser)
+        yield browser
 
-    monkeypatch.setattr(support, "managed_browser", forbidden_managed_browser)
+    monkeypatch.setattr(support, "managed_browser", fake_managed_browser)
+
+    # Standalone scenarios own the browser; their contexts must not leak.
+    with support.isolated_browser_context("chromium", locale="ja-JP") as first:
+        pass
+    with support.isolated_browser_context("chromium", locale="ja-JP") as second:
+        pass
+    assert len(opened) == 2
+    assert opened[0].contexts == [first]
+    assert opened[1].contexts == [second]
+    assert first is not second and first.closed and second.closed
+
+    # A suite-owned browser is reused, without any standalone launch.
     browser = FakeBrowser()
-
-    with support.isolated_browser_context("chromium", browser=browser, locale="ja-JP") as first:
+    with support.isolated_browser_context("chromium", browser=browser) as first:
         pass
-    with support.isolated_browser_context("chromium", browser=browser, locale="ja-JP") as second:
+    with support.isolated_browser_context("chromium", browser=browser) as second:
         pass
-
-    assert first is not second
+    assert len(opened) == 2
     assert browser.contexts == [first, second]
-    assert first.closed and second.closed
+    assert first is not second and first.closed and second.closed
 
 
 def test_lazy_suite_browser_defers_launch_until_first_context(monkeypatch) -> None:

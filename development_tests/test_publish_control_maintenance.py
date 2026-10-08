@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from development_tests.script_harness import load_script, run_script
+from development_tests.script_harness import commit_all, git, load_script, run_script
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL = ROOT / "scripts" / "publish_control_maintenance.py"
@@ -13,15 +13,6 @@ CONTROL_PATHS = (
     ".github/workflows/publish-gateway.yml",
     "scripts/publish_gateway_validate.py",
 )
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
-
-
-def commit_all(repo: Path, message: str) -> None:
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
 
 
 def run(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -94,9 +85,13 @@ def test_control_maintenance_uses_content_tree_plan_and_direct_commit_to_ref_seq
     assert not transaction(repo).exists()
 
 
-def test_control_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> None:
+def test_control_plan_and_record_fail_closed_on_remote_or_manifest_change(tmp_path: Path) -> None:
     repo, base, _ = init_repo(tmp_path)
     run(repo, "prepare")
+    moved = run(repo, "connector-plan", "--publish-head", "e" * 40, check=False)
+    assert moved.returncode != 0
+    assert "publish HEAD moved" in moved.stderr
+
     run(repo, "connector-plan", "--publish-head", base)
     manifest = transaction(repo) / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -105,11 +100,3 @@ def test_control_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> 
     failed = run(repo, "record-update", "--commit-sha", "b" * 40, "--result", "success", check=False)
     assert failed.returncode != 0
     assert "manifest changed" in failed.stderr
-
-
-def test_control_plan_rejects_moved_publish_head(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    run(repo, "prepare")
-    failed = run(repo, "connector-plan", "--publish-head", "e" * 40, check=False)
-    assert failed.returncode != 0
-    assert "publish HEAD moved" in failed.stderr

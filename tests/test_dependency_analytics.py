@@ -286,62 +286,6 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
 
 
-def test_detailed_forecast_is_observational_and_preserves_node_inventory_extrema():
-    app = build_game_application()
-    sim = app._simulation
-    base_day = sim.day
-    base_stock = dict(sim.inventory.stock)
-    selected_nodes = (EARTH, LEO)
-    days = 6
-    expected: dict[tuple[object, object], list[tuple[int, float]]] = {}
-    for node_id, resource_id in sim.inventory.stock:
-        if node_id in selected_nodes:
-            expected[(node_id, resource_id)] = []
-    # Observe an independent canonical replay rather than reproduce the
-    # forecast's internal aggregation logic or rely on scenario balance values.
-    from copy import deepcopy
-    replay = deepcopy(sim)
-    for _ in range(days + 1):
-        for key in set(expected) | {
-            key for key in replay.inventory.stock if key[0] in selected_nodes
-        }:
-            expected.setdefault(key, [])
-            expected[key].append((replay.day, replay.inventory.available(*key)))
-        if replay.day < base_day + days:
-            replay.advance_days(1)
-
-    view = app.query(GetDetailedForecast(
-        "operational_nodes", node_ids=tuple(map(str, selected_nodes)), period_days=days,
-    ))
-    assert sim.day == base_day
-    assert sim.inventory.stock == base_stock
-    assert view.base_day == base_day
-    assert view.projected_day == base_day + days
-    assert view.period_days == days
-    assert view.node_ids == tuple(map(str, selected_nodes))
-    assert view.inventory
-    assert all(isinstance(row.projected_net_per_day, float) for row in view.inventory)
-    assert view.inventory_ranges
-    for row in view.inventory_ranges:
-        key = (next(node for node in selected_nodes if str(node) == row.operational_node_id),
-               DefinitionId(row.resource_id))
-        timeline = {day: 0.0 for day in range(base_day, base_day + days + 1)}
-        timeline.update(expected[key])
-        minimum = min(timeline.values())
-        assert row.base_available_amount == pytest.approx(timeline[base_day])
-        assert row.projected_available_amount == pytest.approx(timeline[base_day + days])
-        assert row.minimum_available_amount == pytest.approx(minimum)
-        assert timeline[row.minimum_available_day] == pytest.approx(minimum)
-        first_depleted = next((day for day in range(base_day + 1, base_day + days + 1)
-                               if timeline.get(day - 1, 0) > 1e-9 and timeline.get(day, 0) <= 1e-9), None)
-        assert row.first_depleted_day == first_depleted
-
-    with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
-        app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
-    with pytest.raises(ApplicationError, match="period_days"):
-        app.query(GetDetailedForecast(period_days=0))
-
-
 def test_selected_scope_does_not_net_unshipped_remote_production_against_local_need():
     app = build_game_application()
     sim = app._simulation
@@ -370,7 +314,7 @@ def test_selected_scope_does_not_net_unshipped_remote_production_against_local_n
     assert combined.internal_dispatch_per_day == 0.0
 
 
-def test_forecast_observes_real_allocations_and_unshipped_due_supply_without_mutating_live_state():
+def test_detailed_forecast_replays_inventory_and_allocation_constraints_without_mutating_state():
     app = build_game_application()
     sim = app._simulation
     baseline = sim.tick_decision_projection()
@@ -393,9 +337,18 @@ def test_forecast_observes_real_allocations_and_unshipped_due_supply_without_mut
     assert expected_unshipped > 0
 
     base_stock = dict(sim.inventory.stock)
+    selected_nodes = (EARTH, LEO)
+    days = 6
     view = app.query(GetDetailedForecast(
-        "operational_nodes", node_ids=(str(EARTH),), period_days=2,
+        "operational_nodes", node_ids=tuple(map(str, selected_nodes)), period_days=days,
     ))
+    assert view.base_day == sim.day
+    assert view.projected_day == sim.day + days
+    assert view.period_days == days
+    assert view.node_ids == tuple(map(str, selected_nodes))
+    assert view.inventory
+    assert all(isinstance(row.projected_net_per_day, float) for row in view.inventory)
+    assert view.inventory_ranges
     gaps = {(row.resource_id, row.kind): row for row in view.supply_gaps}
     execution = gaps[(str(ids.METAL_ORE), "execution_allocation")]
     procurement = gaps[(str(ids.METAL_ORE), "due_supply_unshipped")]
@@ -411,12 +364,38 @@ def test_forecast_observes_real_allocations_and_unshipped_due_supply_without_mut
     from copy import deepcopy
     observed, ordinary = deepcopy(sim), deepcopy(sim)
     seen = []
-    observed.advance_days(2, observe_decision=lambda decision: seen.append(decision.snapshot.day))
-    ordinary.advance_days(2)
-    assert seen == [sim.day, sim.day + 1]
+    timeline: dict[tuple, dict[int, float]] = {}
+    for elapsed in range(days + 1):
+        for key in ordinary.inventory.stock:
+            if key[0] in selected_nodes:
+                timeline.setdefault(key, {})[ordinary.day] = ordinary.inventory.available(*key)
+        if elapsed < days:
+            ordinary.advance_days(1)
+
+    for row in view.inventory_ranges:
+        key = (next(node for node in selected_nodes if str(node) == row.operational_node_id),
+               DefinitionId(row.resource_id))
+        amounts = {day: timeline.get(key, {}).get(day, 0.0)
+                   for day in range(sim.day, sim.day + days + 1)}
+        minimum = min(amounts.values())
+        assert row.base_available_amount == pytest.approx(amounts[sim.day])
+        assert row.projected_available_amount == pytest.approx(amounts[sim.day + days])
+        assert row.minimum_available_amount == pytest.approx(minimum)
+        assert amounts[row.minimum_available_day] == pytest.approx(minimum)
+        first_depleted = next((day for day in range(sim.day + 1, sim.day + days + 1)
+                               if amounts[day - 1] > 1e-9 and amounts[day] <= 1e-9), None)
+        assert row.first_depleted_day == first_depleted
+
+    observed.advance_days(days, observe_decision=lambda decision: seen.append(decision.snapshot.day))
+    assert seen == list(range(sim.day, sim.day + days))
     assert observed.inventory.stock == ordinary.inventory.stock
     assert observed.logistics.cargo_flows == ordinary.logistics.cargo_flows
     assert observed.logistics.arrival_waiting == ordinary.logistics.arrival_waiting
+
+    with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
+        app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
+    with pytest.raises(ApplicationError, match="period_days"):
+        app.query(GetDetailedForecast(period_days=0))
 
 
 def test_forecast_distinguishes_unadmitted_final_cargo_from_intermediate_handoff():

@@ -8,23 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from development_tests.script_harness import load_script, run_script
+from development_tests.script_harness import (
+    commit_all, git, load_script, run_script, write_source_snapshot,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "publish_request.py"
 PUBLISH_REQUEST = load_script(SCRIPT, "space_idle_test_publish_request")
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    ).stdout.strip()
-
-
-def commit_all(repo: Path, message: str) -> None:
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
 
 
 def run_request(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -45,25 +35,6 @@ def connector_state(repo: Path) -> dict[str, object]:
 
 def prepared(repo: Path) -> dict[str, object]:
     return json.loads(manifest_path(repo).read_text(encoding="utf-8"))
-
-
-def write_source_snapshot(repo: Path, directory: Path, *, publish_commit: str | None = None) -> Path:
-    directory.mkdir()
-    develop = git(repo, "rev-parse", "refs/heads/develop")
-    develop_tree = git(repo, "rev-parse", f"{develop}^{{tree}}")
-    publish = publish_commit or develop
-    publish_tree = git(repo, "rev-parse", f"{publish}^{{tree}}")
-    git(repo, "update-ref", "refs/space-idle/publish-base", publish)
-    (directory / ".source-commit").write_text(develop + "\n", encoding="utf-8")
-    (directory / ".source-tree").write_text(develop_tree + "\n", encoding="utf-8")
-    (directory / ".source-branch").write_text("develop\n", encoding="utf-8")
-    (directory / ".source-publish-commit").write_text(publish + "\n", encoding="utf-8")
-    (directory / ".source-publish-tree").write_text(publish_tree + "\n", encoding="utf-8")
-    git(
-        repo, "bundle", "create", str(directory / "repository.bundle"),
-        "refs/heads/develop", "refs/space-idle/publish-base",
-    )
-    return directory
 
 
 def init_repo(tmp_path: Path) -> tuple[Path, str, str, str, str]:
@@ -143,16 +114,6 @@ def test_init_restores_publish_base_after_clone_from_snapshot_bundle(tmp_path: P
     assert result["publish_commit"] == (snapshot / ".source-publish-commit").read_text(encoding="utf-8").strip()
 
 
-def test_publish_commit_inherits_target_commit_time(tmp_path: Path) -> None:
-    repo, _, _, _, _ = init_repo(tmp_path)
-    result = prepare_change(repo)
-    target_commit = str(result["local_target_commit"])
-    publish_commit = str(result["publish_commit"])
-
-    assert git(repo, "show", "-s", "--format=%cI", publish_commit) == git(
-        repo, "show", "-s", "--format=%cI", target_commit
-    )
-
 def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
@@ -166,6 +127,11 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
     assert result["target_tree"] == checkpoint_tree
     assert result["working_tree_clean"] is False
     assert request["version"] == 8
+    # The published identity and timestamp must belong to the committed target,
+    # not to later working-tree edits.
+    assert git(repo, "show", "-s", "--format=%cI", str(result["publish_commit"])) == git(
+        repo, "show", "-s", "--format=%cI", checkpoint
+    )
     raw = subprocess.run(
         ["git", "cat-file", "commit", str(request["publish_commit"])], cwd=repo,
         check=True, stdout=subprocess.PIPE,
@@ -236,6 +202,9 @@ def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gat
     result = prepare_change(repo)
     summary = plan(repo, base, publish_head)
     candidate = "a" * 40
+    # Work on the next checkpoint must not change the prepared transaction.
+    (repo / "later.txt").write_text("later\n", encoding="utf-8")
+    commit_all(repo, "later local work")
 
     recorded = json.loads(run_request(
         repo, "record",
@@ -246,6 +215,8 @@ def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gat
     assert recorded["verified"] is True
     assert recorded["record_verification"] == "manifest-identity-and-gateway-run"
     assert recorded["remote_commit"] == result["publish_commit"]
+    assert recorded["local_head"] == result["local_target_commit"]
+    assert recorded["local_head"] != git(repo, "rev-parse", "HEAD")
     assert recorded["publish_commit"] == candidate
     assert recorded["publish_tree"] == connector_state_from_summary_tree(summary)
     assert not transaction(repo).exists()
@@ -257,54 +228,26 @@ def connector_state_from_summary_tree(summary: dict[str, object]) -> str:
     return str(expected[-1])
 
 
-def test_record_stays_bound_to_prepared_target_if_local_head_advances(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    first = prepare_change(repo, "first\n")
-    plan(repo, base, publish_head)
-    candidate = "b" * 40
-    (repo / "later.txt").write_text("later\n", encoding="utf-8")
-    commit_all(repo, "later local work")
-    recorded = json.loads(run_request(
-        repo, "record",
-        "--gateway-transport-commit", candidate,
-        "--gateway-run-id", "42",
-        "--gateway-conclusion", "success",
-    ).stdout)
-    assert recorded["local_head"] == first["local_target_commit"]
-    assert recorded["local_head"] != git(repo, "rev-parse", "HEAD")
-
-
-def test_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> None:
+def test_preflight_and_record_reject_moved_heads_or_modified_manifest(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
+    for develop_head, gateway_head in (("c" * 40, publish_head), (base, "d" * 40)):
+        rejected = run_request(
+            repo, "connector-plan", "--develop-head", develop_head,
+            "--publish-head", gateway_head, check=False,
+        )
+        assert rejected.returncode != 0
+
     plan(repo, base, publish_head)
     manifest = prepared(repo)
     manifest["request_id"] = "0" * 32
     manifest_path(repo).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     rejected = run_request(
-        repo, "record",
-        "--gateway-transport-commit", "c" * 40,
-        "--gateway-run-id", "77",
-        "--gateway-conclusion", "success",
-        check=False,
+        repo, "record", "--gateway-transport-commit", "c" * 40,
+        "--gateway-run-id", "77", "--gateway-conclusion", "success", check=False,
     )
     assert rejected.returncode != 0
     assert "manifest changed" in rejected.stderr
-
-
-def test_combined_preflight_rejects_moved_develop_or_publish(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    prepare_change(repo)
-    moved_target = run_request(
-        repo, "connector-plan", "--develop-head", "c" * 40,
-        "--publish-head", publish_head, check=False,
-    )
-    assert moved_target.returncode != 0
-    moved_publish = run_request(
-        repo, "connector-plan", "--develop-head", base,
-        "--publish-head", "d" * 40, check=False,
-    )
-    assert moved_publish.returncode != 0
 
 
 def test_cancel_uses_heads_only_and_never_needs_publish_tree_read(tmp_path: Path) -> None:

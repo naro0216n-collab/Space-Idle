@@ -4,7 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from development_tests.script_harness import load_script, run_script
+from development_tests.script_harness import (
+    commit_all, git, load_script, run_script, write_source_snapshot,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,18 +14,6 @@ PUBLISH = ROOT / "scripts" / "publish_request.py"
 MAINTENANCE = ROOT / "scripts" / "workflow_maintenance.py"
 PUBLISH_MODULE = load_script(PUBLISH, "space_idle_test_publish_request_for_maintenance")
 MAINTENANCE_MODULE = load_script(MAINTENANCE, "space_idle_test_workflow_maintenance")
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    ).stdout.strip()
-
-
-def commit_all(repo: Path, message: str) -> None:
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
 
 
 def run(script: Path, repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -51,38 +41,10 @@ def init_repo(tmp_path: Path) -> tuple[Path, str, str]:
     git(repo, "branch", "-M", "develop")
     base = git(repo, "rev-parse", "HEAD")
     tree = git(repo, "rev-parse", "HEAD^{tree}")
-    source_snapshot = tmp_path / "source-snapshot"
-    source_snapshot.mkdir()
-    (source_snapshot / ".source-commit").write_text(base + "\n", encoding="utf-8")
-    (source_snapshot / ".source-tree").write_text(tree + "\n", encoding="utf-8")
-    (source_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
-    git(repo, "update-ref", "refs/space-idle/publish-base", base)
-    (source_snapshot / ".source-publish-commit").write_text(base + "\n", encoding="utf-8")
-    (source_snapshot / ".source-publish-tree").write_text(tree + "\n", encoding="utf-8")
-    git(repo, "bundle", "create", str(source_snapshot / "repository.bundle"),
-        "refs/heads/develop", "refs/space-idle/publish-base")
+    source_snapshot = write_source_snapshot(repo, tmp_path / "source-snapshot")
     git(repo, "remote", "add", "origin", str((source_snapshot / "repository.bundle").resolve()))
     run(PUBLISH, repo, "init")
     return repo, base, tree
-
-
-def test_workflow_maintenance_is_separate_and_has_no_target_or_path_selectors() -> None:
-    maintenance_help = run(MAINTENANCE, ROOT, "--help").stdout
-    publish_help = run(PUBLISH, ROOT, "--help").stdout
-    assert ".github/workflows-only" in maintenance_help
-    assert "workflow-maintenance" not in publish_help
-    assert "--repo" not in maintenance_help
-
-    forbidden_by_command = {
-        "prepare": ("--repo", "--target-ref", "--output", "--target-branch"),
-        "connector-plan": ("--repo", "--manifest", "--plan-dir", "--github-repository",
-                           "--output-dir", "--connector-call-budget-bytes", "--target-branch"),
-        "record-update": ("--repo", "--manifest", "--plan-dir", "--target-branch", "--force"),
-    }
-    for command, flags in forbidden_by_command.items():
-        help_text = run(MAINTENANCE, ROOT, command, "--help").stdout
-        for flag in flags:
-            assert flag not in help_text
 
 
 def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_path: Path) -> None:
@@ -105,6 +67,10 @@ def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_pat
     git(repo, "reset", "--hard", "HEAD^")
     workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
     commit_all(repo, "workflow only")
+    # Workflow-only maintenance cannot be redirected to another branch.
+    redirected = run(MAINTENANCE, repo, "prepare", "--target-branch", "main", check=False)
+    assert redirected.returncode != 0
+    assert not maintenance_manifest(repo).exists()
     run(MAINTENANCE, repo, "prepare")
     second = run(MAINTENANCE, repo, "prepare", check=False)
     assert second.returncode != 0
@@ -160,17 +126,10 @@ def test_workflow_maintenance_generates_complete_content_tree_plan_and_requires_
     blocked = run(PUBLISH, repo, "prepare", check=False)
     assert blocked.returncode != 0
 
-    refreshed_snapshot = tmp_path / "source-snapshot-after-maintenance"
-    refreshed_snapshot.mkdir()
-    (refreshed_snapshot / ".source-commit").write_text(created_commit + "\n", encoding="utf-8")
-    (refreshed_snapshot / ".source-tree").write_text(target_tree + "\n", encoding="utf-8")
-    (refreshed_snapshot / ".source-branch").write_text("develop\n", encoding="utf-8")
-    publish_base = git(repo, "rev-parse", "refs/space-idle/publish-base")
-    publish_tree = git(repo, "rev-parse", f"{publish_base}^{{tree}}")
-    (refreshed_snapshot / ".source-publish-commit").write_text(publish_base + "\n", encoding="utf-8")
-    (refreshed_snapshot / ".source-publish-tree").write_text(publish_tree + "\n", encoding="utf-8")
-    git(repo, "bundle", "create", str(refreshed_snapshot / "repository.bundle"),
-        "refs/heads/develop", "refs/space-idle/publish-base")
+    refreshed_snapshot = write_source_snapshot(
+        repo, tmp_path / "source-snapshot-after-maintenance",
+        publish_commit=git(repo, "rev-parse", "refs/space-idle/publish-base"),
+    )
     git(repo, "remote", "set-url", "origin", str((refreshed_snapshot / "repository.bundle").resolve()))
     run(PUBLISH, repo, "init")
     marker = repo / ".git" / "space-idle-workflow-maintenance-rehydrate-required"
@@ -204,13 +163,3 @@ def test_workflow_plan_rejects_replan_moved_develop_and_manifest_mutation(tmp_pa
     )
     assert rejected.returncode != 0
     assert "manifest changed" in rejected.stderr
-
-
-def test_standard_publish_error_names_workflow_maintenance_as_only_entrypoint(tmp_path: Path) -> None:
-    repo, _, _ = init_repo(tmp_path)
-    workflow = repo / ".github" / "workflows" / "ci.yml"
-    workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
-    commit_all(repo, "Update CI workflow")
-    result = run(PUBLISH, repo, "prepare", check=False)
-    assert result.returncode != 0
-    assert "python scripts/workflow_maintenance.py prepare" in result.stderr

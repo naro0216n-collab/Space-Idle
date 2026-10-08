@@ -113,34 +113,15 @@ def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_
     assert facility.display_name == "Unlocked Facility"
     assert facility.remaining_prerequisite_ids == ()
 
-
-def test_research_projection_exposes_primary_blocker_for_tree_decisions():
-    app = build_game_application()
-    sim = app._simulation
-    prerequisite_id = DefinitionId("test.research.primary_blocker_prerequisite")
-    blocked_id = DefinitionId("test.research.primary_blocker")
-    sim.research.definitions[prerequisite_id] = ResearchDefinition(
-        prerequisite_id,
-        "Primary Blocker Prerequisite",
-        (ResearchTheoryStageSpec("theory", 1.0),),
-    )
-    sim.research.definitions[blocked_id] = ResearchDefinition(
-        blocked_id,
-        "Primary Blocker",
-        (ResearchTheoryStageSpec("theory", 1.0),),
-        prerequisites=frozenset({prerequisite_id}),
-    )
-
-    blocked = _research_row(app, blocked_id)
-    assert blocked.status == "locked"
-    assert blocked.current_blockers
-    assert blocked.primary_blocker == blocked.current_blockers[0]
-    assert blocked.primary_blocker.code == "prerequisite"
-
-    available = _research_row(app, prerequisite_id)
+    # The same dependency graph also determines inspectable blocker state.
+    compound = _research_row(app, compound_child)
+    assert compound.status == "locked"
+    assert compound.current_blockers
+    assert compound.primary_blocker == compound.current_blockers[0]
+    assert compound.primary_blocker.code == "prerequisite"
+    available = _research_row(app, unlock_source)
     assert available.status == "available"
-    assert available.current_blockers == ()
-    assert available.primary_blocker is None
+    assert available.current_blockers == () and available.primary_blocker is None
 
 
 def _remove_research_site_service(sim):

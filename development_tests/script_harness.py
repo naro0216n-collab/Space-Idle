@@ -58,3 +58,40 @@ def run_script(
             stderr=completed.stderr,
         )
     return completed
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
+
+
+def commit_all(repo: Path, message: str) -> None:
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
+
+
+def write_source_snapshot(
+    repo: Path, directory: Path, *, publish_commit: str | None = None,
+) -> Path:
+    """Construct the actual publish-base metadata and bundle for a test repository."""
+    directory.mkdir()
+    develop = git(repo, "rev-parse", "refs/heads/develop")
+    develop_tree = git(repo, "rev-parse", f"{develop}^{{tree}}")
+    publish = publish_commit or develop
+    publish_tree = git(repo, "rev-parse", f"{publish}^{{tree}}")
+    git(repo, "update-ref", "refs/space-idle/publish-base", publish)
+    for name, value in (
+        (".source-commit", develop),
+        (".source-tree", develop_tree),
+        (".source-branch", "develop"),
+        (".source-publish-commit", publish),
+        (".source-publish-tree", publish_tree),
+    ):
+        (directory / name).write_text(value + "\n", encoding="utf-8")
+    git(
+        repo, "bundle", "create", str(directory / "repository.bundle"),
+        "refs/heads/develop", "refs/space-idle/publish-base",
+    )
+    return directory
