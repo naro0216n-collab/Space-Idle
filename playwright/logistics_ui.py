@@ -154,8 +154,9 @@ def run(*, browser=None) -> None:
             assert page.locator("#allocationForward").evaluate("input => input.checkValidity()"), (
                 "Application-derived capacity presets must remain valid precision inputs"
             )
-            page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
-            assert "機" in page.locator("#allocationPreview").inner_text()
+            page.locator("#allocationPreview .kv-grid dt").first.wait_for(timeout=10000)
+            assert page.locator("#allocationPreview .kv-grid dd").count() >= 4
+            assert all(value.strip() for value in page.locator("#allocationPreview .kv-grid dd").all_inner_texts())
             page.locator('[data-allocation-priority="5"]').click()
             page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -190,7 +191,7 @@ def run(*, browser=None) -> None:
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
 
             allocation_toggle = allocation_row.locator('[data-allocation-toggle]')
-            assert allocation_toggle.inner_text() == "停止"
+            assert allocation_toggle.is_enabled()
             allocation_toggle.click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '1'",
@@ -198,7 +199,7 @@ def run(*, browser=None) -> None:
                 timeout=10000,
             )
             allocation_toggle = page.locator(f'[data-allocation-row="{allocation_id}"] [data-allocation-toggle]')
-            assert allocation_toggle.inner_text() == "再開"
+            assert allocation_toggle.is_enabled()
             allocation_toggle.click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '0'",

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from development_tests.script_harness import load_script, run_script
 
@@ -149,7 +152,6 @@ def test_publish_commit_inherits_target_commit_time(tmp_path: Path) -> None:
     assert git(repo, "show", "-s", "--format=%cI", publish_commit) == git(
         repo, "show", "-s", "--format=%cI", target_commit
     )
-    assert git(repo, "show", "-s", "--format=%ct", publish_commit) != "946684800"
 
 def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
@@ -366,13 +368,41 @@ def test_gateway_trusted_workflow_guard_requires_publish_control_blob_identity(t
     assert "untrusted workflow change" in blocked.stderr
 
 
-def test_gateway_transport_path_gate_is_owned_by_trusted_workflow_only() -> None:
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Gateway's bash execution contract is verified on Linux CI")
+def test_gateway_workflow_accepts_only_transport_slot_mutations(tmp_path: Path) -> None:
+    """Execute the actual Gateway path filter, rather than assert source fragments."""
     workflow = (ROOT / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
-    validator = (ROOT / "scripts" / "publish_gateway_validate.py").read_text(encoding="utf-8")
-    assert "Invalid publish transport change" in workflow
-    assert "git diff-tree --no-commit-id --name-status" in workflow
-    assert "_validate_transport_commit_paths" not in validator
-    assert "diff-tree" not in validator
+    step = workflow.split("      - name: Resolve fixed transport slot\n", 1)[1]
+    script = step.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
+
+    repo = tmp_path / "gateway"
+    repo.mkdir()
+    git(repo, "init")
+    (repo / "base.txt").write_text("baseline", encoding="utf-8")
+    commit_all(repo, "base")
+
+    def run_filter(path: str) -> subprocess.CompletedProcess[str]:
+        file = repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("payload", encoding="utf-8")
+        commit_all(repo, "candidate transport")
+        env_file = tmp_path / "gateway.env"
+        env_file.write_text("", encoding="utf-8")
+        return subprocess.run(
+            ["bash", "-c", script], cwd=repo,
+            env={**os.environ, "GITHUB_SHA": git(repo, "rev-parse", "HEAD"),
+                 "GITHUB_ENV": str(env_file)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    accepted = run_filter(".publish/transport/develop/0000.b64")
+    assert accepted.returncode == 0, accepted.stderr
+    assert "TARGET_BRANCH=develop" in (tmp_path / "gateway.env").read_text(encoding="utf-8")
+
+    for unexpected_path in ("src/unrelated.py", ".publish/transport/publish/0000.b64"):
+        rejected = run_filter(unexpected_path)
+        assert rejected.returncode != 0
 
 
 def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> None:

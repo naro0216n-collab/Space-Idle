@@ -500,7 +500,7 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(blocked_research_nodes.count() > 0, "research DAG must distinguish blocked decisions on the node")
             primary_blocker = blocked_research_nodes.first.locator('.research-node-blocker:not(.is-empty)')
             _assert(primary_blocker.count() == 1, "blocked research nodes must expose the Application-projected primary blocker")
-            _assert(primary_blocker.inner_text().startswith("主制約:"), "research node must label its primary blocker")
+            _assert(bool(primary_blocker.inner_text().strip()), "blocked research node must identify its primary constraint")
             first_research_node = research_rows.first
             first_research_node.evaluate("node => { window.__spaceIdleResearchNode = node; }")
             page.wait_for_timeout(1200)
@@ -833,15 +833,16 @@ def run(*, browser=None) -> dict[str, object]:
             # Top-level navigation preserves the last Location context by design.
             # Select Overview explicitly when validating the Overview decision surface.
             page.locator('[data-section-tab="location"][data-tab="overview"]').click()
-            overview_text = page.locator('#operationsTabContent').inner_text()
-            _assert("地表インフラ" in overview_text, "location overview must expose aggregate surface infrastructure state")
-            _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")
-            _assert("サービス能力" in overview_text, "location overview must expose service capacity constraints")
-            _assert("生産差・未充足" in overview_text, "location overview must expose observed production gaps and unmet supply")
+            overview = page.locator('#operationsTabContent .location-overview-board')
+            _assert(overview.count() == 1, "location overview must retain its decision surface")
+            for selector in ('.capacity-quad', '.overview-resource-grid', '.overview-capacity-list', '.overview-dependency-list'):
+                _assert(overview.locator(selector).count() > 0, f"location overview must expose {selector} at the decision point")
             page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
-            dependency_text = page.locator('#operationsTabContent').inner_text()
-            _assert("資源別の需要と供給" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
-            _assert("サービス依存" in dependency_text, "dependency analytics must expose Service dependency separately from Resources")
+            _assert(
+                page.locator('#operationsTabContent [data-inspect="dependency-resource"]').count() > 0
+                and page.locator('#operationsTabContent [data-inspect="dependency-service"]').count() > 0,
+                "dependency analytics must expose selectable Resource and Service demand separately",
+            )
             dependency_transport_found = False
             resource_dependencies = page.locator('[data-inspect="dependency-resource"]')
             for dependency_index in range(resource_dependencies.count()):
@@ -885,9 +886,9 @@ def run(*, browser=None) -> dict[str, object]:
             # real browser -> HTTP -> Application -> rendered-result round trip.
             forecast_surface = page.locator('.detailed-forecast-surface')
             forecast_surface.wait_for(timeout=10000)
-            initial_forecast_text = forecast_surface.inner_text()
             _assert(
-                "明示実行" in initial_forecast_text and "基準 Day" not in initial_forecast_text,
+                forecast_surface.locator('[data-run-detailed-forecast]').is_enabled()
+                and forecast_surface.locator('[data-forecast-period]').count() == 0,
                 "Detailed Forecast must remain idle until the player explicitly runs it",
             )
             medium_horizon = forecast_surface.locator(
@@ -896,7 +897,7 @@ def run(*, browser=None) -> dict[str, object]:
             medium_horizon.click()
             _assert(
                 medium_horizon.get_attribute('aria-pressed') == 'true'
-                and "基準 Day" not in forecast_surface.inner_text(),
+                and forecast_surface.locator('[data-forecast-period]').count() == 0,
                 "changing Detailed Forecast horizon must not implicitly execute the forecast",
             )
             short_horizon = forecast_surface.locator(
@@ -904,13 +905,18 @@ def run(*, browser=None) -> dict[str, object]:
             )
             short_horizon.click()
             forecast_surface.locator('[data-run-detailed-forecast]').click()
-            page.wait_for_function(
-                "() => document.querySelector('.detailed-forecast-surface')?.innerText.includes('基準 Day')",
-                timeout=15000,
+            forecast_surface.locator('[data-forecast-period]').wait_for(timeout=15000)
+            for kind in ('inventory', 'inventory-range', 'allocation-gap', 'arrival-waiting', 'downstream', 'logistics'):
+                result = forecast_surface.locator(f'[data-forecast-result="{kind}"]')
+                _assert(
+                    result.count() == 1 and result.locator('.dependency-card-grid').count() == 1
+                    and result.locator('.detail-card, .empty-state').count() > 0,
+                    f"Detailed Forecast must render {kind} values or their empty state",
+                )
+            _assert(
+                forecast_surface.locator('[data-forecast-result="inventory"] .detail-card .dependency-metrics strong').count() > 0,
+                "Detailed Forecast must render numeric inventory projections, not headings alone",
             )
-            forecast_text = forecast_surface.inner_text()
-            for heading in ("予測時点の在庫・フロー", "拠点別・期間内の利用可能在庫", "要求・割当の未達履歴", "入庫・中継待機の履歴", "波及影響", "広域物流への影響"):
-                _assert(heading in forecast_text, f"詳細予測結果に {heading} が必要です")
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()
@@ -953,7 +959,7 @@ def run(*, browser=None) -> dict[str, object]:
                 "Survey Campaign UI must expose at least one Application-approved scope / goal intent",
             )
             _assert(
-                page.locator('[data-survey-start-intent-status]').inner_text().strip() == "適用可能",
+                page.locator('[data-start-survey-campaign]').is_enabled(),
                 "Survey Campaign creation availability must come from Application preview",
             )
             _choose_priority(page, '#surveyDraftPriority', 4)
@@ -962,7 +968,18 @@ def run(*, browser=None) -> dict[str, object]:
             campaign_row = page.locator('[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
             _assert(campaign_row.evaluate("el => el.classList.contains('survey-campaign-card')"), "Survey Campaign must remain a touch decision card after creation")
-            _assert("1 地域 × 1 資源" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
+            campaign_id = campaign_row.get_attribute('data-id')
+            campaign_state = page.evaluate(
+                "id => window.SpaceIdleApp.state.surveys.campaigns.find(c => c.id === id)",
+                campaign_id,
+            )
+            _assert(
+                campaign_state is not None
+                and campaign_state['target_cell_ids'] == [campaign_cell_id]
+                and campaign_state['resource_ids'] == [campaign_resource_id]
+                and bool(campaign_row.locator('.decision-card-title small').inner_text().strip()),
+                "Survey Campaign must display and retain the player-selected scope",
+            )
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             _assert_inspector_section_order(
@@ -990,7 +1007,7 @@ def run(*, browser=None) -> dict[str, object]:
                 "Survey Comparison must highlight Application-declared differences",
             )
             _assert(
-                "現在の制約" in comparison_surface.inner_text(),
+                comparison_surface.locator('.comparison-blocker-cell').count() == 2,
                 "Survey Comparison must keep candidate blockers in the comparison surface",
             )
             comparison_surface.locator('[data-survey-candidate-detail]').first.click()

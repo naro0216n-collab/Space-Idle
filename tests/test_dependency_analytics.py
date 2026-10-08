@@ -286,36 +286,7 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
 
 
-def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_inventory():
-    app = build_game_application()
-    sim = app._simulation
-    base_day = sim.day
-    base_stock = dict(sim.inventory.stock)
-
-    view = app.query(GetDetailedForecast(
-        "operational_nodes",
-        node_ids=(str(ids.EARTH),),
-        horizon="SHORT_TERM",
-        period_days=5,
-    ))
-
-    assert view.base_day == base_day
-    assert view.projected_day == base_day + 5
-    assert view.period_days == 5
-    assert view.horizon == "SHORT_TERM"
-    assert view.node_ids == (str(ids.EARTH),)
-    assert view.inventory
-    assert sim.day == base_day
-    assert sim.inventory.stock == base_stock
-    assert all(isinstance(row.projected_net_per_day, float) for row in view.inventory)
-
-    with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
-        app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
-    with pytest.raises(ApplicationError, match="period_days"):
-        app.query(GetDetailedForecast(period_days=0))
-
-
-def test_detailed_forecast_preserves_node_specific_inventory_extrema_across_the_horizon():
+def test_detailed_forecast_is_observational_and_preserves_node_inventory_extrema():
     app = build_game_application()
     sim = app._simulation
     base_day = sim.day
@@ -344,7 +315,12 @@ def test_detailed_forecast_preserves_node_specific_inventory_extrema_across_the_
     ))
     assert sim.day == base_day
     assert sim.inventory.stock == base_stock
-    assert len(view.node_ids) == len(selected_nodes)
+    assert view.base_day == base_day
+    assert view.projected_day == base_day + days
+    assert view.period_days == days
+    assert view.node_ids == tuple(map(str, selected_nodes))
+    assert view.inventory
+    assert all(isinstance(row.projected_net_per_day, float) for row in view.inventory)
     assert view.inventory_ranges
     for row in view.inventory_ranges:
         key = (next(node for node in selected_nodes if str(node) == row.operational_node_id),
@@ -359,6 +335,11 @@ def test_detailed_forecast_preserves_node_specific_inventory_extrema_across_the_
         first_depleted = next((day for day in range(base_day + 1, base_day + days + 1)
                                if timeline.get(day - 1, 0) > 1e-9 and timeline.get(day, 0) <= 1e-9), None)
         assert row.first_depleted_day == first_depleted
+
+    with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
+        app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
+    with pytest.raises(ApplicationError, match="period_days"):
+        app.query(GetDetailedForecast(period_days=0))
 
 
 def test_selected_scope_does_not_net_unshipped_remote_production_against_local_need():

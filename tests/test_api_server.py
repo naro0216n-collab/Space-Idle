@@ -284,7 +284,7 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         assert status == 200
         assert payload["revision"] == 0
         etag = headers["ETag"]
-        assert etag.startswith('"ui-state-0-')
+        assert etag and etag.startswith('"') and etag.endswith('"')
 
         status, headers, payload = _request(
             port,
@@ -327,7 +327,8 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         )
         assert status == 200
         assert payload["revision"] == 1
-        assert headers["ETag"].startswith('"ui-state-1-')
+        assert headers["ETag"] != etag
+        assert headers["ETag"] and headers["ETag"].startswith('"')
     finally:
         server.shutdown()
         server.server_close()

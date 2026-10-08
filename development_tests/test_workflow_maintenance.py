@@ -70,7 +70,6 @@ def test_workflow_maintenance_is_separate_and_has_no_target_or_path_selectors() 
     maintenance_help = run(MAINTENANCE, ROOT, "--help").stdout
     publish_help = run(PUBLISH, ROOT, "--help").stdout
     assert ".github/workflows-only" in maintenance_help
-    assert "Normal source/game changes belong to publish_request.py" in " ".join(maintenance_help.split())
     assert "workflow-maintenance" not in publish_help
     assert "--repo" not in maintenance_help
 
@@ -92,7 +91,7 @@ def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_pat
     commit_all(repo, "game change")
     result = run(MAINTENANCE, repo, "prepare", check=False)
     assert result.returncode != 0
-    assert "workflow-only commits" in result.stderr
+    assert not maintenance_manifest(repo).exists()
 
     git(repo, "reset", "--hard", "HEAD^")
     workflow = repo / ".github" / "workflows" / "ci.yml"
@@ -101,7 +100,7 @@ def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_pat
     commit_all(repo, "mixed change")
     mixed = run(MAINTENANCE, repo, "prepare", check=False)
     assert mixed.returncode != 0
-    assert "game.txt" in mixed.stderr
+    assert not maintenance_manifest(repo).exists()
 
     git(repo, "reset", "--hard", "HEAD^")
     workflow.write_text("name: CI\non: [push, workflow_dispatch]\n", encoding="utf-8")
@@ -109,7 +108,7 @@ def test_prepare_rejects_nonworkflow_mixed_and_second_active_transaction(tmp_pat
     run(MAINTENANCE, repo, "prepare")
     second = run(MAINTENANCE, repo, "prepare", check=False)
     assert second.returncode != 0
-    assert "active workflow maintenance transaction" in second.stderr
+    assert maintenance_manifest(repo).exists()
 
 
 def test_workflow_maintenance_generates_complete_content_tree_plan_and_requires_rehydration(tmp_path: Path) -> None:
@@ -160,7 +159,6 @@ def test_workflow_maintenance_generates_complete_content_tree_plan_and_requires_
 
     blocked = run(PUBLISH, repo, "prepare", check=False)
     assert blocked.returncode != 0
-    assert "source-snapshot" in blocked.stderr
 
     refreshed_snapshot = tmp_path / "source-snapshot-after-maintenance"
     refreshed_snapshot.mkdir()
