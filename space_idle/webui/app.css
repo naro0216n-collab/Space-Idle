@@ -139,16 +139,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .movement-plan-button.is-selected { background: #142a3b; border-color: #3a6e8d; }
 .movement-plan-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 10px; }
 .logistics-workspace { padding-bottom: 18px; }
-.network-stage { width: calc(100% - 28px); min-width: 590px; height: 470px; margin: 14px; position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 40% 50%, #102333 0, #0b1721 42%, #08121a 100%); }
-.network-svg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
-.network-line { stroke: #39566a; stroke-width: 2; fill: none; opacity: .72; cursor: pointer; }
-.network-line.available { stroke: #48a9d6; stroke-width: 3; opacity: 1; }
-.network-line.selected { stroke: #8ce5c3; stroke-width: 5; opacity: 1; }
-.network-nodes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-.network-node { position: absolute; width: 138px; min-height: 72px; transform: translate(-50%, -50%); border: 1px solid #426177; border-radius: 10px; background: #101f2c; padding: 8px; text-align: center; pointer-events: auto; }
-.network-node button { display: block; width: 100%; min-height: 54px; padding: 4px; border: 0; background: transparent; }
-.network-node .node-name { display: block; font-weight: 700; font-size: 12px; }
-.network-node .node-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .logistics-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 14px; }
 .detail-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #0b1721; }
 .detail-card.is-usable { border-color: #2f6b5a; }
@@ -249,16 +239,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 
 /* Global decision canvas: the map is primary; summary cards are secondary. */
 .global-decision-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, .7fr); gap: 12px; min-height: 530px; }
-.global-map-card { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #08131c; overflow: hidden; }
-.global-map-toolbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line-soft); }
-.global-map-toolbar h2 { margin: 2px 0 0; font-size: 16px; }
-.global-map-stage { position: relative; min-height: 455px; overflow: hidden; background: radial-gradient(circle at 48% 72%, #122a3c 0, #0a1823 42%, #061019 100%); }
-.global-map-stage::after { content: ''; position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, #7da3bd55 0 1px, transparent 1.5px); background-size: 54px 54px; opacity: .24; }
-.global-map-links { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
-.global-map-nodes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-.global-map-link { stroke: #39566a; stroke-width: .45; vector-effect: non-scaling-stroke; opacity: .5; }
-.global-map-link.is-available { stroke: #4d9fc4; opacity: .9; }
-.global-map-node-shell { position: absolute; z-index: 2; width: 142px; min-height: 64px; transform: translate(-50%, -50%); pointer-events: auto; }
 .global-map-node { width: 100%; min-height: 64px; padding: 8px 10px; text-align: left; border-color: #36566d; background: #0f2230e8; box-shadow: 0 7px 20px #0005; }
 .global-map-node.is-selected { border-color: var(--accent); background: #15354a; box-shadow: 0 0 0 2px #4c9ccf33, 0 10px 24px #0007; }
 .global-map-node-name { display: block; font-size: 12px; font-weight: 700; line-height: 1.25; }
@@ -270,10 +250,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .global-map-signal.is-attention { border-color: #9a6938; color: #f1c47f; background: #281d12; }
 .global-map-signal.is-research { border-color: #536aa0; }
 .global-map-signal.is-survey, .global-map-signal.is-exploration { border-color: #43786d; }
-.global-map-toolbar-meta { display: grid; justify-items: end; gap: 5px; }
-.global-map-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 8px; color: var(--muted); font-size: 8px; }
-.global-map-legend span::before { content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 4px; border: 1px solid #5f7a8d; border-radius: 50%; vertical-align: 1px; }
-.global-map-legend .is-attention::before { border-color: #b87a3a; background: #b87a3a; }
 .global-activity-actions { margin-top: 9px; }
 .global-attention-card { min-width: 0; }
 .global-attention-card .card-body { max-height: 470px; overflow: auto; }
@@ -284,7 +260,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 
 @media (max-width: 1080px) and (orientation: landscape) {
   .global-decision-grid { grid-template-columns: minmax(0, 1fr) 230px; }
-  .global-map-node-shell { width: 122px; }
 }
 
 /* iPad landscape shell: preserve the three-region hierarchy and give the canvas priority. */
@@ -365,7 +340,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .logistics-route-context-bar .movement-plan-list { padding: 0; display: flex; flex-wrap: wrap; gap: 7px; }
 .logistics-route-context-bar .movement-plan-button { width: auto; min-width: 190px; min-height: 58px; flex: 1 1 210px; max-width: 320px; padding: 8px 10px; background: #0a1620; }
 .logistics-route-context-bar .movement-plan-button.is-selected { background: #143047; border-color: #3a6e8d; box-shadow: inset 3px 0 0 var(--accent); }
-.network-stage { min-width: 0; }
 
 @media (max-width: 1080px) and (orientation: landscape) {
   .logistics-route-context-bar .movement-plan-button { min-width: 160px; flex-basis: 180px; }
@@ -448,7 +422,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .survey-scope-node { width: 124px; }
   .survey-goal-row { grid-template-columns: 1fr; }
 }
-.network-line-hit { stroke: transparent; stroke-width: 20; fill: none; pointer-events: stroke; cursor: pointer; }
 
 /* Remaining management-heavy surfaces use the same iPad decision pattern. */
 .decision-surface-block { min-width: 0; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel); }
@@ -607,9 +580,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .logistics-support-heading h2 { margin: 2px 0 0; font-size: 15px; }
 .logistics-support-heading > span { max-width: 480px; color: var(--muted); font-size: 10px; text-align: right; line-height: 1.45; }
 .logistics-support-card.is-primary-support { border-color: #385b70; }
-.network-line.is-context-related { stroke: #f2c26b; stroke-width: 5; opacity: 1; }
-.network-line.is-context-related.selected { stroke-width: 6; }
-.network-node.is-context-related { border-color: #f2c26b; box-shadow: 0 0 0 2px rgba(242,194,107,.16); }
 
 /* Strategic comparison keeps Application-selected axes aligned across 2-4 pinned options. */
 .comparison-empty { min-height: 64px; display: grid; gap: 5px; align-content: center; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
@@ -632,3 +602,32 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .logistics-support-heading { align-items: start; }
   .logistics-support-heading > span { max-width: 300px; }
 }
+
+/* One map surface shared by Overview and Transport. Geometry is diagrammatic. */
+.system-map-host { min-width: 0; }
+.system-map-frame { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: #08131c; overflow: hidden; }
+.system-map-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+.system-map-toolbar > div:first-child { display: grid; gap: 2px; }
+.system-map-note { font-size: 11px; color: var(--muted); }
+.system-map-controls { display: flex; gap: 5px; }
+.system-map-controls button { min-height: 44px; min-width: 44px; }
+.system-map-stage { position: relative; min-width: 0; height: 420px; overflow: hidden; background: radial-gradient(circle at 48% 72%, #122a3c, #061019 72%); touch-action: none; }
+.system-map-viewport { position: absolute; inset: 0; transform-origin: center; will-change: transform; }
+.system-map-links { position: absolute; inset: 0; height: 100%; width: 100%; pointer-events: none; }
+.system-map-edge { stroke: #39566a; stroke-width: .7; vector-effect: non-scaling-stroke; }
+.system-map-edge.is-service { stroke: #4d9fc4; stroke-width: 1.1; }
+.system-map-edge.is-unavailable { stroke-dasharray: 2 1.5; }
+.system-map-edge-hit { stroke: transparent; stroke-width: 8; pointer-events: stroke; cursor: pointer; }
+.system-map-edge.is-candidate { stroke: #a2c0d5; stroke-dasharray: 1.5 1; stroke-width: 1.8; }
+.system-map-pair-button { width: fit-content; min-height: 44px; text-align: left; }
+.system-map-edge.is-context-related { stroke: #f2c26b; stroke-width: 1.8; }
+.system-map-nodes { position: absolute; inset: 0; pointer-events: none; }
+.system-map-node-shell { width: 142px; position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
+.system-map-legend { padding: 8px 14px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line-soft); }
+.system-map-relations:not(:empty) { display: grid; gap: 8px; padding: 10px 14px; max-height: 200px; overflow-y: auto; }
+.system-map-relation { display: grid; gap: 4px; }
+.system-map-relation > strong { font-size: 12px; }
+.system-map-relation-options { display: flex; gap: 7px; flex-wrap: wrap; }
+.system-map-relation-options button { display: grid; text-align: left; gap: 3px; min-height: 44px; }
+.system-map-relation-options button small { color: var(--muted); }
+.system-map-relation-options button.is-selected { outline: 2px solid var(--accent); }

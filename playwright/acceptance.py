@@ -282,35 +282,34 @@ def run(*, browser=None) -> dict[str, object]:
             )
             _assert(page.locator("#researchPointValue").is_visible(), "global bar must expose Research Point")
             _assert(page.locator("#fundsValue").count() == 0, "Funds must not be promoted to a global KPI")
-            _assert(page.locator(".global-map-stage").is_visible(), "global canvas must use the system map as its primary workspace")
-            _assert(page.locator(".global-map-node").count() > 0, "global map must expose spatial nodes as direct targets")
-            _assert(page.locator(".global-map-link").count() > 0, "global map must expose movement relationships without a dashboard detour")
-            first_global_node = page.locator(".global-map-node").first
-            first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; }")
+            _assert(page.locator("#systemMapStage").is_visible(), "global canvas must expose the shared system map")
+            global_nodes = page.locator('#systemMapStage [data-system-node-id]')
+            _assert(global_nodes.count() > 0, "map must expose Operational Nodes as direct targets")
+            first_global_node = global_nodes.first
+            first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
+            original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
             page.wait_for_timeout(1200)
-            _assert(
-                first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"),
-                "periodic sync must preserve the global-map interaction target across authoritative refresh",
-            )
+            _assert(first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic sync must preserve map interaction targets")
             first_global_node.tap()
-            selected_global_node_id = first_global_node.get_attribute("data-global-node-id")
-            selected_global_node_name = first_global_node.locator(".global-map-node-name").inner_text().strip()
-            _assert(first_global_node.get_attribute("aria-pressed") == "true", "map selection must become the active global context")
-            _assert(page.locator(".global-map-legend").is_visible(), "global map must explain decision/activity signals in-place")
-            _assert(page.locator("#globalInspectorContent [data-open-location]").is_visible(), "selected map context must expose a direct location action")
-            page.locator("#globalInspectorContent [data-open-node-logistics]").click()
-            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
-            _assert(selected_global_node_name in page.locator("#networkDecisionContext").inner_text(), "global map selection must carry the node context into Transport")
-            _assert(page.locator("#networkSvg .network-line.is-context-related").count() > 0, "Transport must highlight Network edges related to the inherited global node")
-            first_network_node = page.locator("[data-network-location]").first
-            first_network_node.evaluate("node => { window.__spaceIdleNetworkNode = node; }")
+            selected_global_node_id = first_global_node.get_attribute("data-system-node-id")
+            selected_global_node_name = first_global_node.locator('.global-map-node-name').inner_text().strip()
+            _assert(first_global_node.get_attribute('aria-pressed') == 'true', "Map selection must become the active context")
+            _assert(page.locator('#systemMapLegend').is_visible(), "Map must explain the meaning of displayed connections")
+            page.locator('[data-system-zoom="in"]').click()
+            scaled = page.locator('#systemMapViewport').evaluate("element => element.style.transform")
+            _assert('scale(1.25)' in scaled, "Map zoom must change the shared viewport")
+            page.locator('#globalInspectorContent [data-open-node-logistics]').click()
+            page.locator('#networkDecisionContext').wait_for(state='visible', timeout=10000)
+            _assert(selected_global_node_name in page.locator('#networkDecisionContext').inner_text(), "Transport must inherit the global node")
+            _assert(page.locator('#systemMapStage').evaluate("element => element === window.__spaceIdleMapStage"), "both entrances must use the same map element")
+            selected_transport_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
+            _assert(selected_transport_node.is_visible(), "selected node must remain visible in Transport")
+            _assert(selected_transport_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }") == original_position, "Transport must retain common spatial placement")
+            _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled, "Transport must retain map pan / zoom")
             page.wait_for_timeout(1200)
-            _assert(
-                first_network_node.evaluate("node => node === window.__spaceIdleNetworkNode"),
-                "periodic sync must preserve network interaction targets across authoritative refresh",
-            )
+            _assert(selected_transport_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic refresh must preserve Transport node identity")
             page.locator('.primary-nav-button[data-section="global"]').click()
-            first_global_node = page.locator(f'.global-map-node[data-global-node-id="{selected_global_node_id}"]')
+            first_global_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
             first_global_node.tap()
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
@@ -862,14 +861,10 @@ def run(*, browser=None) -> dict[str, object]:
                     page.locator('.supply-requirement-card.is-context-target').count() > 0,
                     "external dependency navigation must select related Supply Requirements",
                 )
-                context_has_paths = page.evaluate(
-                    "() => (window.SpaceIdleApp?.state?.decisionContext?.movement_plan_ids || []).length > 0"
+                _assert(
+                    page.locator('#systemMapStage').is_visible(),
+                    "external dependency navigation must retain the shared spatial context",
                 )
-                if context_has_paths:
-                    _assert(
-                        page.locator('#networkSvg .network-line.is-context-related').count() > 0,
-                        "external dependency navigation must highlight projected related movement paths when they exist",
-                    )
                 dependency_transport_found = True
                 page.locator('.primary-nav-button[data-section="location"]').click()
                 page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
@@ -1181,19 +1176,16 @@ def run(*, browser=None) -> dict[str, object]:
                 "1024px iPad landscape logistics must not horizontally overflow the page",
             )
             page.set_viewport_size({"width": 1194, "height": 834})
-            network_locations = page.locator("#networkNodes [data-network-location]")
-            expected_network_locations = page.locator("#movementPlanOriginFilter option").count() - 1
-            _assert(
-                network_locations.count() == expected_network_locations,
-                "network must render every location exposed by the Application view",
-            )
+            network_locations = page.locator('#systemMapStage [data-system-node-id]')
+            expected_network_locations = page.locator('#movementPlanOriginFilter option').count() - 1
+            _assert(network_locations.count() == expected_network_locations, "System Map must expose all operational nodes")
             network_positions = network_locations.evaluate_all(
-                "rows => rows.map(row => { const node=row.closest('.network-node'); return `${node.style.left}:${node.style.top}`; })"
+                "rows => rows.map(row => { const node=row.closest('.system-map-node-shell'); return `${node.style.left}:${node.style.top}`; })"
             )
-            _assert(
-                len(set(network_positions)) == len(network_positions),
-                "network layout must give each rendered location a distinct position",
-            )
+            _assert(len(set(network_positions)) == len(network_positions), "nodes must occupy distinct positions")
+            _assert(page.locator('#systemMapStage').count() == 1, "there must be only one authoritative map DOM surface")
+            actual_allocations = page.evaluate("() => window.SpaceIdleApp?.state?.transportAllocations?.items?.length || 0")
+            _assert(page.locator('[data-system-allocation-id]').count() == actual_allocations, "relation overview must preserve every independently editable Allocation")
 
             results = {
                 "browser": browser_name,

@@ -318,19 +318,15 @@ Global Attentionはlogや全warning一覧ではなく、Player設定に対して
 
 ## 8. 全体Map / Location
 
-### 8.1 全体Map
+### 8.1 共通System Map
 
-「全体」はStar System / Operational Node / Locationの空間関係と主要状態を把握する入口とする。
+「全体」と「輸送」は別の地理を再描画する画面ではなく、同一System Mapを異なるDecision Contextで開く入口とする。Operational Nodeを軸に、Star System・Celestial Body・non-surface Spatial contextとの所属関係を理解できる概略配置を共有する。概略図の画面上の距離を実距離・latency・移動可否と解釈させず、それらはApplication Queryの数値・条件で示す。Surface Cellや未設立Founding targetは通常輸送Nodeへ混入させない。
 
-Map上で少なくとも次を識別できるようにする。
+Mapの位置、拡大率・pan、表示階層、選択Node／OD関係、Resource filterを画面入口で共有する。OverviewではOperational Node、Attention、進行中のResearch・Survey・Exploration・Constructionと主要接続を示し、物流Contextでは実際のTransport Allocation、方向別Current / Target / Available / Used / Spareと選択されたSupply Requirement・Cargo Flowを区別する。Movement候補の成立性はTransportの稼働・配備を意味しないため、未配備候補の全線表示を避けて、選択した関係の候補として示す。
 
-- Operational Node / Surface Location
-- active founding / development
-- 主要Movement / logistics connection
-- Attentionを持つLocation
-- Research / Survey / Exploration等の主要active activity
+同一ODに複数Allocation／Movement候補があり得る。Map上の集約エッジは表示上の関係でありDomain Stateではない。方向、複数設定、配送済Cargoと未dispatch需要をInspectorまたは一覧で分解し、個別操作へ到達できるようにする。線の直接ヒットを唯一の操作手段とせず、キーボード・タッチ対応の関係一覧を設ける。色とともに線種、ラベル、凡例、数値・単位で意味を示す。
 
-詳細数値をMapへ過密表示せず、選択した対象をInspectorへ展開する。
+Mapは場所と関係の発見、比較一覧は多拠点の数値・設定と一括確認、Context Inspectorは選択対象の現在値・必要条件・blocker・Draft・Preview・操作を担う。同じ選択ContextをMap・一覧・Inspectorが参照し、どの入口からでも対象を再選択させない。別Canvasへの遷移とperiodic syncでは、対象・スクロール・Draft・pan／zoomを維持する。選択／pan／filterだけでは時間進行を停止せず、基準時点固定が必要なStructured Decisionでのみ既存Planning Modeを使う。
 
 ### 8.2 Location Overview
 
@@ -410,9 +406,11 @@ Current LevelとUpgrade後の主要差を同じInspectorで示し、変化しな
 
 ## 11. Research
 
-ResearchはDAG / Treeを主要Canvasとする。
+ResearchはDAG / Treeを主要Canvasとする。DAG全体を保ちながら名称・分類で検索し、選択Nodeへのジャンプ、direct prerequisiteと後続関係の強調を提供する。検索で一致がなくても選択とスクロールを破棄しない。研究からLocationやFleetへ遷移した場合は同じ研究Nodeへ戻れる。
 
 Node上ではunavailable、available、active、blocked、completed、current stage、progress、primary blockerを簡潔に区別し、Requirement全文はInspectorへ置く。
+
+RPの貯蔵表示は `stored < capacity`、`stored == capacity`、`stored > capacity` の実値を区別し、満杯だけでAttentionにしない。受入値がゼロなら「受入余力あり」と表示しない。Stage別所要時間は現在の供給・条件に基づく参考値と明示し、全Stageの確定完了日とはしない。
 
 Research Inspectorは次を優先する。
 
@@ -492,10 +490,9 @@ Research / Survey等でFleet quantityが直接Player intentならStepper等を�
 
 ## 15. Transport / Logistics
 
-Transport UIは輸送計画作成そのものを主ゲームプレイにしない。Playerが成立させたNetworkについてdemand、Target Stock、Transport Capacity、Fleet provisioning、Cargo Flow、auto-selected routing、bottleneckを確認し、必要な箇所だけ調整する。
+Transport UIは輸送計画作成そのものを主ゲームプレイにしない。共通System Mapの物流Contextと、需要・Allocation・Fleet・Target Stock・Cargo・制約の比較一覧／Inspectorを併用する。Mapで対象ODやNodeを選ぶと関連一覧も選択状態となり、一覧から選ぶとMapの対象を強調する。既存の比較・編集機能はMapへ吸収して消さない。未配備Movement候補と実際に稼働するTransport Serviceは表示を区別する。
 
-Attentionまたは選択Contextがある場合は関係する需要、Allocation、path、bottleneckを強調したNetworkを初期表示し、Contextがない場合だけNetwork overviewを表示する。
-
+Attentionまたは選択Contextがある場合は関係する需要、Allocation、path、bottleneckを強調し、Contextがない場合だけ物流overviewを表示する。通常source/path選択とCargo dispatchの自動化を維持し、必要なhard constraintのみPlayerが編集する。
 代表的な動線:
 
 1. LocationまたはAttentionでResource不足を発見する。
@@ -653,6 +650,9 @@ UIは見た目だけでなく、少なくとも次の契約を検証する。
 
 - blockerから原因と解決対象へ数値暗記なしで到達できる。
 - 関連Canvasへ移っても選択Contextが保持される。
+- 全体・輸送で共通System MapのNode位置・pan／zoom・選択が一致し、実AllocationとMovement候補を区別できる。
+- Mapと輸送一覧が同じNode／OD／Allocationを相互参照し、複数Allocationを集約した表示からも個別設定へ進める。
+- Research検索・前後関係の確認と復帰、RP上限状態の実値表示、Scientific Explorationのphaseとpauseを混同しない。
 - Current / Target / Previewを誤認しない。
 - Stock / Flow / Capacity / Commitmentを区別できる。
 - disabled actionでも必要条件とblockerを確認できる。

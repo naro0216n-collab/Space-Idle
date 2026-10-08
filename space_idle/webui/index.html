@@ -103,7 +103,7 @@
                 <div id="movementPlanList" class="movement-plan-list"></div>
               </div>
               <section id="logisticsDecisionLane" class="logistics-decision-lane" aria-label="現在の輸送判断"></section>
-              <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
+              <div id="systemMapMountLogistics" class="system-map-host"></div>
               <div class="logistics-support-heading"><div><span class="eyebrow">詳細・設定</span><h2>物流状態とPlayer intent</h2></div><span>上の判断から必要な項目へ進み、必要時だけ設定を変更します。</span></div>
               <div class="logistics-bottom-grid">
                 <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
@@ -201,6 +201,7 @@
   <script src="/research_tree.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/operations_ui.js" defer></script>
+  <script src="/system_map.js" defer></script>
   <script src="/logistics_ui.js" defer></script>
 </body>
 </html>

@@ -109,7 +109,13 @@ def run(*, browser=None) -> None:
             decision_item.click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "補給需要" in page.locator("#networkDecisionContext").inner_text()
-            assert page.locator("#networkSvg .network-line.is-context-related").count() > 0
+            # A supply shortfall is not evidence of an operating transport
+            # connection. The spatial canvas must remain available even when
+            # there is no allocated service for this requirement.
+            assert page.locator("#systemMapStage [data-system-node-id]").count() > 0
+            assert page.locator("#systemMapRelations [data-system-allocation-id]").count() == page.evaluate(
+                "() => window.SpaceIdleApp.state.transportAllocations?.items?.length || 0"
+            )
             # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
             page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
@@ -197,10 +203,13 @@ def run(*, browser=None) -> None:
             allocation_row.locator("[data-allocation-network]").click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
-            context_line = page.locator("#networkSvg .network-line.is-context-related").first
-            context_line.wait_for(state="attached", timeout=10000)
-            assert context_line.evaluate("el => parseFloat(getComputedStyle(el).strokeWidth) >= 5 && Number(getComputedStyle(el).opacity) === 1")
-            assert page.locator("#networkNodes .network-node.is-context-related").count() >= 2
+            allocation_map_entry = page.locator(
+                f'#systemMapRelations [data-system-allocation-id="{allocation_id}"]'
+            )
+            allocation_map_entry.wait_for(state="visible", timeout=10000)
+            assert allocation_map_entry.get_attribute("aria-pressed") == "true"
+            assert page.locator("#systemMapStage .system-map-edge.is-context-related").count() > 0
+            assert "利用可能" in page.locator("#movementPlanInspectorContent").inner_text()
 
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)

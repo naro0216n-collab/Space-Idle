@@ -353,6 +353,12 @@
     if(target?.decision_area!=='logistics'){box.hidden=true;box.textContent='';return;}
     const requirements=contextSupplyRequirements();
     const allocations=contextTransportAllocations();
+    if(target.subject_kind==='transport_relation'){
+      const grouped=(state.transportAllocations?.items||[]).filter((row)=>[row.anchor_node_id,row.destination_id].sort().join('\u001f')===target.subject_id);
+      box.hidden=false;
+      box.innerHTML=`<span class="eyebrow">選択した輸送関係</span><strong>${grouped.length?`${esc(locationName(grouped[0].anchor_node_id))} ↔ ${esc(locationName(grouped[0].destination_id))}`:'設定が存在しません'}</strong><span>${grouped.length} 件の方向別Allocationを個別に確認できます</span>`;
+      return;
+    }
     if(target.subject_kind==='dependency_resource'&&target.resource_id){
       const location=target.operational_node_id?` · ${locationName(target.operational_node_id)}`:'';
       box.hidden=false;box.innerHTML=`<span class="eyebrow">外部依存から引き継ぎ</span><strong>${esc(resourceName(target.resource_id))}${esc(location)}</strong><span>関連する補給需要 ${requirements.length} 件 · 輸送能力設定 ${allocations.length} 件 · 経路を強調中</span>`;return;
@@ -382,35 +388,6 @@
     const root=$('#movementPlanList');
     const html=filteredMovementPlans().map((r)=>`<button type="button" class="movement-plan-button ${r.id===state.selectedMovementPlanId?'is-selected':''}" data-movement-plan-id="${esc(r.id)}"><div class="cell-main">${esc(r.display_name)}</div><div class="movement-plan-status"><span>${esc(locationName(r.origin_id))} → ${esc(locationName(r.destination_id))}</span><span class="badge ${r.service_feasible_now?'ok':r.available?'warn':''}">${r.service_feasible_now?'運用可能':r.available?'運用条件待ち':'移動不可'}</span></div></button>`).join('')||`<div class="empty-state">条件に一致する${playerTerm('movement_plan')}なし</div>`;
     A.replaceHtmlPreservingKeyed(root,html,[{selector:'[data-movement-plan-id]',attributes:['data-movement-plan-id']}]);
-  }
-
-  function networkPositions(locations){
-    const groups=new Map();
-    for(const loc of locations){
-      const groupKey=loc.body_id||`unbound:${loc.id}`;
-      if(!groups.has(groupKey))groups.set(groupKey,[]);
-      groups.get(groupKey).push(loc);
-    }
-    const keys=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
-    const positions={};
-    keys.forEach((key,groupIndex)=>{
-      const members=groups.get(key).slice().sort((a,b)=>`${a.kind}:${a.display_name}:${a.id}`.localeCompare(`${b.kind}:${b.display_name}:${b.id}`));
-      const x=keys.length===1?50:12+(76*groupIndex/(keys.length-1));
-      members.forEach((loc,index)=>{
-        const y=members.length===1?50:18+(64*index/(members.length-1));
-        positions[loc.id]=[x,y];
-      });
-    });
-    return positions;
-  }
-  function renderNetwork(){
-    const svg=$('#networkSvg'),nodes=$('#networkNodes'),movementPlans=state.movementPlans?.items||[],locations=state.world?.operational_nodes||[],positions=networkPositions(locations);
-    const contextPlans=contextMovementPlanIds(),contextNodes=contextNetworkNodeIds(contextPlans);
-    const svgHtml=movementPlans.map((r)=>{const a=positions[r.origin_id],b=positions[r.destination_id];if(!a||!b)return'';const coords=`x1="${a[0]*9}" y1="${a[1]*4.7}" x2="${b[0]*9}" y2="${b[1]*4.7}"`;const contextClass=contextPlans.has(r.id)?'is-context-related':'';return `<line ${coords} class="network-line-hit" data-movement-plan-line="${esc(r.id)}" /><line ${coords} class="network-line ${r.service_feasible_now?'available':''} ${contextClass} ${r.id===state.selectedMovementPlanId?'selected':''}" data-network-plan-visual="${esc(r.id)}" aria-hidden="true" />`;}).join('');
-    A.setHtmlIfChanged(svg,svgHtml);
-    const nodesHtml=locations.map((loc)=>{const p=positions[loc.id]||[50,50],contextClass=contextNodes.has(loc.id)?'is-context-related':'';return `<div class="network-node ${contextClass}" data-network-node-visual="${esc(loc.id)}" style="left:${p[0]}%;top:${p[1]}%"><button type="button" data-network-location="${esc(loc.id)}"><span class="node-name">${esc(loc.display_name)}</span><span class="node-meta">設備 ${loc.facility_count} · 建設 ${loc.active_project_count}</span></button></div>`;}).join('');
-    A.replaceHtmlPreservingKeyed(nodes,nodesHtml,[{selector:'[data-network-location]',attributes:['data-network-location']}]);
-    renderNetworkDecisionContext();
   }
 
   function constraintScopeKey(row){return encodeURIComponent(JSON.stringify([row.destination_id,row.owner_kind||null,row.owner_id||null,row.resource_id||null]));}
@@ -557,7 +534,20 @@
 
   function renderMovementPlanInspector(){
     const title=$('#movementPlanInspectorTitle'),content=$('#movementPlanInspectorContent');
-    if(!state.selectedMovementPlanId){title.textContent='移動経路を選択';content.innerHTML=`<div class="empty-state">上の${playerTerm('movement_plan')}またはNetwork上の接続を選択してください。</div>`;return;}
+    const selectedContext=state.decisionContext;
+    if(selectedContext?.decision_area==='logistics'&&selectedContext.subject_kind==='transport_relation'){
+      const allocations=(state.transportAllocations?.items||[]).filter((row)=>[row.anchor_node_id,row.destination_id].sort().join('\u001f')===selectedContext.subject_id);
+      title.textContent='輸送関係 · 個別設定';
+      content.innerHTML=section('同一区間の輸送設定',allocations.map((row)=>`<div class="detail-card"><strong>${esc(row.display_name)}</strong>${kv([['目標容量',esc(capText(row.target_capacity))],['利用可能',esc(capText(row.available))],['使用中',esc(capText(row.used))],['余力',esc(capText(row.spare))]])}<button type="button" data-system-allocation-id="${esc(row.id)}">この設定を確認</button></div>`).join('')||'<div class="empty-state">現在の設定なし</div>');return;
+    }
+    if(selectedContext?.decision_area==='logistics'&&selectedContext.subject_kind==='transport_allocation'){
+      const row=(state.transportAllocations?.items||[]).find((item)=>item.id===selectedContext.subject_id);
+      if(row){
+        title.textContent=row.display_name;
+        content.innerHTML=section('方向別輸送能力',kv([['出発',esc(locationName(row.anchor_node_id))],['到着',esc(locationName(row.destination_id))],['目標',esc(capText(row.target_capacity))],['利用可能',esc(capText(row.available))],['使用中',esc(capText(row.used))],['余力',esc(capText(row.spare))],['必要Fleet',`${fmt(row.required_units,0)} 機`],['割当Fleet',`${fmt(row.active_units,0)} 機`],['片道所要時間',`${fmt(row.forward_latency_days,1)} 日`],['運用Resource', (row.operational_supply||[]).map(([id,rid,amount])=>`${esc(locationName(id))} ${esc(resourceName(rid))} ${fmt(amount,2)} t/日`).join(' / ')||'追加なし']]))+section('操作',`<button type="button" data-allocation-edit="${esc(row.id)}">Capacity targetを設定</button>`);return;
+      }
+    }
+    if(!state.selectedMovementPlanId){title.textContent='輸送関係を選択';content.innerHTML=`<div class="empty-state">System Map・輸送関係一覧・${playerTerm('movement_plan')}から対象を選択してください。</div>`;return;}
     const movementPlan=(state.movementPlans?.items||[]).find((row)=>row.id===state.selectedMovementPlanId);if(!movementPlan)return;
     title.textContent=movementPlan.display_name;
     const modes=(movementPlan.modes||[]).map((m)=>`<div class="detail-card ${m.service_feasible?'is-usable':''}"><div class="mode-title"><span>${esc(m.display_name)}</span><span class="badge ${m.service_feasible?'ok':'warn'}">${m.service_feasible?'運用可能':'条件不足'}</span></div><div class="cell-sub">Fleet 保有 ${fmt(m.fleet_total_units,0)} / 空き ${fmt(m.fleet_free_units,0)} · 基準能力 ${capText(m.nominal_capacity)} · 往復周期 ${m.cycle_days==null?'—':fmt(m.cycle_days,1)+'日'}</div><div class="cell-sub">必要インフラ: ${esc(infrastructureText(m.infrastructure_requirements))}</div>${(m.blockers||[]).length?`<div class="issue-stack">${m.blockers.map((b)=>issueHtml(b)).join('')}</div>`:''}</div>`).join('');
@@ -655,7 +645,7 @@
   function render(){
     if(!state.logisticsSummary||!state.movementPlans)return;const s=state.logisticsSummary;
     A.setHtmlIfChanged($('#logisticsSummary'),[['保有機体',`${s.free_fleet_units}/${s.fleet_units} 使用可能`],['輸送能力',`${s.allocation_count} · 未充足 ${s.unfilled_allocation_units}`],['経路固定',`${s.routing_constraint_count}`],['追加備蓄',`${s.target_stock_count}`],['補給需要',`${s.requirement_count}`],['待ち供給',`${fmt(s.queued_supply_t)} t`],['輸送中',`${fmt(s.in_transit_t)} t`],['到着待機',`${fmt(s.arrival_waiting_t)} t`]].map(metricHtml).join(''));
-    populateLocationSelects();renderMovementPlanFilters();renderMovementPlanList();renderLogisticsDecisionLane();renderNetwork();renderSupplyPolicies();renderRequirements();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderMarket();renderMovementPlanInspector();
+    populateLocationSelects();renderMovementPlanFilters();renderMovementPlanList();renderLogisticsDecisionLane();renderNetworkDecisionContext();renderSupplyPolicies();renderRequirements();renderFleet();renderAllocations();renderVehicleProduction();renderCargoFlows();renderMarket();renderMovementPlanInspector();window.SpaceIdleSystemMap?.render();
   }
 
   document.addEventListener('change',(event)=>{
@@ -674,20 +664,18 @@
     if(state.activeView!=='logistics')return;
     const decision=event.target.closest('[data-logistics-decision-kind]');if(decision){
       state.decisionContext={decision_area:'logistics',subject_kind:decision.dataset.logisticsDecisionKind,subject_id:decision.dataset.logisticsDecisionId};
-      state.selectedMovementPlanId=null;render();$('#networkStage')?.scrollIntoView?.({block:'nearest'});return;
+      state.selectedMovementPlanId=null;render();$('#systemMapMountLogistics')?.scrollIntoView?.({block:'nearest'});return;
     }
     const decisionTarget=event.target.closest('[data-logistics-decision-target]');if(decisionTarget){
       const target=decisionTarget.dataset.logisticsDecisionTarget;
       if(target==='cargo')$('#cargoTable')?.scrollIntoView?.({block:'nearest'});
       return;
     }
-    const movementPlanButton=event.target.closest('[data-movement-plan-id]');if(movementPlanButton){state.selectedMovementPlanId=movementPlanButton.dataset.movementPlanId;render();return;}
-    const movementPlanLine=event.target.closest('[data-movement-plan-line]');if(movementPlanLine){state.selectedMovementPlanId=movementPlanLine.dataset.movementPlanLine;render();return;}
-    const network=event.target.closest('[data-network-location]');if(network){$('#movementPlanOriginFilter').value=network.dataset.networkLocation;renderMovementPlanList();return;}
+    const movementPlanButton=event.target.closest('[data-movement-plan-id]');if(movementPlanButton){state.selectedMovementPlanId=movementPlanButton.dataset.movementPlanId;state.decisionContext=null;render();return;}
     if(event.target.closest('#newTargetStockButton')){openTargetStockDialog();return;}
     if(event.target.closest('#newAllocationButton')){openAllocationDialog();return;} if(event.target.closest('#movementPlanAllocationButton')){openAllocationDialog((state.movementPlans?.items||[]).find((x)=>x.id===state.selectedMovementPlanId));return;}
-    const requirementNetwork=event.target.closest('[data-requirement-network]');if(requirementNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'supply_requirement',subject_id:requirementNetwork.dataset.requirementNetwork};state.selectedMovementPlanId=null;render();$('#networkStage')?.scrollIntoView?.({block:'nearest'});return;}
-    const allocationNetwork=event.target.closest('[data-allocation-network]');if(allocationNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'transport_allocation',subject_id:allocationNetwork.dataset.allocationNetwork};state.selectedMovementPlanId=null;render();$('#networkStage')?.scrollIntoView?.({block:'nearest'});return;}
+    const requirementNetwork=event.target.closest('[data-requirement-network]');if(requirementNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'supply_requirement',subject_id:requirementNetwork.dataset.requirementNetwork};state.selectedMovementPlanId=null;render();$('#systemMapMountLogistics')?.scrollIntoView?.({block:'nearest'});return;}
+    const allocationNetwork=event.target.closest('[data-allocation-network]');if(allocationNetwork){state.decisionContext={decision_area:'logistics',subject_kind:'transport_allocation',subject_id:allocationNetwork.dataset.allocationNetwork};state.selectedMovementPlanId=null;render();$('#systemMapMountLogistics')?.scrollIntoView?.({block:'nearest'});return;}
     const allocationEdit=event.target.closest('[data-allocation-edit]');if(allocationEdit){const a=(state.transportAllocations?.items||[]).find((x)=>x.id===allocationEdit.dataset.allocationEdit);if(a)openAllocationDialog(null,a);return;}
     const allocationOption=event.target.closest('[data-allocation-option]');if(allocationOption){$('#allocationVehicle').value=allocationOption.dataset.allocationOption;allocationCapacityInitialized=false;allocationMovementComparisonPins=[];renderAllocationServiceOptions();renderAllocationCapacityControls();void updateAllocationMovementChoices();scheduleAllocationPreview({immediate:true});return;}
     const allocationPriority=event.target.closest('[data-allocation-priority]');if(allocationPriority){setAllocationPriority(allocationPriority.dataset.allocationPriority);return;}
