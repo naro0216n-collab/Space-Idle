@@ -80,6 +80,13 @@ python -m playwright install chromium
 git diff --check
 ```
 
+短い外部コマンド呼出し期限を持つ環境で、それより長いローカル検証を実行する場合は `scripts/local_test_run.py` を使用する。コマンドの終了コードとログをrepoの `.git/local-test-runs/` に保存し、呼出し側の応答期限と検証の完了を区別する。`running` はテスト失敗でも成功でもない。完了後の `result.exit_code` とログだけを検証結果として扱う。通常のローカル・CI実行は直接 `pytest` を利用する。
+
+```bash
+python scripts/local_test_run.py start -- python -m pytest -q --durations=20
+python scripts/local_test_run.py status <startで返されたrun_id>
+```
+
 実ブラウザ、clean install、OS差などローカル環境で十分再現できない検証は、対応するテストも変更単位に含めてGitHub CIで実行する。ローカルで実行できないことを理由に、正準契約上必要な検証自体を省略しない。
 
 Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのものの契約テストは `development_tests/` に物理分離し、ゲーム本体の `tests/` と通常suiteには含めない。開発基盤を変更した場合は `pytest -q development_tests` を基準とし、変更責務が明確に限定される場合は現在のsuite構成から関連targetだけを選んでよい。特定test file名を開発手順上の恒久契約にはしない。実ブラウザの受入シナリオは `playwright/` に置き、この開発基盤テストとも分離する。
