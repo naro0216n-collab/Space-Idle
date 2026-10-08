@@ -1059,6 +1059,8 @@ Command名は内部State名の変更を目的にせず、Player intentを一操�
 
 Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維持率・Movement適合・routing・provider selection・allocation・Projected Material Readiness・産業依存度等を再計算しない。
 
+Body選択を持つQueryは、静的Celestial Bodyカタログの親子関係と対象BodyだけのSurface Cell／非運用non-surface Contextを結合する。非地表Founding候補は既存Foundingの計画可否・Movement・Resource要求から投影し、UI固有の設立規則を増やさない。Survey KnowledgeのBody scopeは投影する対象Cellと関連Campaignの選択に適用し、調査・科学・輸送のState所有を変更しない。Physical Contextを追加するだけでは一般のOperational Node間Movement探索を拡張しない。
+
 Queryは要求されたscopeを不必要に拡大しない。origin / destination、Operational Node、Entity ID等で対象が限定されている場合は、そのscopeから必要な派生状態を導出する。同一Application snapshot内で複数Queryが同じ派生状態を必要とする場合は同じprojection / indexを再利用し、各Query・各rowから全世界候補を再生成しない。read Queryはauthoritative Stateを変更せず、性能上の都合だけでDomain-owned derived indexを無条件にinvalidateしない。
 
 ## 14. Save / Load / Offline Progress

@@ -636,6 +636,13 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .system-map-edge.is-context-related { stroke: #f2c26b; stroke-width: 1.8; }
 .system-map-edge.is-cargo-in-transit { stroke: #e8a3d0; stroke-width: 2.8; stroke-dasharray: 3 1; pointer-events: none; }
 .system-map-edge.is-cargo-waiting { stroke: #e8a3d0; stroke-width: 2.4; stroke-dasharray: 1 2; pointer-events: none; }
+.system-map-body-hierarchy { stroke: #4b5e70; stroke-width: 1.1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.system-map-bodynodes { position: absolute; inset: 0; pointer-events: none; }
+.system-map-body-shell { width: 128px; position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
+.system-map-body { width: 100%; min-height: 68px; display: grid; align-content: center; gap: 4px; padding: 7px; text-align: center; background: #1b3041; border: 1px solid #738fa4; border-radius: 16px; }
+.system-map-body.is-satellite { background: #162633; border-radius: 9px; }
+.system-map-body.is-selected { outline: 2px solid var(--accent); }
+.system-map-body small { color: var(--muted); font-size: 10px; }
 .system-map-nodes { position: absolute; inset: 0; pointer-events: none; }
 .system-map-node-shell { width: 142px; position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
 .system-map-node-index { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; max-height: 156px; overflow-y: auto; border-top: 1px solid var(--line-soft); }

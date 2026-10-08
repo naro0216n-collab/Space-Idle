@@ -4,16 +4,77 @@ from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
-    SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
-    SurfaceLocationTerritoryRow,
+    SurfaceCellDevelopmentOption, FoundingOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
+    SurfaceLocationTerritoryRow, NonSurfaceFoundingContextRow, NonSurfaceFoundingView,
     SurfaceMapView,
     SurfaceResourceKnowledgeRow,
 )
+from .founding import NonSurfaceOperationalNodeTargetSpec
 from .facilities import FacilityPlacementScope
 from .shared import CelestialBodyId
 
 
 class SurfaceProjectorMixin:
+    def _non_surface_founding_view(self, body_id: CelestialBodyId) -> NonSurfaceFoundingView:
+        """Scoped physical orbital targets; economic state exists only after founding."""
+        sim = self._simulation
+        contexts = []
+        for node in sorted(
+            (row for row in sim.graph.nodes.values() if row.body_id == body_id),
+            key=lambda row: str(row.id),
+        ):
+            operational = sim.graph.has_operational_node(node.id)
+            candidates = []
+            if not operational and sim.founding is not None:
+                target = NonSurfaceOperationalNodeTargetSpec(node.id)
+                active = sim.founding.active_project_for_target_node(node.id)
+                for staging_id in sorted(sim.graph.operational_node_ids(), key=str):
+                    for recipe in sorted(sim.founding.deployment_recipes.values(), key=lambda row: str(row.id)):
+                        for vehicle in sim.transport.vehicle_definitions():
+                            failures = sim.founding.planning_failures(
+                                staging_id, target, recipe.id, vehicle.id, sim.day,
+                            )
+                            try:
+                                movement = sim.founding.movement_plan_for_target(
+                                    staging_id, target, vehicle.id, recipe.payload_t_per_unit, sim.day,
+                                )
+                                transit = sim.transport.performance_movement_transit_days(
+                                    movement, vehicle.performance,
+                                )
+                                required = sim.founding.resource_requirements_for(
+                                    recipe.id, vehicle.id, staging_id, target, day=sim.day,
+                                )
+                            except (KeyError, ValueError):
+                                transit = None
+                                required = recipe.payload_resources
+                            candidates.append(FoundingOption(
+                                staging_node_id=str(staging_id),
+                                deployment_recipe_id=str(recipe.id),
+                                recipe_display_name=recipe.display_name,
+                                vehicle_definition_id=str(vehicle.id),
+                                vehicle_display_name=vehicle.display_name,
+                                preparation_work=recipe.preparation_work,
+                                transit_days=transit,
+                                payload_t=recipe.payload_t,
+                                payload_t_per_unit=recipe.payload_t_per_unit,
+                                required_units=recipe.required_units,
+                                resources=tuple((str(req.resource_id), req.amount_t) for req in required),
+                                blockers=constraints_from_pairs(
+                                    tuple((failure.code, failure.detail) for failure in failures),
+                                    affected_action="plan_founding",
+                                    related_entity_kind="non_surface_spatial_node",
+                                    related_entity_id=str(node.id),
+                                ),
+                                can_plan=not failures,
+                                active_project_id=None if active is None else str(active.id),
+                                comparison_key=f"{node.id}|{staging_id}|{recipe.id}|{vehicle.id}",
+                            ))
+            contexts.append(NonSurfaceFoundingContextRow(
+                str(node.id), node.display_name, node.kind.value, operational,
+                tuple(candidates),
+            ))
+        return NonSurfaceFoundingView(str(body_id), tuple(contexts))
+
     def _surface_map_view(self, body_id: CelestialBodyId) -> SurfaceMapView:
         sim = self._simulation
         body = sim.graph.bodies[body_id]
@@ -239,7 +300,7 @@ class SurfaceProjectorMixin:
                                     axis_key="slope_factor", number_value=cell.terrain.slope_factor
                                 ),
                             )
-                            foundation_rows.append(SurfaceCellFoundationOption(
+                            foundation_rows.append(FoundingOption(
                                 staging_node_id=str(staging_id),
                                 deployment_recipe_id=str(recipe.id),
                                 recipe_display_name=recipe.display_name,

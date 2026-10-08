@@ -24,6 +24,7 @@ from ..application_commands import (
     GetMovementPlans,
     GetSurveys,
     GetSurfaceMap,
+    GetNonSurfaceFoundingOptions,
     GetTransportAllocations,
     GetWorld,
     GetMarket,
@@ -95,10 +96,11 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
                 "projects": GetProjects(operational_node_id),
                 "build_options": GetBuildOptions(operational_node_id),
                 "bottlenecks": GetBottlenecks(operational_node_id),
-                "surveys": GetSurveys(operational_node_id),
+                "surveys": GetSurveys(operational_node_id, surface_body_id),
             })
         if surface_body_id:
             queries["surface_map"] = GetSurfaceMap(surface_body_id)
+            queries["non_surface_founding"] = GetNonSurfaceFoundingOptions(surface_body_id)
 
         result = self.server.runtime.snapshot_if_changed(
             queries,

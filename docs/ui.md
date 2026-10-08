@@ -324,6 +324,8 @@ Global Attentionはlogや全warning一覧ではなく、Player設定に対して
 
 物理Body・衛星の階層はOperational Nodeの有無に関わらず選択でき、同じInspector Contextから物理環境、Surface Cell登録状況、科学観測、Movement、Foundingの状況と必要条件を確認できる。固体地表のない天体には空の地表Mapを単なる読み込み失敗として表示せず、軌道・科学対象を提示する。未設立のBody/Cell/軌道Contextを通常のCargo配送先やTransport Allocation先の選択肢と混同しない。天体に関する物理値と判定はApplicationの同じWorld/Catalog投影を使い、地図内で再計算しない。
 
+物理天体階層の表示位置とOperational Nodeの表示位置は別レイヤーとし、母天体接続を物流経路の実線として表さない。天体は未運用でも選択でき、地表の有無、代表重力・日射、登録された地域、非地表Contextの有無を区別して表示する。選択BodyのSurveyと非地表Founding候補はそのBodyの範囲で取得し、別Bodyの候補やKnowledgeを無条件に列挙しない。Founding操作は地表／非地表とも同じCommandへ接続し、Vehicle・staging・Recipeごとの準備、輸送、Resource、Fleetとblockerを判断点に提示する。
+
 Mapの位置、拡大率・pan、表示階層、選択Node／OD関係、Resource filterを画面入口で共有する。OverviewではOperational Node、Attention、進行中のResearch・Survey・Exploration・Constructionと主要接続を示し、物流Contextでは実際のTransport Allocation、方向別Current / Target / Available / Used / Spareと選択されたSupply Requirement・Cargo Flowを区別する。Movement候補の成立性はTransportの稼働・配備を意味しないため、未配備候補の全線表示を避けて、選択した関係の候補として示す。
 
 同一ODに複数Allocation／Movement候補があり得る。Map上の集約エッジは表示上の関係でありDomain Stateではない。方向、複数設定、配送済Cargoと未dispatch需要をInspectorまたは一覧で分解し、個別操作へ到達できるようにする。線の直接ヒットを唯一の操作手段とせず、キーボード・タッチ対応の関係一覧を設ける。色とともに線種、ラベル、凡例、数値・単位で意味を示す。

@@ -602,6 +602,44 @@
     return `<div class="survey-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">地表調査</span><h2>地表調査</h2><p>地域、対象資源、調査知識目標を直接選びます。観測手段は自動選択し、戦略差が意思決定に影響する場合だけ比較します。</p></div></div>${createSection}${campaignSection}${knowledgeSection}${providerSection}</div>`;
   }
 
+  function nonSurfaceFoundingHtml(bodyId){
+    const context=state.nonSurfaceFounding;
+    if(!context||context.body_id!==bodyId)return '<section class="card"><div class="card-heading"><h3>非地表Context</h3></div><div class="empty-state">軌道・非地表の設立候補を取得しています。</div></section>';
+    const contexts=context.contexts||[];
+    const cards=contexts.map((node)=>{
+      if(node.operational)return `<div class="detail-card"><strong>${esc(node.display_name)}</strong><div class="cell-sub">運用拠点設立済み · 通常の在庫・Fleet管理は運用拠点で行います。</div></div>`;
+      const candidates=(node.foundation_options||[]).slice().sort((a,b)=>
+        Number(b.can_plan)-Number(a.can_plan)||(a.blockers||[]).length-(b.blockers||[]).length
+        ||String(a.comparison_key).localeCompare(String(b.comparison_key)));
+      const options=candidates.map((option)=>{
+        const plan=planningOptionState(option,'設立可');
+        const scope=`foundation:${node.spatial_node_id}:${option.staging_node_id}:${option.deployment_recipe_id}:${option.vehicle_definition_id}`;
+        const resourceHeading=option.transit_days==null?'基本展開資材':'出発拠点で必要なResource';
+        return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${plan.disabled?'warn':'ok'}">${option.active_project_id?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備 ${fmt(option.preparation_work,1)} · 航行 ${option.transit_days==null?'移動経路未成立':`${fmt(option.transit_days,0)} 日`} · 搭載量 ${fmt(option.payload_t,2)} t / ${fmt(option.required_units,0)} 機</div><div class="cell-sub">${resourceHeading}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${option.transit_days==null?'<div class="cell-sub">現行の能力では出発時の全Resource要件を算出できません。</div>':''}${plan.blockers.length?`<div class="issue-stack">${plan.blockers.map(issueHtml).join('')}</div>`:''}${foundingPlanControls(scope,option,plan.disabled)}<label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規宇宙拠点"></label><button type="button" class="primary" data-nonsurface-found data-spatial-node-id="${esc(node.spatial_node_id)}" data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" ${plan.disabled?'disabled':''}>この軌道Contextへ設立</button></div>`;
+      }).join('')||'<div class="empty-state">登録された展開構成はありません。</div>';
+      return `<div class="detail-card"><div class="mode-title"><strong>${esc(node.display_name)}</strong><span class="badge">物理Context・未運用</span></div><div class="cell-sub">対象 ${esc(node.spatial_node_id)} · ${candidates.length} 構成（実行拠点／Recipe／Vehicle）</div><div class="detail-stack">${options}</div></div>`;
+    }).join('');
+    return `<section class="card"><div class="card-heading"><div><h3>周回軌道・非地表Context</h3><div class="cell-sub">運用Nodeとは異なる物理Targetです。設立条件・輸送能力・Resourceを比較します。</div></div><span class="badge">${contexts.length} Context</span></div><div class="card-body detail-stack">${cards||'<div class="empty-state">この天体には設立対象の非地表Contextが登録されていません。物理天体の存在と設立候補の有無は別です。</div>'}</div></section>`;
+  }
+
+  function bodyPhysicalHtml(bodyId){
+    const body=(state.catalog?.celestial_bodies||[]).find((row)=>row.id===bodyId);
+    if(!body)return '';
+    const parent=(state.catalog?.celestial_bodies||[]).find((row)=>row.id===body.parent_body_id);
+    const number=(value,unit,digits=2)=>value==null?'未定義':`${fmt(value,digits)} ${unit}`;
+    return `<section class="card"><div class="card-heading"><div><h3>${esc(body.display_name)} · 物理情報</h3><div class="cell-sub">静的Worldの基準値 · 航行可否や操業能力そのものではありません</div></div></div><div class="card-body">${kv([
+      ['分類',body.parent_body_id?'衛星':'惑星'],
+      ['母天体',parent?esc(parent.display_name):'太陽系中心'],
+      ['固体地表',body.physical_surface==='solid'?'あり':'なし'],
+      ['地表地域の登録数',fmt(body.surface_cell_count,0)],
+      ['平均半径',number(body.mean_radius_km,'km')],
+      ['代表重力',number(body.reference_gravity_m_s2,'m/s²')],
+      ['基準日射',number(body.representative_solar_flux_w_m2,'W/m²')],
+      ['太陽周回長半径',number(body.heliocentric_semimajor_axis_au,'AU',3)],
+      ['母天体周回長半径',number(body.parent_orbit_semimajor_axis_km,'km')],
+    ])}<div class="cell-sub">環境へのFacility適合・Movement条件は候補別のApplication判定を参照します。科学探査は「科学探査」タブ、資源調査は「地表調査」タブで確認できます。</div></div></section>`;
+  }
+
   function renderSurfaceTab(){
     const map=state.surfaceMap;
     if(!map){
@@ -610,7 +648,12 @@
       return `<section class="card"><div class="card-heading"><h3>地表マップ</h3></div><div class="empty-state">${message}</div></section>`;
     }
     const cells=map.cells||[];
-    if(!cells.length)return `<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">地表区画が定義されていません。</div></section>`;
+    const bodyContext=bodyPhysicalHtml(map.body_id);
+    const nonSurface=nonSurfaceFoundingHtml(map.body_id);
+    if(!cells.length){
+      const noSurface=map.physical_surface==='no_solid_surface';
+      return `${bodyContext}<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">${noSurface?'固体地表がありません。地表地域の開発・設立はできません。周回軌道の物理Contextと科学探査を確認してください。':'固体地表はありますが、地域（Surface Cell）が登録されていません。'}</div></section>${nonSurface}`;
+    }
     const layout=surfaceDecisionLayout(cells),pos=layout.positions;
     const links=surfaceAdjacencyLines(cells,pos);
     const buttons=cells.map((cell)=>{
@@ -620,7 +663,7 @@
     }).join('');
     const cellIndex=cells.map((cell)=>`<button type="button" class="surface-cell-index-item ${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''}" data-inspect="surface-cell" data-id="${esc(cell.id)}" data-surface-choice-kind="index" aria-pressed="${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'true':'false'}">${esc(surfaceCellLabel(cell.id))}</button>`).join('');
     const locations=(map.locations||[]).map((loc)=>`<span class="badge">${esc(loc.display_name)} ${loc.developed_cell_ids?.length||0} 地域</span>`).join(' ');
-    return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-viewport"><div class="surface-map-stage" style="min-width:${layout.width}px;height:${layout.height}px"><svg class="surface-map-links" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg><div class="surface-map-nodes">${buttons}</div></div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div><div class="cell-sub surface-map-caption">位置は地理的関係の概略です。緯度・経度は地域詳細の数値を参照してください。</div><div class="surface-cell-index" aria-label="地表地域の一覧">${cellIndex}</div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>`;
+    return `${bodyContext}<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-viewport"><div class="surface-map-stage" style="min-width:${layout.width}px;height:${layout.height}px"><svg class="surface-map-links" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg><div class="surface-map-nodes">${buttons}</div></div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div><div class="cell-sub surface-map-caption">位置は地理的関係の概略です。緯度・経度は地域詳細の数値を参照してください。</div><div class="surface-cell-index" aria-label="地表地域の一覧">${cellIndex}</div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>${nonSurface}`;
   }
 
   function patchSurveyDecisionSurface(root,html){
@@ -1236,6 +1279,26 @@
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const cellId=surfaceDevelop.dataset.cellId,plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:cellId,...plan});await A.completeActiveDraft(`development:${cellId}:${surfaceDevelop.dataset.surfaceDevelop}`);preserveSurfaceDecision(cellId);banner('地表地域の開発案件を作成しました');}catch{}return;}
+    const nonSurfaceFound=event.target.closest('[data-nonsurface-found]');
+    if(nonSurfaceFound){
+      const card=nonSurfaceFound.closest('.surface-action-card');
+      const displayName=card?.querySelector('[data-new-location-name]')?.value.trim();
+      if(!displayName){banner('拠点名を入力してください','error');return;}
+      const priority=Number(card?.querySelector('[data-founding-priority]')?.value??3);
+      try{
+        await command('PlanOperationalNodeFounding',{
+          staging_node_id:nonSurfaceFound.dataset.stagingNodeId,
+          display_name:displayName,
+          target_spec:{target_type:'non_surface_operational_node',spatial_node_id:nonSurfaceFound.dataset.spatialNodeId},
+          deployment_recipe_id:nonSurfaceFound.dataset.recipeId,
+          vehicle_definition_id:nonSurfaceFound.dataset.vehicleId,
+          priority,
+        });
+        await A.completeActiveDraft(`foundation:${nonSurfaceFound.dataset.spatialNodeId}:${nonSurfaceFound.dataset.stagingNodeId}:${nonSurfaceFound.dataset.recipeId}:${nonSurfaceFound.dataset.vehicleId}`);
+        banner('非地表拠点の設立を開始しました');
+      }catch{}
+      return;
+    }
     const surfaceFound=event.target.closest('[data-surface-found]');if(surfaceFound){const cellId=surfaceFound.dataset.cellId,card=surfaceFound.closest('.surface-action-card'),displayName=card?.querySelector('[data-new-location-name]')?.value.trim();if(!displayName){banner('拠点名を入力してください','error');return;}const priority=Number(card?.querySelector('[data-founding-priority]')?.value??3);try{await command('PlanOperationalNodeFounding',{staging_node_id:surfaceFound.dataset.stagingNodeId,display_name:displayName,target_spec:{target_type:'surface_location',body_id:surfaceFound.dataset.bodyId,core_cell_id:cellId},deployment_recipe_id:surfaceFound.dataset.recipeId,vehicle_definition_id:surfaceFound.dataset.vehicleId,priority});await A.completeActiveDraft(`foundation:${cellId}:${surfaceFound.dataset.stagingNodeId}:${surfaceFound.dataset.recipeId}:${surfaceFound.dataset.vehicleId}`);preserveSurfaceDecision(cellId);banner('拠点設立を開始しました');}catch{}return;}
     const build=event.target.closest('[data-build]');if(build){const prefix=build.dataset.planPrefix||'buildPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanBuild',{operational_node_id:state.operationalNodeId,facility_id:build.dataset.build,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-build:${build.dataset.build}`);banner('建設計画を作成しました');}catch{}return;}
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-upgrade:${upgrade.dataset.upgrade}`);banner('設備更新案件を作成しました');}catch{}return;}

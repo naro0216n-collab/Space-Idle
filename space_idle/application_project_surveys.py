@@ -339,7 +339,7 @@ class SurveyProgressionProjectorMixin:
             comparison_axes=comparison_axes,
         )
 
-    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None) -> SurveysView:
+    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None, *, body_id=None) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
             return SurveysView((), (), ())
@@ -349,8 +349,16 @@ class SurveyProgressionProjectorMixin:
         service_plan = decision.allocations.services
         powers = decision.allocations.power_by_location
         knowledge_rows: list[SurveyRow] = []
+        # Filter before projecting knowledge and provider decisions. A body-scoped
+        # UI query must never request derived candidates for unrelated worlds.
+        target_items = (
+            sim.survey.targets.items() if body_id is None else (
+                (key, target) for key, target in sim.survey.targets.items()
+                if sim.graph.surface_cells[key[0]].body_id == body_id
+            )
+        )
         for (cell_id, resource_id), _target in sorted(
-            sim.survey.targets.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+            target_items, key=lambda row: (str(row[0][0]), str(row[0][1]))
         ):
             cell = sim.graph.surface_cells[cell_id]
             owner = sim.graph.owner_of_cell(cell_id)
@@ -370,5 +378,9 @@ class SurveyProgressionProjectorMixin:
         campaign_rows = tuple(
             self._survey_campaign_row(campaign, execution_plan, service_plan, powers)
             for campaign in sorted(sim.survey.campaigns.values(), key=lambda row: str(row.id))
+            if body_id is None or any(
+                sim.graph.surface_cells[cell_id].body_id == body_id
+                for cell_id in campaign.target_cell_ids
+            )
         )
         return SurveysView(provider_fleet, tuple(knowledge_rows), campaign_rows)

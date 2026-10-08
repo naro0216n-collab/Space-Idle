@@ -14,7 +14,7 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -363,8 +363,11 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/research":
             self._query_result(GetResearch())
             return
+        if path == "/api/v1/non-surface-founding-options":
+            self._query_result(GetNonSurfaceFoundingOptions(_required(params, "body_id")))
+            return
         if path == "/api/v1/surveys":
-            self._query_result(GetSurveys(_one(params, "provider_operational_node_id")))
+            self._query_result(GetSurveys(_one(params, "provider_operational_node_id"), _one(params, "body_id")))
             return
         if path == "/api/v1/survey-campaign-intent-preview":
             self._query_result(GetSurveyCampaignIntentPreview(

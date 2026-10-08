@@ -346,6 +346,8 @@ Surface CellはFacility配置スロットでもOperational Nodeでもない。�
 
 Founding targetは少なくとも地表Locationとnon-surface Operational Nodeを型として区別する。Surface Location Foundingはtarget Surface Cellと生成するcore cellを持ち、non-surface Foundingは既存のnon-surface Spatial contextをtargetとする。両者はcommitment、Movement、settlement、保存則を共有するが、Surface Cell領域や地表Site条件をnon-surface拠点へ持ち込まない。
 
+未開発の天体や軌道もWorld上の物理対象として選択でき、出発拠点を所有するFleet・Resourceから科学探査または設立候補を評価する。軌道上の拠点設立は既存の物理Contextを対象に共通Foundingを用い、設立以前のFleetPool・Inventoryは存在しない。表示する候補はTarget種別・staging拠点・Deployment Recipe・Vehicle性能から導かれ、必要条件やblockerはApplicationから受け取る。
+
 Location設立前のSurface CellはInventoryや通常物流のNodeではない。Surface FoundingではContentが必要Resource、展開Facility / Fleet、輸送・着陸能力、準備作業、所要時間、物理Site条件をDeployment Recipeとして定義する。Resource Survey Knowledgeを成立条件にする場合は「Survey済み」というbooleanではなく、対象Cell / Resource等とminimum Knowledge Levelを明示するKnowledge Requirementを定義する。
 
 Deployment開始時にprepared Resource / Fleetをsource側の物理Stateからone-shot Movement payload / commitmentへ移し、成功時だけRecipeに従って初期Storage、Facility、Inventory、必要なFleet等へ変換する。Definitionだけを根拠にtarget側へResource、Fleet、Facilityを無償生成しない。失敗・取消可能境界・帰還dispositionもMovement / commitment契約で明示する。

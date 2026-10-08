@@ -8,6 +8,8 @@ class GetWorld: pass
 @dataclass(frozen=True)
 class GetSurfaceMap: body_id: str
 @dataclass(frozen=True)
+class GetNonSurfaceFoundingOptions: body_id: str
+@dataclass(frozen=True)
 class GetOperationalNode: operational_node_id: str
 @dataclass(frozen=True)
 class GetFlowReport: operational_node_id: str
@@ -81,7 +83,9 @@ class GetResearch: pass
 @dataclass(frozen=True)
 class GetScientificExplorations: pass
 @dataclass(frozen=True)
-class GetSurveys: provider_operational_node_id: str | None = None
+class GetSurveys:
+    provider_operational_node_id: str | None = None
+    body_id: str | None = None
 @dataclass(frozen=True)
 class GetSurveyCampaignIntentPreview:
     target_cell_ids: tuple[str, ...]

@@ -13,10 +13,10 @@ Cartesian baseline or per-origin/destination route table.
 
 from __future__ import annotations
 
-from ..shared import CelestialBodyId
+from ..shared import CelestialBodyId, SpatialNodeId
 from ..spatial import (
     AtmosphereField, CelestialBodyDef, GravityField, PhysicalSurface,
-    RadiationField, SpatialGraph, StaticFacetStore, ThermalField,
+    RadiationField, SpatialGraph, SpatialNodeDef, SpatialNodeKind, StaticFacetStore, ThermalField,
 )
 from . import base_ids as ids
 
@@ -80,6 +80,25 @@ def register_solar_system_bodies(graph: SpatialGraph) -> None:
             parent_body_id=CelestialBodyId(f"base.body.{parent}"),
             parent_orbit_semimajor_axis_km=axis_km,
             standard_gravitational_parameter_km3_s2=gm,
+        ))
+
+
+def register_giant_orbital_contexts(graph: SpatialGraph) -> None:
+    """Explicit physical orbital destinations for gas giant science and founding.
+
+    These contexts own no Fleet, Inventory, or Transport Allocation. Their
+    representative orbital radius is Content, not a fabricated solid surface.
+    """
+    for slug, name, radius, _axis, _gravity, solid in _PLANETS:
+        if solid:
+            continue
+        graph.add(SpatialNodeDef(
+            SpatialNodeId(f"base.spatial.{slug}.orbit"), f"{name}周回軌道",
+            ids.SOL_SYSTEM, None,
+            body_id=CelestialBodyId(f"base.body.{slug}"),
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+            body_center_orbit_radius_km=radius+5000.0,
         ))
 
 

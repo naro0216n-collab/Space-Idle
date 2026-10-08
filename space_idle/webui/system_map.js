@@ -10,6 +10,7 @@
   let stage=null;
   let dragging=null;
   let mapGeometry=null;
+  let hasCentered=false;
 
   function selectedResource(){return state.systemMapResourceId||null;}
   function requirementRows(){return state.logistics?.requirements||[];}
@@ -66,6 +67,59 @@
     return {positions,width,height};
   }
 
+  function worldPositionsFor(bodies,nodes){
+    // Body hierarchy is catalog data; only its presentation coordinates are calculated here.
+    // Operational Nodes have their own column and are the only valid allocation endpoints.
+    if(!bodies.length)return {...positionsFor(nodes),bodyPositions:{},parentLines:[]};
+    const byId=new Map(bodies.map((body)=>[body.id,body]));
+    const roots=bodies.filter((body)=>!body.parent_body_id||!byId.has(body.parent_body_id))
+      .sort((a,b)=>(a.heliocentric_semimajor_axis_au??Infinity)-(b.heliocentric_semimajor_axis_au??Infinity)
+        ||a.id.localeCompare(b.id));
+    const rootFor=(body)=>{
+      let current=body;
+      const seen=new Set();
+      while(current.parent_body_id&&byId.has(current.parent_body_id)&&!seen.has(current.id)){
+        seen.add(current.id);
+        current=byId.get(current.parent_body_id);
+      }
+      return current.id;
+    };
+    const groups=roots.map((root)=>({
+      root,
+      satellites:bodies.filter((body)=>body.id!==root.id&&rootFor(body)===root.id)
+        .sort((a,b)=>(a.parent_orbit_semimajor_axis_km??Infinity)-(b.parent_orbit_semimajor_axis_km??Infinity)||a.id.localeCompare(b.id)),
+    }));
+    const nodeGroups=new Map(groups.map((group)=>[group.root.id,[]]));
+    const detached=[];
+    for(const node of nodes){
+      const body=byId.get(node.body_id);
+      const rootId=body&&rootFor(body);
+      if(rootId&&nodeGroups.has(rootId))nodeGroups.get(rootId).push(node);
+      else detached.push(node);
+    }
+    const width=Math.max(720,groups.length*342+detached.length*164+40);
+    const height=Math.max(420,...groups.map((group)=>180+Math.max(group.satellites.length, nodeGroups.get(group.root.id).length)*142));
+    const bodyPositions={};
+    const positions={};
+    const parentLines=[];
+    groups.forEach((group,index)=>{
+      const x=index*342+91;
+      bodyPositions[group.root.id]=[x,90];
+      group.satellites.forEach((body,row)=>{
+        const y=236+row*142;
+        bodyPositions[body.id]=[x,y];
+        parentLines.push([bodyPositions[body.parent_body_id]||bodyPositions[group.root.id],[x,y]]);
+      });
+      nodeGroups.get(group.root.id).sort((a,b)=>a.id.localeCompare(b.id)).forEach((node,row)=>{
+        positions[node.id]=[x+165,94+row*142];
+      });
+    });
+    detached.sort((a,b)=>a.id.localeCompare(b.id)).forEach((node,index)=>{
+      positions[node.id]=[groups.length*342+110+164*index,100];
+    });
+    return {positions,bodyPositions,parentLines,width,height};
+  }
+
   function pairKey(a,b){return [String(a),String(b)].sort().join('\u001f');}
   function allocationPairs(allocations){
     const pairs=new Map();
@@ -82,7 +136,7 @@
     if(stage)return stage;
     stage=document.createElement('section');
     stage.className='system-map-frame';
-    stage.innerHTML=`<div class="system-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><strong id="systemMapMode">空間概要</strong><span class="system-map-note">概略配置 · 距離と移動日数は数値で確認</span></div><div class="system-map-controls"><label class="system-map-resource-label">Resource <select id="systemMapResourceFilter" aria-label="地図で強調するResource"></select></label><button type="button" data-system-zoom="out" aria-label="縮小">−</button><button type="button" data-system-zoom="reset" aria-label="表示位置をリセット">等倍</button><button type="button" data-system-zoom="in" aria-label="拡大">＋</button></div></div><div id="systemMapBodies" class="system-map-bodies" aria-label="天体と地表マップへの移動"></div><div id="systemMapStage" class="system-map-stage" role="group" aria-label="共通System Map"><div id="systemMapViewport" class="system-map-viewport"><svg class="system-map-links" preserveAspectRatio="none" aria-hidden="true"></svg><div class="system-map-nodes"></div></div></div><div class="system-map-legend" id="systemMapLegend"></div><div class="system-map-node-index" id="systemMapNodeIndex" aria-label="全拠点の選択・Map上の位置への移動"></div><div class="system-map-relations" id="systemMapRelations" aria-label="輸送関係一覧"></div>`;
+    stage.innerHTML=`<div class="system-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><strong id="systemMapMode">空間概要</strong><span class="system-map-note">概略配置 · 距離と移動日数は数値で確認</span></div><div class="system-map-controls"><label class="system-map-resource-label">Resource <select id="systemMapResourceFilter" aria-label="地図で強調するResource"></select></label><button type="button" data-system-zoom="out" aria-label="縮小">−</button><button type="button" data-system-zoom="reset" aria-label="表示位置をリセット">等倍</button><button type="button" data-system-zoom="in" aria-label="拡大">＋</button></div></div><div id="systemMapBodies" class="system-map-bodies" aria-label="天体と地表マップへの移動"></div><div id="systemMapStage" class="system-map-stage" role="group" aria-label="共通System Map"><div id="systemMapViewport" class="system-map-viewport"><svg class="system-map-links" preserveAspectRatio="none" aria-hidden="true"></svg><div class="system-map-bodynodes"></div><div class="system-map-nodes"></div></div></div><div class="system-map-legend" id="systemMapLegend"></div><div class="system-map-node-index" id="systemMapNodeIndex" aria-label="全拠点の選択・Map上の位置への移動"></div><div class="system-map-relations" id="systemMapRelations" aria-label="輸送関係一覧"></div>`;
     return stage;
   }
   function applyViewport(){
@@ -110,18 +164,26 @@
     const nodes=state.world?.operational_nodes||[];
     const bodies=state.catalog?.celestial_bodies||[];
     const bodyNames=new Map(bodies.map((body)=>[body.id,body.display_name]));
-    const bodyLinks=`<span>天体 · 地表へ</span>`+bodies.map((body)=>
-      `<button type="button" data-system-body-id="${esc(body.id)}" aria-pressed="${state.selectedSurfaceBodyId===body.id?'true':'false'}">${esc(body.display_name)} <small>地表Map</small></button>`
+    const bodyLinks=`<span>物理天体 · 選択して詳細へ</span>`+bodies.map((body)=>
+      `<button type="button" data-system-body-id="${esc(body.id)}" aria-pressed="${state.selectedSurfaceBodyId===body.id?'true':'false'}">${esc(body.display_name)} <small>${body.physical_surface==='solid'?'地表':'地表なし'}</small></button>`
     ).join('');
     A.setHtmlIfChanged(root.querySelector('#systemMapBodies'),bodyLinks);
     const stageArea=root.querySelector('#systemMapStage');
-    const geometry=positionsFor(nodes);
+    const geometry=worldPositionsFor(bodies,nodes);
     mapGeometry=geometry;
-    const {positions,width,height}=geometry;
+    const {positions,bodyPositions,parentLines,width,height}=geometry;
     const plane=root.querySelector('#systemMapViewport');
     plane.style.width=`${width}px`;
     plane.style.height=`${height}px`;
     root.querySelector('.system-map-links').setAttribute('viewBox',`0 0 ${width} ${height}`);
+    const bodyHierarchy=parentLines.map(([a,b])=>`<line class="system-map-body-hierarchy" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`).join('');
+    A.replaceHtmlPreservingKeyed(root.querySelector('.system-map-bodynodes'),bodies.map((body)=>{
+      const point=bodyPositions[body.id];
+      if(!point)return '';
+      const isMoon=Boolean(body.parent_body_id);
+      const selected=body.id===state.selectedSurfaceBodyId;
+      return `<div class="system-map-body-shell" style="left:${point[0]}px;top:${point[1]}px"><button type="button" class="system-map-body ${isMoon?'is-satellite':''} ${selected?'is-selected':''}" data-system-body-id="${esc(body.id)}" aria-pressed="${selected?'true':'false'}"><strong>${esc(body.display_name)}</strong><small>${isMoon?'衛星':'惑星'} · ${body.physical_surface==='solid'?`${body.surface_cell_count} 地域`:'固体地表なし'}</small></button></div>`;
+    }).join(''),[{selector:'[data-system-body-id]',attributes:['data-system-body-id']}]);
     const allocations=state.transportAllocations?.items||[];
     const pairs=allocationPairs(allocations);
     const resourceFilter=root.querySelector('#systemMapResourceFilter');
@@ -169,7 +231,7 @@
         edges+=`<line class="system-map-edge ${waiting?'is-cargo-waiting':'is-cargo-in-transit'}" x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"><title>${esc(waiting?'到着済み・受入／引継ぎ待ち':'輸送中Cargo')} · ${esc(locationName(cargoContext.source_id))} → ${esc(locationName(cargoContext.destination_id))} · ${fmt(cargoContext.amount_t,2)} t</title></line>`;
       }
     }
-    A.setHtmlIfChanged(root.querySelector('.system-map-links'),edges);
+    A.setHtmlIfChanged(root.querySelector('.system-map-links'),bodyHierarchy+edges);
     const html=nodes.map((node)=>{
       const [x,y]=positions[node.id];
       const signal=signals[node.id]||{};
@@ -180,7 +242,7 @@
       return `<div class="system-map-node-shell" style="left:${x}px;top:${y}px"><button type="button" class="global-map-node ${highlighted?'is-selected':''} ${signalClass} ${related?'is-related':''}" data-system-node-id="${esc(node.id)}" aria-pressed="${highlighted?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindName(node.kind))} · ${esc(bodyNames.get(node.body_id)||'非地表Context')} · 設備 ${fmt(node.facility_count,0)}</span>${!logistics&&counters.length?`<span class="global-map-node-signals">${counters.map(([kind,label,n])=>`<span class="global-map-signal is-${kind}">${label} ${fmt(n,0)}</span>`).join('')}</span>`:''}</button></div>`;
     }).join('');
     A.replaceHtmlPreservingKeyed(root.querySelector('.system-map-nodes'),html,[{selector:'[data-system-node-id]',attributes:['data-system-node-id']}]);
-    root.querySelector('#systemMapLegend').textContent=logistics?'実輸送設定（実線：利用可能／破線：停止・容量不足）、選択Movement候補（点線）、選択Cargo（太い破線：輸送中／点線：入庫待機）。需要・Cargo・Stockは別状態です。':'設定済みTransport接続と拠点Activity。選択中のMovement候補は点線。位置は概略であり移動可能性を保証しません。';
+    root.querySelector('#systemMapLegend').textContent=logistics?'天体・衛星の細線は物理的所属（輸送航路ではありません）。実輸送設定（実線：利用可能／破線：停止・容量不足）、選択Movement候補（点線）、選択Cargo（太い破線：輸送中／点線：入庫待機）。需要・Cargo・Stockは別状態です。':'天体・衛星の細線は物理的所属（輸送航路ではありません）。設定済みTransport接続と拠点Activity。選択中のMovement候補は点線。位置は概略であり移動可能性を保証しません。';
     A.replaceHtmlPreservingKeyed(root.querySelector('#systemMapNodeIndex'),nodes.map((node)=>
       `<button type="button" data-system-node-jump="${esc(node.id)}" class="${node.id===selected?'is-selected':''}" aria-pressed="${node.id===selected?'true':'false'}">${esc(node.display_name)}${relatedNodes.has(node.id)?' · 関連Resource':''}</button>`).join(''),[{selector:'[data-system-node-jump]',attributes:['data-system-node-jump']}]);
     const relationHtml=logistics?pairs.map((pair)=>{
@@ -202,7 +264,8 @@
         element.getAttribute(selector==='[data-system-allocation-id]'?'data-system-allocation-id':'data-system-pair')===key);
       replacement?.focus({preventScroll:true});
     }
-    applyViewport();
+    if(!hasCentered&&selected){focusNode(selected);hasCentered=true;}
+    else applyViewport();
   }
   document.addEventListener('change',(event)=>{
     if(event.target.id!=='systemMapResourceFilter')return;
@@ -246,5 +309,5 @@
     viewport.x=dragging.ox+event.clientX-dragging.x;viewport.y=dragging.oy+event.clientY-dragging.y;applyViewport();
   });
   for(const type of ['pointerup','pointercancel'])document.addEventListener(type,(event)=>{if(dragging?.id===event.pointerId)dragging=null;});
-  window.SpaceIdleSystemMap={detach,render,positionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
+  window.SpaceIdleSystemMap={detach,render,positionsFor,worldPositionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
 })();

@@ -4,7 +4,7 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null, inspectedNode:null, inspectedFlow:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
@@ -368,6 +368,7 @@
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
     if(data.surveys!==undefined)state.surveys=data.surveys;
     if(data.surface_map!==undefined)state.surfaceMap=data.surface_map;
+    if(data.non_surface_founding!==undefined)state.nonSurfaceFounding=data.non_surface_founding;
     // A plan outside the currently selected node's projection remains the
     // player's selection until a deliberate selection change, not a deletion.
   }
@@ -715,7 +716,7 @@
 
   function clearLocationSnapshot(){
     state.operationalNode=null; state.flow=null; state.dependencyAnalyticsCurrent=null; state.dependencyAnalyticsForecast=null; state.bottlenecks=null; state.projects=null;
-    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;state.decisionContext=null;
+    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.nonSurfaceFounding=null; state.inspector=null;state.decisionContext=null;
     if(state.sectionContexts.location)state.sectionContexts.location={...state.sectionContexts.location,inspector:null,decisionContext:null};
   }
   function requestedSurfaceBodyId(){
@@ -824,7 +825,7 @@
     }
     if(target.decision_area==='exploration'&&target.subject_kind==='celestial_body'){
       if(!(state.catalog?.celestial_bodies||[]).some((body)=>body.id===target.subject_id))return;
-      if(changedBody)state.surfaceMap=null;
+      if(changedBody){state.surfaceMap=null;state.nonSurfaceFounding=null;}
       state.selectedSurfaceBodyId=target.subject_id;
     }
     setActiveSection(target.decision_area);

@@ -43,7 +43,7 @@ from .app_contracts.analytics_views import (
     DetailedForecastLogisticsRow, DetailedForecastView,
 )
 from .app_contracts.surface_views import (
-    SurfaceCellDevelopmentOption, SurfaceCellFoundationOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
+    SurfaceCellDevelopmentOption, FoundingOption, NonSurfaceFoundingContextRow, NonSurfaceFoundingView, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
 from .app_contracts.economy_views import (
@@ -51,7 +51,7 @@ from .app_contracts.economy_views import (
 )
 
 QueryResult: TypeAlias = (
-    CatalogView | WorldView | SurfaceMapView | OperationalNodeView | FlowReportView | BottlenecksView |
+    CatalogView | WorldView | SurfaceMapView | NonSurfaceFoundingView | OperationalNodeView | FlowReportView | BottlenecksView |
     DependencyAnalyticsView | DetailedForecastView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |

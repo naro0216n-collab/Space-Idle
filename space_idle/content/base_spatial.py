@@ -23,7 +23,7 @@ from ..spatial import (
     ThermalField,
 )
 from . import base_ids as ids
-from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions
+from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions, register_giant_orbital_contexts
 
 
 def _earth_cell(
@@ -83,6 +83,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         standard_gravitational_parameter_km3_s2=4902.800,
     ))
     register_solar_system_bodies(graph)
+    register_giant_orbital_contexts(graph)
 
     # Baseline orbital contexts inherit their physical body's transfer scale;
     # they do not duplicate an independent Cartesian transport baseline.

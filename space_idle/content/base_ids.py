@@ -57,6 +57,7 @@ MARS_CELL_POLAR_HIGHLANDS = SurfaceCellId("base.cell.mars.polar_highlands")
 # Geographic development / founding Content IDs.
 SURFACE_CELL_DEVELOPMENT_PROJECT = DefinitionId("base.construction.surface_cell_development")
 ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE = DefinitionId("base.founding.robotic_lunar_outpost")
+ORBITAL_OUTPOST_FOUNDING_PACKAGE = DefinitionId("base.founding.orbital_logistics_outpost")
 
 # ---------------------------------------------------------------------------
 # Facilities. IDs and display names describe function, not placement.

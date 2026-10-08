@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from space_idle import GetCatalog, GetSurfaceMap, GetWorld, build_game_application
+from space_idle import GetCatalog, GetSurfaceMap, GetWorld, GetNonSurfaceFoundingOptions, GetSurveys, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.shared import CelestialBodyId, SpatialNodeId, SurfaceCellId, StarSystemId
 from space_idle.spatial import (
@@ -219,3 +219,47 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
             spec.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / spec.reference_flux_w_m2 * illum.availability
         )
     assert generation[ids.MOON_CELL_SOUTH_POLAR_RIDGE] > generation[europa] > generation[triton]
+
+
+def test_orbital_founding_preview_is_a_scoped_physical_target_not_a_player_node():
+    app = build_game_application()
+    sim = app._simulation
+    owned = set(sim.graph.operational_node_ids())
+    fleet = dict(sim.transport.fleet_pools)
+    stock = dict(sim.inventory.stock)
+
+    for body_id in ("base.body.jupiter", "base.body.saturn", "base.body.uranus", "base.body.neptune"):
+        options = app.query(GetNonSurfaceFoundingOptions(body_id))
+        assert options.body_id == body_id
+        assert len(options.contexts) == 1
+        context = options.contexts[0]
+        assert context.spatial_node_id in sim.graph.nodes
+        assert context.spatial_node_id not in owned
+        assert not context.operational
+        assert context.foundation_options
+        assert all(row.blockers or row.can_plan for row in context.foundation_options)
+        assert any(row.deployment_recipe_id == str(ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE)
+                   for row in context.foundation_options)
+        assert context.spatial_node_id not in {str(x) for x in sim.graph.operational_node_ids()}
+
+    assert app.query(GetNonSurfaceFoundingOptions(str(ids.EARTH_BODY))).contexts[0].operational
+    mars = app.query(GetNonSurfaceFoundingOptions("base.body.mars"))
+    assert mars.contexts[0].spatial_node_id == str(ids.MARS_ORBIT)
+    assert not set(sim.graph.operational_node_ids()) ^ owned
+    assert sim.transport.fleet_pools == fleet
+    assert sim.inventory.stock == stock
+
+
+def test_survey_projection_is_scoped_to_selected_body_and_preserves_owner_knowledge():
+    app = build_game_application()
+    global_view = app.query(GetSurveys())
+    target_bodies = {row.body_id for row in global_view.items}
+    assert len(target_bodies) > 3
+    mars = app.query(GetSurveys(body_id="base.body.mars"))
+    moon = app.query(GetSurveys(body_id=str(ids.MOON)))
+    assert mars.items and moon.items
+    assert {row.body_id for row in mars.items} == {"base.body.mars"}
+    assert {row.body_id for row in moon.items} == {str(ids.MOON)}
+    assert not {row.cell_id for row in mars.items} & {row.cell_id for row in moon.items}
+    assert all(row.visible_potential is None for row in mars.items)
+    assert app.query(GetSurveys()).items == global_view.items

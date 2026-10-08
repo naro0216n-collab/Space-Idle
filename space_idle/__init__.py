@@ -11,7 +11,7 @@ from .application import (
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions,
-    GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,
+    GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, PauseBuild, PauseFacility, PauseResearch,
     PauseScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
