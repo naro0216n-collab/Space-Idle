@@ -944,6 +944,10 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator('[data-survey-draft-cell]').evaluate_all(
                 "(nodes,id) => nodes.find(node=>node.value===id)?.checked || false", target_survey_cell),
                 "alternative Survey list must toggle the same editable scope as the map")
+            first_survey_cell.click()
+            _assert(not page.locator('[data-survey-draft-cell]').evaluate_all(
+                "(nodes,id) => nodes.find(node=>node.value===id)?.checked || false", target_survey_cell),
+                "alternative Survey list must also remove its selection without a separate state path")
             _assert(page.locator('[data-survey-map-layer]').count() == 5, "Survey surface canvas must expose the five canonical information layers")
             movement_layer = page.locator('[data-survey-map-layer="movement"]')
             movement_layer.click()
@@ -971,20 +975,31 @@ def run(*, browser=None) -> dict[str, object]:
             for index in range(surface_cells.count()):
                 surface_cells.nth(index).click()
                 if (
-                    page.locator('#inspectorContent [data-surface-develop]').count() > 0
+                    page.locator('#inspectorContent [data-surface-found]').count() > 0
                     and "新拠点設立" in page.locator("#inspectorContent").inner_text()
                 ):
                     surface_decision_found = True
                     break
-            _assert(surface_decision_found, "surface map must expose a projected development/founding decision")
+            _assert(surface_decision_found, "Surface Map must expose the Application-projected founding decision on an unowned cell")
+            selected_surface_projection = page.evaluate("""() => {
+              const state=window.SpaceIdleApp.state;
+              return state.surfaceMap.cells.find(cell => cell.id === state.inspector?.id);
+            }""")
+            _assert(selected_surface_projection is not None,
+                    "Surface Inspector must resolve the same physical cell selected on the map")
             surface_inspector = page.locator("#inspectorContent").inner_text()
             _assert("地域状態" in surface_inspector, "surface cell inspector must expose physical cell state")
             _assert("現在の環境" in surface_inspector, "surface cell inspector must expose application-projected current environment")
             _assert("資源調査情報" in surface_inspector, "surface cell inspector must expose survey-derived resource knowledge")
             _assert(page.locator('#inspectorContent [data-inspect="survey"]').count() > 0, "surface map resource decisions must link directly to survey controls")
-            _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
+            _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must explain nearby location development eligibility in-place")
             _assert("新拠点設立" in surface_inspector, "unowned cell must expose founding options in-place")
-            _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
+            _assert(page.locator('#inspectorContent [data-surface-found]').count() ==
+                    len(selected_surface_projection['foundation_options']),
+                    "founding controls must correspond to the selected cell's Application options")
+            _assert(page.locator('#inspectorContent [data-surface-develop]').count() ==
+                    len(selected_surface_projection['development_options']),
+                    "development actions must exist only where existing Locations can actually expand")
             page.locator('.primary-nav-button[data-section="location"]').click()
             # Top-level navigation preserves the last Location context by design.
             # Select Overview explicitly when validating the Overview decision surface.
