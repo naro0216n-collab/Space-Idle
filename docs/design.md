@@ -677,6 +677,8 @@ Locationの発展は「到達したか」「基地が存在するか」という
 - `CURRENT`：現在のproduction、consumption / demand、imports、exports、unmet demandからsnapshot時点の依存構造を示す。
 - `FORECAST`：active Project、Supply Requirement、Target Stock等が持つforecast requirement time / consumption rateから、既に計画へ現れている将来dependency / critical resourceを示す。固定の将来日数をStateとして持たず、UIが期間を絞る場合はQuery filterとして扱う。
 
+複数Operational Nodeの生産と需要は、各拠点の現地生産差と、成立済みTransport Service上で実際に発送・移動中のResourceを区別する。別拠点の生産余剰を物流の裏付けなく現地需要へ充当しない。生産差、未発送の補給要求、実行配分未達、中継・入庫待機は異なる指標であり、戦略上の改善指示へ読み替えない。
+
 Resource flowとPower等のService dependencyを一つの「Energy」値へ混在させない。Service Capacity依存を分析する場合はResource dependencyとは別のprojectionとして扱う。
 
 同じ高Potential地点へ採掘設備を追加し続けるほど限界収益は低下するため、既存Locationの高密度化、隣接地域への拡張、別Locationの設立と物流投資を比較する。資源枯渇を強制移住の主因にはしない。発展した拠点をPrestige等で操作不能にせず、新技術は既存Facility更新、Surface Infrastructure増強、再開発理由にもする。

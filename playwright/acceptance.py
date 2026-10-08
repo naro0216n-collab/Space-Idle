@@ -837,10 +837,10 @@ def run(*, browser=None) -> dict[str, object]:
             _assert("地表インフラ" in overview_text, "location overview must expose aggregate surface infrastructure state")
             _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")
             _assert("サービス能力" in overview_text, "location overview must expose service capacity constraints")
-            _assert("外部依存" in overview_text, "location overview must expose external dependency as a decision category")
+            _assert("生産差・未充足" in overview_text, "location overview must expose observed production gaps and unmet supply")
             page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
             dependency_text = page.locator('#operationsTabContent').inner_text()
-            _assert("資源依存" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
+            _assert("資源別の需要と供給" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
             _assert("サービス依存" in dependency_text, "dependency analytics must expose Service dependency separately from Resources")
             dependency_transport_found = False
             resource_dependencies = page.locator('[data-inspect="dependency-resource"]')
@@ -909,7 +909,7 @@ def run(*, browser=None) -> dict[str, object]:
                 timeout=15000,
             )
             forecast_text = forecast_surface.inner_text()
-            for heading in ("予測時点の在庫・フロー", "拠点別・期間内の利用可能在庫", "波及影響", "広域物流への影響"):
+            for heading in ("予測時点の在庫・フロー", "拠点別・期間内の利用可能在庫", "要求・割当の未達履歴", "入庫・中継待機の履歴", "波及影響", "広域物流への影響"):
                 _assert(heading in forecast_text, f"詳細予測結果に {heading} が必要です")
 
             _select_location(page, ids.LUNAR_ORBIT)

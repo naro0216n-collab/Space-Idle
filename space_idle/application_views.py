@@ -39,6 +39,7 @@ from .app_contracts.analytics_views import (
     CurrentDependencyMetricRow, ForecastDependencyMetricRow,
     CurrentServiceDependencyMetricRow, ForecastServiceDependencyMetricRow,
     DependencyAnalyticsView, DetailedForecastInventoryRow, DetailedForecastInventoryRangeRow, DetailedForecastImpactRow,
+    DetailedForecastSupplyGapRow, DetailedForecastArrivalWaitingRow,
     DetailedForecastLogisticsRow, DetailedForecastView,
 )
 from .app_contracts.surface_views import (

@@ -567,6 +567,8 @@ Fast Previewは実行可否、Targetから導出されるCapacity / required uni
 
 future Inventory、downstream impact、multi-hop logistics impact、Location dependency forecast等はFast Previewから分離する。期間末日時点の生産・消費・入出荷収支は数値で表し、期間末日の収支符号のみから長期均衡・枯渇の成否を断定しない。 期間中の在庫変化は、拠点・Resource単位で最小利用可能量とその時点も表示できるようにする。複数拠点の残高を合計することで各拠点固有の制約を打ち消さない。利用可能在庫が0になった事実だけをResource需要の未充足と同一視せず、それぞれ別の指標として扱う。
 
+期間中の実行配分未達、期限到来Supply Requirementの未発送、中継／入庫arrival waitingを別系列にし、対象拠点・Resourceごとの初回観測日、最大未達量・発生日、到着待機の期間末残量を表示する。実行配分未達はResource以外のRequirement制約も含み得るため、現地Resource在庫不足と同一視しない。依存分析では現地生産差とscope内発送・輸送中量を分離し、外部供給に依存するだけで警告表示にしない。
+
 UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / 長期等の期間を選び、実期間はApplication Query filterとして扱う。
 
 ### 18.4 Draft

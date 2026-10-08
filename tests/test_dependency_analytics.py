@@ -16,7 +16,9 @@ from space_idle.content.base_game import EARTH, LEO
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.validation import validate_catalog_coverage
 from space_idle.validation_support import ConfigurationError
-from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg
+from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg, CargoArrivalWaiting
+from space_idle.construction.models import BuildResourceRequirement
+from dataclasses import replace
 from space_idle.production import ProcessSpec
 from space_idle.supply import SupplyRoutingConstraintScope
 
@@ -57,6 +59,9 @@ def test_scope_boundary_changes_import_export_without_double_counting_internal_f
     assert str(EARTH) in _resource(leo, ids.WATER).dependency_source_node_ids
     assert _resource(combined, ids.WATER).imports_pipeline_t == pytest.approx(0.0)
     assert _resource(combined, ids.WATER).exports_pipeline_t == pytest.approx(0.0)
+    assert _resource(combined, ids.WATER).internal_pipeline_t == pytest.approx(12.0)
+    assert _resource(earth, ids.WATER).internal_pipeline_t == pytest.approx(0.0)
+    assert _resource(leo, ids.WATER).internal_pipeline_t == pytest.approx(0.0)
     assert combined.node_ids == tuple(sorted((str(EARTH), str(LEO))))
 
     body_id = sim.graph.context_body_id(EARTH)
@@ -106,13 +111,13 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
     assert group.exports_pipeline_t == pytest.approx(sum(row.exports_pipeline_t for row in members))
 
     assert water.production_per_day > machinery.demand_per_day
-    assert machinery.external_dependency_per_day > 0
-    assert group.external_dependency_per_day == pytest.approx(
-        sum(row.external_dependency_per_day for row in members)
+    assert machinery.local_production_gap_per_day > 0
+    assert group.local_production_gap_per_day == pytest.approx(
+        sum(row.local_production_gap_per_day for row in members)
     )
     assert group.local_coverage_ratio == pytest.approx(
         sum(
-            max(0.0, row.demand_per_day - row.external_dependency_per_day)
+            max(0.0, row.demand_per_day - row.local_production_gap_per_day)
             for row in members
         ) / sum(row.demand_per_day for row in members)
     )
@@ -183,6 +188,9 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     )
     assert sum(row.imports_per_day for row in combined.current_resources) == pytest.approx(0.0)
     assert sum(row.exports_per_day for row in combined.current_resources) == pytest.approx(0.0)
+    assert sum(row.internal_dispatch_per_day for row in combined.current_resources) == pytest.approx(
+        sum(row.imports_per_day for row in leo.current_resources)
+    )
     propellant = _resource(earth, ids.PROPELLANT)
     assert propellant.demand_per_day > 0
     assert propellant.consumption_per_day > 0
@@ -351,6 +359,117 @@ def test_detailed_forecast_preserves_node_specific_inventory_extrema_across_the_
         first_depleted = next((day for day in range(base_day + 1, base_day + days + 1)
                                if timeline.get(day - 1, 0) > 1e-9 and timeline.get(day, 0) <= 1e-9), None)
         assert row.first_depleted_day == first_depleted
+
+
+def test_selected_scope_does_not_net_unshipped_remote_production_against_local_need():
+    app = build_game_application()
+    sim = app._simulation
+    recipe = sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE]
+    # An otherwise identical Project needing a Resource produced elsewhere.
+    # Demand/production quantities are test inputs, not a gameplay balance contract.
+    sim.projects.recipes[ids.ORBITAL_LOGISTICS_NODE] = replace(
+        recipe, resources=(BuildResourceRequirement(ids.WATER, 0.2),)
+    )
+    sim.technology.completed.update(recipe.prerequisite_technologies)
+    sim.projects.plan_build(ids.ORBITAL_LOGISTICS_NODE, LEO, 3, "immediate", day=sim.day)
+    sim.projects.advance_procurement(sim.day)
+
+    views = [app.query(GetDependencyAnalytics(
+        "operational_nodes", node_ids=tuple(map(str, selected))
+    )) for selected in ((EARTH,), (LEO,), (EARTH, LEO))]
+    earth, leo, combined = (_resource(view, ids.WATER) for view in views)
+    assert earth.production_per_day > leo.demand_per_day > 0
+    assert leo.local_production_gap_per_day > 0
+    assert combined.local_production_gap_per_day == pytest.approx(
+        earth.local_production_gap_per_day + leo.local_production_gap_per_day
+    )
+    assert combined.local_production_gap_per_day > max(
+        0.0, combined.demand_per_day - combined.production_per_day
+    )
+    assert combined.internal_dispatch_per_day == 0.0
+
+
+def test_forecast_observes_real_allocations_and_unshipped_due_supply_without_mutating_live_state():
+    app = build_game_application()
+    sim = app._simulation
+    baseline = sim.tick_decision_projection()
+    expected_allocation_gap = sum(
+        row.unmet_amount for row in baseline.allocations.resources.rows
+        if row.operational_node_id == EARTH and row.resource_id == ids.METAL_ORE
+    )
+    assert expected_allocation_gap > 0
+    projected_dispatch = sim.logistics.capacity_logistics_execution_projection(
+        baseline.allocations.transport
+    )
+    due = sim.logistics.unshipped_due_supply(
+        sim.day, baseline.intents.supplys, baseline.plan.external_requirements,
+        ((row.requirement_id, row.amount_t) for row in projected_dispatch.dispatches),
+    )
+    expected_unshipped = sum(
+        amount for requirement, amount in due
+        if requirement.destination_id == EARTH and requirement.resource_id == ids.METAL_ORE
+    )
+    assert expected_unshipped > 0
+
+    base_stock = dict(sim.inventory.stock)
+    view = app.query(GetDetailedForecast(
+        "operational_nodes", node_ids=(str(EARTH),), period_days=2,
+    ))
+    gaps = {(row.resource_id, row.kind): row for row in view.supply_gaps}
+    execution = gaps[(str(ids.METAL_ORE), "execution_allocation")]
+    procurement = gaps[(str(ids.METAL_ORE), "due_supply_unshipped")]
+    assert execution.first_unmet_day == sim.day
+    assert procurement.first_unmet_day == sim.day
+    assert execution.first_unmet_t == pytest.approx(expected_allocation_gap)
+    assert procurement.first_unmet_t == pytest.approx(expected_unshipped)
+    assert sim.day == view.base_day
+    assert sim.inventory.stock == base_stock
+
+    # Observing a canonical allocation is read-only: the physical replay and
+    # its serialized state remain unchanged compared with ordinary advancement.
+    from copy import deepcopy
+    observed, ordinary = deepcopy(sim), deepcopy(sim)
+    seen = []
+    observed.advance_days(2, observe_decision=lambda decision: seen.append(decision.snapshot.day))
+    ordinary.advance_days(2)
+    assert seen == [sim.day, sim.day + 1]
+    assert observed.inventory.stock == ordinary.inventory.stock
+    assert observed.logistics.cargo_flows == ordinary.logistics.cargo_flows
+    assert observed.logistics.arrival_waiting == ordinary.logistics.arrival_waiting
+
+
+def test_forecast_distinguishes_unadmitted_final_cargo_from_intermediate_handoff():
+    app = build_game_application()
+    sim = app._simulation
+    from copy import deepcopy
+    initial_day = sim.day
+    for destination, identifier, remaining in (
+        (LEO, "final", ()),
+        (ids.LUNAR_ORBIT, "handoff", (
+            CargoServiceLeg("test.next", LEO, ids.LUNAR_ORBIT, 7, 2.0,
+                            EntityId("test.next.allocation"), "forward"),
+        )),
+    ):
+        waiting_id = EntityId(f"test.wait.{identifier}")
+        sim.logistics.arrival_waiting[waiting_id] = CargoArrivalWaiting(
+            id=waiting_id, resource_id=ids.WATER, amount_t=0.5,
+            node_id=LEO, final_destination_id=destination, requirement_id=None,
+            owner_kind="test", owner_id=EntityId("test.owner"), priority=3,
+            arrival_leg=CargoServiceLeg("test.first", EARTH, LEO, 2, 2.0,
+                                       EntityId("test.first.allocation"), "forward"),
+            remaining_legs=remaining, arrived_day=sim.day,
+        )
+
+    waiting_before = deepcopy(sim.logistics.arrival_waiting)
+    view = app.query(GetDetailedForecast(
+        "operational_nodes", node_ids=(str(LEO),), period_days=2,
+    ))
+    assert {(row.final_destination_id, row.first_waiting_day) for row in view.arrival_waiting} == {
+        (str(LEO), sim.day), (str(ids.LUNAR_ORBIT), sim.day),
+    }
+    assert all(row.peak_waiting_t >= 0.5 for row in view.arrival_waiting)
+    assert sim.day == initial_day
+    assert sim.logistics.arrival_waiting == waiting_before
 
 
 def test_flow_report_includes_current_facility_maintenance_consumption():

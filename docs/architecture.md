@@ -559,7 +559,11 @@ Surface Infrastructure / Local Distributionの有限能力はExtraction executio
 
 単一Surface Location、単一Operational Node、任意のOperational Node集合をanalysis scopeとして選べる。Resource単位を正本とし、表示上のResource GroupはContent Definitionで定義できる。Mass、Energy、Propellant、Machinery等の固定カテゴリをGeneric Coreへ埋め込まない。
 
-Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。CURRENTはsnapshot時点のrate / unmet stateを返す。FORECASTはactive Project、Supply Requirement、Target Stock等が持つforecast time / consumption rateから、既に計画へ現れている将来依存を導出する。固定horizonはauthoritative Stateにせず、期間指定が必要ならQuery filterとして扱う。Power等のService Capacity dependencyをResource Groupへ混在させず、必要なら別projectionとして扱う。派生AnalyticsなのでSaveへ独立保存しない。 外部依存と実行未充足は異なる指標として返す。外部依存の有無・率からプレイヤーの優先行動を決めるcriticalランキングを派生させない。 詳細な期間予測は同じSimulationを一時複製して既存のcanonical dayを進め、期間末日の収支に加えて対象拠点の各Resource利用可能在庫の期間内最小値・発生日を観測する。これは派生Queryであり、別の予測InventoryやLogistics Stateを保存しない。
+Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。CURRENTはsnapshot時点のrate / unmet stateを返す。FORECASTはactive Project、Supply Requirement、Target Stock等が持つforecast time / consumption rateから、既に計画へ現れている将来依存を導出する。固定horizonはauthoritative Stateにせず、期間指定が必要ならQuery filterとして扱う。Power等のService Capacity dependencyをResource Groupへ混在させず、必要なら別projectionとして扱う。派生AnalyticsなのでSaveへ独立保存しない。
+
+複数Nodeの現地生産差は各Nodeの `max(0, local demand - local production)` をResource別に集計し、別Nodeの生産余剰と無条件に相殺しない。実際のscope内発送、in-transit Cargo、scope境界のimports / exports、期限到来後も未発送のSupply Requirementは独立した指標とする。現地生産差は輸入依存や実行未充足とは異なり、それだけでcritical rankingや改善指示を派生させない。
+
+詳細期間予測は同じSimulationを一時複製してcanonical dayを進め、期間末日の収支に加えて各Node / Resource利用可能在庫の期間内最小値・発生日を観測する。各dayの実際に採用された共通AllocationからResource要求／割当未達を、Logisticsの発送結果から期限到来Supply Requirementの未発送量を、Logistics-owned Cargoから中継待機／最終目的地入庫待機を、それぞれ別の時系列指標として導出する。実行配分未達は同時に必要なService等の制約によっても発生するため、在庫不足量と断定しない。Simulationの正準Allocationを再計算せずread-onlyに観測し、独立した予測Stateは保存しない。
 
 ## 9. Constructionモデル
 

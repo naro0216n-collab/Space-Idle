@@ -7,6 +7,8 @@ from .application_views import (
     DetailedForecastImpactRow,
     DetailedForecastInventoryRow,
     DetailedForecastInventoryRangeRow,
+    DetailedForecastSupplyGapRow,
+    DetailedForecastArrivalWaitingRow,
     DetailedForecastLogisticsRow,
     DetailedForecastView,
 )
@@ -38,6 +40,53 @@ class DetailedForecastProjectorMixin:
         # speculative import forecast; arrivals, consumption and reservations
         # are settled by the same canonical simulation used for end-day values.
         extrema: dict[tuple[object, object], tuple[float, int, int | None, float, float]] = {}
+        allocation_gaps: dict[tuple[object, object, str], tuple[int, float, int, float]] = {}
+        cargo_waiting: dict[tuple[object, object, object], tuple[int, int, float, float]] = {}
+
+        def capture_allocation(decision) -> None:
+            """Read the same canonical allocation used for the day's execution."""
+            day = decision.snapshot.day
+            daily: dict[tuple[object, object, str], float] = {}
+            for row in decision.allocations.resources.rows:
+                if row.operational_node_id not in selected or row.unmet_amount <= 1e-9:
+                    continue
+                key = (row.operational_node_id, row.resource_id, "execution_allocation")
+                daily[key] = daily.get(key, 0.0) + row.unmet_amount
+
+            logistics_projection = forecast_sim.logistics.capacity_logistics_execution_projection(
+                decision.allocations.transport
+            )
+            for requirement, amount in forecast_sim.logistics.unshipped_due_supply(
+                day, decision.intents.supplys, decision.plan.external_requirements,
+                ((row.requirement_id, row.amount_t) for row in logistics_projection.dispatches),
+            ):
+                if requirement.destination_id in selected:
+                    key = (requirement.destination_id, requirement.resource_id, "due_supply_unshipped")
+                    daily[key] = daily.get(key, 0.0) + amount
+
+            for key, amount in daily.items():
+                previous = allocation_gaps.get(key)
+                if previous is None:
+                    allocation_gaps[key] = (day, amount, day, amount)
+                elif amount > previous[3] + 1e-9:
+                    allocation_gaps[key] = (previous[0], previous[1], day, amount)
+
+        def capture_cargo_waiting() -> None:
+            waiting_today: dict[tuple[object, object, object], float] = {}
+            for waiting in forecast_sim.logistics.arrival_waiting_snapshots():
+                if waiting.node_id not in selected:
+                    continue
+                key = (waiting.node_id, waiting.final_destination_id, waiting.resource_id)
+                waiting_today[key] = waiting_today.get(key, 0.0) + waiting.amount_t
+            for key in set(cargo_waiting) | set(waiting_today):
+                amount = waiting_today.get(key, 0.0)
+                previous = cargo_waiting.get(key)
+                if previous is None:
+                    cargo_waiting[key] = (forecast_sim.day, forecast_sim.day, amount, amount)
+                elif amount > previous[2] + 1e-9:
+                    cargo_waiting[key] = (previous[0], forecast_sim.day, amount, amount)
+                else:
+                    cargo_waiting[key] = (previous[0], previous[1], previous[2], amount)
 
         def capture_stock() -> None:
             keys = {
@@ -67,9 +116,11 @@ class DetailedForecastProjectorMixin:
                 extrema[key] = (minimum, minimum_day, first_depleted, value, max(peak, value))
 
         capture_stock()
+        capture_cargo_waiting()
         for _ in range(days):
-            forecast_sim.advance_days(1)
+            forecast_sim.advance_days(1, observe_decision=capture_allocation)
             capture_stock()
+            capture_cargo_waiting()
         projected = copy(self)
         projected._simulation = forecast_sim
         projected._query_projection_cache = None
@@ -92,7 +143,7 @@ class DetailedForecastProjectorMixin:
             metric = projected_metrics.get(resource_id)
             production = 0.0 if metric is None else metric.production_per_day
             consumption = 0.0 if metric is None else metric.consumption_per_day
-            external = 0.0 if metric is None else metric.external_dependency_per_day
+            external = 0.0 if metric is None else metric.local_production_gap_per_day
             net = production + (0.0 if metric is None else metric.imports_per_day) - consumption - (0.0 if metric is None else metric.exports_per_day)
             if abs(projected_amount - current_amount) <= 1e-9 and metric is None:
                 continue
@@ -105,7 +156,7 @@ class DetailedForecastProjectorMixin:
                 delta_amount=projected_amount - current_amount,
                 projected_production_per_day=production,
                 projected_consumption_per_day=consumption,
-                projected_external_dependency_per_day=external,
+                projected_local_production_gap_per_day=external,
                 projected_net_per_day=net,
             ))
 
@@ -205,4 +256,19 @@ class DetailedForecastProjectorMixin:
             inventory_ranges=tuple(range_rows),
             downstream_impacts=tuple(impacts),
             logistics_impacts=logistics_rows,
+            supply_gaps=tuple(
+                DetailedForecastSupplyGapRow(
+                    str(node), str(resource), kind, first_day, first_amount, peak_day, peak_amount
+                )
+                for (node, resource, kind), (first_day, first_amount, peak_day, peak_amount)
+                in sorted(allocation_gaps.items(), key=lambda item: tuple(map(str, item[0])))
+            ),
+            arrival_waiting=tuple(
+                DetailedForecastArrivalWaitingRow(
+                    str(node), str(destination), str(resource), first_day,
+                    peak_day, peak_amount, ending,
+                )
+                for (node, destination, resource), (first_day, peak_day, peak_amount, ending)
+                in sorted(cargo_waiting.items(), key=lambda item: tuple(map(str, item[0])))
+            ),
         )

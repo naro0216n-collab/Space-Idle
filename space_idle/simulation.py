@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
+from collections.abc import Callable
 import math
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
@@ -1442,7 +1443,9 @@ class Simulation:
         # refresh their new physical envelope during that boundary.
         self.storage.refresh(self.day, allocations.power_by_location)
 
-    def _advance_canonical_day(self) -> None:
+    def _advance_canonical_day(
+        self, observe_decision: Callable[[TickDecisionProjection], None] | None = None,
+    ) -> None:
         """Advance exactly one canonical game day through the phase contract."""
         # Phase 1: Boundary settlement.  In the normal resting state this was
         # already completed when the previous day returned.
@@ -1459,6 +1462,10 @@ class Simulation:
             plan = self._plan_tick(intents)
             # Phase 5: Allocation.
             allocations = self._allocate_tick(snapshot, intents, plan)
+            if observe_decision is not None:
+                # Read-only forecast observation of the exact allocation that
+                # will execute; no second tick plan or altered settlement path.
+                observe_decision(TickDecisionProjection(snapshot, intents, plan, allocations))
             # Phase 6: Domain execution.
             activities = self._execute_tick_domains(snapshot, allocations)
         # Phase 7: Logistics / Movement progression.
@@ -1475,8 +1482,11 @@ class Simulation:
         # Player Commands are allowed to mutate authoritative intent/state.
         self._ensure_current_boundary_settled()
 
-    def advance_days(self, days: int) -> None:
+    def advance_days(
+        self, days: int, *,
+        observe_decision: Callable[[TickDecisionProjection], None] | None = None,
+    ) -> None:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
-            self._advance_canonical_day()
+            self._advance_canonical_day(observe_decision)

@@ -13,7 +13,7 @@ class CurrentDependencyMetricRow:
     production_per_day: float
     consumption_per_day: float
     demand_per_day: float
-    external_dependency_per_day: float
+    local_production_gap_per_day: float
     local_coverage_ratio: float | None
     imports_per_day: float
     exports_per_day: float
@@ -23,6 +23,8 @@ class CurrentDependencyMetricRow:
     dependency_source_node_ids: tuple[str, ...]
     limiting_factors: tuple[DecisionConstraintRow, ...]
     navigation: DecisionContextTarget | None = None
+    internal_dispatch_per_day: float = 0.0
+    internal_pipeline_t: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -33,8 +35,8 @@ class ForecastDependencyMetricRow:
     member_resource_ids: tuple[str, ...]
     planned_requirement_t: float
     recurring_consumption_per_day: float
-    external_requirement_t: float
-    external_recurring_dependency_per_day: float
+    offsite_requirement_t: float
+    recurring_local_production_gap_per_day: float
     target_stock_t: float
     earliest_requirement_day: int | None
     dependency_source_node_ids: tuple[str, ...]
@@ -78,7 +80,7 @@ class DetailedForecastInventoryRow:
     delta_amount: float
     projected_production_per_day: float
     projected_consumption_per_day: float
-    projected_external_dependency_per_day: float
+    projected_local_production_gap_per_day: float
     projected_net_per_day: float
 
 
@@ -95,6 +97,28 @@ class DetailedForecastInventoryRangeRow:
     minimum_available_day: int
     projected_available_amount: float
     first_depleted_day: int | None
+
+
+@dataclass(frozen=True)
+class DetailedForecastSupplyGapRow:
+    operational_node_id: str
+    resource_id: str
+    kind: str  # execution_allocation | due_supply_unshipped
+    first_unmet_day: int
+    first_unmet_t: float
+    peak_unmet_day: int
+    peak_unmet_t: float
+
+
+@dataclass(frozen=True)
+class DetailedForecastArrivalWaitingRow:
+    operational_node_id: str
+    final_destination_id: str
+    resource_id: str
+    first_waiting_day: int
+    peak_waiting_day: int
+    peak_waiting_t: float
+    projected_waiting_t: float
 
 
 @dataclass(frozen=True)
@@ -134,6 +158,8 @@ class DetailedForecastView:
     inventory_ranges: tuple[DetailedForecastInventoryRangeRow, ...]
     downstream_impacts: tuple[DetailedForecastImpactRow, ...]
     logistics_impacts: tuple[DetailedForecastLogisticsRow, ...]
+    supply_gaps: tuple[DetailedForecastSupplyGapRow, ...] = ()
+    arrival_waiting: tuple[DetailedForecastArrivalWaitingRow, ...] = ()
 
 
 @dataclass(frozen=True)
