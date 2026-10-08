@@ -101,7 +101,7 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph, transport)
+    survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 

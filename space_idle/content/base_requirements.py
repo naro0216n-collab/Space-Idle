@@ -8,7 +8,7 @@ from ..site import (
     CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
     SpatialClassification, SpatialClassificationRequirement,
 )
-from ..spatial import AtmosphereField, ThermalField
+from ..spatial import AtmosphereField, RadiationField, ThermalField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
 SURFACE_CLASSIFICATION = (
@@ -29,6 +29,14 @@ VACUUM_ENV = (
 COLD_VOLATILE_ENV = VACUUM_ENV + (
     FacetValueRange(
         ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0
+    ),
+)
+# Radiation sensitivity is equipment-specific. This is an Eligibility check,
+# not an independent dose penalty; protective capacity is separately supplied.
+LOW_RADIATION_ENV = (
+    FacetValueRange(
+        RadiationField, "dose_equivalent_msv_per_day",
+        "environment:radiation_tolerance", "設備の耐放射線上限を超過", maximum=5.0,
     ),
 )
 SURFACE_SITE = SiteRequirements(spatial_classification_requirements=SURFACE_CLASSIFICATION)

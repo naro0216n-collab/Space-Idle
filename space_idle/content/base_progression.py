@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..spatial import SpatialGraph
 from ..survey import (
     ExtractionSpec, KnowledgeLevel, SurveyReachScope, SurveyReachSpec, SurveyObservationModeSpec,
     SurveyProviderSourceKind, SurveyProviderSpec, SurveyTarget,
@@ -12,7 +13,7 @@ _EARTH_SURVEY_THRESHOLDS = (1.0, 2.0, 3.0)
 _LUNAR_SURVEY_THRESHOLDS = (20.0, 60.0, 120.0)
 
 
-def build_survey_targets() -> dict:
+def build_survey_targets(graph: SpatialGraph) -> dict:
     """Content-defined geological knowledge targets keyed by Surface Cell × Resource."""
     targets = {}
     for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND):
@@ -45,6 +46,14 @@ def build_survey_targets() -> dict:
             targets[(cell_id, resource_id)] = SurveyTarget(
                 cell_id, resource_id, (15.0, 45.0, 110.0), 0.5,
             )
+    # Every registered Resource Potential has exactly one Survey target. The
+    # physical world defines what could exist; this Content supplies only the
+    # initial observation prior and knowledge thresholds, not player Knowledge.
+    for cell in graph.surface_cells.values():
+        for resource_id in cell.resource_potential_by_resource:
+            targets.setdefault((cell.id, resource_id), SurveyTarget(
+                cell.id, resource_id, (25.0, 75.0, 160.0), 0.5,
+            ))
     return targets
 
 

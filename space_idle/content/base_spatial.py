@@ -11,6 +11,7 @@ from ..spatial import (
     IlluminationField,
     OrbitalField,
     PhysicalSurface,
+    RadiationField,
     SpatialGraph,
     SpatialNodeDef,
     SpatialNodeKind,
@@ -22,7 +23,7 @@ from ..spatial import (
     ThermalField,
 )
 from . import base_ids as ids
-from .solar_system_bodies import register_solar_system_bodies
+from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions
 
 
 def _earth_cell(
@@ -245,6 +246,8 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
 
 
     facets = StaticFacetStore()
+    register_solar_system_environment(graph, facets)
+    register_solar_system_regions(graph, facets)
 
     # Body-global Physical Environment is defined once per body.  Surface Cell
     # local fields/overlays remain explicit below; Surface Locations never copy
@@ -262,42 +265,46 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         ),
     )
     facets.set_body(ids.EARTH_BODY, ThermalField(288.0))
+    facets.set_body(ids.EARTH_BODY, RadiationField(0.003))
     facets.set_body(ids.EARTH_BODY, CommunicationField(0.02, 1.0))
     for cell_id in (
         ids.EARTH_CELL_INDUSTRIAL,
         ids.EARTH_CELL_COASTAL,
         ids.EARTH_CELL_INLAND,
     ):
-        facets.set(cell_id, IlluminationField(1361.0, 0.50))
+        facets.set(cell_id, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.50))
 
     facets.set(ids.LEO, OrbitalField(5400.0))
     facets.set(ids.LEO, GravityField(8.7, 10800.0))
     facets.set(ids.LEO, AtmosphereField(0.0, 0.0, {}))
-    facets.set(ids.LEO, IlluminationField(1361.0, 0.62))
+    facets.set(ids.LEO, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.62))
     facets.set(ids.LEO, ThermalField(270.0))
+    facets.set(ids.LEO, RadiationField(0.5))
     facets.set(ids.LEO, CommunicationField(0.02, 0.98))
 
     facets.set(ids.LUNAR_ORBIT, OrbitalField(7200.0))
     facets.set(ids.LUNAR_ORBIT, GravityField(1.4, 2300.0))
     facets.set(ids.LUNAR_ORBIT, AtmosphereField(0.0, 0.0, {}))
     facets.set(ids.LUNAR_ORBIT, ThermalField(250.0))
-    facets.set(ids.LUNAR_ORBIT, IlluminationField(1361.0, 0.70))
+    facets.set(ids.LUNAR_ORBIT, RadiationField(0.8))
+    facets.set(ids.LUNAR_ORBIT, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.70))
     facets.set(ids.LUNAR_ORBIT, CommunicationField(1.3, 0.95))
 
     facets.set_body(ids.MOON, GravityField(1.62, 2380.0))
     facets.set_body(ids.MOON, AtmosphereField(0.0, 0.0, {}))
     facets.set_body(ids.MOON, ThermalField(220.0, 90.0, 390.0))
+    facets.set_body(ids.MOON, RadiationField(0.8))
     facets.set_body(ids.MOON, CommunicationField(1.3, 0.75))
     lunar_surface_ids = tuple(cell.id for cell in moon_cells)
     for cell_id in lunar_surface_ids:
-        facets.set(cell_id, IlluminationField(1361.0, 0.45))
+        facets.set(cell_id, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.45))
 
-    facets.set(ids.MOON_CELL_SOUTH_POLAR_RIDGE, IlluminationField(1361.0, 0.78))
+    facets.set(ids.MOON_CELL_SOUTH_POLAR_RIDGE, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.78))
     facets.set(ids.MOON_CELL_SOUTH_POLAR_RIDGE, CommunicationField(1.3, 0.85))
-    facets.set(ids.MOON_CELL_POLAR_COLD_TRAP, IlluminationField(1361.0, 0.05))
+    facets.set(ids.MOON_CELL_POLAR_COLD_TRAP, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.05))
     facets.set(ids.MOON_CELL_POLAR_COLD_TRAP, ThermalField(80.0, 40.0, 120.0))
     facets.set(ids.MOON_CELL_POLAR_COLD_TRAP, CommunicationField(1.3, 0.15))
-    facets.set(ids.MOON_CELL_NEARSIDE_MARE, IlluminationField(1361.0, 0.52))
+    facets.set(ids.MOON_CELL_NEARSIDE_MARE, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.52))
     facets.set(ids.MOON_CELL_NEARSIDE_MARE, CommunicationField(1.3, 1.0))
 
     facets.set_body(ids.MARS_BODY, GravityField(3.71, 5030.0))
@@ -305,6 +312,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         610.0, 0.020, {DefinitionId("base.species.co2"): 0.953},
     ))
     facets.set_body(ids.MARS_BODY, ThermalField(210.0, 145.0, 290.0))
+    facets.set_body(ids.MARS_BODY, RadiationField(0.65))
     facets.set_body(ids.MARS_BODY, CommunicationField(750.0, 0.80))
     solar_flux = graph.representative_solar_flux_w_m2(ids.MARS_BODY)
     assert solar_flux is not None
@@ -312,10 +320,12 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
         facets.set(cell.id, IlluminationField(solar_flux, 0.48))
     facets.set(ids.MARS_CELL_POLAR_HIGHLANDS, IlluminationField(solar_flux, 0.23))
     facets.set(ids.MARS_CELL_POLAR_HIGHLANDS, ThermalField(168.0, 125.0, 230.0))
+    facets.set(ids.MARS_CELL_POLAR_HIGHLANDS, RadiationField(0.45))
     facets.set(ids.MARS_ORBIT, OrbitalField(7500.0))
     facets.set(ids.MARS_ORBIT, GravityField(2.95, 4500.0))
     facets.set(ids.MARS_ORBIT, AtmosphereField(0.0, 0.0, {}))
     facets.set(ids.MARS_ORBIT, ThermalField(235.0))
+    facets.set(ids.MARS_ORBIT, RadiationField(0.8))
     facets.set(ids.MARS_ORBIT, IlluminationField(solar_flux, 0.69))
     facets.set(ids.MARS_ORBIT, CommunicationField(750.0, 0.90))
 

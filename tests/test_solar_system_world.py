@@ -41,10 +41,10 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     europa = next(row for row in catalog.celestial_bodies if row.id == "base.body.europa")
     assert jupiter.physical_surface == "no_solid_surface"
     assert europa.physical_surface == "solid" and europa.parent_body_id == jupiter.id
-    assert europa.surface_cell_count == 0
+    assert europa.surface_cell_count > 0
     assert app.query(GetSurfaceMap(jupiter.id)).physical_surface == "no_solid_surface"
     assert app.query(GetSurfaceMap(europa.id)).physical_surface == "solid"
-    assert app.query(GetSurfaceMap(europa.id)).cells == ()
+    assert len(app.query(GetSurfaceMap(europa.id)).cells) == europa.surface_cell_count
 
     world = app.query(GetWorld())
     assert {row.id for row in world.operational_nodes} == {str(id_) for id_ in graph.operational_node_ids()}
@@ -151,3 +151,71 @@ def test_representative_transfer_uses_orbital_physics_and_existing_movement_exec
     local = graph.characteristic_transport_separation(ids.MARS_ORBIT, same)
     assert local.scope == "local_orbit_transfer"
     assert local.delta_v_km_s == 0.0 and local.representative_transit_days == 0.0
+
+
+def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts():
+    """Surface potential, sensing and energy have different owners and clocks."""
+    from space_idle.spatial import (
+        AtmosphereField, GravityField, IlluminationField, RadiationField, ThermalField,
+    )
+    from space_idle.facilities import FacilityBook
+    from space_idle.site import SiteRequirements, FacetValueRange, evaluate_physical_site_requirements
+
+    app = build_game_application()
+    sim = app._simulation
+    graph = sim.graph
+    env = sim.environment
+    solid = [body for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID]
+    assert all(graph.cells_for_body(body.id) for body in solid)
+    assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
+               if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
+
+    io = SurfaceCellId("base.cell.io.plain")
+    europa = SurfaceCellId("base.cell.europa.ridge")
+    callisto = SurfaceCellId("base.cell.callisto.crater")
+    titan = SurfaceCellId("base.cell.titan.highland")
+    venus = SurfaceCellId("base.cell.venus.lowland")
+    triton = SurfaceCellId("base.cell.triton.plain")
+    for cell_id in (io, europa, callisto, titan, venus, triton):
+        assert env.require(cell_id, GravityField).local_acceleration_m_s2 > 0
+        assert env.require(cell_id, IlluminationField).solar_flux_w_m2 == pytest.approx(
+            graph.representative_solar_flux_w_m2(graph.surface_cells[cell_id].body_id)
+        )
+        for resource in graph.surface_cells[cell_id].resource_potential_by_resource:
+            assert (cell_id, resource) in sim.survey.targets
+            assert (cell_id, resource) not in sim.survey.knowledge_progress
+
+    assert env.require(venus, AtmosphereField).pressure_pa > env.require(titan, AtmosphereField).pressure_pa
+    assert env.require(europa, AtmosphereField).pressure_pa == 0
+    assert env.require(triton, ThermalField).nominal_temperature_k < env.require(europa, ThermalField).nominal_temperature_k
+    assert env.require(io, RadiationField).dose_equivalent_msv_per_day > (
+        env.require(europa, RadiationField).dose_equivalent_msv_per_day
+        > env.require(callisto, RadiationField).dose_equivalent_msv_per_day
+    )
+    # Radiation is not inherited from Jupiter, which has no solid Site.
+    assert (CelestialBodyId("base.body.jupiter"), RadiationField) not in env.static.body_facets
+    assert env.require(ids.MARS_CELL_POLAR_HIGHLANDS, RadiationField).dose_equivalent_msv_per_day < (
+        env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, RadiationField).dose_equivalent_msv_per_day
+    )
+    condition = SiteRequirements(environment=(FacetValueRange(
+        RadiationField, "dose_equivalent_msv_per_day", "environment:radiation_tolerance",
+        "radiation limit", maximum=5,
+    ),))
+    assert evaluate_physical_site_requirements(condition, io, sim.day, env)[0].code == "environment:radiation_tolerance"
+    assert not evaluate_physical_site_requirements(condition, callisto, sim.day, env)
+
+    # Same solar Facility in different Cells receives exactly the flux and
+    # availability resolved from each Cell; no second AU attenuation is applied.
+    generation = {}
+    for cell_id in (ids.MOON_CELL_SOUTH_POLAR_RIDGE, europa, triton):
+        node_id = SpatialNodeId(f"test.power.{cell_id}")
+        graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
+        facilities = FacilityBook(sim.facilities.definitions, env)
+        facility_id = facilities.install(ids.SURFACE_POWER_GRID, node_id, site_cell_id=cell_id)
+        generation[cell_id] = sim.power.physical_snapshot(node_id, facilities, sim.day).generation_mw_by_facility[facility_id]
+        illum = env.require(cell_id, IlluminationField)
+        spec = sim.power.specs[ids.SURFACE_POWER_GRID].generation
+        assert generation[cell_id] == pytest.approx(
+            spec.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / spec.reference_flux_w_m2 * illum.availability
+        )
+    assert generation[ids.MOON_CELL_SOUTH_POLAR_RIDGE] > generation[europa] > generation[triton]

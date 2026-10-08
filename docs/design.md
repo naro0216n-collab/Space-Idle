@@ -388,7 +388,7 @@ Core Cellであること自体は内部物流コストを免除しない。設�
 
 「地表である」「軌道である」等のSpatial classificationと、温度・日照・大気・放射線等のPhysical Environment Requirementを同一Facetで代用しない。Operational Node-scope FacilityのEligibilityは、そのNodeのSpatial classification、Celestial Body global Physical Environment、およびInfrastructureが供給するInstalled / Active Capability等から判定する。Powerや有限Service Capacityが必要な運転は通常Allocationで実行量を決める。Surface Cell localなPhysical Environmentが必要なFacilityはCell placementを要求して、その配置CellのPhysical Environmentを評価する。
 
-人工的な与圧、温調、放射線遮蔽等はPhysical Environmentを書き換えない。Infrastructureは `pressurized workspace`、`thermal control`、`radiation shelter` 等のCapability / Service Capacityを供給し、それを必要とする活動が有限能力として利用する。
+人工的な与圧、温調、放射線遮蔽等はPhysical Environmentを書き換えない。Infrastructureは `pressurized workspace`、`thermal control`、`radiation shelter` 等のCapability / Service Capacityを供給し、それを必要とする活動が有限能力として利用する。 放射線の外部環境値はFacilityやFleetの耐性に対して評価する物理条件であり、設備による遮蔽の有無を環境値の変更として記録しない。
 
 ### 8.4 環境変化と将来のテラフォーミング
 

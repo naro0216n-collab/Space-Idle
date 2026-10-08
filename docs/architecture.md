@@ -349,7 +349,7 @@ Physical Environmentのfield definitionはscope / compositionを明示し、少�
 
 Non-surface Operational Nodeは結び付いたSpatial contextのPhysical Environmentを評価する。Surface Location上のOPERATIONAL_NODE FacilityはBody-globalなPhysical Environment、Spatial classification、Infrastructure Capability / Service Capacityを利用できるが、Cell-localな日照・地形・局所温度等を暗黙の代表Cellから取得しない。Cell-localな物理条件が必要なFacility / Operationは明示Surface Cell contextを要求する。
 
-与圧、温調、放射線遮蔽等の人工運用環境はPhysical Environment Stateを書き換えず、Infrastructureが供給するCapability / Service Capacityとして表現する。
+与圧、温調、放射線遮蔽等の人工運用環境はPhysical Environment Stateを書き換えず、Infrastructureが供給するCapability / Service Capacityとして表現する。 放射線は遮蔽前の環境線量率をtyped Fieldとして表し、Site/Operationが必要とする耐性や保護能力はその利用側のRequirementに帰属させる。天体ごとの基準日射は恒星周回軌道入力から導出し、局所日照率と分離してSolar Generationへ渡す。
 
 ### 5.3 SiteRequirements / Capability / Service Capacity
 

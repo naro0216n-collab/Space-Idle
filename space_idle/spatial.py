@@ -97,6 +97,23 @@ class ThermalField(SpatialFacet):
 
 
 @dataclass(frozen=True)
+class RadiationField(SpatialFacet):
+    """Ambient unshielded dose-equivalent rate; never a protection/capability state.
+
+    A local Cell or orbital context may override the body's reference field.
+    Undefined remains different from a measured zero dose rate.
+    """
+
+    facet_key: ClassVar[str] = "radiation"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
+    dose_equivalent_msv_per_day: float
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.dose_equivalent_msv_per_day) or self.dose_equivalent_msv_per_day < 0:
+            raise ValueError("radiation dose equivalent must be finite and non-negative")
+
+
+@dataclass(frozen=True)
 class SurfaceTerrain:
     """Static terrain/geology descriptors owned by SurfaceCellDef."""
     terrain_factor: float = 1.0
