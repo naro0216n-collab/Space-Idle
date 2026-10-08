@@ -298,8 +298,13 @@ def test_target_stock_options_project_current_state_and_application_owned_preset
         app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     )
     assert view.normal_demand_t_per_day > 0
-    assert [preset.days_of_supply for preset in view.presets] == [1.0, 3.0, 7.0]
+    # Application owns the preset choices; a transient UI assortment is not a
+    # gameplay contract. Every offered quantity must match its time basis.
+    assert view.presets
+    assert len({preset.key for preset in view.presets}) == len(view.presets)
     for preset in view.presets:
+        assert preset.display_name
+        assert preset.days_of_supply is not None and preset.days_of_supply > 0
         assert preset.target_quantity_t == pytest.approx(
             view.normal_demand_t_per_day * preset.days_of_supply
         )

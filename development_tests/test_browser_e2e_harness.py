@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
 from contextlib import contextmanager
 import importlib.util
+import re
+import shlex
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -237,13 +240,56 @@ def test_monitored_page_fails_on_browser_specific_runtime_errors() -> None:
         raise AssertionError("browser runtime errors must fail the scenario")
 
 
-def test_ci_browser_jobs_invoke_explicit_suite_runner() -> None:
-    fast = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    full = (ROOT / ".github" / "workflows" / "full-validation.yml").read_text(encoding="utf-8")
+def _runnable_browser_scenarios() -> set[str]:
+    """The actual scenario entrypoints, not an old hand-maintained test list."""
+    result = set()
+    for path in PLAYWRIGHT_DIR.glob("*.py"):
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run"
+            for node in module.body
+        ):
+            result.add(path.stem)
+    return result
 
-    assert "python playwright/run_suite.py acceptance interaction_continuity logistics_ui" in fast
-    full_command = (
-        "python playwright/run_suite.py acceptance interaction_continuity logistics_ui"
+
+def _workflow_browser_scenarios(workflow: Path, job: str, browser_name: str) -> set[str]:
+    """Check the invocation actually wired to a CI job, not a comment/string."""
+    source = workflow.read_text(encoding="utf-8")
+    section = re.search(
+        rf"(?ms)^  {re.escape(job)}:\s*\n(.*?)(?=^  [a-z][a-z0-9-]*:|\Z)",
+        source,
     )
-    assert full.count(full_command) == 2
-    assert "python playwright/lane_ui.py" not in fast + full
+    assert section is not None, f"Missing CI browser job: {job}"
+    assert re.search(
+        rf"(?m)^\s+SPACE_IDLE_BROWSER:\s*{re.escape(browser_name)}\s*$",
+        section.group(1),
+    ), f"{job} must select the intended browser engine"
+    invocations = []
+    for line in section.group(1).splitlines():
+        if match := re.match(r"^\s+run:\s*(.*?)\s*$", line):
+            args = shlex.split(match.group(1))
+            if len(args) >= 2 and args[1] == "playwright/run_suite.py":
+                assert args[0] in {"python", "python3"}
+                invocations.append(args[2:])
+    assert len(invocations) == 1, f"{job} must execute exactly one browser suite"
+    scenarios = invocations[0]
+    assert scenarios and len(scenarios) == len(set(scenarios))
+    return set(scenarios)
+
+
+def test_ci_browser_jobs_execute_the_runnable_scenarios_without_gaps() -> None:
+    """No supported browser surface silently drops scenarios after suite changes."""
+    workflows = ROOT / ".github" / "workflows"
+    runnable = _runnable_browser_scenarios()
+    assert runnable
+    fast = _workflow_browser_scenarios(workflows / "ci.yml", "chromium-smoke", "chromium")
+    full_chromium = _workflow_browser_scenarios(
+        workflows / "full-validation.yml", "chromium-e2e", "chromium"
+    )
+    full_webkit = _workflow_browser_scenarios(
+        workflows / "full-validation.yml", "webkit-e2e", "webkit"
+    )
+    assert fast and fast <= runnable
+    assert full_chromium == full_webkit == runnable
+    assert fast <= full_chromium

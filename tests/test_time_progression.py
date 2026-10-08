@@ -143,20 +143,25 @@ def test_offline_day_conversion_requires_finite_positive_duration(seconds_per_da
         OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
 
 
-@pytest.mark.parametrize("elapsed", [-1, float("nan"), float("inf"), -float("inf")])
-def test_offline_elapsed_time_validation_preserves_state(elapsed):
+@pytest.mark.parametrize(
+    "elapsed,seconds_per_day,reason",
+    [
+        (-1, 1.0, "elapsed_real_seconds"),
+        (float("nan"), 1.0, "elapsed_real_seconds"),
+        (float("inf"), 1.0, "elapsed_real_seconds"),
+        (-float("inf"), 1.0, "elapsed_real_seconds"),
+        (1e308, 1e-308, "representable game time"),
+    ],
+)
+def test_invalid_offline_elapsed_or_conversion_preserves_authoritative_state(
+    elapsed, seconds_per_day, reason
+):
     app = build_game_application()
     before = capture_state(app._simulation)
-    with pytest.raises(ValueError, match="elapsed_real_seconds"):
-        app._simulation.advance_offline(elapsed, OfflineProgressPolicy(real_seconds_per_game_day=1.0))
-    assert capture_state(app._simulation) == before
-
-
-def test_offline_elapsed_conversion_rejects_overflow_before_state_mutation():
-    app = build_game_application()
-    before = capture_state(app._simulation)
-    with pytest.raises(ValueError, match="representable game time"):
-        app._simulation.advance_offline(1e308, OfflineProgressPolicy(real_seconds_per_game_day=1e-308))
+    with pytest.raises(ValueError, match=reason):
+        app._simulation.advance_offline(
+            elapsed, OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
+        )
     assert capture_state(app._simulation) == before
 
 

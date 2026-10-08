@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, PlanBuild, build_game_application
+from space_idle import AdvanceTime, GetFleet, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -82,9 +82,7 @@ def run(*, browser=None) -> None:
 
             fleet_pool = page.locator('#vehicleTable [data-fleet-pool-row]').first
             fleet_pool.wait_for(timeout=10000)
-            fleet_text = fleet_pool.inner_text()
-            for usage_label in ("輸送", "研究", "地表調査", "科学探査", "拠点設立", "移動中", "回収中", "退役中"):
-                assert usage_label in fleet_text, f"Fleet pool must expose {usage_label} commitment state"
+            assert fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").count() > 0
 
             constraint_button = page.locator(
                 f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
@@ -165,6 +163,33 @@ def run(*, browser=None) -> None:
             allocation_row.wait_for(timeout=10000)
             allocation_id = allocation_row.get_attribute("data-allocation-row")
             assert allocation_id
+
+            # Verify real Application-owned Fleet quantities in the browser.
+            # Text labels alone could remain present while showing wrong numbers.
+            pools = runtime.query(GetFleet()).data.pools
+            pool = next(pool for pool in pools if pool.transport_units > 0)
+            fleet_pool = page.locator(
+                f'#vehicleTable [data-fleet-pool-row][data-fleet-node-id="{pool.operational_node_id}"]'
+                f'[data-fleet-vehicle-id="{pool.vehicle_definition_id}"]'
+            )
+            fleet_pool.wait_for(timeout=10000)
+            assert fleet_pool.locator(".decision-card-title strong").inner_text() == pool.display_name
+            expected_usage = {
+                key.removesuffix("_units"): value
+                for key, value in vars(pool).items()
+                if key.endswith("_units") and key not in {"total_units", "free_units"}
+                and (key != "other_committed_units" or value > 0)
+            }
+            rendered_usage = {
+                metric.get_attribute("data-fleet-usage"): int(metric.locator("strong").inner_text())
+                for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
+            }
+            assert rendered_usage == expected_usage
+            assert all(
+                metric.locator("small").inner_text().strip()
+                for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
+            )
+
             allocation_text = allocation_row.inner_text()
             for label in ("目標", "必要機体", "利用可能", "使用中", "余力", "周期"):
                 assert label in allocation_text, f"Transport Allocation card must expose {label}"

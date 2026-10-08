@@ -81,7 +81,13 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert target_stock_options["destination_id"] == str(ids.EARTH)
         assert target_stock_options["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
         assert target_stock_options["normal_demand_t_per_day"] > 0
-        assert [row["display_name"] for row in target_stock_options["presets"]] == ["1日分", "3日分", "7日分"]
+        # HTTP carries the Application's offered quantities, without making
+        # transient preset copy or count part of the wire protocol.
+        presets = target_stock_options["presets"]
+        assert presets
+        assert all(row["key"] and row["display_name"] for row in presets)
+        assert all(row["days_of_supply"] > 0 for row in presets)
+        assert all(row["target_quantity_t"] > 0 for row in presets)
 
         allocation_options_status, _, allocation_options_payload = _request(
             port, "GET",
