@@ -290,6 +290,15 @@ def run(*, browser=None) -> dict[str, object]:
             original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
             page.wait_for_timeout(1200)
             _assert(first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic sync must preserve map interaction targets")
+            # Map placement and zoom are insufficient if redraws discard
+            # keyboard focus: both selection and the focused control survive.
+            first_global_node.focus()
+            page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
+            _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
+                    "map redraw must retain keyboard focus on the same Operational Node")
+            page.wait_for_timeout(1200)
+            _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
+                    "authoritative periodic sync must not discard focused map controls")
             first_global_node.tap()
             selected_global_node_id = first_global_node.get_attribute("data-system-node-id")
             selected_global_node_name = first_global_node.locator('.global-map-node-name').inner_text().strip()

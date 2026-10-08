@@ -517,6 +517,8 @@
   function replaceHtmlPreservingKeyed(root,html,specs=[]){
     if(!root||root.innerHTML===html)return false;
     if(!specs.length){root.innerHTML=html;return true;}
+    const focused=document.activeElement;
+    const focusedWithin=focused&&root.contains(focused);
     const template=document.createElement('template');
     template.innerHTML=html;
     for(const spec of specs){
@@ -531,6 +533,12 @@
       }
     }
     root.replaceChildren(template.content);
+    // Moving a keyed control through the detached template can blur it even
+    // though the exact DOM node survives. Restore focus only when that same
+    // control still belongs to the rendered surface.
+    if(focusedWithin&&focused.isConnected&&root.contains(focused)&&document.activeElement!==focused){
+      focused.focus({preventScroll:true});
+    }
     return true;
   }
 
@@ -607,9 +615,23 @@
     const inspectorTitle=selectedNode?.display_name||'全体状況';
     const inspectorHtml=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindName(selectedNode.kind))],['設備',fmt(selectedNode.facility_count,0)],['進行中案件',fmt(selectedSignals.projects||0,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>活動</h3>${kvHtml(activityRows.map(([label,value])=>[label,fmt(value,0)]))}${activityActions?`<div class="action-stack global-activity-actions">${activityActions}</div>`:''}</section>${relatedIssues.length?`<section class="inspector-section"><h3>この拠点の制約</h3><div class="issue-stack">${relatedIssues.slice(0,4).map(issueHtml).join('')}</div></section>`:''}<section class="inspector-section"><h3>関連画面</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
     setHtmlIfChanged($('#globalHeadlineMetrics'),headlineHtml);
-    replaceHtmlPreservingKeyed(canvas,canvasHtml,[
-      {selector:'.domain-entry[data-section]',attributes:['data-section']},
-    ]);
+    // The Map host is a persistent part of the decision canvas. Replacing the
+    // surrounding HTML on every authoritative snapshot removes the focused Map
+    // control from the document even if its selection and viewport survive.
+    if(!canvas.querySelector('#systemMapMountGlobal')){
+      canvas.innerHTML=canvasHtml;
+    }else{
+      const attention=canvas.querySelector('.global-attention-card');
+      const badge=attention.querySelector('.badge');
+      badge.className=`badge ${issues.length?'warn':'ok'}`;
+      badge.textContent=String(issues.length);
+      setHtmlIfChanged(attention.querySelector('.global-attention-list'),attentionItems);
+      const next=document.createElement('template');
+      next.innerHTML=canvasHtml;
+      replaceHtmlPreservingKeyed(canvas.querySelector('.global-domain-strip'),next.content.querySelector('.global-domain-strip').innerHTML,[
+        {selector:'.domain-entry[data-section]',attributes:['data-section']},
+      ]);
+    }
     $('#globalInspectorTitle').textContent=inspectorTitle;
     setHtmlIfChanged(inspector,inspectorHtml);
   }
@@ -676,7 +698,6 @@
   }
   function renderAll(){
     capturePreservedScrollRegions();
-    window.SpaceIdleSystemMap?.detach();
     renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
     if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
     if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();

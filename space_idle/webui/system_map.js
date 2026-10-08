@@ -152,7 +152,17 @@
         return `<button type="button" class="${selectedAllocation?'is-selected':''}" data-system-allocation-id="${esc(row.id)}" aria-pressed="${selectedAllocation?'true':'false'}"><span>${esc(row.display_name||row.id)} · ${esc(locationName(row.anchor_node_id))} → ${esc(locationName(row.destination_id))}</span><small>往路 / 復路 · 目標 ${fmt(target.forward_t_per_day,2)} / ${fmt(target.reverse_t_per_day,2)} t/日 · 利用可 ${fmt(row.available?.forward_t_per_day,2)} / ${fmt(row.available?.reverse_t_per_day,2)} t/日 · 使用 ${fmt(row.used?.forward_t_per_day,2)} / ${fmt(row.used?.reverse_t_per_day,2)} t/日 · 余力 ${fmt(row.spare?.forward_t_per_day,2)} / ${fmt(row.spare?.reverse_t_per_day,2)} t/日</small></button>`;
       }).join('')}</div></div>`;
     }).join(''):'';
-    A.setHtmlIfChanged(root.querySelector('#systemMapRelations'),relationHtml||'<span class="cell-sub">設定済みTransport Allocationなし</span>');
+    const relations=root.querySelector('#systemMapRelations');
+    const focused=document.activeElement;
+    const focusedKey=focused?.closest?.('[data-system-allocation-id],[data-system-pair]');
+    const selector=focusedKey?.hasAttribute('data-system-allocation-id')?'[data-system-allocation-id]':'[data-system-pair]';
+    const key=focusedKey?.getAttribute(selector==='[data-system-allocation-id]'?'data-system-allocation-id':'data-system-pair');
+    A.setHtmlIfChanged(relations,relationHtml||'<span class="cell-sub">設定済みTransport Allocationなし</span>');
+    if(key&&focusedKey&&!focusedKey.isConnected){
+      const replacement=[...relations.querySelectorAll(selector)].find((element)=>
+        element.getAttribute(selector==='[data-system-allocation-id]'?'data-system-allocation-id':'data-system-pair')===key);
+      replacement?.focus({preventScroll:true});
+    }
     applyViewport();
   }
   document.addEventListener('change',(event)=>{

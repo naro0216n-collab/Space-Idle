@@ -256,6 +256,13 @@ def run(*, browser=None) -> None:
             )
             allocation_map_entry.wait_for(state="visible", timeout=10000)
             assert allocation_map_entry.get_attribute("aria-pressed") == "true"
+            # Comparing several allocations must not lose the keyboard target
+            # merely because a new authoritative projection has been rendered.
+            allocation_map_entry.focus()
+            page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
+            assert allocation_map_entry.evaluate("node => document.activeElement === node"), (
+                "shared Map relation controls must retain focus across redraw"
+            )
             assert page.locator("#systemMapStage .system-map-edge.is-context-related").count() > 0
             allocation_details = page.locator("#movementPlanInspectorContent").inner_text()
             assert all(label in allocation_details for label in (
