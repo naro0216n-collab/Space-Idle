@@ -754,6 +754,8 @@
     const allocationMovement=event.target.closest('[data-allocation-movement]');if(allocationMovement){const id=allocationMovement.dataset.allocationMovement;allocationMovementSelection=allocationMovementSelection.length===1&&allocationMovementSelection[0]===id?[]:[id];renderAllocationMovementChoices();scheduleAllocationPreview();return;}
     const fleetMap=event.target.closest('[data-fleet-map-node]');if(fleetMap){
       const id=fleetMap.dataset.fleetMapNode;
+      // Fleet selection is a new decision, not a Resource-filtered supply decision.
+      state.systemMapResourceId=null;
       state.selectedGlobalNodeId=id;
       state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:id,operational_node_id:id};
       render();$('#systemMapMountLogistics')?.scrollIntoView?.({block:'nearest'});return;

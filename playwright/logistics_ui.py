@@ -231,6 +231,7 @@ def run(*, browser=None) -> None:
             }
             assert rendered_usage == expected_usage
             fleet_pool.locator('[data-fleet-map-node]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == ''
             assert page.locator(f'#systemMapStage [data-system-node-id="{pool.operational_node_id}"]').get_attribute('aria-pressed') == 'true'
             assert page.locator('#movementPlanInspectorTitle').inner_text() == page.evaluate(
                 'id => window.SpaceIdleApp.locationName(id)', pool.operational_node_id
