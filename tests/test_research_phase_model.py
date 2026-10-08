@@ -321,6 +321,10 @@ def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_run
     assert resource.reserved_t == pytest.approx(0.25)
     assert resource.requested_t == pytest.approx(0.75)
     assert sim.inventory.available(EARTH, resource_id) == pytest.approx(0.0)
+    earth_preview = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
+    assert earth_preview.resources[0].reserved_t == pytest.approx(0.25)
+    assert earth_preview.resources[0].shortfall_t == pytest.approx(0.75)
+    assert next(value for value in earth_preview.comparison_values if value.axis_key == "estimated_days").number_value is None
 
     app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(LEO)))
     assert sim.research.prototype_reserved_t(
@@ -442,6 +446,58 @@ def test_research_stage_identity_is_explicit_unique_and_stable_across_repeated_s
     assert research_id not in sim.research.active
 
 
+def test_prototype_site_comparison_uses_per_resource_readiness_and_does_not_promise_unfunded_progress():
+    app = build_game_application()
+    sim = app._simulation
+    research_id = DefinitionId("test.research.comparison_multiple_resources")
+    rare = DefinitionId("test.resource.comparison_rare")
+    common = DefinitionId("test.resource.comparison_common")
+    _research_site_fixture(sim)
+    sim.inventory.add(EARTH, rare, 1.0)
+    sim.inventory.add(EARTH, common, 20.0)
+    sim.research.definitions[research_id] = ResearchDefinition(
+        research_id, "Mixed Resource Readiness", (
+            ResearchPrototypeStageSpec(
+                "prototype", {common: 2.0, rare: 3.0}, SiteRequirements(),
+                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
+                required_work=2.0,
+            ),
+        ), prerequisites=frozenset(),
+    )
+    app.execute(StartResearch(str(research_id)))
+    before = sim.inventory.stock.copy()
+    row = _research_row(app, research_id)
+    earth = next(option for option in row.execution_context_options if option.operational_node_id == str(EARTH))
+    resources = {item.resource_id: item for item in earth.resources}
+    assert tuple(item.resource_id for item in earth.resources) == tuple(sorted((str(rare), str(common))))
+    assert resources[str(rare)].shortfall_t == pytest.approx(2.0)
+    assert resources[str(common)].shortfall_t == pytest.approx(0.0)
+    assert resources[str(common)].available_t > sum(item.required_t for item in earth.resources)
+    values = {value.axis_key: value.number_value for value in earth.comparison_values}
+    assert values["resource_shortfall_t"] == pytest.approx(2.0)
+    assert values["estimated_days"] is None
+    assert earth.can_select  # Shortage blocks operation, not planning a site.
+    assert sim.inventory.stock == before  # Read projections never reserve material.
+
+    app.execute(SetResearchPrototypeSite(str(research_id), "prototype", str(EARTH)))
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[research_id].stage_progress == 0.0
+    selected = next(option for option in _research_row(app, research_id).execution_context_options
+                    if option.operational_node_id == str(EARTH))
+    statuses = {item.resource_id: item for item in selected.resources}
+    assert statuses[str(rare)].reserved_t == pytest.approx(1.0)
+    assert statuses[str(rare)].shortfall_t == pytest.approx(2.0)
+    assert statuses[str(common)].reserved_t == pytest.approx(2.0)
+    assert statuses[str(common)].shortfall_t == pytest.approx(0.0)
+    assert next(value for value in selected.comparison_values if value.axis_key == "estimated_days").number_value is None
+
+    sim.inventory.add(EARTH, rare, 2.0)
+    ready = next(option for option in _research_row(app, research_id).execution_context_options
+                 if option.operational_node_id == str(EARTH))
+    assert all(item.shortfall_t == pytest.approx(0) for item in ready.resources)
+    assert next(value for value in ready.comparison_values if value.axis_key == "estimated_days").number_value == pytest.approx(2.0)
+
+
 def test_research_execution_context_projects_strategic_comparison_axes_from_application_state():
     app = build_game_application()
     sim = app._simulation
@@ -469,7 +525,7 @@ def test_research_execution_context_projects_strategic_comparison_axes_from_appl
 
     axis_keys = {axis.key for axis in row.execution_context_comparison_axes}
     assert "location" in axis_keys
-    assert "resource_available_t" in axis_keys
+    assert "resource_shortfall_t" in axis_keys
     assert "service_work_capacity" in axis_keys
     assert "estimated_days" in axis_keys
     resource_required_axis = next(axis for axis in row.execution_context_comparison_axes if axis.key == "resource_required_t")
@@ -479,9 +535,13 @@ def test_research_execution_context_projects_strategic_comparison_axes_from_appl
     leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
     earth_values = {value.axis_key: value for value in earth.comparison_values}
     leo_values = {value.axis_key: value for value in leo.comparison_values}
-    assert earth_values["resource_available_t"].number_value == pytest.approx(2.0)
-    assert leo_values["resource_available_t"].number_value == pytest.approx(0.0)
+    assert earth_values["resource_shortfall_t"].number_value == pytest.approx(0.0)
+    assert leo_values["resource_shortfall_t"].number_value == pytest.approx(2.0)
     assert earth_values["service_work_capacity"].number_value == pytest.approx(1.0)
     assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
     assert earth_values["estimated_days"].number_value == pytest.approx(2.0)
     assert leo_values["estimated_days"].number_value is None
+    assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
+            for item in earth.resources] == [(2.0, 0.0, 2.0, 0.0)]
+    assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
+            for item in leo.resources] == [(2.0, 0.0, 0.0, 2.0)]

@@ -63,8 +63,8 @@ class OfflineProgressPolicy:
     max_game_days_per_resume: int | None = None
 
     def __post_init__(self) -> None:
-        if self.real_seconds_per_game_day <= 0:
-            raise ValueError("real_seconds_per_game_day must be positive")
+        if not math.isfinite(self.real_seconds_per_game_day) or self.real_seconds_per_game_day <= 0:
+            raise ValueError("real_seconds_per_game_day must be positive and finite")
         if self.max_game_days_per_resume is not None and self.max_game_days_per_resume < 0:
             raise ValueError("max_game_days_per_resume must be non-negative")
 
@@ -565,8 +565,8 @@ class Simulation:
     def advance_offline(
         self, elapsed_real_seconds: float, policy: OfflineProgressPolicy
     ) -> OfflineProgressResult:
-        if elapsed_real_seconds < 0:
-            raise ValueError("elapsed_real_seconds must be non-negative")
+        if not math.isfinite(elapsed_real_seconds) or elapsed_real_seconds < 0:
+            raise ValueError("elapsed_real_seconds must be finite and non-negative")
         raw_game_days = elapsed_real_seconds / policy.real_seconds_per_game_day
         capped = False
         if (
@@ -575,6 +575,8 @@ class Simulation:
         ):
             raw_game_days = float(policy.max_game_days_per_resume)
             capped = True
+        if not math.isfinite(raw_game_days):
+            raise ValueError("elapsed_real_seconds exceeds representable game time")
         credited = raw_game_days + self.pending_offline_game_days
         whole_days = math.floor(credited + 1e-12)
         self.pending_offline_game_days = max(0.0, credited - whole_days)

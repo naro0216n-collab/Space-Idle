@@ -165,7 +165,7 @@
       promptText:'実行地点から2〜4候補を比較に追加すると、Fleet拘束・Resource・Service供給・所要時間を共通の比較軸で確認できます。',
       headingHtml:(row)=>`<strong>${esc(researchSiteLabel(row))}</strong><small>${row.can_select?'選択可能':'条件未達'}</small>`,
       detailButtonHtml:()=>'',
-      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
+      blockerHtml:(row)=>`${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">選択条件を満たす</span>'}${researchSiteResourceHtml(row)}`,
     });
   }
   const surveyIntentPreviewSerial=new Map();
@@ -839,10 +839,38 @@
   }
   function researchBlockers(r){return r.current_blockers||[];}
   function researchSiteLabel(site){if(!site)return '未選択';return `${locationName(site.operational_node_id)}${site.surface_cell_id?` / ${surfaceCellLabel(site.surface_cell_id)}`:''}`;}
+  function researchSiteResourceHtml(site){
+    const rows=site.resources||[];
+    if(!rows.length)return '';
+    return `<div class="cell-sub">試作Resource（地点選択後の予約を考慮）</div>`+
+      rows.map((item)=>`<div class="cell-sub">${esc(resourceName(item.resource_id))}: 必要 ${fmt(item.required_t)} t · 予約済 ${fmt(item.reserved_t)} t · 利用可能 ${fmt(item.available_t)} t · 不足 ${fmt(item.shortfall_t)} t</div>`).join('');
+  }
   function siteOptionsHtml(r,kind){
-    const options=r.execution_context_options||[],selected=r.execution_context,comparisonAvailable=(r.execution_context_comparison_axes||[]).length>0,pins=new Set(researchComparisonPinnedKeys(r));
+    const options=r.execution_context_options||[];
+    const selected=r.execution_context;
+    const comparisonAvailable=(r.execution_context_comparison_axes||[]).length>0;
+    const pins=new Set(researchComparisonPinnedKeys(r));
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
-    return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=Boolean(selected)&&site.operational_node_id===selected.operational_node_id&&(site.surface_cell_id||null)===(selected.surface_cell_id||null),canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site',pinned=pins.has(site.comparison_key),pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働制約`:'選択可'):`${blocked||1} 制約`;const compareAction=comparisonAvailable?`<button type="button" data-research-compare-pin="${esc(r.id)}" data-comparison-key="${esc(site.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(x)).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div></div>`;}).join('');
+    return options.map((site)=>{
+      const blockers=site.blockers||[];
+      const blocked=blockers.length;
+      const isSelected=Boolean(selected)&&site.operational_node_id===selected.operational_node_id&&
+        (site.surface_cell_id||null)===(selected.surface_cell_id||null);
+      const canSelect=Boolean(site.can_select);
+      const attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';
+      const pinned=pins.has(site.comparison_key);
+      const pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;
+      const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働制約`:'選択可'):`${blocked||1} 制約`;
+      const compareAction=comparisonAvailable
+        ?`<button type="button" data-research-compare-pin="${esc(r.id)}" data-comparison-key="${esc(site.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`
+        :'';
+      const estimatedDays=comparisonValue(site,'estimated_days')?.number_value;
+      const timeLabel=estimatedDays==null?'算定不可':`${fmt(estimatedDays,2)} 日`;
+      return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>`+
+        `${blocked?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}`+
+        `${researchSiteResourceHtml(site)}<div class="cell-sub">現在条件での参考所要日数: ${timeLabel}</div>`+
+        `<div class="action-row">${compareAction}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div></div>`;
+    }).join('');
   }
   function prototypeResourceHtml(r){
     const rows=r.stage_resources||[];

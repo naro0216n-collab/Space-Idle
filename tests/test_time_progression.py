@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from space_idle import AdvanceTime, GetWorld, SetTimeControl, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
@@ -133,3 +135,34 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 
     assert first.data["world"].day == day_before_projection
     assert second.data["world"].day == day_before_projection + 2
+
+
+@pytest.mark.parametrize("seconds_per_day", [0, -1, float("nan"), float("inf"), -float("inf")])
+def test_offline_day_conversion_requires_finite_positive_duration(seconds_per_day):
+    with pytest.raises(ValueError, match="real_seconds_per_game_day"):
+        OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
+
+
+@pytest.mark.parametrize("elapsed", [-1, float("nan"), float("inf"), -float("inf")])
+def test_offline_elapsed_time_validation_preserves_state(elapsed):
+    app = build_game_application()
+    before = capture_state(app._simulation)
+    with pytest.raises(ValueError, match="elapsed_real_seconds"):
+        app._simulation.advance_offline(elapsed, OfflineProgressPolicy(real_seconds_per_game_day=1.0))
+    assert capture_state(app._simulation) == before
+
+
+def test_offline_elapsed_conversion_rejects_overflow_before_state_mutation():
+    app = build_game_application()
+    before = capture_state(app._simulation)
+    with pytest.raises(ValueError, match="representable game time"):
+        app._simulation.advance_offline(1e308, OfflineProgressPolicy(real_seconds_per_game_day=1e-308))
+    assert capture_state(app._simulation) == before
+
+
+def test_offline_resume_cap_still_bounds_large_finite_elapsed_time():
+    app = build_game_application()
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=1e-308, max_game_days_per_resume=2)
+    result = app._simulation.advance_offline(1e308, policy)
+    assert result.capped
+    assert result.advanced_days == 2

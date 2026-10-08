@@ -10,11 +10,11 @@ from .application_views import (
     ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchUnlockRow,
     ResearchRow, ResearchView,
 )
-from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
+from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow, ResearchSiteResourceRow
 from .research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
     ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
-    ResearchProviderSourceKind,
+    ResearchProviderSourceKind, ResearchExecutionSite,
 )
 from .site import requires_surface_cell_context
 
@@ -110,11 +110,17 @@ class ResearchProgressionProjectorMixin:
                 else:
                     blockers = sim.research.demonstration_site_blockers(definition.id, node.id, sim.day, power_by_location.get(node.id), surface_cell_id)
                     can_select = sim.research.can_select_demonstration_site(definition.id, node.id, sim.day, surface_cell_id)
-                resource_required = sum(spec.resources.values()) if isinstance(spec, ResearchPrototypeStageSpec) else 0.0
-                resource_available = (
-                    sum(sim.inventory.available(node.id, resource_id) for resource_id in spec.resources)
-                    if isinstance(spec, ResearchPrototypeStageSpec) else 0.0
+                resource_status = (
+                    sim.research.prototype_site_resources(
+                        definition.id, ResearchExecutionSite(node.id, surface_cell_id)
+                    ) if isinstance(spec, ResearchPrototypeStageSpec) else ()
                 )
+                resource_rows = tuple(ResearchSiteResourceRow(
+                    str(item.resource_id), item.required_t, item.reserved_t,
+                    item.available_t, item.shortfall_t,
+                ) for item in resource_status)
+                resource_required = sum(item.required_t for item in resource_status)
+                resource_shortfall = sum(item.shortfall_t for item in resource_status)
                 service_requirements = tuple(
                     requirement for requirement in spec.execution_requirements
                     if isinstance(requirement, ServiceCapacityRequirement)
@@ -145,12 +151,15 @@ class ResearchProgressionProjectorMixin:
                     for assignment in sim.research.provider_assignments.values()
                     if assignment.operational_node_id == node.id
                 )
-                estimated_days = None if service_work_capacity <= 1e-12 else float(remaining_work) / service_work_capacity
+                estimated_days = (
+                    None if blockers or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
+                    else float(remaining_work) / service_work_capacity
+                )
                 comparison_values = (
                     ComparisonValueRow("location", text_value=str(node.display_name)),
                     ComparisonValueRow("fleet_commitment", number_value=float(committed_fleet)),
                     ComparisonValueRow("resource_required_t", number_value=float(resource_required)),
-                    ComparisonValueRow("resource_available_t", number_value=float(resource_available)),
+                    ComparisonValueRow("resource_shortfall_t", number_value=float(resource_shortfall)),
                     ComparisonValueRow("service_work_capacity", number_value=float(service_work_capacity)),
                     ComparisonValueRow("estimated_days", number_value=None if estimated_days is None else float(estimated_days)),
                 )
@@ -165,6 +174,7 @@ class ResearchProgressionProjectorMixin:
                     can_select,
                     comparison_key=f"{node.id}|{surface_cell_id or ''}",
                     comparison_values=comparison_values,
+                    resources=resource_rows,
                 ))
         return tuple(rows)
 
@@ -388,9 +398,9 @@ class ResearchProgressionProjectorMixin:
                         ("location", "Location", "text", None),
                         ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
                         ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_available_t", "現地利用可能Resource", "number", "t"),
+                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
-                        ("estimated_days", "推定所要時間", "number", "日"),
+                        ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))
                     location_id = None if state.execution_context is None else state.execution_context.operational_node_id
                     for resource_id, required in sorted(current_spec.resources.items(), key=lambda row: str(row[0])):
@@ -422,9 +432,9 @@ class ResearchProgressionProjectorMixin:
                         ("location", "Location", "text", None),
                         ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
                         ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_available_t", "現地利用可能Resource", "number", "t"),
+                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
-                        ("estimated_days", "推定所要時間", "number", "日"),
+                        ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))
                 elif isinstance(current_spec, ResearchOperationalExperienceStageSpec):
                     stage_required = sum(current_spec.requirements.values())

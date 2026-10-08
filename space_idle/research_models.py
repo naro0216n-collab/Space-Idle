@@ -61,6 +61,17 @@ class ResearchPrototypeStageSpec:
 
 
 @dataclass(frozen=True)
+class ResearchPrototypeSiteResource:
+    """Resource readiness at a candidate site after any site-switch reservation release."""
+
+    resource_id: DefinitionId
+    required_t: float
+    reserved_t: float
+    available_t: float
+    shortfall_t: float
+
+
+@dataclass(frozen=True)
 class ResearchDemonstrationStageSpec:
     stage_id: str
     required_work: float

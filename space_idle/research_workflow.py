@@ -15,6 +15,7 @@ from .research_models import (
     ResearchExecutionSite,
     ResearchTheoryStageSpec,
     ResearchPrototypeStageSpec,
+    ResearchPrototypeSiteResource,
     ResearchDemonstrationStageSpec,
     ResearchOperationalExperienceStageSpec,
     ResearchStage,
@@ -162,6 +163,33 @@ class ResearchWorkflowMixin:
         return self.inventory.reserved_for(
             self._prototype_reservation_owner_id(research_id, stage_id), location_id, resource_id
         )
+
+    def prototype_site_resources(
+        self, research_id: DefinitionId, site: ResearchExecutionSite
+    ) -> tuple[ResearchPrototypeSiteResource, ...]:
+        """Project current stock and owned reservations as if ``site`` were chosen.
+
+        Reassigning an execution context releases this project's reservations.
+        Other projects' reservations remain unavailable to this project.
+        """
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchPrototypeStageSpec):
+            raise ValueError("research is not in a prototype stage")
+        current_site = self.active[research_id].execution_context
+        same_site = current_site == site
+        rows = []
+        for resource_id, required in sorted(spec.resources.items(), key=lambda row: str(row[0])):
+            current_reserved = (
+                self.prototype_reserved_t(research_id, spec.stage_id, current_site.operational_node_id, resource_id)
+                if current_site is not None else 0.0
+            )
+            reserved = current_reserved if same_site else 0.0
+            available = self.inventory.available(site.operational_node_id, resource_id)
+            if current_site is not None and not same_site and current_site.operational_node_id == site.operational_node_id:
+                available += current_reserved  # Released on reassignment within this node.
+            shortfall = max(0.0, required - reserved - available)
+            rows.append(ResearchPrototypeSiteResource(resource_id, required, reserved, available, shortfall))
+        return tuple(rows)
 
     def _release_stage_reservations(self, research_id: DefinitionId, stage_id: str) -> None:
         self.inventory.release_reservation(self._prototype_reservation_owner_id(research_id, stage_id))

@@ -9,6 +9,15 @@ from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
+class ResearchSiteResourceRow:
+    resource_id: str
+    required_t: float
+    reserved_t: float
+    available_t: float
+    shortfall_t: float
+
+
+@dataclass(frozen=True)
 class ResearchSiteOptionRow:
     operational_node_id: str
     surface_cell_id: str | None
@@ -16,6 +25,7 @@ class ResearchSiteOptionRow:
     can_select: bool
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
+    resources: tuple[ResearchSiteResourceRow, ...] = ()
 
 
 @dataclass(frozen=True)
