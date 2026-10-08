@@ -14,7 +14,7 @@ class DetailedForecastProjectorMixin:
     _FORECAST_DEFAULT_DAYS = {
         "SHORT_TERM": 30,
         "MEDIUM_TERM": 120,
-        "STEADY_STATE": 365,
+        "LONG_TERM": 365,
     }
 
     def _detailed_forecast_view(self, query: GetDetailedForecast) -> DetailedForecastView:
@@ -57,12 +57,6 @@ class DetailedForecastProjectorMixin:
             consumption = 0.0 if metric is None else metric.consumption_per_day
             external = 0.0 if metric is None else metric.external_dependency_per_day
             net = production + (0.0 if metric is None else metric.imports_per_day) - consumption - (0.0 if metric is None else metric.exports_per_day)
-            if abs(net) <= 1e-9:
-                steady_state = "stable"
-            elif net > 0:
-                steady_state = "accumulating"
-            else:
-                steady_state = "depleting"
             if abs(projected_amount - current_amount) <= 1e-9 and metric is None:
                 continue
             inventory_rows.append(DetailedForecastInventoryRow(
@@ -75,7 +69,7 @@ class DetailedForecastProjectorMixin:
                 projected_production_per_day=production,
                 projected_consumption_per_day=consumption,
                 projected_external_dependency_per_day=external,
-                steady_state=steady_state,
+                projected_net_per_day=net,
             ))
 
         impacts: list[DetailedForecastImpactRow] = []

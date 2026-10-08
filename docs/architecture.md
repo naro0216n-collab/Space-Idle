@@ -559,7 +559,7 @@ Surface Infrastructure / Local Distributionの有限能力はExtraction executio
 
 単一Surface Location、単一Operational Node、任意のOperational Node集合をanalysis scopeとして選べる。Resource単位を正本とし、表示上のResource GroupはContent Definitionで定義できる。Mass、Energy、Propellant、Machinery等の固定カテゴリをGeneric Coreへ埋め込まない。
 
-Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。CURRENTはsnapshot時点のrate / unmet stateを返す。FORECASTはactive Project、Supply Requirement、Target Stock等が持つforecast time / consumption rateから、既に計画へ現れている将来依存を導出する。固定horizonはauthoritative Stateにせず、期間指定が必要ならQuery filterとして扱う。Power等のService Capacity dependencyをResource Groupへ混在させず、必要なら別projectionとして扱う。派生AnalyticsなのでSaveへ独立保存しない。
+Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。CURRENTはsnapshot時点のrate / unmet stateを返す。FORECASTはactive Project、Supply Requirement、Target Stock等が持つforecast time / consumption rateから、既に計画へ現れている将来依存を導出する。固定horizonはauthoritative Stateにせず、期間指定が必要ならQuery filterとして扱う。Power等のService Capacity dependencyをResource Groupへ混在させず、必要なら別projectionとして扱う。派生AnalyticsなのでSaveへ独立保存しない。 外部依存と実行未充足は異なる指標として返す。外部依存の有無・率からプレイヤーの優先行動を決めるcriticalランキングを派生させない。
 
 ## 9. Constructionモデル
 
@@ -758,7 +758,7 @@ TargetStockState
   activity_priority
 ```
 
-Logistics PlannerはSupply Requirement、Target Stock、Inventory、Reservation、Inbound Cargo、latency、Transport Capacity、Activity Priority、必要なrouting hard constraintを統合し、当日dispatch必要量・rateをactive shipping demandへ解決する。Activity Priorityが高くても、将来まで十分余裕があるRequirementは現在必要な低Priority活動を直ちに先取りしない。同一destination / Resourceの複数Requirementはlocal stock / inbound planning creditを共通配分し、同じ量を複数Requirementへ重複して充足済みと数えない。
+Logistics PlannerはSupply Requirement、Target Stock、Inventory、Reservation、Inbound Cargo、latency、Transport Capacity、Activity Priority、必要なrouting hard constraintを統合し、当日dispatch必要量・rateをactive shipping demandへ解決する。 輸送中Cargoの見込到着時点は既dispatchの固定Leg chainを最終Destinationまで通算して導出し、中継地点到着を最終到着と取り違えない。Segmentの最初と最後の到着は区別し、handoff待機やStorage Admissionが未解決ならInventory利用可能日を確約しない。現地在庫÷継続需要率によるrunwayは「現地在庫のみ」の派生値とし、補給・生産を含む将来在庫予測と混同しない。Activity Priorityが高くても、将来まで十分余裕があるRequirementは現在必要な低Priority活動を直ちに先取りしない。同一destination / Resourceの複数Requirementはlocal stock / inbound planning creditを共通配分し、同じ量を複数Requirementへ重複して充足済みと数えない。
 
 通常状態では、現在成立しているsource InventoryとTransport Service graphからsource / end-to-end pathを正準評価で決定論的に選択する。Playerが自動選択を制限したい場合だけ、需要scopeに直接結び付く疎なrouting hard constraintをauthoritative intentとして保持する。
 
@@ -807,6 +807,8 @@ Cargoが目的地またはhandoff Operational Nodeへ到着した場合、Cargo 
 荷卸し条件が成立しないCargoはarrival waitingとしてLogistics側に残る。arrival waitingはCargo Handling / arrival holdingの物理制約を消費し、対応するTransport Serviceの再利用可能capacityへbackpressureを与える。個体Vehicleを通常物流へ生成せず、Service Planのpayload / cycleからaggregate occupancyとして扱う。
 
 輸送中Cargoは目的地Storageを事前予約しない。
+
+任意のscopeに対する輸送中Resourceの入出力分析ではCargoの最終destinationを考慮し、単なる中継通過をそのNodeへの入荷済み・入荷予定Resourceとして計上しない。輸送中のResourceは、到着・入庫するまでInventoryに含めない。
 
 ### 10.8 End-to-End path
 

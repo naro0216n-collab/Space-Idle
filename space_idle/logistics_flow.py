@@ -1470,18 +1470,28 @@ class LogisticsFlowMixin:
             if not selected_path
             else min(float(edge.capacity_t_per_day) for edge in selected_path)
         )
-        arrivals = [
-            flow.first_arrival_day
-            for flow in self.cargo_flows.values()
+        committed_flows = (
+            flow for flow in self.cargo_flows.values()
             if flow.requirement_id == requirement.id
-        ]
+        )
+        arrivals = sorted(
+            (flow.first_final_arrival_day, flow.last_final_arrival_day)
+            for flow in committed_flows
+        )
+        # Arrival waiting has no reliable onward/admission date.  In particular,
+        # a trailing dispatched slice does not imply complete material readiness.
+        waiting_for_requirement = any(
+            waiting.requirement_id == requirement.id
+            for waiting in self.arrival_waiting.values()
+        )
         return SupplyPlanningOptions(
             tuple(candidates),
             tuple(operational),
             tuple(stocked),
             tuple(path_candidates),
             tuple(dict.fromkeys(blockers)),
-            min(arrivals) if arrivals else None,
+            min(first for first, _last in arrivals) if arrivals else None,
+            max(last for _first, last in arrivals) if arrivals and not waiting_for_requirement else None,
             selected_source_id=selected_source_id,
             selected_service_ids=tuple(edge.key for edge in selected_path),
             selected_movement_plan_ids=tuple(

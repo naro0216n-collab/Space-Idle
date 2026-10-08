@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from space_idle import (
-    GetCargoFlows, GetLogistics, GetProjects, PauseTransportAllocation,
+    GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, PauseTransportAllocation,
     PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
 )
 from space_idle.content.base_game import (
@@ -373,7 +373,8 @@ def test_auto_source_selection_is_deterministic_and_routing_constraints_are_hard
 
 
 def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_ownership_until_final_arrival():
-    sim = build_game_application()._simulation
+    app = build_game_application()
+    sim = app._simulation
     sim.transport.transport_allocations.clear()
     _owned_multistage_capacity(sim)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
@@ -415,6 +416,24 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
     assert sum(leg.latency_days for leg in frozen_legs) == expected_latency
     dispatched = first.amount_t
     assert sim.logistics.cargo_flow_pipeline_t(dispatch.requirement.id) == pytest.approx(dispatched)
+    assert first.first_final_arrival_day == first.first_arrival_day + sum(
+        leg.latency_days for leg in first.remaining_legs
+    )
+    assert first.last_final_arrival_day >= first.first_final_arrival_day
+    assert first.first_final_arrival_day > first.first_arrival_day
+
+    requirement_row = next(
+        row for row in app.query(GetLogistics()).requirements
+        if row.owner_kind == "target_stock" and row.owner_id == str(target_id)
+    )
+    assert requirement_row.pipeline_t == pytest.approx(dispatched)
+    assert requirement_row.earliest_in_transit_arrival_day == first.first_final_arrival_day
+    assert requirement_row.latest_in_transit_arrival_day == first.last_final_arrival_day
+
+    lunar_flows = {row.resource_id: row for row in app.query(GetFlowReport(LUNAR_ORBIT)).resources}
+    leo_flows = {row.resource_id: row for row in app.query(GetFlowReport(LEO)).resources}
+    assert lunar_flows[str(resource)].inbound_in_transit_t == pytest.approx(dispatched)
+    assert str(resource) not in leo_flows or leo_flows[str(resource)].inbound_in_transit_t == pytest.approx(0.0)
     next_day = sim.tick_decision_projection()
     assert not [
         row for row in next_day.plan.logistics.dispatches

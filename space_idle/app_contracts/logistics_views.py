@@ -269,7 +269,8 @@ class SupplyRequirementRow:
     forecast_requirement_day: int | None = None
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None
-    earliest_confirmed_arrival_day: int | None = None
+    earliest_in_transit_arrival_day: int | None = None
+    latest_in_transit_arrival_day: int | None = None
     projected_gap_days: float | None = None
     candidate_source_count: int = 0
     operational_source_count: int = 0

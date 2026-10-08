@@ -22,7 +22,8 @@ class SupplyPlanningOptions:
     stocked_source_ids: tuple[SpatialNodeId, ...]
     path_candidates: tuple[tuple[SpatialNodeId, tuple[MovementPlanId, ...]], ...]
     blockers: tuple[str, ...]
-    earliest_confirmed_arrival_day: int | None
+    earliest_in_transit_arrival_day: int | None
+    latest_in_transit_arrival_day: int | None
     selected_source_id: SpatialNodeId | None = None
     selected_service_ids: tuple[str, ...] = ()
     selected_movement_plan_ids: tuple[MovementPlanId, ...] = ()

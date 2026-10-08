@@ -159,9 +159,6 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     )
     assert partial.imports_per_day > 0
     assert 0 < partial.unmet_demand_t < machinery.amount_t
-    assert str(ids.MACHINERY) in app.query(
-        GetDependencyAnalytics("operational_nodes", node_ids=(str(LEO),))
-    ).critical_dependency_resource_ids
     assert any(factor.code == "unmet_demand" for factor in partial.limiting_factors)
     assert partial.navigation is not None
     assert partial.navigation.decision_area == "logistics"
@@ -257,7 +254,6 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     assert row.local_enabled_rate >= row.requested_rate
     assert row.unmet_rate == pytest.approx(0.0)
     assert row.local_coverage_ratio == pytest.approx(1.0)
-    assert row.service_type not in view.critical_dependency_service_types
 
     sim = app._simulation
     project_id = sim.projects.plan_build(
@@ -280,7 +276,6 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     assert row.local_enabled_rate == pytest.approx(0.0)
     assert row.outside_scope_enabled_rate > 0
     assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
-    assert "construction_work" in forecast.critical_dependency_service_types
 
 
 def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_inventory():
@@ -304,10 +299,7 @@ def test_detailed_forecast_advances_isolated_snapshot_and_projects_future_invent
     assert view.inventory
     assert sim.day == base_day
     assert sim.inventory.stock == base_stock
-    assert all(
-        row.steady_state in {"stable", "accumulating", "depleting"}
-        for row in view.inventory
-    )
+    assert all(isinstance(row.projected_net_per_day, float) for row in view.inventory)
 
     with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
         app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))

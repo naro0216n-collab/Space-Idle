@@ -48,9 +48,9 @@ class ProjectProjectorMixin:
                 continue
             if requirement.remaining_t > 1e-9:
                 return None
-            if requirement.earliest_confirmed_arrival_day is None:
+            if requirement.latest_in_transit_arrival_day is None:
                 return None
-            readiness_days.append(requirement.earliest_confirmed_arrival_day)
+            readiness_days.append(requirement.latest_in_transit_arrival_day)
         return max(readiness_days, default=day)
     def _construction_resource_options(
         self, recipe, location_id: SpatialNodeId, execution_allocation

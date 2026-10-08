@@ -62,21 +62,17 @@ class SupplyPlanningProjectorMixin:
             runway = None if rate is None else runway_by_key.get(
                 (requirement.destination_id, requirement.resource_id), 0.0
             )
-            earliest = options.earliest_confirmed_arrival_day
+            earliest = options.earliest_in_transit_arrival_day
             gap = None
             if runway is not None and earliest is not None:
                 gap = max(0.0, float(earliest - sim.day) - runway)
 
-            if gap is not None and gap > 1e-9:
-                supply_state = "coverage_gap"
-            elif remaining_t > 1e-9 and not options.candidate_source_ids:
+            if remaining_t > 1e-9 and not options.candidate_source_ids:
                 supply_state = "no_source"
             elif remaining_t > 1e-9 and not options.operational_source_ids:
                 supply_state = "transport_blocked"
             elif remaining_t > 1e-9 and not options.stocked_source_ids:
                 supply_state = "source_shortage"
-            elif remaining_t > 1e-9 and runway is not None and runway <= 1.0 + 1e-9:
-                supply_state = "low_runway"
             elif remaining_t > 1e-9:
                 supply_state = "uncovered"
             elif pipeline_t > 1e-9:
@@ -160,7 +156,8 @@ class SupplyPlanningProjectorMixin:
                     forecast_requirement_day=requirement.forecast_requirement_day,
                     recurring_rate_t_per_day=rate,
                     local_runway_days=runway,
-                    earliest_confirmed_arrival_day=earliest,
+                    earliest_in_transit_arrival_day=earliest,
+                    latest_in_transit_arrival_day=options.latest_in_transit_arrival_day,
                     projected_gap_days=gap,
                     candidate_source_count=len(options.candidate_source_ids),
                     operational_source_count=len(options.operational_source_ids),

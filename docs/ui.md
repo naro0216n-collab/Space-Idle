@@ -6,7 +6,7 @@
 
 正式対応対象は **iPad横画面** とする。Portrait専用Layoutや狭幅Desktop向けLayoutは本書の対象外とする。
 
-UIは内部Domain、DTO、永続Stateの構造をそのまま画面へ露出せず、Playerが「何を判断するか」を単位に構成する。情報量を減らすこと自体を目的にせず、判断に必要なstate、requirement、blocker、limiting factor、Resource、Capacity、時間、progress、commitment、候補差を判断地点で確認できることを優先する。
+UIは内部Domain、DTO、永続Stateの構造をそのまま画面へ露出せず、Playerが「何を判断するか」を単位に構成する。 表示の主軸は数値、単位付きrate、現在/目標の差、時系列、拠点間Resourceフローとする。状態名や制約の説明は測定値の意味と操作不能理由を理解するために付し、活動・投資・物流への改善優先順位や最善手を文章・色・並び順によって暗示しない。情報量を減らすこと自体を目的にせず、判断に必要なstate、requirement、blocker、limiting factor、Resource、Capacity、時間、progress、commitment、候補差を判断地点で確認できることを優先する。
 
 本ゲームは輸送計画そのものを主目的としない。研究、産業、拠点開発、建設、探査、物流、Fleet運用、経済を一つの宇宙開発ゲームとして接続し、特定Domainの操作様式を全体へ一般化しない。
 
@@ -262,7 +262,7 @@ UIはこれらをDomain ruleから独自計算しない。
 - Forecast
 - Draft / Preview
 
-単位と時間基準を併記する。
+単位と時間基準を併記する。 収支の増減とその戦略的価値は同一視しない。注意色は未充足・ブロック・容量超過等の客観的成立差に用い、外部依存や在庫減少の存在だけで警告にしない。
 
 ### 6.3 Current / Target / Preview
 
@@ -299,7 +299,7 @@ Player hard constraintがある場合は自動選択結果と明示constraintを
 
 ## 7. Attention
 
-Global Attentionはlogや全warning一覧ではなく、Player判断が必要な事象を扱う。
+Global Attentionはlogや全warning一覧ではなく、Player設定に対して成立しない活動・状態変化・完了イベントを扱う。通知はプレイヤーに取るべき行動を指定しない。
 
 主対象:
 
@@ -507,7 +507,7 @@ Attentionまたは選択Contextがある場合は関係する需要、Allocation
 
 Transport Allocationではorigin / destination、selected Movement / Service、Directional Capacity target、Provisioning Priority、Required Fleet Units、Assigned / available units、Nominal / Available / Used / Spare Capacity、latency、operational Resource demand、blocker / limiting factorを表示する。
 
-Resource需要ではlocal stock、normal demand、Target Stock追加需要、inbound、active shipping demand、unmet demandを区別する。
+Resource需要ではlocal stock、normal demand、Target Stock追加需要、inbound、active shipping demand、unmet demandを区別する。 輸送中Cargoは最終destinationとLeg chainから到着時点の最短見込み・Segment最後の見込みを示し、handoff待機・入庫制約があるときの見込みは確定到着として表示しない。runwayは現地在庫のみからの計算であることを明示する。
 
 通常routingはselected source、selected path、latency、主要operational Resource burden、handoff、limiting factorを表示し、hard constraintはPlayerが自動選択を戦略的に制限する場合だけNode / Edgeから設定する。
 
@@ -538,7 +538,7 @@ Buyではreserved Funds / provider supplyを、SellではInterfaceへ実際に�
 - imports
 - exports
 - unmet demand
-- critical external Resource
+- external Resource dependency quantity / rate (unmet demandとは区別)
 - forecast requirement
 
 該当Resource、Facility、Construction、TransportへContext付きで移動できるようにする。
@@ -565,9 +565,9 @@ Fast Previewは実行可否、Targetから導出されるCapacity / required uni
 
 ### 18.3 Detailed Forecast
 
-future Inventory、downstream impact、multi-hop logistics impact、long-term steady state、Location dependency forecast等はFast Previewから分離する。
+future Inventory、downstream impact、multi-hop logistics impact、Location dependency forecast等はFast Previewから分離する。期間末日時点の生産・消費・入出荷収支は数値で表し、期間末日の収支符号のみから長期均衡・枯渇の成否を断定しない。
 
-UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / steady-state等の意味的horizonを選び、実期間はApplication Query filterとして扱う。
+UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / 長期等の期間を選び、実期間はApplication Query filterとして扱う。
 
 ### 18.4 Draft
 

@@ -110,7 +110,7 @@ class ApplicationReportProjectorMixin:
         nodes = self._dependency_scope_nodes(query)
         requirement_rows = self._requirement_rows()
         if basis == "CURRENT":
-            rows, group_rows, critical = self._current_dependency_rows(nodes)
+            rows, group_rows = self._current_dependency_rows(nodes)
             rows = [
                 replace(
                     row,
@@ -120,7 +120,7 @@ class ApplicationReportProjectorMixin:
                 )
                 for row in rows
             ]
-            service_rows, critical_services = self._current_service_dependency_rows(nodes)
+            service_rows = self._current_service_dependency_rows(nodes)
             return DependencyAnalyticsView(
                 scope_kind=query.scope_kind,
                 scope_id=query.scope_id,
@@ -130,10 +130,8 @@ class ApplicationReportProjectorMixin:
                 current_resources=tuple(rows),
                 current_resource_groups=tuple(group_rows),
                 current_services=tuple(service_rows),
-                critical_dependency_resource_ids=tuple(critical),
-                critical_dependency_service_types=tuple(critical_services),
             )
-        rows, group_rows, critical = self._forecast_dependency_rows(nodes)
+        rows, group_rows = self._forecast_dependency_rows(nodes)
         rows = [
             replace(
                 row,
@@ -143,7 +141,7 @@ class ApplicationReportProjectorMixin:
             )
             for row in rows
         ]
-        service_rows, critical_services = self._forecast_service_dependency_rows(nodes)
+        service_rows = self._forecast_service_dependency_rows(nodes)
         return DependencyAnalyticsView(
             scope_kind=query.scope_kind,
             scope_id=query.scope_id,
@@ -153,13 +151,11 @@ class ApplicationReportProjectorMixin:
             forecast_resources=tuple(rows),
             forecast_resource_groups=tuple(group_rows),
             forecast_services=tuple(service_rows),
-            critical_dependency_resource_ids=tuple(critical),
-            critical_dependency_service_types=tuple(critical_services),
         )
 
     def _current_service_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[CurrentServiceDependencyMetricRow], list[str]]:
+    ) -> list[CurrentServiceDependencyMetricRow]:
         sim = self._simulation
         decision = self._tick_decision_projection()
         plan = decision.allocations.services
@@ -222,7 +218,6 @@ class ApplicationReportProjectorMixin:
             if node_id in selected
         )
         rows: list[CurrentServiceDependencyMetricRow] = []
-        critical: list[str] = []
         for service_type in sorted(service_types):
             scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
             local_nominal = sum(
@@ -266,8 +261,6 @@ class ApplicationReportProjectorMixin:
             if external_dependency > 1e-9:
                 limiting.append("outside_scope_service_dependency")
             limiting = list(dict.fromkeys(limiting))
-            if unmet > 1e-9 or external_dependency > 1e-9:
-                critical.append(service_type)
             if requested <= 1e-12 and unmet <= 1e-12 and external_dependency <= 1e-12:
                 continue
             rows.append(CurrentServiceDependencyMetricRow(
@@ -288,11 +281,11 @@ class ApplicationReportProjectorMixin:
                     related_entity_id=service_type,
                 ),
             ))
-        return rows, critical
+        return rows
 
     def _forecast_service_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[ForecastServiceDependencyMetricRow], list[str]]:
+    ) -> list[ForecastServiceDependencyMetricRow]:
         sim = self._simulation
         decision = self._tick_decision_projection()
         plan = decision.allocations.services
@@ -321,7 +314,6 @@ class ApplicationReportProjectorMixin:
                     paused.add(service_type)
 
         rows: list[ForecastServiceDependencyMetricRow] = []
-        critical: list[str] = []
         for service_type in sorted(planned):
             scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
             local_enabled = sum(
@@ -343,8 +335,6 @@ class ApplicationReportProjectorMixin:
                 limiting.append("no_organization_service_capacity")
             if service_type in paused:
                 limiting.append("paused_plan")
-            if any(value.startswith("no_") for value in limiting):
-                critical.append(service_type)
             rows.append(ForecastServiceDependencyMetricRow(
                 service_type=service_type,
                 scope=scope.value,
@@ -359,11 +349,11 @@ class ApplicationReportProjectorMixin:
                     related_entity_id=service_type,
                 ),
             ))
-        return rows, critical
+        return rows
 
     def _current_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[CurrentDependencyMetricRow], list[CurrentDependencyMetricRow], list[str]]:
+    ) -> tuple[list[CurrentDependencyMetricRow], list[CurrentDependencyMetricRow]]:
         sim = self._simulation
         scope = set(nodes)
         decision = self._tick_decision_projection()
@@ -466,7 +456,7 @@ class ApplicationReportProjectorMixin:
 
         for flow in sim.logistics.cargo_flow_snapshots():
             source_inside = flow.source_id in scope
-            destination_inside = flow.destination_id in scope
+            destination_inside = flow.final_destination_id in scope
             if source_inside == destination_inside:
                 continue
             if destination_inside:
@@ -476,7 +466,7 @@ class ApplicationReportProjectorMixin:
                 exports_pipeline[flow.resource_id] += flow.amount_t
         for waiting in sim.logistics.arrival_waiting_snapshots():
             source_inside = waiting.arrival_leg.source_id in scope
-            destination_inside = waiting.node_id in scope
+            destination_inside = waiting.final_destination_id in scope
             if source_inside == destination_inside:
                 continue
             if destination_inside:
@@ -555,12 +545,11 @@ class ApplicationReportProjectorMixin:
                 tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
                 tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
             ))
-        critical = [row.id for row in rows if row.external_dependency_per_day > 1e-9 or row.unmet_demand_t > 1e-9]
-        return rows, group_rows, critical
+        return rows, group_rows
 
     def _forecast_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[ForecastDependencyMetricRow], list[ForecastDependencyMetricRow], list[str]]:
+    ) -> tuple[list[ForecastDependencyMetricRow], list[ForecastDependencyMetricRow]]:
         sim = self._simulation
         scope = set(nodes)
         decision = self._tick_decision_projection()
@@ -659,8 +648,7 @@ class ApplicationReportProjectorMixin:
                 tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
                 tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
             ))
-        critical = [row.id for row in rows if row.external_requirement_t > 1e-9 or row.external_recurring_dependency_per_day > 1e-9]
-        return rows, group_rows, critical
+        return rows, group_rows
 
     @staticmethod
     def _issue_navigation(
@@ -1129,7 +1117,7 @@ class ApplicationReportProjectorMixin:
         for flow in sim.logistics.cargo_flow_snapshots():
             if flow.source_id == location_id:
                 outbound_transit[flow.resource_id] += flow.amount_t
-            if flow.destination_id == location_id:
+            if flow.final_destination_id == location_id:
                 inbound_transit[flow.resource_id] += flow.amount_t
         for waiting in sim.logistics.arrival_waiting_snapshots():
             if waiting.node_id == location_id:

@@ -138,6 +138,8 @@ Fundsは組織全体のResource売買決済通貨とする。Research、Construc
 
 物理資源は所在地を持つ。地球の水1000t、月面の水1000t、LEOの水1000tは同価値ではない。
 
+Resourceの不足や供給依存は操作・計画に対する観測値であり、改善の義務や戦略的な優劣を意味しない。UIは現在値・変化率・量・必要時期・輸送状態と制約を示し、何を増産・移送・延期するかの選択をプレイヤーに残す。
+
 ### 5.2 在庫・倉庫
 
 各Operational Nodeでは最低限、現在在庫、予約済み在庫、入庫フロー、出庫フロー、輸送待ち、輸送中、到着待機、保管容量を区別する。
@@ -718,6 +720,8 @@ LLMはプレイヤーの主要判断を代行させない。
 ## 18. Simulation Core / Application / UI
 
 ゲームルールはUI、HTTP、LLMから独立させる。UIはSimulation内部を直接操作せず、Application LayerのCommand / Query境界を利用する。
+
+UIが提示する中心情報はStock、Flow、Capacity、Requirement、Progress、時点付きForecastとそれらの差分とする。自動選択された既存Network内の通常物流経路は確認可能にするが、Facility投資、供給拡張、研究、輸送網配備等の攻略上の最善手は提示しない。成立していない条件とその数値を説明することは、戦略的な改善方法を指示することとは区別する。
 
 主要Command例：
 

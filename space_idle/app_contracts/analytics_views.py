@@ -79,7 +79,7 @@ class DetailedForecastInventoryRow:
     projected_production_per_day: float
     projected_consumption_per_day: float
     projected_external_dependency_per_day: float
-    steady_state: str
+    projected_net_per_day: float
 
 
 @dataclass(frozen=True)
@@ -133,5 +133,3 @@ class DependencyAnalyticsView:
     forecast_resource_groups: tuple[ForecastDependencyMetricRow, ...] = ()
     current_services: tuple[CurrentServiceDependencyMetricRow, ...] = ()
     forecast_services: tuple[ForecastServiceDependencyMetricRow, ...] = ()
-    critical_dependency_resource_ids: tuple[str, ...] = ()
-    critical_dependency_service_types: tuple[str, ...] = ()
