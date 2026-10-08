@@ -46,7 +46,7 @@ jobs:
           path: ${{ runner.temp }}/source
           include-hidden-files: true
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   unit:
     name: Unit / architecture
