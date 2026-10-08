@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, GetFleet, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetFleet, GetTransportAllocations, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -394,6 +394,44 @@ def run(*, browser=None) -> None:
                 arg=market_order_id,
                 timeout=10000,
             )
+
+            # The Map relation is a visual grouping, not a unique allocation.
+            # Two independent settings on the same OD must remain individually
+            # inspectable, even when their capacity targets differ sharply.
+            first_parallel_id = runtime.execute(CreateTransportAllocation(
+                OWNED_LAUNCH_VEHICLE, EARTH, LEO,
+                target_forward_t_per_day=0.25, target_reverse_t_per_day=0.0,
+            )).data.created_id
+            second_parallel_id = runtime.execute(CreateTransportAllocation(
+                OWNED_LAUNCH_VEHICLE, EARTH, LEO,
+                target_forward_t_per_day=0.0, target_reverse_t_per_day=0.0,
+            )).data.created_id
+            assert first_parallel_id and second_parallel_id and first_parallel_id != second_parallel_id
+            parallel_rows = runtime.query(GetTransportAllocations()).data.items
+            parallel = {row.id: row for row in parallel_rows if row.id in (first_parallel_id, second_parallel_id)}
+            assert len(parallel) == 2
+            assert parallel[first_parallel_id].target_capacity.forward_t_per_day > 0
+            assert parallel[second_parallel_id].target_capacity.forward_t_per_day == 0
+
+            page.reload(wait_until='load')
+            page.locator('#connectionState.is-ok').wait_for(timeout=10000)
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
+            relation = page.locator('#systemMapRelations .system-map-relation').filter(
+                has=page.locator(f'[data-system-allocation-id="{first_parallel_id}"]')
+            )
+            relation.wait_for(state='visible', timeout=10000)
+            assert relation.locator('[data-system-allocation-id]').count() == 2
+            assert '2 設定を比較' in relation.locator('[data-system-pair]').inner_text()
+            first_button = relation.locator(f'[data-system-allocation-id="{first_parallel_id}"]')
+            second_button = relation.locator(f'[data-system-allocation-id="{second_parallel_id}"]')
+            first_button.click()
+            assert first_button.get_attribute('aria-pressed') == 'true'
+            second_button.click()
+            assert first_button.get_attribute('aria-pressed') == 'false'
+            assert second_button.get_attribute('aria-pressed') == 'true'
+            relation.locator('[data-system-pair]').click()
+            assert first_button.get_attribute('aria-pressed') == 'true'
+            assert second_button.get_attribute('aria-pressed') == 'true'
 
     finally:
         server.shutdown()
