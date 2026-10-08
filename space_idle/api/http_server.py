@@ -295,6 +295,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/logistics/movement-plans":
             self._query_result(GetMovementPlans(
+                touching_node_id=_one(params, "touching_node_id"),
                 origin_id=_one(params, "origin_id"),
                 destination_id=_one(params, "destination_id"),
                 movement_plan_id=_one(params, "movement_plan_id"),

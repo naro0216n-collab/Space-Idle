@@ -433,6 +433,27 @@ def run(*, browser=None) -> None:
             assert first_button.get_attribute('aria-pressed') == 'true'
             assert second_button.get_attribute('aria-pressed') == 'true'
 
+            # A remote node selected on the shared Map is an inspection scope,
+            # not a command to change the location running the simulation.
+            remote_id = page.evaluate("""() => {
+                const state = window.SpaceIdleApp.state;
+                return state.world.operational_nodes.find(node => node.id !== state.operationalNodeId)?.id;
+            }""")
+            assert remote_id
+            execution_id = page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId')
+            page.locator(f'#systemMapNodeIndex [data-system-node-jump="{remote_id}"]').click()
+            page.wait_for_function(
+                'id => window.SpaceIdleApp.state.inspectedNode?.id === id', arg=remote_id
+            )
+            assert page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId') == execution_id
+            remote_resource = page.evaluate(
+                '() => window.SpaceIdleApp.state.inspectedNode.inventory?.[0]?.resource_id || null'
+            )
+            if remote_resource:
+                page.locator('#systemMapResourceFilter').select_option(remote_resource)
+                assert '現在在庫' in page.locator('#movementPlanInspectorContent').inner_text()
+                assert '現地生産' in page.locator('#movementPlanInspectorContent').inner_text()
+
     finally:
         server.shutdown()
         server.server_close()

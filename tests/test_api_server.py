@@ -316,6 +316,23 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         assert status == 200
         assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
 
+        # The inspection node is independent of the execution node. Scope
+        # changes invalidate the composite view token and constrain Movement.
+        inspect_path = (
+            f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+            f"&inspect_node_id={ids.LUNAR_ORBIT}"
+        )
+        status, _, payload = _request(port, "GET", inspect_path, headers={"X-Space-Idle-Known-View": etag})
+        assert status == 200
+        inspected = payload["data"]
+        assert inspected["operational_node"]["id"] == str(ids.EARTH)
+        assert inspected["inspected_node"]["id"] == str(ids.LUNAR_ORBIT)
+        assert inspected["inspected_flow"]["operational_node_id"] == str(ids.LUNAR_ORBIT)
+        assert all(
+            str(ids.LUNAR_ORBIT) in (plan["origin_id"], plan["destination_id"])
+            for plan in inspected["movement_plans"]["items"]
+        )
+
         status, _, payload = _request(
             port,
             "POST",

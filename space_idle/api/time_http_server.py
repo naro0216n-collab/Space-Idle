@@ -53,7 +53,14 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             raise ApiPayloadError("surface_body_id must appear once")
         surface_body_id = surface_body_values[0] if surface_body_values else None
 
-        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}"
+        # Map/Inspector reference one selected node without changing the
+        # execution node. Selection scopes the Movement candidates as well.
+        inspect_values = params.get("inspect_node_id", [])
+        if len(inspect_values) > 1:
+            raise ApiPayloadError("inspect_node_id must appear once")
+        inspect_node_id = inspect_values[0] if inspect_values else None
+
+        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}\0{inspect_node_id or ''}"
         scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
         known_revision = None
         known_view = self.headers.get("X-Space-Idle-Known-View", "").strip()
@@ -69,12 +76,16 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "contracts": GetContracts(),
             "logistics_summary": GetLogisticsSummary(),
             "logistics": GetLogistics(),
-            "movement_plans": GetMovementPlans(include_modes=True),
             "fleet": GetFleet(),
             "transport_allocations": GetTransportAllocations(),
             "cargo_flows": GetCargoFlows(),
             "market": GetMarket(),
         }
+        if inspect_node_id:
+            queries["movement_plans"] = GetMovementPlans(touching_node_id=inspect_node_id, include_modes=True)
+            if inspect_node_id != operational_node_id:
+                queries["inspected_node"] = GetOperationalNode(inspect_node_id)
+                queries["inspected_flow"] = GetFlowReport(inspect_node_id)
         if operational_node_id:
             queries.update({
                 "operational_node": GetOperationalNode(operational_node_id),

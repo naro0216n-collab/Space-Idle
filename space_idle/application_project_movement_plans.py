@@ -128,12 +128,13 @@ class LogisticsMovementPlanProjectorMixin:
         origin_id: str | None = None,
         destination_id: str | None = None,
         movement_plan_id: str | None = None,
+        touching_node_id: str | None = None,
         include_modes: bool = True,
         comparison_vehicle_definition_id: str | None = None,
     ) -> tuple[MovementPlanRow, ...]:
         cache = getattr(self, "_query_projection_cache", None)
         key = (
-            "movement_plan_rows", origin_id, destination_id,
+            "movement_plan_rows", origin_id, destination_id, touching_node_id,
             movement_plan_id, comparison_vehicle_definition_id,
         )
         # The summary only suppresses mode details in presentation; it still
@@ -147,6 +148,11 @@ class LogisticsMovementPlanProjectorMixin:
         if movement_plan_id is not None:
             movement_plan = sim.transport.movement_plan(movement_plan_id)
             candidates = () if movement_plan is None else (movement_plan,)
+        elif touching_node_id is not None:
+            outbound = sim.transport.outbound_movement_plans(touching_node_id)
+            inbound = sim.transport.inbound_movement_plans(touching_node_id)
+            by_id = {str(plan.id): plan for plan in (*outbound, *inbound)}
+            candidates = tuple(by_id[plan_id] for plan_id in sorted(by_id))
         elif origin_id is not None and destination_id is not None:
             candidates = sim.transport.movement_plan_candidates(origin_id, destination_id)
         elif origin_id is not None:
@@ -250,6 +256,7 @@ class LogisticsMovementPlanProjectorMixin:
             origin_id=query.origin_id,
             destination_id=query.destination_id,
             movement_plan_id=query.movement_plan_id,
+            touching_node_id=query.touching_node_id,
             include_modes=query.include_modes,
             comparison_vehicle_definition_id=query.vehicle_definition_id,
         )

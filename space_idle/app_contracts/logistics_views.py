@@ -322,7 +322,6 @@ class TargetStockOptionsView:
 
 @dataclass(frozen=True)
 class LogisticsView:
-    movement_plans: tuple[MovementPlanRow, ...]
     fleet_pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]

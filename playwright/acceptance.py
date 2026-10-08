@@ -305,6 +305,24 @@ def run(*, browser=None) -> dict[str, object]:
             global_nodes = page.locator('#systemMapStage [data-system-node-id]')
             _assert(global_nodes.count() > 0, "map must expose Operational Nodes as direct targets")
             initial_node_count = global_nodes.count()
+            _assert(page.locator('#systemMapNodeIndex [data-system-node-jump]').count() == initial_node_count,
+                    "every Operational Node must remain accessible through a Map-independent touch list")
+            # The plane must expand with node density instead of making the
+            # touch rectangles overlap when several locations share a body.
+            layout = page.evaluate("""() => {
+                const synthetic=Array.from({length:36},(_,i)=>({
+                    id:`stress.node.${i}`,body_id:`stress.body.${Math.floor(i/12)}`,kind:'surface'
+                }));
+                const original=window.SpaceIdleSystemMap.positionsFor(synthetic);
+                const reversed=window.SpaceIdleSystemMap.positionsFor([...synthetic].reverse());
+                const points=Object.values(original.positions);
+                const clear=points.every((p,i)=>points.every((q,j)=>i===j||
+                    Math.abs(p[0]-q[0])>=142||Math.abs(p[1]-q[1])>=132));
+                return {clear,stable:JSON.stringify(original)===JSON.stringify(reversed),
+                    count:points.length,height:original.height};
+            }""")
+            _assert(layout['clear'] and layout['stable'] and layout['count'] == 36 and layout['height'] > 420,
+                    "a many-node Map must retain stable, non-overlapping hit targets")
             first_global_node = global_nodes.first
             first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
             original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
@@ -1349,7 +1367,7 @@ def run(*, browser=None) -> dict[str, object]:
             )
             page.set_viewport_size({"width": 1194, "height": 834})
             network_locations = page.locator('#systemMapStage [data-system-node-id]')
-            expected_network_locations = page.locator('#movementPlanOriginFilter option').count() - 1
+            expected_network_locations = page.evaluate('() => window.SpaceIdleApp.state.world.operational_nodes.length')
             _assert(network_locations.count() == expected_network_locations, "System Map must expose all operational nodes")
             network_positions = network_locations.evaluate_all(
                 "rows => rows.map(row => { const node=row.closest('.system-map-node-shell'); return `${node.style.left}:${node.style.top}`; })"

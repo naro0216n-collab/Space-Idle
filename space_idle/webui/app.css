@@ -625,7 +625,7 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .system-map-bodies button small { margin-left: 5px; color: var(--muted); }
 .system-map-bodies button[aria-pressed="true"] { border-color: var(--accent); background: #143348; }
 .system-map-stage { position: relative; min-width: 0; height: 420px; overflow: hidden; background: radial-gradient(circle at 48% 72%, #122a3c, #061019 72%); touch-action: none; }
-.system-map-viewport { position: absolute; inset: 0; transform-origin: center; will-change: transform; }
+.system-map-viewport { position: absolute; top: 0; left: 0; transform-origin: center; will-change: transform; }
 .system-map-links { position: absolute; inset: 0; height: 100%; width: 100%; pointer-events: none; }
 .system-map-edge { stroke: #39566a; stroke-width: .7; vector-effect: non-scaling-stroke; }
 .system-map-edge.is-service { stroke: #4d9fc4; stroke-width: 1.1; }
@@ -638,6 +638,9 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .system-map-edge.is-cargo-waiting { stroke: #e8a3d0; stroke-width: 2.4; stroke-dasharray: 1 2; pointer-events: none; }
 .system-map-nodes { position: absolute; inset: 0; pointer-events: none; }
 .system-map-node-shell { width: 142px; position: absolute; transform: translate(-50%,-50%); pointer-events: auto; }
+.system-map-node-index { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; max-height: 156px; overflow-y: auto; border-top: 1px solid var(--line-soft); }
+.system-map-node-index button { min-height: 44px; text-align: left; }
+.system-map-node-index button.is-selected { outline: 2px solid var(--accent); }
 .system-map-legend { padding: 8px 14px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line-soft); }
 .system-map-relations:not(:empty) { display: grid; gap: 8px; padding: 10px 14px; max-height: 200px; overflow-y: auto; }
 .system-map-relation { display: grid; gap: 4px; }

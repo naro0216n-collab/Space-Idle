@@ -78,6 +78,10 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetLogisticsSummary):
             return self._logistics_summary_view()
         if isinstance(query, GetMovementPlans):
+            if query.touching_node_id is not None:
+                if query.origin_id is not None or query.destination_id is not None or query.movement_plan_id is not None:
+                    raise ApplicationError("invalid_query", "touching_node_id cannot be combined with a Movement Plan or OD scope")
+                self._require_operational_node(query.touching_node_id)
             if query.origin_id is not None:
                 self._require_operational_node(query.origin_id)
             if query.destination_id is not None:

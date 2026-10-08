@@ -10,8 +10,6 @@ from .logistics_views import (
 
 @dataclass(frozen=True)
 class LogisticsSummaryView:
-    movement_plan_count: int
-    usable_movement_plan_count: int
     fleet_units: int
     free_fleet_units: int
     allocation_count: int

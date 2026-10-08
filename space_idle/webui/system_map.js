@@ -9,6 +9,7 @@
   const viewport={scale:1,x:0,y:0};
   let stage=null;
   let dragging=null;
+  let mapGeometry=null;
 
   function selectedResource(){return state.systemMapResourceId||null;}
   function requirementRows(){return state.logistics?.requirements||[];}
@@ -38,7 +39,8 @@
     return {selectedAllocations,selectedNodes};
   }
   function positionsFor(nodes){
-    // Stable body groups are diagrammatic, not a proportional distance projection.
+    // A diagrammatic, extendable plane. Nodes are given real hit-target space,
+    // not squeezed into a fixed percentage band as the number of nodes grows.
     const groups=new Map();
     for(const node of nodes){
       const key=node.body_id||`context:${node.id}`;
@@ -47,16 +49,21 @@
     }
     const keys=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
     const positions={};
+    // Use a common logical coordinate space independent of the width of the
+    // Overview/Transport host and the current device orientation.
+    const width=Math.max(720,keys.length*188+56);
+    const maxRows=Math.max(1,...[...groups.values()].map((items)=>items.length));
+    const height=Math.max(420,maxRows*140+44);
     keys.forEach((key,groupIndex)=>{
       const group=groups.get(key).slice().sort((a,b)=>
         String(a.kind||'').localeCompare(String(b.kind||''))||String(a.id).localeCompare(String(b.id)));
-      const x=keys.length===1?50:14+72*groupIndex/(keys.length-1);
+      const x=(groupIndex+.5)*width/keys.length;
       group.forEach((node,index)=>{
-        const y=group.length===1?50:20+60*index/(group.length-1);
+        const y=(index+.5)*height/group.length;
         positions[node.id]=[x,y];
       });
     });
-    return positions;
+    return {positions,width,height};
   }
 
   function pairKey(a,b){return [String(a),String(b)].sort().join('\u001f');}
@@ -75,12 +82,23 @@
     if(stage)return stage;
     stage=document.createElement('section');
     stage.className='system-map-frame';
-    stage.innerHTML=`<div class="system-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><strong id="systemMapMode">空間概要</strong><span class="system-map-note">概略配置 · 距離と移動日数は数値で確認</span></div><div class="system-map-controls"><label class="system-map-resource-label">Resource <select id="systemMapResourceFilter" aria-label="地図で強調するResource"></select></label><button type="button" data-system-zoom="out" aria-label="縮小">−</button><button type="button" data-system-zoom="reset" aria-label="表示位置をリセット">等倍</button><button type="button" data-system-zoom="in" aria-label="拡大">＋</button></div></div><div id="systemMapBodies" class="system-map-bodies" aria-label="天体と地表マップへの移動"></div><div id="systemMapStage" class="system-map-stage" role="group" aria-label="共通System Map"><div id="systemMapViewport" class="system-map-viewport"><svg class="system-map-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg><div class="system-map-nodes"></div></div></div><div class="system-map-legend" id="systemMapLegend"></div><div class="system-map-relations" id="systemMapRelations" aria-label="輸送関係一覧"></div>`;
+    stage.innerHTML=`<div class="system-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><strong id="systemMapMode">空間概要</strong><span class="system-map-note">概略配置 · 距離と移動日数は数値で確認</span></div><div class="system-map-controls"><label class="system-map-resource-label">Resource <select id="systemMapResourceFilter" aria-label="地図で強調するResource"></select></label><button type="button" data-system-zoom="out" aria-label="縮小">−</button><button type="button" data-system-zoom="reset" aria-label="表示位置をリセット">等倍</button><button type="button" data-system-zoom="in" aria-label="拡大">＋</button></div></div><div id="systemMapBodies" class="system-map-bodies" aria-label="天体と地表マップへの移動"></div><div id="systemMapStage" class="system-map-stage" role="group" aria-label="共通System Map"><div id="systemMapViewport" class="system-map-viewport"><svg class="system-map-links" preserveAspectRatio="none" aria-hidden="true"></svg><div class="system-map-nodes"></div></div></div><div class="system-map-legend" id="systemMapLegend"></div><div class="system-map-node-index" id="systemMapNodeIndex" aria-label="全拠点の選択・Map上の位置への移動"></div><div class="system-map-relations" id="systemMapRelations" aria-label="輸送関係一覧"></div>`;
     return stage;
   }
   function applyViewport(){
     if(!stage)return;
     stage.querySelector('#systemMapViewport').style.transform=`translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+  }
+  function focusNode(nodeId){
+    const geometry=mapGeometry;
+    const point=geometry?.positions[nodeId];
+    const area=stage?.querySelector('#systemMapStage');
+    if(!point||!area)return;
+    // CSS transform-origin is the plane centre. Keep the selected point in the
+    // visible stage even when the layout extends beyond its viewport.
+    viewport.x=area.clientWidth/2-(point[0]*viewport.scale+geometry.width*(1-viewport.scale)/2);
+    viewport.y=area.clientHeight/2-(point[1]*viewport.scale+geometry.height*(1-viewport.scale)/2);
+    applyViewport();
   }
   function detach(){if(stage?.isConnected)stage.remove();}
   function render(signals={}){
@@ -96,7 +114,14 @@
       `<button type="button" data-system-body-id="${esc(body.id)}" aria-pressed="${state.selectedSurfaceBodyId===body.id?'true':'false'}">${esc(body.display_name)} <small>地表Map</small></button>`
     ).join('');
     A.setHtmlIfChanged(root.querySelector('#systemMapBodies'),bodyLinks);
-    const positions=positionsFor(nodes);
+    const stageArea=root.querySelector('#systemMapStage');
+    const geometry=positionsFor(nodes);
+    mapGeometry=geometry;
+    const {positions,width,height}=geometry;
+    const plane=root.querySelector('#systemMapViewport');
+    plane.style.width=`${width}px`;
+    plane.style.height=`${height}px`;
+    root.querySelector('.system-map-links').setAttribute('viewBox',`0 0 ${width} ${height}`);
     const allocations=state.transportAllocations?.items||[];
     const pairs=allocationPairs(allocations);
     const resourceFilter=root.querySelector('#systemMapResourceFilter');
@@ -106,6 +131,11 @@
     const context=contextRelations(allocations);
     const relevantRequirements=requirementRows().filter((row)=>!selectedResource()||row.resource_id===selectedResource());
     const relevantFlows=cargoRows().filter((row)=>!selectedResource()||row.resource_id===selectedResource());
+    const relevantAllocations=new Set(relevantRequirements.flatMap((row)=>row.selected_transport_allocation_ids||[]));
+    const relevantPairs=new Set(relevantFlows.map((row)=>pairKey(row.source_id,row.destination_id)));
+    for(const pair of pairs){
+      if(pair.items.some((row)=>relevantAllocations.has(row.id)))relevantPairs.add(pair.key);
+    }
     const relatedNodes=new Set(context.selectedNodes);
     for(const row of relevantRequirements)if(selectedResource())relatedNodes.add(row.destination_id);
     for(const row of relevantFlows)if(selectedResource())for(const id of [row.source_id,row.destination_id,row.final_destination_id])if(id)relatedNodes.add(id);
@@ -116,6 +146,7 @@
     // Only actual allocation edges are shown by default. Movement feasibility is not a service.
     let edges=pairs.map((pair)=>{
       const a=positions[pair.from],b=positions[pair.to];if(!a||!b)return'';
+      if(selectedResource()&&!relevantPairs.has(pair.key)&&!pair.items.some((row)=>context.selectedAllocations.has(row.id)))return'';
       const selectedPair=pair.items.some((row)=>context.selectedAllocations.has(row.id))
         ||(state.decisionContext?.subject_kind==='operational_node'&&(pair.from===selected||pair.to===selected));
       const active=pair.items.some((row)=>!row.paused&&(Number(row.available?.forward_t_per_day)||Number(row.available?.reverse_t_per_day)));
@@ -146,10 +177,12 @@
       const related=logistics&&relatedNodes.has(node.id);
       const counters=[['attention','要確認',signal.attention],['projects','案件',signal.projects],['founding','設立',signal.founding],['research','研究',signal.research],['survey','調査',signal.survey],['exploration','探査',signal.exploration]].filter(([, ,v])=>Number(v)>0);
       const signalClass=signal.attention?'has-attention':counters.length?'has-activity':'';
-      return `<div class="system-map-node-shell" style="left:${x}%;top:${y}%"><button type="button" class="global-map-node ${highlighted?'is-selected':''} ${signalClass} ${related?'is-related':''}" data-system-node-id="${esc(node.id)}" aria-pressed="${highlighted?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindName(node.kind))} · ${esc(bodyNames.get(node.body_id)||'非地表Context')} · 設備 ${fmt(node.facility_count,0)}</span>${!logistics&&counters.length?`<span class="global-map-node-signals">${counters.map(([kind,label,n])=>`<span class="global-map-signal is-${kind}">${label} ${fmt(n,0)}</span>`).join('')}</span>`:''}</button></div>`;
+      return `<div class="system-map-node-shell" style="left:${x}px;top:${y}px"><button type="button" class="global-map-node ${highlighted?'is-selected':''} ${signalClass} ${related?'is-related':''}" data-system-node-id="${esc(node.id)}" aria-pressed="${highlighted?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindName(node.kind))} · ${esc(bodyNames.get(node.body_id)||'非地表Context')} · 設備 ${fmt(node.facility_count,0)}</span>${!logistics&&counters.length?`<span class="global-map-node-signals">${counters.map(([kind,label,n])=>`<span class="global-map-signal is-${kind}">${label} ${fmt(n,0)}</span>`).join('')}</span>`:''}</button></div>`;
     }).join('');
     A.replaceHtmlPreservingKeyed(root.querySelector('.system-map-nodes'),html,[{selector:'[data-system-node-id]',attributes:['data-system-node-id']}]);
     root.querySelector('#systemMapLegend').textContent=logistics?'実輸送設定（実線：利用可能／破線：停止・容量不足）、選択Movement候補（点線）、選択Cargo（太い破線：輸送中／点線：入庫待機）。需要・Cargo・Stockは別状態です。':'設定済みTransport接続と拠点Activity。選択中のMovement候補は点線。位置は概略であり移動可能性を保証しません。';
+    A.replaceHtmlPreservingKeyed(root.querySelector('#systemMapNodeIndex'),nodes.map((node)=>
+      `<button type="button" data-system-node-jump="${esc(node.id)}" class="${node.id===selected?'is-selected':''}" aria-pressed="${node.id===selected?'true':'false'}">${esc(node.display_name)}${relatedNodes.has(node.id)?' · 関連Resource':''}</button>`).join(''),[{selector:'[data-system-node-jump]',attributes:['data-system-node-jump']}]);
     const relationHtml=logistics?pairs.map((pair)=>{
       const title=`${locationName(pair.from)} ↔ ${locationName(pair.to)}`;
       return `<div class="system-map-relation"><button type="button" class="system-map-pair-button ${pair.items.some((r)=>context.selectedAllocations.has(r.id))?'is-selected':''}" data-system-pair="${esc(pair.key)}">${esc(title)} · ${pair.items.length} 設定を比較</button><div class="system-map-relation-options">${pair.items.map((row)=>{
@@ -188,6 +221,8 @@
     if(zoom){const action=zoom.dataset.systemZoom;if(action==='reset'){viewport.scale=1;viewport.x=0;viewport.y=0;}else viewport.scale=Math.min(2.5,Math.max(.75,viewport.scale*(action==='in'?1.25:.8)));applyViewport();return;}
     const node=event.target.closest('[data-system-node-id]');
     if(node){state.selectedGlobalNodeId=node.dataset.systemNodeId;if(state.activeSection==='logistics')state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:state.selectedGlobalNodeId,resource_id:selectedResource()};window.SpaceIdleSystemMap.onSelect();return;}
+    const jump=event.target.closest('[data-system-node-jump]');
+    if(jump){state.selectedGlobalNodeId=jump.dataset.systemNodeJump;if(state.activeSection==='logistics')state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:state.selectedGlobalNodeId,resource_id:selectedResource()};focusNode(state.selectedGlobalNodeId);window.SpaceIdleSystemMap.onSelect();return;}
     const pairButton=event.target.closest('[data-system-pair]');
     if(pairButton){
       const pair=allocationPairs(state.transportAllocations?.items||[]).find((row)=>row.key===pairButton.dataset.systemPair);
@@ -211,5 +246,5 @@
     viewport.x=dragging.ox+event.clientX-dragging.x;viewport.y=dragging.oy+event.clientY-dragging.y;applyViewport();
   });
   for(const type of ['pointerup','pointercancel'])document.addEventListener(type,(event)=>{if(dragging?.id===event.pointerId)dragging=null;});
-  window.SpaceIdleSystemMap={detach,render,positionsFor,allocationPairs,contextRelations,onSelect:()=>{}};
+  window.SpaceIdleSystemMap={detach,render,positionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
 })();

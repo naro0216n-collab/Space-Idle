@@ -5,7 +5,7 @@
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
     research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
-    fleet:null, transportAllocations:null, cargoFlows:null, market:null,
+    fleet:null, transportAllocations:null, cargoFlows:null, market:null, inspectedNode:null, inspectedFlow:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
     activeDraft:null, busy:false, syncInFlight:null,
@@ -357,6 +357,7 @@
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.movementPlans=data.movement_plans; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
+    state.inspectedNode=data.inspected_node??null; state.inspectedFlow=data.inspected_flow??null;
     state.market=data.market??state.market;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
@@ -367,7 +368,8 @@
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
     if(data.surveys!==undefined)state.surveys=data.surveys;
     if(data.surface_map!==undefined)state.surfaceMap=data.surface_map;
-    if(state.selectedMovementPlanId&&!(state.movementPlans?.items||[]).some((r)=>r.id===state.selectedMovementPlanId))state.selectedMovementPlanId=null;
+    // A plan outside the currently selected node's projection remains the
+    // player's selection until a deliberate selection change, not a deletion.
   }
 
   async function beginMutation(){
@@ -723,18 +725,20 @@
   }
   async function loadUiSnapshot({preserveInteraction=true}={}){
     const surfaceBodyId=requestedSurfaceBodyId();
+    const inspectedNodeId=state.selectedGlobalNodeId||state.operationalNodeId;
     while(state.syncInFlight){
       const pending=state.syncInFlight;
-      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId)return pending.promise;
+      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId&&pending.inspectedNodeId===inspectedNodeId)return pending.promise;
       try{await pending.promise;}catch{}
       if(state.syncInFlight===pending)state.syncInFlight=null;
     }
     const locationId=state.operationalNodeId;
-    const request={operationalNodeId:locationId,surfaceBodyId,promise:null};
+    const request={operationalNodeId:locationId,surfaceBodyId,inspectedNodeId,promise:null};
     request.promise=(async()=>{
       const params=new URLSearchParams();
       if(locationId)params.set('operational_node_id',locationId);
       if(surfaceBodyId)params.set('surface_body_id',surfaceBodyId);
+      if(inspectedNodeId)params.set('inspect_node_id',inspectedNodeId);
       const suffix=params.size?`?${params.toString()}`:'';
       const snapshotPath=`/api/v1/ui-state${suffix}`;
       // A revision token is valid only while its full scoped projection is in memory.
@@ -742,7 +746,7 @@
       if(appliedUiSnapshotPath!==snapshotPath)responseViewTokens.delete(snapshotPath);
       const data=await api(snapshotPath,{viewTokenKey:snapshotPath});
       if(data?.unchanged===true){setConnection('ok','PC Server');return data;}
-      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId())return data;
+      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId()||inspectedNodeId!==(state.selectedGlobalNodeId||state.operationalNodeId))return data;
       applyUiSnapshot(data);
       appliedUiSnapshotPath=snapshotPath;
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
@@ -826,7 +830,10 @@
     setActiveSection(target.decision_area);
     state.decisionContext={...target};
     if(target.decision_area==='logistics'&&target.resource_id)state.systemMapResourceId=target.resource_id;
-    if(target.decision_area==='logistics'&&target.operational_node_id)state.selectedGlobalNodeId=target.operational_node_id;
+    if(target.decision_area==='logistics'&&target.operational_node_id){
+      state.selectedGlobalNodeId=target.operational_node_id;
+      void loadUiSnapshot().catch((error)=>banner(error.message,'error'));
+    }
     const tab=decisionContextTab(target);
     if(tab)state.activeTab=tab;
     if(['surface','survey'].includes(state.activeTab))await loadUiSnapshot({preserveInteraction:false});
@@ -853,7 +860,7 @@
     await loadUiSnapshot({preserveInteraction:false}); $('#app').setAttribute('aria-busy','false');
   }
 
-  document.addEventListener('DOMContentLoaded',()=>{if(window.SpaceIdleSystemMap)window.SpaceIdleSystemMap.onSelect=renderAll;});
+  document.addEventListener('DOMContentLoaded',()=>{if(window.SpaceIdleSystemMap)window.SpaceIdleSystemMap.onSelect=()=>{renderAll();void loadUiSnapshot().catch((error)=>banner(error.message,'error'));};});
 
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,serviceName,operationName,
@@ -868,7 +875,7 @@
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
     const openLocation=event.target.closest('[data-open-location]'); if(openLocation){const resourceId=state.activeSection==='logistics'?state.systemMapResourceId:null;await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');if(resourceId){state.activeTab='inventory';state.inspector={type:'resource',id:resourceId};renderAll();}return;}
-    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){const nodeId=globalLogistics.dataset.openNodeLogistics;state.selectedGlobalNodeId=nodeId;setActiveSection('logistics');state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:nodeId,resource_id:state.systemMapResourceId};renderAll();return;}
+    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){const nodeId=globalLogistics.dataset.openNodeLogistics;state.selectedGlobalNodeId=nodeId;setActiveSection('logistics');state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:nodeId,resource_id:state.systemMapResourceId};renderAll();void loadUiSnapshot().catch((error)=>banner(error.message,'error'));return;}
     const issueLink=event.target.closest('[data-issue-area]'); if(issueLink){await openDecisionContext({decision_area:issueLink.dataset.issueArea,operational_node_id:issueLink.dataset.issueNode||null,subject_kind:issueLink.dataset.issueSubjectKind||null,subject_id:issueLink.dataset.issueSubjectId||null,resource_id:issueLink.dataset.issueResourceId||null});return;}
     if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}
