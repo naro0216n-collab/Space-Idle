@@ -29,7 +29,10 @@ from .app_contracts.transport import (
 from .app_contracts.logistics import (
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
-from .app_contracts.population import SetPopulationTarget, ClearPopulationTarget
+from .app_contracts.population import (
+    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
+)
 from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
     CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
@@ -42,7 +45,7 @@ from .app_contracts.queries import (
 )
 
 Command: TypeAlias = (
-    SetPopulationTarget | ClearPopulationTarget |
+    SetPopulationTarget | ClearPopulationTarget | RequestPassengerTransfer | CancelPassengerTransfer |
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectProcurementPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
@@ -62,6 +65,7 @@ Command: TypeAlias = (
     DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (
+    GetPassengerTransferPreview | GetPassengerTransfers |
     GetCatalog | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockOptions |

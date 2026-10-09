@@ -862,7 +862,9 @@ Market InterfaceへのResource輸送はPlayer-owned Fleet / Transport Capacity�
 
 ### 10.10 人口移送とTransport Execution
 
-`PassengerTransferOrder` はPopulationの一回限りのPlayer intentで、origin Node、destination Node、指定合計人数、Activity Priority、外部人員供給元の任意指定、Service経路またはfree Fleet専用便の任意のhard constraint、受入済み人数、取消済み人数、Transit中のPopulationGroup参照を保持する。Order状態は `requested = 未出発 + Transit + delivered + cancelled` から導出する。人口目標とMissionなしで独立に作成し、現在利用可能な非拘束人数を超える要求を受理しない。未出発分は人員を排他的に予約せず、部分dispatchの都度源人数と物理制約を再評価する。取消は未出発分だけを cancelled に移し、既出発者の輸送義務と位置は残す。
+`PassengerTransferOrder` はPopulationの一回限りのPlayer intentで、origin Node、destination Node、指定合計人数、Activity Priority、外部人員供給元の任意指定、Service経路またはfree Fleet専用便の任意のhard constraint、受入済み人数、取消済み人数、Transit中のPopulationGroup参照を保持する。Order状態は `requested = 未出発 + Transit + delivered + cancelled + Transit中の死亡実績` から導出する。人口目標とMissionなしで独立に作成し、現在利用可能な非拘束人数を超える要求を受理しない。未出発分は人員を排他的に予約せず、部分dispatchの都度源人数と物理制約を再評価する。取消は未出発分だけを cancelled に移し、既出発者の輸送義務と位置は残す。
+
+航行中にPopulationGroupが死亡したときは、その人数をOrderの死亡実績に計上する。死亡実績を未出発人数やプレイヤー取消数に戻さず、`requested = 未出発 + Transit + delivered + cancelled + deceased` を維持する。出発済み全員が死亡した場合も到着済みとは表示しない。Transport manifestとPopulationの実在人員参照を同時に更新する。
 
 既存Transport Service上の有限旅客dispatchは貨物と同じFleet cycle・共通Mass Capacityを競合消費し、確定Leg、到着日、Onboard Resource、Service identityをTransportが所有するTransit obligationに集約する。free Fleet専用便は既存one-shot Movement ExecutionにPassenger ownerを追加し、Fleet排他commitと物理Arrival / recoveryに従ってsettleする。未指定の手段は成立済みServiceだけを正準評価し、明示専用便指定や固定Service経路を後から勝手に切り替えない。
 

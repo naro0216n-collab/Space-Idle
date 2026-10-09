@@ -7,6 +7,7 @@ from .application_commands import (
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, Query,
     GetMarket,
+    GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -46,6 +47,10 @@ class ApplicationQueryRouterMixin:
                 self._query_projection_cache = None
 
     def _query(self, query: Query) -> QueryResult:
+        if isinstance(query, GetPassengerTransferPreview):
+            return self._passenger_transfer_preview_view(query)
+        if isinstance(query, GetPassengerTransfers):
+            return self._passenger_transfers_view(query)
         if isinstance(query, GetCatalog):
             return self._catalog_view()
         if isinstance(query, GetWorld):

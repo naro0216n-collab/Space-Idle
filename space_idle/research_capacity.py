@@ -4,6 +4,7 @@ from .execution_requirements import (
     ExecutionAllocationPlan,
     ExecutionRequirementBundle,
     PoolAdmissionRequirement,
+    ServiceCapacityRequirement,
     pool_admission_constraint,
     pool_constraint,
 )
@@ -505,7 +506,11 @@ class ResearchCapacityMixin:
                 operational_node_id=None,
                 requested_execution=requested,
                 priority=facility.activity_priority,
-                requirements=(PoolAdmissionRequirement(self.RESEARCH_POINT_POOL, 1.0),),
+                requirements=(PoolAdmissionRequirement(self.RESEARCH_POINT_POOL, 1.0),) + (
+                    (ServiceCapacityRequirement("crew", provider.crew_person_days_per_research_point,
+                                                constraint_node_id=facility.operational_node_id),)
+                    if provider.crew_person_days_per_research_point > 0 else ()
+                ),
             ))
         for assignment_id, assignment in sorted(
             self.provider_assignments.items(), key=lambda row: str(row[0])
@@ -521,7 +526,11 @@ class ResearchCapacityMixin:
                 operational_node_id=None,
                 requested_execution=requested,
                 priority=assignment.priority,
-                requirements=(PoolAdmissionRequirement(self.RESEARCH_POINT_POOL, 1.0),),
+                requirements=(PoolAdmissionRequirement(self.RESEARCH_POINT_POOL, 1.0),) + (
+                    (ServiceCapacityRequirement("crew", self.providers[assignment.provider_definition_id].crew_person_days_per_research_point,
+                                                constraint_node_id=assignment.operational_node_id),)
+                    if self.providers[assignment.provider_definition_id].crew_person_days_per_research_point > 0 else ()
+                ),
             ))
         return tuple(rows)
 

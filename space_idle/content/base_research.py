@@ -75,6 +75,7 @@ def build_research_providers() -> dict:
             ids.CREWED_ORBITAL_LABORATORY,
             tier=3,
             levels=(ResearchProviderLevelSpec(1, 22.0, 1600.0, 1.0),),
+            crew_person_days_per_research_point=0.18,
         ),
         ids.ROBOTIC_GEOLOGY_STATION: ResearchProviderSpec(
             ids.ROBOTIC_GEOLOGY_STATION,

@@ -220,6 +220,11 @@ def build_base_simulation(
         facilities, inventory, graph, population_rules,
         {source.id: source for source in external_population_sources},
     )
+    population.transport = transport
+    population.logistics = logistics
+    transport.register_fleet_commitment_owner_resolver(
+        'passenger_transfer', lambda owner_id: owner_id in population.transfer_orders,
+    )
     facility_lifecycle_registry.register_blocker_provider('population', population)
     sim = Simulation(
         day=0, market=market, graph=graph, environment=environment, inventory=inventory,

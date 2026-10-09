@@ -97,6 +97,7 @@
           <div class="logistics-decision-canvas">
             <section class="workspace logistics-workspace">
               <div class="workspace-heading logistics-heading"><div><div class="eyebrow">輸送ネットワーク</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="passenger-network-control"><div id="passengerLogisticsMount" class="passenger-controls"></div></div>
               <div class="logistics-route-context-bar" aria-label="移動経路コンテキスト">
                 <div class="route-filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
                 <div id="networkDecisionContext" class="network-decision-context" hidden></div>
@@ -200,6 +201,7 @@
   </div>
   <script src="/research_tree.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/passenger_ui.js" defer></script>
   <script src="/operations_ui.js" defer></script>
   <script src="/system_map.js" defer></script>
   <script src="/logistics_ui.js" defer></script>

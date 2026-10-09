@@ -309,6 +309,67 @@ class TransportServiceSupply:
 
 
 @dataclass(frozen=True)
+class PassengerServiceLeg:
+    """One fixed leg of a Transport-owned service transit obligation."""
+
+    service_key: str
+    allocation_id: EntityId
+    origin_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    duration_days: int
+    passenger_accommodation: PassengerAccommodation
+    payload_mass_t: float
+
+    def __post_init__(self) -> None:
+        if not self.service_key or self.duration_days <= 0 or self.payload_mass_t <= 0:
+            raise ValueError('invalid fixed passenger service leg')
+        if self.origin_id == self.destination_id:
+            raise ValueError('passenger service leg has identical endpoints')
+
+
+@dataclass
+class PassengerServiceTransit:
+    """Physical Transit obligation, not an alternative authoritative people Stock.
+
+    Population owns group counts; Transport owns fixed route, on-board
+    Resource quantities and temporal obligations of the allocated service.
+    """
+
+    id: EntityId
+    order_id: EntityId | None
+    passenger_group_refs: tuple[EntityId, ...]
+    legs: tuple[PassengerServiceLeg, ...]
+    started_day: int
+    last_settled_day: int
+    onboard_resources: dict[DefinitionId, float]
+
+    def __post_init__(self) -> None:
+        if not self.legs or not self.passenger_group_refs or self.started_day < 0:
+            raise ValueError('passenger service transit needs actual people and legs')
+        if self.last_settled_day < self.started_day:
+            raise ValueError('invalid passenger transit settlement day')
+        if len(set(self.passenger_group_refs)) != len(self.passenger_group_refs):
+            raise ValueError('duplicate passenger group in service manifest')
+        if any(not math.isfinite(value) or value < 0 for value in self.onboard_resources.values()):
+            raise ValueError('invalid onboard Resource Stock')
+        for left, right in zip(self.legs, self.legs[1:]):
+            if left.destination_id != right.origin_id:
+                raise ValueError('non-contiguous passenger service legs')
+
+    @property
+    def arrival_day(self) -> int:
+        return self.started_day + sum(leg.duration_days for leg in self.legs)
+
+    def active_leg(self, day: int) -> PassengerServiceLeg:
+        elapsed = max(0, day - self.started_day - 1)
+        for leg in self.legs:
+            if elapsed < leg.duration_days:
+                return leg
+            elapsed -= leg.duration_days
+        return self.legs[-1]  # real onboard holding uses the final vehicle
+
+
+@dataclass(frozen=True)
 class TransportOperationDependencyProjection:
     """Transport-owned dependencies Logistics must submit to shared allocators."""
 
@@ -513,6 +574,7 @@ class MovementExecutionKind(str, Enum):
     FLEET_RELOCATION = "fleet_relocation"
     FOUNDING_DEPLOYMENT = "founding_deployment"
     SCIENTIFIC_EXPLORATION = "scientific_exploration"
+    PASSENGER_TRANSFER = "passenger_transfer"
 
 
 @dataclass(frozen=True)
@@ -583,6 +645,7 @@ class MovementExecution:
     started_day: int
     completion_day: int
     payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
+    passenger_accommodation: PassengerAccommodation | None = None
 
     def __post_init__(self) -> None:
         if not self.legs:
@@ -794,6 +857,48 @@ class VehicleMaintenanceSpec:
 
 
 @dataclass(frozen=True)
+class PassengerAccommodation:
+    """Vehicle-installed physical seats, protected living and onboard services.
+
+    The capacity of a vehicle is fixed by its real Definition, not by a
+    Population-owned virtual seat Stock or a Cargo-equivalent people Resource.
+    """
+
+    seats: int = 0
+    person_mass_t: float = 0.1
+    life_support_person_days_per_day: float = 0.0
+    onboard_power_mw: float = 0.0
+    power_mw_per_person: float = 0.0
+    net_resources_per_person_day: tuple[tuple[DefinitionId, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.seats, bool) or not isinstance(self.seats, int) or self.seats < 0:
+            raise ValueError('passenger seats must be a nonnegative integer')
+        numeric = (self.person_mass_t, self.life_support_person_days_per_day,
+                   self.onboard_power_mw, self.power_mw_per_person)
+        if any(not math.isfinite(value) or value < 0 for value in numeric) or self.person_mass_t <= 0:
+            raise ValueError('passenger accommodation values must be nonnegative and finite')
+        if self.seats > 0 and (self.life_support_person_days_per_day <= 0 or self.onboard_power_mw <= 0
+                               or self.power_mw_per_person <= 0):
+            raise ValueError('crew-rated vehicles require finite life support and onboard power')
+        if len({name for name, _ in self.net_resources_per_person_day}) != len(self.net_resources_per_person_day):
+            raise ValueError('duplicate onboard life support Resource')
+        if any(not math.isfinite(rate) or rate < 0 for _, rate in self.net_resources_per_person_day):
+            raise ValueError('invalid onboard Resource rate')
+
+    def supportable_seats(self, units: int) -> int:
+        if units <= 0:
+            return 0
+        per_unit = min(
+            self.seats,
+            math.floor(self.life_support_person_days_per_day + 1e-9),
+            math.floor(self.onboard_power_mw / self.power_mw_per_person + 1e-9)
+            if self.power_mw_per_person > 0 else 0,
+        )
+        return max(0, per_unit * units)
+
+
+@dataclass(frozen=True)
 class VehicleDef:
     id: DefinitionId
     display_name: str
@@ -801,6 +906,7 @@ class VehicleDef:
     production: VehicleProductionSpec = VehicleProductionSpec()
     retirement: VehicleRetirementSpec = VehicleRetirementSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
+    passengers: PassengerAccommodation = PassengerAccommodation()
 
     @property
     def dry_mass_t(self) -> float: return self.performance.dry_mass_t

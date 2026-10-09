@@ -187,8 +187,12 @@ class ResearchProviderSpec:
     tier: int
     levels: tuple[ResearchProviderLevelSpec, ...]
     site_requirements: SiteRequirements = SiteRequirements()
+    crew_person_days_per_research_point: float = 0.0
 
     def __post_init__(self) -> None:
+        import math
+        if not math.isfinite(self.crew_person_days_per_research_point) or self.crew_person_days_per_research_point < 0:
+            raise ValueError("research provider Crew requirement must be finite and nonnegative")
         if self.tier < 1:
             raise ValueError("research provider tier must be positive")
         if not self.levels:

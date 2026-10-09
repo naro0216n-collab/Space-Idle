@@ -350,6 +350,7 @@ class Simulation:
         rows.extend(self.market.sell_execution_bundles())
         if self.population is not None:
             rows.extend(self.population.execution_requirement_bundles(self.day))
+            rows.extend(self.population.passenger_dispatch_bundles(self.day))
         service_scopes = self.service_capacity_scopes()
         rows = [
             with_service_capacity_conservation(row, service_scopes)
@@ -585,6 +586,8 @@ class Simulation:
             self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None and self.founding.settle_arrivals(self.day):
             self.transport.invalidate_movement_plans()
+        if self.population is not None:
+            self.population.settle_transit_arrivals(self.day)
 
         # Routing constraints are Logistics-owned intent while owner lifecycle is
         # authoritative in each activity Domain. Boundary settlement completes
@@ -949,10 +952,19 @@ class Simulation:
             dispatch_intents = self.logistics.dispatch_execution_requirements(
                 day, logistics_plan, reference
             )
-            allocation_intents = static_intents + dispatch_intents
+            passenger_intents = (
+                () if self.population is None else
+                self.population.passenger_service_bundles(day, reference)
+            )
+            allocation_intents = static_intents + dispatch_intents + passenger_intents
             pool_overrides = dict(
                 self.logistics.allocation_pool_capacities(day, surface)
             )
+            if self.population is not None:
+                for key, value in self.population.service_seat_pool_capacities(day).items():
+                    if key in pool_overrides:
+                        raise RuntimeError(f'duplicate passenger seat Pool: {key}')
+                    pool_overrides[key] = value
             for key, value in (research_pool_overrides or {}).items():
                 if key in pool_overrides:
                     raise RuntimeError(f"duplicate allocation pool override: {key}")
@@ -972,6 +984,13 @@ class Simulation:
             actual_usage = self.logistics.dispatch_usage_from_execution(
                 logistics_plan, execution
             )
+            if self.population is not None:
+                for allocation_id, passengers in self.population.passenger_service_usage(execution).items():
+                    cargo = actual_usage.get(allocation_id, DirectionalCapacity())
+                    actual_usage[allocation_id] = DirectionalCapacity(
+                        cargo.forward_t_per_day + passengers.forward_t_per_day,
+                        cargo.reverse_t_per_day + passengers.reverse_t_per_day,
+                    )
             return execution, actual_usage, next_surface, surface_limits
 
         for _ in range(64):
@@ -1409,6 +1428,9 @@ class Simulation:
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
         self.transport.advance_fleet_relocations(allocations.execution, self.day)
+        if self.population is not None:
+            self.population.dispatch_allocated_passengers(allocations.execution, self.day)
+            self.population.dispatch_allocated_service_passengers(allocations.execution, self.day)
         return self.logistics.advance_capacity_logistics(
             self.day, allocations.logistics, allocations.transport
         )

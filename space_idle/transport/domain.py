@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..domain import (
-    DomainExtension, StateCodec, decode_bool, decode_float, decode_int, decode_list,
+    DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int, decode_list,
     decode_str, require_fields,
 )
 from ..validation_support import (
@@ -29,6 +29,8 @@ from .models import (
     MovementExecutionLeg,
     MovementExecutionPayloadResource,
     MovementExecutionResourceRequirement,
+    PassengerAccommodation,
+    PassengerServiceLeg, PassengerServiceTransit,
     OperationAssetDisposition,
     TransportOperationRequirement,
     TransportAllocation,
@@ -106,6 +108,17 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
             {"resource_id": str(payload.resource_id), "amount_t": payload.amount_t}
             for payload in row.payload_resources
         ],
+        "passenger_accommodation": None if row.passenger_accommodation is None else {
+            "seats": row.passenger_accommodation.seats,
+            "person_mass_t": row.passenger_accommodation.person_mass_t,
+            "life_support_person_days_per_day": row.passenger_accommodation.life_support_person_days_per_day,
+            "onboard_power_mw": row.passenger_accommodation.onboard_power_mw,
+            "power_mw_per_person": row.passenger_accommodation.power_mw_per_person,
+            "net_resources_per_person_day": [
+                {"resource_id": str(resource), "rate": rate}
+                for resource, rate in row.passenger_accommodation.net_resources_per_person_day
+            ],
+        },
         "legs": [
             {
                 "movement_plan_id": str(leg.movement_plan_id),
@@ -138,7 +151,7 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
         value,
         {
             "id", "owner_id", "kind", "fleet_commitment_id", "payload_t_per_unit",
-            "started_day", "completion_day", "payload_resources", "legs",
+            "started_day", "completion_day", "payload_resources", "legs", "passenger_accommodation",
         },
         field,
     )
@@ -227,6 +240,23 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
             )
         )
 
+    accommodation = None
+    if data['passenger_accommodation'] is not None:
+        row = require_fields(data['passenger_accommodation'], {
+            'seats', 'person_mass_t', 'life_support_person_days_per_day',
+            'onboard_power_mw', 'power_mw_per_person', 'net_resources_per_person_day',
+        }, f'{field} passenger accommodation')
+        accommodation = PassengerAccommodation(
+            decode_int(row['seats'], f'{field} seats'),
+            decode_float(row['person_mass_t'], f'{field} person mass'),
+            decode_float(row['life_support_person_days_per_day'], f'{field} onboard life support'),
+            decode_float(row['onboard_power_mw'], f'{field} onboard power'),
+            decode_float(row['power_mw_per_person'], f'{field} power/person'),
+            tuple((DefinitionId(decode_str(p['resource_id'], f'{field} onboard resource')),
+                   decode_float(p['rate'], f'{field} onboard resource rate'))
+                  for item in decode_list(row['net_resources_per_person_day'], f'{field} onboard resources')
+                  for p in (require_fields(item, {'resource_id', 'rate'}, f'{field} onboard resource'),)),
+        )
     return MovementExecution(
         id=EntityId(decode_str(data["id"], f"{field} id")),
         owner_id=EntityId(decode_str(data["owner_id"], f"{field} owner_id")),
@@ -241,6 +271,7 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
         started_day=decode_int(data["started_day"], f"{field} started_day"),
         completion_day=decode_int(data["completion_day"], f"{field} completion_day"),
         payload_resources=tuple(payload_resources),
+        passenger_accommodation=accommodation,
     )
 
 
@@ -320,6 +351,28 @@ def capture_transport(sim: Any) -> dict[str, Any]:
         "movement_executions": [
             _capture_movement_execution(row)
             for row in sorted(tr.movement_executions.values(), key=lambda row: str(row.id))
+        ],
+        "passenger_service_transits": [
+            {"id": str(transit.id), "order_id": None if transit.order_id is None else str(transit.order_id),
+             "passenger_group_refs": [str(ref) for ref in transit.passenger_group_refs],
+             "started_day": transit.started_day, "last_settled_day": transit.last_settled_day,
+             "onboard_resources": {str(resource): amount for resource, amount in sorted(transit.onboard_resources.items())},
+             "legs": [{
+                 "service_key": leg.service_key, "allocation_id": str(leg.allocation_id),
+                 "origin_id": str(leg.origin_id), "destination_id": str(leg.destination_id),
+                 "duration_days": leg.duration_days, "payload_mass_t": leg.payload_mass_t,
+                 "passenger_accommodation": {
+                     "seats": leg.passenger_accommodation.seats,
+                     "person_mass_t": leg.passenger_accommodation.person_mass_t,
+                     "life_support_person_days_per_day": leg.passenger_accommodation.life_support_person_days_per_day,
+                     "onboard_power_mw": leg.passenger_accommodation.onboard_power_mw,
+                     "power_mw_per_person": leg.passenger_accommodation.power_mw_per_person,
+                     "net_resources_per_person_day": [
+                         {"resource_id": str(resource), "rate": rate}
+                         for resource, rate in leg.passenger_accommodation.net_resources_per_person_day],
+                 },
+             } for leg in transit.legs],
+            } for transit in sorted(tr.passenger_service_transits.values(), key=lambda row: str(row.id))
         ],
         "fleet_releases": [
             {
@@ -578,6 +631,56 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
         if execution.id in tr.movement_executions:
             raise ValueError(f"duplicate movement execution: {execution.id}")
         tr.movement_executions[execution.id] = execution
+
+    tr.passenger_service_transits = {}
+    for index, raw in enumerate(decode_list(data['passenger_service_transits'], 'passenger service transits')):
+        row = require_fields(raw, {
+            'id', 'order_id', 'passenger_group_refs', 'started_day',
+            'last_settled_day', 'onboard_resources', 'legs',
+        }, f'passenger service transit[{index}]')
+        legs = []
+        for leg_index, raw_leg in enumerate(decode_list(row['legs'], 'passenger service legs')):
+            leg = require_fields(raw_leg, {
+                'service_key', 'allocation_id', 'origin_id', 'destination_id',
+                'duration_days', 'payload_mass_t', 'passenger_accommodation',
+            }, f'passenger service leg[{leg_index}]')
+            accommodation = require_fields(leg['passenger_accommodation'], {
+                'seats', 'person_mass_t', 'life_support_person_days_per_day',
+                'onboard_power_mw', 'power_mw_per_person', 'net_resources_per_person_day',
+            }, 'passenger service accommodation')
+            resource_rows = []
+            for raw_resource in decode_list(accommodation['net_resources_per_person_day'], 'onboard requirements'):
+                resource = require_fields(raw_resource, {'resource_id', 'rate'}, 'onboard requirement')
+                resource_rows.append((DefinitionId(decode_str(resource['resource_id'], 'resource id')),
+                                      decode_float(resource['rate'], 'onboard resource rate')))
+            spec = PassengerAccommodation(
+                decode_int(accommodation['seats'], 'seats'),
+                decode_float(accommodation['person_mass_t'], 'person mass'),
+                decode_float(accommodation['life_support_person_days_per_day'], 'onboard life support'),
+                decode_float(accommodation['onboard_power_mw'], 'onboard power'),
+                decode_float(accommodation['power_mw_per_person'], 'passenger power'),
+                tuple(resource_rows),
+            )
+            legs.append(PassengerServiceLeg(
+                decode_str(leg['service_key'], 'service key'),
+                EntityId(decode_str(leg['allocation_id'], 'allocation id')),
+                SpatialNodeId(decode_str(leg['origin_id'], 'origin node')),
+                SpatialNodeId(decode_str(leg['destination_id'], 'destination node')),
+                decode_int(leg['duration_days'], 'service days'), spec,
+                decode_float(leg['payload_mass_t'], 'payload mass'),
+            ))
+        resources = decode_dict(row['onboard_resources'], 'onboard resources')
+        transit = PassengerServiceTransit(
+            EntityId(decode_str(row['id'], 'service transit id')),
+            None if row['order_id'] is None else EntityId(decode_str(row['order_id'], 'transit order id')),
+            tuple(EntityId(decode_str(value, 'manifest group')) for value in decode_list(row['passenger_group_refs'], 'manifest')),
+            tuple(legs), decode_int(row['started_day'], 'departure day'),
+            decode_int(row['last_settled_day'], 'settled day'),
+            {DefinitionId(key): decode_float(amount, 'onboard stock') for key, amount in resources.items()},
+        )
+        if transit.id in tr.passenger_service_transits:
+            raise ValueError('duplicate passenger service transit ID')
+        tr.passenger_service_transits[transit.id] = transit
 
     tr.fleet_releases = {}
     release_fields = {"id", "allocation_id", "fleet_commitment_id", "release_day"}
@@ -873,6 +976,23 @@ def validate_transport_runtime(sim: Any) -> None:
         tr._vehicle_production_counter, tr.vehicle_production_projects,
         "vehicle_production.", "vehicle production",
     )
+
+    for transit_id, transit in tr.passenger_service_transits.items():
+        _require(transit.id == transit_id, f'passenger service transit key mismatch: {transit_id}')
+        _require(transit.order_id is None or transit.order_id in sim.population.transfer_orders,
+                 f'passenger transit has no Population Order: {transit_id}')
+        for group_id in transit.passenger_group_refs:
+            _require(group_id in sim.population.groups,
+                     f'passenger transit refers to missing Population group: {transit_id}/{group_id}')
+            group = sim.population.groups[group_id]
+            _require(group.position.kind == 'transport_execution' and group.position.ref == str(transit_id),
+                     f'passenger transit manifest position mismatch: {transit_id}/{group_id}')
+            if transit.order_id is not None:
+                _require(group_id in sim.population.transfer_orders[transit.order_id].in_transit_group_refs,
+                         f'passenger transit has no matching order membership: {transit_id}/{group_id}')
+        for leg in transit.legs:
+            _require(leg.allocation_id in tr.transport_allocations,
+                     f'passenger transit references removed allocation: {transit_id}')
 
     for (vehicle_definition_id, location_id), pool in tr.fleet_pools.items():
         _require(

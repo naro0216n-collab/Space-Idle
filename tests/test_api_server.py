@@ -73,6 +73,28 @@ def test_http_command_and_world_read_cross_json_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+        # The independent finite passenger intent uses real HTTP Command and
+        # Query contracts; setting a Population Target is not a prerequisite.
+        status, _, payload = _request(port, "GET", f"/api/v1/population/passenger-preview?origin_node_id={ids.EARTH}&destination_node_id={ids.LEO}&requested_count=2")
+        assert status == 200 and payload["data"]["requested_count"] == 2
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "RequestPassengerTransfer", "payload": {
+                "origin_node_id": str(ids.EARTH), "destination_node_id": str(ids.LEO),
+                "requested_count": 2, "capacity_source_constraint": {
+                    "dedicated_vehicle_definition_id": str(ids.REUSABLE_LAUNCH_VEHICLE),
+                    "dedicated_units": 1,
+                },
+            },
+        })
+        assert status == 200 and payload["data"]["created_id"]
+        order_id = payload["data"]["created_id"]
+        status, _, payload = _request(port, "GET", "/api/v1/population/passenger-transfers")
+        assert status == 200 and payload["data"]["items"][0]["id"] == order_id
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "CancelPassengerTransfer", "payload": {"order_id": order_id},
+        })
+        assert status == 200
+
 
 def test_http_decision_views_scope_and_projection_boundary(tmp_path):
     with running_api(tmp_path) as port:

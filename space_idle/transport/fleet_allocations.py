@@ -427,9 +427,13 @@ class FleetAllocationMixin:
         execution = self.movement_executions.get(active_execution_id)
         if execution is None:
             raise RuntimeError("Fleet commitment references missing MovementExecution")
-        destination_id = execution.destination.operational_node_id
-        if destination_id is not None and destination_id != location_id:
-            raise ValueError("Fleet commitment arrival location mismatch")
+        expected_location = (
+            execution.origin.operational_node_id
+            if execution.final_asset_disposition is OperationAssetDisposition.ORIGIN
+            else execution.destination.operational_node_id
+        )
+        if expected_location is not None and expected_location != location_id:
+            raise ValueError("Fleet commitment recovery location mismatch")
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
         pool = self.fleet_pool(commitment.vehicle_definition_id, location_id)
@@ -1076,6 +1080,7 @@ class FleetAllocationMixin:
         *,
         movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         day: int = 0,
+        require_destination_disposition: bool = True,
     ) -> FleetRelocationPlan:
         """Derive the exact decision contract used to start a Fleet relocation."""
         if vehicle_definition_id not in self.vehicle_defs:
@@ -1104,7 +1109,7 @@ class FleetAllocationMixin:
                     vehicle_definition_id,
                     day,
                     movement_hard_constraint,
-                    require_destination_disposition=True,
+                    require_destination_disposition=require_destination_disposition,
                 )
             except ValueError as exc:
                 blockers.append(f"relocation_path:{exc}")

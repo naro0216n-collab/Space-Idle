@@ -100,6 +100,15 @@ class LogisticsFlowMixin:
                 return cached
         rows: list[TransportServiceSupply] = []
         backpressure = self._arrival_backpressure_by_service()
+        for transit in self.transport.passenger_service_transits.values():
+            if transit.arrival_day <= day:
+                leg = transit.legs[-1]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError("Passenger transit references missing Transport Allocation")
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
         for edge in self.transport.transport_service_supplies(day):
             occupied = backpressure.get(self._capacity_owner_key_from_supply(edge), 0.0)
             if occupied <= 1e-12:
@@ -649,6 +658,21 @@ class LogisticsFlowMixin:
                 raise
             raise ValueError("routing hard constraint has no matching transport path") from exc
         return tuple(row[0] for row in selected)
+
+    def passenger_service_path(
+        self, origin: SpatialNodeId, destination: SpatialNodeId, day: int,
+        allowed_allocation_ids: frozenset[EntityId] | None = None,
+    ) -> tuple[TransportServiceSupply, ...]:
+        """Find a physical Service route through the existing Cargo path rules.
+
+        A hard choice filters eligible allocations rather than creating another
+        passenger router or Transport capacity source.
+        """
+        edges = tuple(edge for edge in self._service_edges(day)
+                      if edge.capacity_t_per_day > 1e-12
+                      and (allowed_allocation_ids is None or edge.allocation_id in allowed_allocation_ids)
+                      and self.transport.service_vehicle(edge.allocation_id).passengers.seats > 0)
+        return self._automatic_service_path(origin, destination, edges, None)
 
     def supply_service_path(
         self,

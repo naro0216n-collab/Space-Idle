@@ -9,7 +9,8 @@ from .application_commands import (
     SetFacilityActivityPriority,
     SetMaintenancePriority,
     SetTimeControl,
-    SetPopulationTarget, ClearPopulationTarget,
+    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    CancelPassengerTransfer,
 )
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
@@ -22,6 +23,23 @@ class OperationsCommandHandlerMixin:
             return CommandResult()
         if isinstance(command, ClearPopulationTarget):
             sim.population.clear_target(SpatialNodeId(command.operational_node_id))
+            return CommandResult()
+        if isinstance(command, RequestPassengerTransfer):
+            from .population import PassengerCapacitySource
+            choice = command.capacity_source_constraint
+            source = None if choice is None else PassengerCapacitySource(
+                None if choice.transport_allocation_ids is None else tuple(EntityId(value) for value in choice.transport_allocation_ids),
+                None if choice.dedicated_vehicle_definition_id is None else DefinitionId(choice.dedicated_vehicle_definition_id),
+                choice.dedicated_units, choice.movement_hard_constraint,
+            )
+            order = sim.population.request_transfer(
+                SpatialNodeId(command.origin_node_id), SpatialNodeId(command.destination_node_id),
+                command.requested_count, source_external_provider_id=command.source_external_provider_id,
+                activity_priority=command.activity_priority, capacity_source_constraint=source,
+            )
+            return CommandResult(created_id=str(order.id))
+        if isinstance(command, CancelPassengerTransfer):
+            sim.population.cancel_transfer(EntityId(command.order_id))
             return CommandResult()
         if isinstance(command, PauseFacility):
             sim.facilities.pause(EntityId(command.facility_id))

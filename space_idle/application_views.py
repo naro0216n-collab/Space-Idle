@@ -50,6 +50,10 @@ from .app_contracts.surface_views import (
 from .app_contracts.economy_views import (
     BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
 )
+from .app_contracts.passenger_views import (
+    PassengerDispatchOptionRow, PassengerTransferPreviewView,
+    PassengerTransferRow, PassengerTransfersView,
+)
 
 QueryResult: TypeAlias = (
     CatalogView | WorldView | SurfaceMapView | NonSurfaceFoundingView | OperationalNodeView | FlowReportView | BottlenecksView |
@@ -57,7 +61,8 @@ QueryResult: TypeAlias = (
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | TransportAllocationPreviewView | TargetStockOptionsView | ResearchView |
-    ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | ContractsView | MarketView
+    ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | ContractsView | MarketView |
+    PassengerTransferPreviewView | PassengerTransfersView
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

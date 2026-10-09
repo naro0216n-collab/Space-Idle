@@ -670,3 +670,6 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
   .system-map-resource-label select { max-width: 142px; }
   .system-map-stage { height: 390px; }
 }
+
+/* Finite passenger decisions: keep counts, resources, conditions and order history visible. */
+.passenger-controls{margin-top:1rem;min-width:0}.passenger-network-control{margin:0 0 1rem}.passenger-options{margin-top:0.7rem}.passenger-option{display:flex;flex-direction:column;gap:0.3rem;padding:0.65rem;border:1px solid var(--line,#435366);border-radius:0.5rem;margin:0.3rem 0;cursor:pointer}.passenger-option input{align-self:flex-start}.passenger-decision-card .form-row{flex-wrap:wrap}.passenger-decision-card .form-row label{min-width:8rem;flex:1}.passenger-decision-card select,.passenger-decision-card input{max-width:100%;width:100%}.passenger-orders{margin-top:0.7rem}.passenger-orders .detail-card{margin-top:0.35rem;padding:0.65rem}

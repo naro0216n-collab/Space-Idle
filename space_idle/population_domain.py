@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from .domain import DomainExtension, StateCodec, decode_dict, decode_float, decode_int, decode_list, decode_str, require_fields
-from .population import PopulationGroup, PopulationPosition
-from .shared import EntityId, SpatialNodeId
+from .population import PopulationGroup, PopulationPosition, PassengerTransferOrder, PassengerCapacitySource
+from .shared import EntityId, SpatialNodeId, DefinitionId
 from .validation_support import ValidationContext
 
 
@@ -19,15 +19,35 @@ def capture_population_state(sim):
         ],
         'targets': [{'node_id': str(node), 'desired_count': count}
                     for node, count in sorted(population.targets.items(), key=lambda pair: str(pair[0]))],
+        'transfer_orders': [
+            {
+                'id': str(order.id), 'origin_node_id': str(order.origin_node_id),
+                'destination_node_id': str(order.destination_node_id),
+                'requested_count': order.requested_count, 'activity_priority': int(order.activity_priority),
+                'source_external_provider_id': order.source_external_provider_id,
+                'capacity_source_constraint': None if order.capacity_source_constraint is None else {
+                    'transport_allocation_ids': None if order.capacity_source_constraint.transport_allocation_ids is None else [str(value) for value in order.capacity_source_constraint.transport_allocation_ids],
+                    'dedicated_vehicle_definition_id': None if order.capacity_source_constraint.dedicated_vehicle_definition_id is None else str(order.capacity_source_constraint.dedicated_vehicle_definition_id),
+                    'dedicated_units': order.capacity_source_constraint.dedicated_units,
+                    'movement_hard_constraint': None if order.capacity_source_constraint.movement_hard_constraint is None else list(order.capacity_source_constraint.movement_hard_constraint),
+                },
+                'delivered_count': order.delivered_count,
+                'cancelled_count': order.cancelled_count,
+                'deceased_count': order.deceased_count,
+                'in_transit_group_refs': [str(value) for value in order.in_transit_group_refs],
+            }
+            for order in sorted(population.transfer_orders.values(), key=lambda value: str(value.id))
+        ],
         'external_remaining': dict(sorted(population.external_remaining.items())),
         'external_acquisition_day': population.external_acquisition_day,
         'external_acquired_today': dict(sorted(population.external_acquired_today.items())),
         'next_group_id': population._next_group_id,
+        'next_transfer_order_id': population._next_transfer_order_id,
     }
 
 
 def restore_population_state(sim, state):
-    row = require_fields(state, {'groups', 'targets', 'external_remaining', 'external_acquisition_day', 'external_acquired_today', 'next_group_id'}, 'population state')
+    row = require_fields(state, {'groups', 'targets', 'transfer_orders', 'external_remaining', 'external_acquisition_day', 'external_acquired_today', 'next_group_id', 'next_transfer_order_id'}, 'population state')
     service = sim.population
     groups = {}
     for raw in decode_list(row['groups'], 'population groups'):
@@ -57,6 +77,42 @@ def restore_population_state(sim, state):
     remaining = decode_dict(row['external_remaining'], 'external population remaining')
     service.groups = groups
     service.targets = targets
+    orders = {}
+    for raw in decode_list(row['transfer_orders'], 'passenger orders'):
+        data = require_fields(raw, {
+            'id', 'origin_node_id', 'destination_node_id', 'requested_count',
+            'activity_priority', 'source_external_provider_id', 'capacity_source_constraint',
+            'delivered_count', 'cancelled_count', 'deceased_count', 'in_transit_group_refs',
+        }, 'passenger order')
+        constraint = None
+        if data['capacity_source_constraint'] is not None:
+            source = require_fields(data['capacity_source_constraint'], {
+                'transport_allocation_ids', 'dedicated_vehicle_definition_id',
+                'dedicated_units', 'movement_hard_constraint',
+            }, 'passenger capacity source')
+            constraint = PassengerCapacitySource(
+                None if source['transport_allocation_ids'] is None else tuple(EntityId(decode_str(item, 'service allocation id')) for item in decode_list(source['transport_allocation_ids'], 'service allocations')),
+                None if source['dedicated_vehicle_definition_id'] is None else DefinitionId(decode_str(source['dedicated_vehicle_definition_id'], 'dedicated vehicle id')),
+                None if source['dedicated_units'] is None else decode_int(source['dedicated_units'], 'dedicated units'),
+                None if source['movement_hard_constraint'] is None else tuple(decode_str(item, 'movement plan id') for item in decode_list(source['movement_hard_constraint'], 'movement constraint')),
+            )
+        order = PassengerTransferOrder(
+            EntityId(decode_str(data['id'], 'order id')),
+            SpatialNodeId(decode_str(data['origin_node_id'], 'order origin')),
+            SpatialNodeId(decode_str(data['destination_node_id'], 'order destination')),
+            decode_int(data['requested_count'], 'order requested count'),
+            decode_int(data['activity_priority'], 'order priority'),
+            None if data['source_external_provider_id'] is None else decode_str(data['source_external_provider_id'], 'source provider'),
+            constraint,
+            decode_int(data['delivered_count'], 'order delivered'),
+            decode_int(data['cancelled_count'], 'order cancelled'),
+            decode_int(data['deceased_count'], 'order deceased'),
+            [EntityId(decode_str(item, 'in transit group')) for item in decode_list(data['in_transit_group_refs'], 'in transit references')],
+        )
+        if order.id in orders:
+            raise ValueError('duplicate passenger order id')
+        orders[order.id] = order
+    service.transfer_orders = orders
     service.external_remaining = {identifier: decode_int(value, 'external source remaining') for identifier, value in remaining.items()}
     service.external_acquisition_day = decode_int(row['external_acquisition_day'], 'external acquisition day')
     service.external_acquired_today = {
@@ -66,7 +122,9 @@ def restore_population_state(sim, state):
     service._next_group_id = decode_int(row['next_group_id'], 'next population group id')
     if service._next_group_id < 0:
         raise ValueError('negative population group counter')
+    service._next_transfer_order_id = decode_int(row['next_transfer_order_id'], 'next passenger order id')
     service._day_fulfillment = {}
+    service._dispatch_options.clear()
     service.validate()
 
 
@@ -77,6 +135,10 @@ def validate_configuration(sim, ctx: ValidationContext) -> None:
             for resource_id, _ in definition.life_support.net_resources:
                 if resource_id not in sim.inventory.resource_definitions:
                     raise ValueError(f'life support Resource not registered: {resource_id}')
+    for vehicle in sim.transport.vehicle_definitions():
+        for resource_id, _ in vehicle.passengers.net_resources_per_person_day:
+            if resource_id not in sim.inventory.resource_definitions:
+                raise ValueError(f'onboard life support Resource not registered: {resource_id}')
 
 
 def validate_runtime(sim) -> None:

@@ -22,7 +22,8 @@ from .application import (
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet,
     UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
-    SetPopulationTarget, ClearPopulationTarget,
+    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

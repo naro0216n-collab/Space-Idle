@@ -152,6 +152,7 @@ class MovementExecutionMixin:
             started_day=day,
             completion_day=day + max(1, latency_days),
             payload_resources=payload_resources,
+            passenger_accommodation=(vehicle.passengers if kind is MovementExecutionKind.PASSENGER_TRANSFER else None),
         )
         self.movement_executions[execution_id] = execution
         return execution

@@ -16,6 +16,7 @@ from ..application_commands import (
     GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
+    GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -342,6 +343,17 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/logistics/cargo-flows":
             self._query_result(GetCargoFlows())
+            return
+        if path == "/api/v1/population/passenger-transfers":
+            self._query_result(GetPassengerTransfers(_one(params, "operational_node_id")))
+            return
+        if path == "/api/v1/population/passenger-preview":
+            self._query_result(GetPassengerTransferPreview(
+                origin_node_id=_required(params, "origin_node_id"),
+                destination_node_id=_required(params, "destination_node_id"),
+                requested_count=int(_required(params, "requested_count")),
+                source_external_provider_id=_one(params, "source_external_provider_id"),
+            ))
             return
         if path == "/api/v1/transport-allocation-options":
             source_id = _required(params, "source_id")

@@ -19,7 +19,8 @@ from .application_commands import (
     SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
-    SetPopulationTarget, ClearPopulationTarget,
+    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 
 from .application_command_handlers import ApplicationCommandMixin

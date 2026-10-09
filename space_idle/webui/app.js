@@ -711,6 +711,7 @@
     if(['global','logistics'].includes(state.activeSection)){
       window.SpaceIdleSystemMap?.render(globalNodeSignals(state.world?.operational_nodes||[],state.globalIssues?.items||[],state.research?.items||[],state.scientificExplorations?.items||[],state.surveys?.campaigns||[]));
     }
+    window.SpaceIdlePassengers?.render();
     restoreActiveDraftValues(); renderActiveDraftBar(); restorePreservedScrollRegions();
   }
 

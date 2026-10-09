@@ -21,6 +21,7 @@ from ..transport import (
     VehicleMaintenanceSpec,
     VehicleProductionSpec,
     VehicleRetirementSpec,
+    PassengerAccommodation,
 )
 from ..transport.movement import SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from . import base_ids as ids
@@ -159,6 +160,11 @@ def build_vehicle_definitions() -> dict:
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 10.0), (ids.MACHINERY, 4.0), (ids.PRECISION_ELECTRONICS, 1.0)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="launch_vehicle_servicing", turnaround_days=5.0),
+            passengers=PassengerAccommodation(
+                seats=6, life_support_person_days_per_day=6, onboard_power_mw=0.6,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
         ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
             id=ids.REUSABLE_ORBITAL_CARGO_TUG,
@@ -207,6 +213,11 @@ def build_vehicle_definitions() -> dict:
                                             (ids.MACHINERY, 2.5), (ids.PRECISION_ELECTRONICS, 2.0)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=8.0),
+            passengers=PassengerAccommodation(
+                seats=8, life_support_person_days_per_day=8, onboard_power_mw=0.8,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
         ),
         ids.INTERPLANETARY_LANDER: VehicleDef(
             id=ids.INTERPLANETARY_LANDER,
@@ -238,6 +249,11 @@ def build_vehicle_definitions() -> dict:
                                             (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 1.5)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=6.0),
+            passengers=PassengerAccommodation(
+                seats=4, life_support_person_days_per_day=4, onboard_power_mw=0.4,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
         ),
         ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT: VehicleDef(
             id=ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,
