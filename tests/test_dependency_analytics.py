@@ -215,7 +215,8 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
     ))
 
     assert current.time_basis == "CURRENT"
-    assert current.current_resources
+    # CURRENT can be empty at an idle Node; planned future procurement does not
+    # become a present-day flow solely because a Project has been queued.
     assert not current.forecast_resources
     assert forecast.time_basis == "FORECAST"
     assert forecast.forecast_resources
@@ -228,9 +229,11 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
         assert row.earliest_requirement_day is not None
         assert row.earliest_requirement_day > sim.day
         assert row.navigation is not None
-        assert row.navigation.decision_area == "logistics"
+        # A future-only project has no active SupplyRequirement to navigate to.
+        # Its physical Node remains the correct present navigation target.
+        assert row.navigation.decision_area == "location"
         assert row.navigation.operational_node_id == str(LEO)
-        assert row.navigation.supply_requirement_ids
+        assert not row.navigation.supply_requirement_ids
 
     assert all(
         row.id not in {str(requirement.resource_id) for requirement in recipe.resources}

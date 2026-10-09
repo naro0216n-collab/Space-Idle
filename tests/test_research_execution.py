@@ -71,21 +71,21 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
         app.execute(SetResearchProviderFleetQuantity(
             str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
         ))
-    assert sim.research.provider_assignments == {}
+    assert not any(row.provider_definition_id == provider_id for row in sim.research.provider_assignments.values())
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == initial_free
 
     assignment_id = app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     )).created_id
     assert assignment_id is not None
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     repeated_id = app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     )).created_id
     assert repeated_id == assignment_id
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     app.execute(SetResearchProviderAssignmentPriority(assignment_id, 4))
-    assignment = sim.research.provider_assignments[next(iter(sim.research.provider_assignments))]
+    assignment = next(row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id)
     commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
     assert commitment is not None
     assert commitment.quantity == 1
@@ -114,7 +114,7 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
     )).created_id
     assert resized_id == assignment_id
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     resized = next(item for item in app.query(GetResearch()).providers if item.id == assignment_id)
     assert resized.committed_units == 2
     assert resized.priority == 5
@@ -123,13 +123,15 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 0
     ))
-    assert sim.research.provider_assignments == {}
+    assert not any(row.provider_definition_id == provider_id for row in sim.research.provider_assignments.values())
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
 
 
 def _mixed_provider_admission_projection(provider_order: tuple[str, str]):
     app = build_game_application()
     sim = app._simulation
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {}
 
     facility_definition_id = DefinitionId("test.facility.rp_provider.mixed")
@@ -222,6 +224,8 @@ def _set_earth_research_execution_capacity(sim, rate: float) -> None:
     sim.facilities.definitions[fixture_id] = FacilityDef(
         fixture_id, "Research execution capacity fixture"
     )
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {fixture_id: ResearchProviderSpec(
         fixture_id, ResearchProviderSourceKind.FACILITY, fixture_id, tier=1,
         levels=(ResearchProviderLevelSpec(1, 0.0, 0.0, rate),),
@@ -306,6 +310,8 @@ def test_organization_research_execution_aggregates_provider_sites_after_local_p
     sim = app._simulation
     earth_provider = DefinitionId("test.facility.research_execution.earth")
     leo_provider = DefinitionId("test.facility.research_execution.leo")
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {}
     for definition_id in (earth_provider, leo_provider):
         sim.facilities.definitions[definition_id] = FacilityDef(definition_id, str(definition_id))
@@ -317,6 +323,7 @@ def test_organization_research_execution_aggregates_provider_sites_after_local_p
     sim.power.specs[leo_provider] = PowerSpec(None, 1.0)
     sim.facilities.install(earth_provider, ids.EARTH)
     sim.facilities.install(leo_provider, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_FISSION_POWER, ids.LEO)
 
     research_id = DefinitionId("test.research.organization_provider_power")
     sim.research.definitions[research_id] = ResearchDefinition(research_id, "Organization Provider Power", (ResearchTheoryStageSpec("theory", 10.0),), prerequisites=frozenset())

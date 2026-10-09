@@ -260,6 +260,33 @@ def build_vehicle_definitions() -> dict:
                 net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
             ),
         ),
+        ids.ORBITAL_OBSERVATION_SPACECRAFT: VehicleDef(
+            id=ids.ORBITAL_OBSERVATION_SPACECRAFT,
+            display_name="自律軌道観測宇宙機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=2.0, payload_t=0.3,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=0.8,
+                propellant_t_per_total_t_per_km_s=0.018,
+                operation_capabilities=(SpaceflightCapability(5.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=180.0,
+                generic_capabilities=("observation_sensor", "docking_interface", "refueling_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=3.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 1.5),
+                           (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+                prerequisite_technologies=frozenset({ids.SS_SENSING_01}),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.5,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.75),
+                                            (ids.MACHINERY, 0.5), (ids.PRECISION_ELECTRONICS, 0.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+        ),
         ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT: VehicleDef(
             id=ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,
             display_name="月周回資源観測宇宙機",

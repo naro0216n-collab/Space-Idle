@@ -47,8 +47,8 @@ class ScenarioFleet:
 
 
 @dataclass(frozen=True)
-class ScenarioSurveyFleetAssignment:
-    """Initial use of real Fleet units by a Survey Provider; no duplicate quantity."""
+class ScenarioProviderFleetAssignment:
+    """Initial provider use of real Fleet units; quantity remains owned by Fleet."""
     provider_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
     units: int
@@ -96,7 +96,8 @@ class ScenarioDefinition:
     storage_infrastructure: tuple[ScenarioStorageInfrastructure, ...] = ()
     inventory_stock: tuple[ScenarioInventoryStock, ...] = ()
     fleet: tuple[ScenarioFleet, ...] = ()
-    survey_fleet_assignments: tuple[ScenarioSurveyFleetAssignment, ...] = ()
+    survey_fleet_assignments: tuple[ScenarioProviderFleetAssignment, ...] = ()
+    research_fleet_assignments: tuple[ScenarioProviderFleetAssignment, ...] = ()
     known_surface_resources: tuple[tuple[SurfaceCellId, DefinitionId], ...] = ()
     completed_technologies: tuple[DefinitionId, ...] = ()
     funds_balance_musd: float = 0.0
@@ -148,6 +149,16 @@ class ScenarioDefinition:
         for row in self.survey_fleet_assignments:
             provider = sim.survey.provider(row.provider_definition_id)
             sim.survey.set_provider_fleet_quantity(
+                row.provider_definition_id,
+                row.operational_node_id,
+                provider.source_definition_id,
+                row.units,
+                day=sim.day,
+            )
+
+        for row in self.research_fleet_assignments:
+            provider = sim.research.providers[row.provider_definition_id]
+            sim.research.set_provider_fleet_quantity(
                 row.provider_definition_id,
                 row.operational_node_id,
                 provider.source_definition_id,

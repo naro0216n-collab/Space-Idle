@@ -381,6 +381,8 @@ def test_rp_admission_blocks_only_active_science_and_shares_recovered_headroom()
     sim.facilities.definitions[storage_definition_id] = FacilityDef(
         storage_definition_id, "Exploration RP storage fixture"
     )
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {
         storage_provider_id: ResearchProviderSpec(
             storage_provider_id,

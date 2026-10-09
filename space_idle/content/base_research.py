@@ -10,6 +10,7 @@ from ..research import (
 from ..knowledge import ExperienceContributionRule
 from ..shared import DefinitionId
 from . import base_ids as ids
+from . import base_requirements as req
 from .base_research_dag import RESEARCH_DAG_ROWS
 
 
@@ -55,12 +56,13 @@ def build_research_providers() -> dict:
                 ResearchProviderLevelSpec(3, 9.5, 560.0, 1.0),
             ),
         ),
-        ids.EARTH_OBSERVATION_SATELLITE: ResearchProviderSpec(
-            ids.EARTH_OBSERVATION_SATELLITE,
-            ResearchProviderSourceKind.FACILITY,
-            ids.EARTH_OBSERVATION_SATELLITE,
+        ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER,
+            ResearchProviderSourceKind.FLEET,
+            ids.ORBITAL_OBSERVATION_SPACECRAFT,
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 2.0, 120.0, 1.0),),
+            site_requirements=req.ORBIT_SITE,
         ),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ResearchProviderSpec(
             ids.MICROGRAVITY_EXPERIMENT_PLATFORM,

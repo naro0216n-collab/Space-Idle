@@ -64,7 +64,6 @@ ORBITAL_OUTPOST_FOUNDING_PACKAGE = DefinitionId("base.founding.orbital_logistics
 # Facilities. IDs and display names describe function, not placement.
 # ---------------------------------------------------------------------------
 EARTH_RESEARCH_LAB = DefinitionId("base.facility.research_laboratory")
-EARTH_OBSERVATION_SATELLITE = DefinitionId("base.facility.earth_observation_satellite")
 MICROGRAVITY_EXPERIMENT_PLATFORM = DefinitionId("base.facility.microgravity_experiment_platform")
 CREWED_ORBITAL_LABORATORY = DefinitionId("base.facility.crewed_orbital_laboratory")
 HABITAT = DefinitionId("base.facility.habitat")
@@ -157,6 +156,8 @@ EXPERIENCE_MANUFACTURING_OPERATIONS = "base.experience.manufacturing_operations"
 # from performance and endpoint environment, not purpose/category labels.
 REUSABLE_LAUNCH_VEHICLE = DefinitionId("base.vehicle.reusable_launch_vehicle")
 REUSABLE_ORBITAL_CARGO_TUG = DefinitionId("base.vehicle.reusable_orbital_cargo_tug")
+ORBITAL_OBSERVATION_SPACECRAFT = DefinitionId("base.vehicle.orbital_observation_spacecraft")
+ORBITAL_OBSERVATION_RESEARCH_PROVIDER = DefinitionId("base.research_provider.orbital_observation")
 LUNAR_ORBITAL_SURVEY_SPACECRAFT = DefinitionId("base.vehicle.lunar_orbital_survey_spacecraft")
 DEEP_SPACE_PROBE = DefinitionId("base.vehicle.deep_space_probe")
 DEEP_SPACE_FREIGHTER = DefinitionId("base.vehicle.deep_space_freighter")

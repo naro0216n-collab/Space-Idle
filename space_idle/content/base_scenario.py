@@ -4,7 +4,7 @@ from ..scenario import (
     ScenarioDefinition,
     ScenarioFacility,
     ScenarioFleet,
-    ScenarioSurveyFleetAssignment,
+    ScenarioProviderFleetAssignment,
     ScenarioInventoryStock,
     ScenarioMarketInterface,
     ScenarioStorageInfrastructure,
@@ -24,7 +24,6 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.EARTH_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.EARTH_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
-        ScenarioFacility(ids.EARTH_OBSERVATION_SATELLITE, ids.LEO, invested_resources=((S, 1.5), (M, 1.0), (E, 1.0))),
         ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT, invested_resources=((S, 3.0), (M, 2.0), (E, 1.0))),
         ScenarioFacility(ids.GRID_POWER_SUPPLY, ids.EARTH, invested_resources=((S, 8.0), (M, 6.0))),
         ScenarioFacility(ids.EARTH_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 10.0), (M, 8.0), (E, 2.0))),
@@ -79,11 +78,15 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         fleet=(
             ScenarioFleet(ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
             ScenarioFleet(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
+            ScenarioFleet(ids.ORBITAL_OBSERVATION_SPACECRAFT, 1, ids.LEO),
             ScenarioFleet(ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT),
             ScenarioFleet(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT),
         ),
         survey_fleet_assignments=(
-            ScenarioSurveyFleetAssignment(ids.LUNAR_FLEET_SURVEY_PROVIDER, ids.LUNAR_ORBIT, 1),
+            ScenarioProviderFleetAssignment(ids.LUNAR_FLEET_SURVEY_PROVIDER, ids.LUNAR_ORBIT, 1),
+        ),
+        research_fleet_assignments=(
+            ScenarioProviderFleetAssignment(ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER, ids.LEO, 1),
         ),
         known_surface_resources=known,
         initial_population=(ScenarioPopulation(ids.EARTH, 30),),
