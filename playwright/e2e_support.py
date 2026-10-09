@@ -9,6 +9,22 @@ from typing import Any
 import urllib.request
 
 
+def priority_group(root: Any, holder_selector: str) -> Any:
+    holder = root.locator(holder_selector)
+    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
+
+
+def choose_priority(root: Any, holder_selector: str, level: int | str) -> Any:
+    """Use the same visible priority control contract in every browser scenario."""
+    value = str(level)
+    holder = root.locator(holder_selector)
+    group = priority_group(root, holder_selector)
+    button = group.locator(f'[data-priority-choice="{value}"]')
+    button.click()
+    assert holder.input_value() == value
+    return button
+
+
 def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
     """Return the shared browser launch contract for E2E scenarios."""
     launch_kwargs: dict[str, object] = {"headless": True}

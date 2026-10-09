@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, isolated_browser_context, monitored_page, wait_for_server
 
 import os
 from pathlib import Path
@@ -12,21 +12,6 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
-
-
-def _priority_group(page, holder_selector: str):
-    holder = page.locator(holder_selector)
-    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
-
-
-def _choose_priority(page, holder_selector: str, level: int | str):
-    value = str(level)
-    group = _priority_group(page, holder_selector)
-    button = group.locator(f'[data-priority-choice="{value}"]')
-    button.click()
-    assert page.locator(holder_selector).input_value() == value
-    return button
-
 
 
 def run(browser) -> None:
@@ -135,7 +120,7 @@ def run(browser) -> None:
             priority.wait_for(timeout=10000, state="attached")
             saved_priority = priority.input_value()
             draft_priority = "4" if saved_priority != "4" else "5"
-            priority_button = _choose_priority(page, "#buildPlanPriorityInput", draft_priority)
+            priority_button = choose_priority(page, "#buildPlanPriorityInput", draft_priority)
             priority_button.focus()
             with page.expect_response(
                 lambda response: response.request.method == "GET"
@@ -224,7 +209,7 @@ def run(browser) -> None:
             changed_priority = "4" if authoritative_priority != "4" else "5"
             page.locator("#saveButton").click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            _choose_priority(page, "#facilityPriorityInput", changed_priority)
+            choose_priority(page, "#facilityPriorityInput", changed_priority)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             assert page.locator("#facilityPriorityInput").input_value() == changed_priority
             page.locator("#loadButton").click()

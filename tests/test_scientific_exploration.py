@@ -610,7 +610,9 @@ def _finish_unoperated_science(app):
     assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
 
 
-def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources(short_interplanetary_transit):
+def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_and_abort(
+    tmp_path, short_interplanetary_transit,
+):
     app = build_game_application()
     sim = app._simulation
     before_survey = capture_state(sim)["survey"]
@@ -619,22 +621,8 @@ def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources(short_
     state, initial_balances, needs = _start_unoperated_science(app)
     assert needs and all(node == ids.LEO for node, _, _, _ in needs)
     for node, resource, amount, _ in needs:
-        # Ordinary Facility maintenance may consume the same stock that day.
+        # Ordinary facility maintenance can also draw from the same inventory.
         assert initial_balances[node, resource] - sim.inventory.amount(node, resource) + 1e-9 >= amount
-    _arrive_unoperated_science(app)
-    _finish_unoperated_science(app)
-    assert state.phase.value == "complete"
-    definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
-    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
-    assert capture_state(sim)["survey"] == before_survey
-    assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
-    for node, resource, _, _ in needs:
-        assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
-
-
-def test_unoperated_science_save_load_and_abort_preserve_fleet(tmp_path, short_interplanetary_transit):
-    app = build_game_application()
-    state, _, _ = _start_unoperated_science(app)
     _arrive_unoperated_science(app)
     path = tmp_path / "unoperated-science.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -656,6 +644,13 @@ def test_unoperated_science_save_load_and_abort_preserve_fleet(tmp_path, short_i
     assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
     assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
     assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    assert state.phase.value == "complete"
+    definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
+    assert capture_state(sim)["survey"] == before_survey
+    assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
+    for node, resource, _, _ in needs:
+        assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
 
     aborted = build_game_application()
     _start_unoperated_science(aborted)

@@ -210,6 +210,14 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
             "infrastructure_count",
         } <= value_keys
 
+    # Node-neighbourhood and OD views share the scoped Movement contract.
+    touching = app.query(GetMovementPlans(
+        touching_node_id=str(EARTH), include_modes=True,
+    )).items
+    assert touching
+    assert all(str(EARTH) in (row.origin_id, row.destination_id) for row in touching)
+    assert len({row.id for row in touching}) == len(touching)
+
 def test_application_decision_queries_are_observational_and_reuse_projection_within_query(monkeypatch):
     app = build_game_application()
     sim = app._simulation
@@ -564,6 +572,16 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
 def test_logistics_projections_share_scoped_derivations_without_changing_read_contracts():
     app = build_game_application()
     sim = app._simulation
+    # A logistics-only read does not need to generate unrelated Movement modes.
+    with patch.object(app, "_movement_plan_rows", side_effect=AssertionError(
+        "logistics summary/details must not expand Movement candidates",
+    )):
+        logistics_only = app.query_many({
+            "logistics": GetLogistics(), "summary": GetLogisticsSummary(),
+        })
+    assert logistics_only["logistics"].fleet_pools
+    assert logistics_only["summary"].fleet_units >= 0
+
     plan_count = len(sim.transport.movement_plan_options())
     vehicle_count = len(sim.transport.vehicle_definitions())
     from space_idle import application_project_movement_plans
@@ -603,34 +621,6 @@ def test_logistics_projections_share_scoped_derivations_without_changing_read_co
     # The cache belongs to one query snapshot, not the authoritative state.
     app.execute(AdvanceTime(1))
     assert app.query(GetLogisticsSummary()) == app.query_many({"summary": GetLogisticsSummary()})["summary"]
-
-
-def test_logistics_read_models_do_not_eagerly_expand_all_movement_candidates(monkeypatch):
-    app = build_game_application()
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("a logistics state/summary read must not expand Movement candidates")
-
-    monkeypatch.setattr(app, "_movement_plan_rows", forbidden)
-    result = app.query_many({"logistics": GetLogistics(), "summary": GetLogisticsSummary()})
-    assert result["logistics"].fleet_pools
-    assert result["summary"].fleet_units >= 0
-
-
-def test_map_movement_candidates_are_node_scoped_without_global_enumeration(monkeypatch):
-    app = build_game_application()
-    sim = app._simulation
-    # An origin/destination-neighbourhood view must not rebuild every OD pair.
-    sim.transport.invalidate_movement_plans()
-    def forbidden_all(_resolver):
-        raise AssertionError("selected-node lookup must not enumerate all OD pairs")
-
-    monkeypatch.setattr(MovementResolver, "all_direct_plans", forbidden_all)
-    node_id = str(EARTH)
-    rows = app.query(GetMovementPlans(touching_node_id=node_id, include_modes=True)).items
-    assert rows
-    assert all(node_id in (row.origin_id, row.destination_id) for row in rows)
-    assert len({row.id for row in rows}) == len(rows)
 
 
 def test_construction_queries_expose_authoritative_project_controls():

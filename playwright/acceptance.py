@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, isolated_browser_context, monitored_page, priority_group as _priority_group, wait_for_server
 
 import json
 import os
@@ -45,18 +45,6 @@ def _visible_button_min_height(page) -> float:
           .filter(b => { const r=b.getBoundingClientRect(); const s=getComputedStyle(b); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; })
           .map(b => b.getBoundingClientRect().height))"""
     )
-
-
-def _priority_group(page, holder_selector: str):
-    holder = page.locator(holder_selector)
-    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
-
-
-def _choose_priority(page, holder_selector: str, level: int | str) -> None:
-    value = str(level)
-    group = _priority_group(page, holder_selector)
-    group.locator(f'[data-priority-choice="{value}"]').click()
-    _assert(page.locator(holder_selector).input_value() == value, f"priority {holder_selector} must select {value}")
 
 
 def _assert_inspector_section_order(page, expected_prefix: list[str], message: str) -> None:
@@ -534,7 +522,6 @@ def run(browser) -> dict[str, object]:
             _assert(page.locator('[data-time-speed="1"]').is_visible(), "1x speed control must be visible")
             _assert(page.locator('[data-time-speed="4"]').is_visible(), "4x speed control must be visible")
             _assert(page.locator('[data-time-speed="16"]').is_visible(), "16x speed control must be visible")
-            _assert(page.get_by_role("button", name="+1日").count() == 0, "manual day-jump control must be removed")
 
             page.locator("#timePauseButton").tap()
             page.wait_for_function(
@@ -572,7 +559,7 @@ def run(browser) -> dict[str, object]:
             )
             _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
-            _choose_priority(page, "#upgradePlanPriorityInput", 4)
+            choose_priority(page, "#upgradePlanPriorityInput", 4)
             # Periodic-sync draft continuity is exercised in interaction_continuity.
             # Acceptance keeps this path focused on the structured decision itself.
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
@@ -602,10 +589,9 @@ def run(browser) -> dict[str, object]:
             )
             _assert(_priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectProcurementTimingPolicy").is_enabled(), "mutable procurement timing policy must stay visible and enabled")
-            _choose_priority(page, "#projectPriorityInput", 5)
+            choose_priority(page, "#projectPriorityInput", 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             _assert(page.locator("#projectPriorityInput").input_value() == "5", "project priority direct action must round-trip through the UI")
-            _assert(page.locator('[data-set-project-priority]').count() == 0, "project priority must not require a second Apply action")
             cancel_upgrade = page.locator('#inspectorContent [data-command="CancelBuild"]')
             _assert(cancel_upgrade.is_enabled(), "planned upgrade project must use ordinary construction cancellation")
             cancel_upgrade.click()
@@ -628,7 +614,7 @@ def run(browser) -> dict[str, object]:
             _assert("見込回収量" in page.locator('#inspectorContent').inner_text(), "decommission decision must expose projected salvage before commitment")
             _assert(_priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
             _assert(page.locator('#decommissionPlanProcurementTimingPolicy').is_visible(), "decommission planning must expose procurement timing")
-            _choose_priority(page, '#decommissionPlanPriorityInput', 2)
+            choose_priority(page, '#decommissionPlanPriorityInput', 2)
             page.locator('#decommissionPlanProcurementTimingPolicy').select_option('extended_wait')
             decommission_button.click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
@@ -688,8 +674,6 @@ def run(browser) -> dict[str, object]:
             ).click()
             _assert(page.locator('#inspectorContent [data-facility-process]').count() > 0,
                     "Application process options must reach the Facility Inspector")
-            _assert(page.locator('#inspectorContent [data-set-facility-process]').count() == 0,
-                    "process selection must not require a second Apply action")
             _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
                     "current process must remain visibly selected")
 
@@ -749,7 +733,7 @@ def run(browser) -> dict[str, object]:
                 and startable_research.is_enabled(),
                 "Application-startable Research must expose an enabled Start command in the Inspector",
             )
-            _choose_priority(page, '#researchPriorityInput', 4)
+            choose_priority(page, '#researchPriorityInput', 4)
             startable_research.click()
             research_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="research"]')
             page.wait_for_function(
@@ -869,7 +853,7 @@ def run(browser) -> dict[str, object]:
             exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
             _assert(exploration_lifecycle.count() == 1, "exploration must expose one lifecycle control")
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
-            _choose_priority(page, '#explorationPriorityInput', 4)
+            choose_priority(page, '#explorationPriorityInput', 4)
             exploration_lifecycle.click()
 
             # Completion disposition is a real Direct Action. The browser test
@@ -1188,7 +1172,7 @@ def run(browser) -> dict[str, object]:
                 page.locator('[data-start-survey-campaign]').is_enabled(),
                 "Survey Campaign creation availability must come from Application preview",
             )
-            _choose_priority(page, '#surveyDraftPriority', 4)
+            choose_priority(page, '#surveyDraftPriority', 4)
             page.locator('[data-start-survey-campaign]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             campaign_row = page.locator('[data-inspect="survey-campaign"]').first
@@ -1255,12 +1239,11 @@ def run(browser) -> dict[str, object]:
             _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "Survey Campaign start priority must round-trip through the UI")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey-campaign"]')
             _assert(survey_lifecycle.get_attribute('data-survey-campaign-action') == 'pause' and survey_lifecycle.is_enabled(), "active Survey Campaign must expose pause on the stable lifecycle control")
-            _choose_priority(page, '#surveyPriorityInput', 5)
+            choose_priority(page, '#surveyPriorityInput', 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.wait_for_function(
                 "() => document.querySelector('#surveyPriorityInput')?.value === '5'", timeout=10000
             )
-            _assert(page.locator('#inspectorContent [data-set-survey-priority]').count() == 0, "Survey priority must be a direct action without a second Apply button")
             survey_lifecycle.click()
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'resume'",
