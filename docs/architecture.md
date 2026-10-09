@@ -1197,6 +1197,12 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
 14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
+### 17.1 開発用依存グラフと分析境界
+
+バランス分析はSimulationの進行責務とは分離した明示要求型の読取処理とし、Composition境界で登録したContributorが自身のDefinition群から型付きNodeとRelationを提供する。共通Relationはsemantic kind、source/target、quantity、unit、time basis、condition、provenanceを区別する。異なるResourceの同時投入はProcess/Method Nodeを介した複数の要求として保持し、単純なResource間edgeへ縮約しない。ContributorのNode所有重複、未登録relation kind、未定義参照は根拠付きdiagnosticとする。新Domainの追加ではCompositionにContributorと使用するrelation kindを登録する。分析用GraphはSave対象でも通常tickの常駐派生Stateでもなく、物理的な可否や有限Allocationを独自に解かない。
+
+Definition間の静的関係、特定Scenarioでの現在の実行可能性、日次の実績Flowは異なる分析層とする。静的Graphで到達しただけの利用手段を実行可能とは判定しない。分析結果はJSON等の読取Projectionとして出力し、Node/Relationの追加や変更に伴う診断根拠を追跡可能にする。
+
 ## 18. アーキテクチャ定義の要約
 
 本作のCoreは、Research / Knowledgeの成長、物理的な産業拡大、空間的な拠点拡大、それを支えるResource / Service Capacity / Movement / Logisticsを一つの状態モデルへ接続する。
