@@ -10,6 +10,7 @@ from .power import PowerSnapshot
 from .priority import ActivityPriority, DEFAULT_ACTIVITY_PRIORITY
 from .service_capacity import ServiceCapacityScope
 from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
+from .technology import TechnologyState
 from .spatial import SpatialGraph
 from .site import evaluate_site_requirements
 from .execution_requirements import (
@@ -74,6 +75,7 @@ class SurveyService:
     facilities: FacilityBook
     graph: SpatialGraph
     transport: "TransportService"
+    technology_state: TechnologyState
     knowledge_progress: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     knowledge_precision_fraction: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
     estimated_potential: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
@@ -367,7 +369,10 @@ class SurveyService:
         self, provider_operational_node_id: SpatialNodeId, provider: SurveyProviderSpec,
         mode: SurveyObservationModeSpec, cell_id: SurfaceCellId, day: int,
     ) -> tuple[str, ...]:
-        failures: list[str] = []
+        failures: list[str] = [
+            f"technology:{technology_id}"
+            for technology_id in self.technology_state.missing(mode.prerequisite_technologies)
+        ]
         failures.extend(self._mode_reach_failures(
             provider, provider_operational_node_id, mode, cell_id, day
         ))

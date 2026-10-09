@@ -79,11 +79,22 @@ class ResearchProgressionProjectorMixin:
         for vehicle in sim.transport.vehicle_definitions():
             append("vehicle_production", str(vehicle.id), vehicle.display_name,
                    vehicle.production.prerequisite_technologies)
+        if sim.survey is not None:
+            for provider in sim.survey.providers.values():
+                for mode in provider.observation_modes:
+                    append("survey_mode", f"{provider.id}:{mode.id}",
+                           mode.display_name or mode.id, mode.prerequisite_technologies)
+        if sim.scientific_exploration is not None:
+            for definition in sim.scientific_exploration.definitions.values():
+                append("scientific_exploration", str(definition.id), definition.display_name,
+                       definition.prerequisite_technologies)
 
         kind_order = {
             "research": 0,
             "process": 1,
             "vehicle_production": 2,
+            "survey_mode": 2,
+            "scientific_exploration": 2,
             "facility": 1,
             "facility_upgrade": 2,
             "surface_development": 3,

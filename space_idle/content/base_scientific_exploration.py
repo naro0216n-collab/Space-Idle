@@ -4,6 +4,7 @@ from ..scientific_exploration import ScientificExplorationDefinition
 from ..transport.models import MovementEndpoint
 from . import base_ids as ids
 from . import base_requirements as req
+from ..shared import DefinitionId
 
 
 def build_scientific_exploration_definitions() -> dict:
@@ -41,6 +42,7 @@ def build_scientific_exploration_definitions() -> dict:
             destination=MovementEndpoint(physical_target_node_id=ids.MARS_ORBIT),
             duration_days=12.0,
             research_points_total=180.0,
+            prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-02")}),
             consumable_resources=((ids.MACHINERY, 0.10), (ids.PRECISION_ELECTRONICS, 0.20)),
             origin_requirements=req.ORBIT_SITE,
             destination_requirements=req.ORBIT_SITE,

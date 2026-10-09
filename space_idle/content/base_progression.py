@@ -7,6 +7,7 @@ from ..survey import (
 )
 from . import base_requirements as req
 from . import base_ids as ids
+from ..shared import DefinitionId
 
 
 _EARTH_SURVEY_THRESHOLDS = (1.0, 2.0, 3.0)
@@ -89,6 +90,7 @@ def build_survey_providers() -> dict:
         KnowledgeLevel.PRESENCE_PROBABILITY, 0.65, 0.35,
         required_source_capabilities=frozenset(("survey_sensor",)),
         display_name="惑星間遠隔分光観測",
+        prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-02")}),
     )
     return {
         ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(

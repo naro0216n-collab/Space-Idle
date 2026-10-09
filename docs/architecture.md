@@ -985,7 +985,7 @@ Scientific Exploration Campaignは必要性能を満たすFleet unitをFleet Dom
 
 Definitionは対象、必要Operation / Endurance / Payload、Capability / Environment、期間、有限RP総量 / 生成率、Resource / Service requirement、完了後Fleet disposition等を持てる。
 
-Campaign DefinitionはOperational Nodeを目的地とする型と未運用Physical Movement Targetを目的地とする型を区別する。観測subjectとEndpointの意味は混在させない。後者では出発元で往復Movementの有限Resource requirementを予約・消費してから出発し、到着先に燃料・在庫を無償追加しない。Transport/Fleetが航行と所在を所有し、Scientific Explorationは科学進行・RP・帰還/中止Intentを所有する。到着後の観測・帰還・Abort/ReturnはFleetをphysical commitmentとして保持して処理し、帰還先Operational Nodeで解放する。
+Campaign DefinitionはOperational Nodeを目的地とする型と未運用Physical Movement Targetを目的地とする型を区別する。Technology prerequisiteはCampaign開始時の非消費Eligibilityであり、開始済みCampaignやMovementの進行・回収条件へ遡及適用しない。観測subjectとEndpointの意味は混在させない。後者では出発元で往復Movementの有限Resource requirementを予約・消費してから出発し、到着先に燃料・在庫を無償追加しない。Transport/Fleetが航行と所在を所有し、Scientific Explorationは科学進行・RP・帰還/中止Intentを所有する。到着後の観測・帰還・Abort/ReturnはFleetをphysical commitmentとして保持して処理し、帰還先Operational Nodeで解放する。
 
 Exploration DomainはFleet総数を直接所有せず、Fleet Domainのcommitmentを参照する。拘束中unitはTransport Allocationや別Exploration等へ同時利用できない。適合判定は用途タグではなくVehicle性能とMovement Planから行う。
 
@@ -1006,7 +1006,7 @@ UNKNOWN
 
 各Levelは公開可能な情報schemaを持つ。Presenceは存在可能性、Estimatedは推定Potentialとuncertainty range、Measuredは投資判断に用いる測定済みPotentialを表す。具体的な精度はSurvey Provider / observation modeのContent parameterとする。
 
-Survey Provider Definitionはsurvey rate、coverage / reach model、max Knowledge Level、observation precision、必要Operation / Infrastructure / source Capability、minimum source units等を持つ。Survey ServiceはproviderのSpatial contextとtarget Cellの関係からreachabilityを判定する。軌道Remote Survey providerは対象天体にSurface Locationが存在しなくても広域Cellを観測できる。
+Survey Provider Definitionはsurvey rate、coverage / reach model、max Knowledge Level、observation precision、必要Operation / Infrastructure / source Capability、minimum source units等を持つ。Survey ServiceはproviderのSpatial contextとtarget Cellの関係からreachabilityを判定する。軌道Remote Survey providerは対象天体にSurface Locationが存在しなくても広域Cellを観測できる。 Observation ModeごとのTechnologyは消費しないEligibility Requirementであり、Survey Serviceが他のReach/Site/Source Capabilityと同じ時点の判定へ合成する。Technology Domainの単一Stateを参照し、Survey Campaignのauthoritative StateやProvider Assignmentへ解禁フラグを複製しない。未解禁Modeは候補・blockerに残し、実Execution Bundleを発生させない。
 
 Fleet-backed Survey ProviderはSurvey Domainが `SurveyProviderAssignmentState` をauthoritativeなprovider-use intentとして所有し、そのStateがFleet Domainの排他的Fleet Commitmentを参照する。Fleet quantityと排他所有はFleet Domainだけが所有し、Survey Campaignへ複製しない。Player Commandはprovider用途へ配分する希望Fleet quantityを受け取り、Provider AssignmentからSurvey Service Capacityを導出してFacility providerの能力と同じExecution allocationへ供給する。
 

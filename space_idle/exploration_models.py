@@ -96,6 +96,7 @@ class SurveyObservationModeSpec:
     required_source_capabilities: frozenset[str] = frozenset()
     minimum_source_units: int = 1
     display_name: str | None = None
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.id:

@@ -342,6 +342,10 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     cell, resource = ids.MARS_CELL_POLAR_HIGHLANDS, ids.VOLATILE_BEARING_MATERIAL
     initial_nodes = frozenset(sim.graph.operational_node_ids())
     initial_fleet = dict(sim.transport.fleet_pools)
+    mode = sim.survey.observation_mode(
+        ids.LUNAR_RESOURCE_SURVEY_ORBITER, "interplanetary_remote_spectrometry"
+    )
+    sim.technology.completed.update(mode.prerequisite_technologies)
 
     # One survey owner and knowledge projection, independently scoped by
     # physical body; no remotely observed Cell becomes an owned Location.

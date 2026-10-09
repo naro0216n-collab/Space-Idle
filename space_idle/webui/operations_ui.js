@@ -1019,7 +1019,7 @@
     return rows.map((x)=>`<div class="detail-card"><div class="mode-title"><span>${esc(definitionName(x.category_id))}</span><span>${fmt(x.current,1)} / ${fmt(x.required,1)}</span></div><div class="cell-sub">残り ${fmt(x.unmet,1)}</div></div>`).join('');
   }
   function researchUnlocksHtml(r){
-    const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去',process:'製法',vehicle_production:'機体製造'};
+    const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去',process:'製法',vehicle_production:'機体製造',survey_mode:'観測方式',scientific_exploration:'科学探査'};
     const rows=r.unlocks||[];
     if(!rows.length)return '<div class="empty-state">この研究から直接つながる利用手段はありません。</div>';
     return rows.map((row)=>{
@@ -1092,7 +1092,7 @@
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack"><div class="form-row">${priorityControl(x.priority??3,x.can_set_priority?`id="explorationPriorityInput" data-priority-direct="exploration" data-priority-id="${esc(x.id)}"`:`id="explorationPriorityInput" data-draft-key="exploration:${esc(x.id)}:priority"`,'活動優先度',!(x.can_start||x.can_set_priority))}</div>${dispositionControl}${action||'<span class="badge">操作なし</span>'}</div>`)+
       section('Fleet適合性',vehicleRows)+
-      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)
+      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">必要技術: ${(x.prerequisite_technologies||[]).map((id)=>esc(definitionName(id))).join(' / ')||'なし'}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)
     );
     return true;
   }

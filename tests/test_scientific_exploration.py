@@ -552,9 +552,48 @@ def test_scientific_exploration_abort_return_and_completion_disposition_are_doma
     validate_runtime_state(sim)
 
 
+def test_scientific_exploration_technology_is_a_start_requirement_not_an_in_flight_lock():
+    from space_idle.app_contracts.common import ApplicationError
+
+    app = build_game_application()
+    sim = app._simulation
+    mission_id = ids.MARS_ORBIT_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[mission_id]
+    assert definition.prerequisite_technologies
+    mission = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(mission_id))
+    assert not mission.can_start
+    assert set(mission.prerequisite_technologies) == set(map(str, definition.prerequisite_technologies))
+    assert {f"technology:{tech_id}" for tech_id in definition.prerequisite_technologies} <= {
+        row.code for row in mission.blockers
+    }
+    with pytest.raises(ApplicationError, match="technology"):
+        app.execute(StartScientificExploration(str(mission_id)))
+    assert mission_id not in sim.scientific_exploration.campaigns
+    assert any(
+        unlock.kind == "scientific_exploration" and unlock.id == str(mission_id)
+        for research in app.query(GetResearch()).items for unlock in research.unlocks
+    )
+
+    sim.technology.completed.update(definition.prerequisite_technologies)
+    assert next(row for row in app.query(GetScientificExplorations()).items
+                if row.id == str(mission_id)).can_start
+    app.execute(StartScientificExploration(str(mission_id)))
+    sim.technology.completed.difference_update(definition.prerequisite_technologies)
+    assert sim.scientific_exploration.blockers(mission_id) == ("fleet_unassigned",)
+    assert sim.scientific_exploration.campaigns[mission_id].phase.value == "awaiting_fleet"
+    assert not next(row for row in app.query(GetScientificExplorations()).items
+                    if row.id == str(mission_id)).can_start
+
+
 def _start_unoperated_science(app):
     sim = app._simulation
     mission_id = ids.MARS_ORBIT_SCIENCE_EXPLORATION
+    # The scenario under test concerns Fleet ownership after a legitimate
+    # campaign acquisition, not whether the method has been researched.
+    sim.technology.completed.update(
+        sim.scientific_exploration.definitions[mission_id].prerequisite_technologies
+    )
     vehicle_id = ids.DEEP_SPACE_PROBE
     sim.transport.add_fleet_units(vehicle_id, 1, ids.LEO)
     app.execute(StartScientificExploration(str(mission_id)))

@@ -226,6 +226,8 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         for mode in provider.observation_modes:
             _require(KnowledgeLevel.PRESENCE_PROBABILITY <= mode.max_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, f"invalid Survey Knowledge cap: {provider_id}/{mode.id}")
             _require(mode.minimum_source_units > 0, f"invalid Survey minimum source units: {provider_id}/{mode.id}")
+            _require(mode.prerequisite_technologies.issubset(ctx.known_technologies),
+                     f"Survey mode references unknown technology: {provider_id}/{mode.id}")
             validate_site_requirements(mode.site_requirements, ctx.known_capabilities, f"survey:{provider_id}/{mode.id}")
             if provider.source_kind is SurveyProviderSourceKind.FACILITY:
                 source_definition = ctx.facility_defs.get(provider.source_definition_id)

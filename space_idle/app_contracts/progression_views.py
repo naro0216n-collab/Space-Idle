@@ -212,6 +212,7 @@ class ScientificExplorationRow:
     crew_in_transit: int
     onboard_resources: tuple[tuple[str, float], ...]
     required_vehicle_capabilities: tuple[str, ...]
+    prerequisite_technologies: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
     fleet_commitment_id: str | None
     committed_units: int

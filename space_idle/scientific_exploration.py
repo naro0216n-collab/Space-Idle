@@ -17,6 +17,7 @@ from .execution_requirements import (
 )
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
+from .technology import TechnologyState
 from .site import SiteRequirements, evaluate_site_requirements
 from .transport.models import FleetActivityRef, MovementEndpoint, MovementExecutionKind
 
@@ -41,6 +42,7 @@ class ScientificExplorationDefinition:
     minimum_payload_t: float = 0.0
     required_crew: int = 0
     required_vehicle_capabilities: tuple[str, ...] = ()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
     def __post_init__(self) -> None:
         if self.origin_id == self.destination_id:
@@ -127,6 +129,7 @@ class ScientificExplorationService:
     research: ResearchService
     service_capacity_registry: ServiceCapacityRegistry
     population: "PopulationService"
+    technology_state: TechnologyState
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
 
     def _physical_target(self, definition: ScientificExplorationDefinition) -> MovementEndpoint | None:
@@ -250,8 +253,9 @@ class ScientificExplorationService:
     ) -> None:
         if definition_id not in self.definitions:
             raise KeyError(definition_id)
-        if not self.can_start(definition_id):
-            raise ValueError("scientific exploration campaign already started")
+        blockers = self.start_blockers(definition_id)
+        if blockers:
+            raise ValueError("scientific exploration cannot start: " + ", ".join(blockers))
         self.campaigns[definition_id] = ScientificExplorationState(
             definition_id=definition_id,
             created_day=day,
@@ -445,8 +449,19 @@ class ScientificExplorationService:
                         failures.append(f'crew_payload:{capacity:g}/{required_payload:g}')
         return tuple(dict.fromkeys(failures))
 
+    def start_blockers(self, definition_id: DefinitionId) -> tuple[str, ...]:
+        definition = self.definitions.get(definition_id)
+        if definition is None:
+            return ("unknown_scientific_exploration",)
+        if definition_id in self.campaigns:
+            return ("scientific_exploration_already_started",)
+        return tuple(
+            f"technology:{technology_id}"
+            for technology_id in self.technology_state.missing(definition.prerequisite_technologies)
+        )
+
     def can_start(self, definition_id: DefinitionId) -> bool:
-        return definition_id in self.definitions and definition_id not in self.campaigns
+        return not self.start_blockers(definition_id)
 
     def completion_disposition(self, definition_id: DefinitionId) -> str:
         state = self.campaigns.get(definition_id)
@@ -1008,7 +1023,9 @@ class ScientificExplorationService:
     ) -> tuple[str, ...]:
         definition = self.definitions[definition_id]
         state = self.campaigns.get(definition_id)
-        if state is None or state.phase is ScientificExplorationPhase.COMPLETE:
+        if state is None:
+            return self.start_blockers(definition_id)
+        if state.phase is ScientificExplorationPhase.COMPLETE:
             return ()
         blockers: list[str] = []
         if state.paused and state.phase in {

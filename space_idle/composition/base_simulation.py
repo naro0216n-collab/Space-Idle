@@ -105,7 +105,7 @@ def build_base_simulation(
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport)
+    survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport, technology)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
@@ -221,7 +221,7 @@ def build_base_simulation(
     population.technology_state = technology
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),
-        facilities, inventory, power, transport, research, service_capacity_registry, population,
+        facilities, inventory, power, transport, research, service_capacity_registry, population, technology,
     )
     transport.register_fleet_commitment_owner_resolver(
         'passenger_transfer', lambda owner_id: owner_id in population.transfer_orders,

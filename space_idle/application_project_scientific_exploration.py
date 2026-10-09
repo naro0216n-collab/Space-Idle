@@ -39,7 +39,7 @@ class ScientificExplorationProjectorMixin:
                 assigned_vehicle_definition_id = None
                 fleet_commitment_id = None
                 committed_units = 0
-                blockers: tuple[str, ...] = ()
+                blockers = service.start_blockers(definition.id)
                 priority = 3
                 can_set_priority = False
             else:
@@ -270,6 +270,7 @@ class ScientificExplorationProjectorMixin:
                         (str(resource), amount) for resource, amount in commitment.onboard_resources
                     )),
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
+                    prerequisite_technologies=tuple(sorted(map(str, definition.prerequisite_technologies))),
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
                     fleet_commitment_id=fleet_commitment_id,
                     committed_units=committed_units,

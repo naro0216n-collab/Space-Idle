@@ -102,6 +102,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     nodes = ctx.spatial_nodes
     for definition_id, definition in sim.scientific_exploration.definitions.items():
         _require(definition_id == definition.id, f"scientific exploration key mismatch: {definition_id}")
+        _require(definition.prerequisite_technologies.issubset(ctx.known_technologies),
+                 f"scientific exploration references unknown Technology: {definition_id}")
         graph = sim.graph
         _require(definition.origin_id in nodes or graph.has_operational_node(definition.origin_id),
                  f"scientific exploration origin is not a configured spatial context: {definition_id}")

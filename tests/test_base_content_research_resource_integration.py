@@ -178,3 +178,48 @@ def test_completed_technology_enables_process_and_vehicle_methods_without_rewrit
     save_game(app, path, saved_at=fixed)
     loaded, _ = load_game(path, build_game_application_for_load, now=fixed)
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_survey_method_technology_blocks_progress_without_discarding_campaign():
+    """A mode is a reusable method, not an implicit property of its Provider or body."""
+    from space_idle import AdvanceTime, GetResearch, StartSurvey, SurveyProviderConstraintInput
+    from space_idle.content import base_ids as ids
+
+    app = build_game_application()
+    sim = app._simulation
+    provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    mode_id = "interplanetary_remote_spectrometry"
+    mode = sim.survey.observation_mode(provider_id, mode_id)
+    assert mode.prerequisite_technologies
+    cell_id, resource_id = ids.MARS_CELL_EQUATORIAL_PLAIN, ids.MINERAL_FEEDSTOCK
+    campaign_id = app.execute(StartSurvey(
+        target_cell_ids=(str(cell_id),),
+        resource_ids=(str(resource_id),),
+        goal_knowledge_level=1,
+        provider_constraint=SurveyProviderConstraintInput(str(provider_id), str(ids.LUNAR_ORBIT)),
+        observation_mode_constraint=mode_id,
+    )).created_id
+    campaign = sim.survey.campaigns[campaign_id]
+    projection = sim.survey.campaign_projection(campaign, day=sim.day)
+    assert projection.resolved_candidate is None
+    candidate = next(row for row in projection.candidates
+                     if row.provider_definition_id == provider_id and row.observation_mode_id == mode_id)
+    assert {f"technology:{tech_id}" for tech_id in mode.prerequisite_technologies} <= set(candidate.blockers)
+    assert any(
+        unlock.kind == "survey_mode" and unlock.id == f"{provider_id}:{mode_id}"
+        for row in app.query(GetResearch()).items for unlock in row.unlocks
+    )
+    before = sim.survey.progress(cell_id, resource_id)
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(cell_id, resource_id) == before
+
+    sim.technology.completed.update(mode.prerequisite_technologies)
+    candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
+    assert blockers == () and candidate is not None
+    app.execute(AdvanceTime(1))
+    progress = sim.survey.progress(cell_id, resource_id)
+    assert progress > before
+    sim.technology.completed.difference_update(mode.prerequisite_technologies)
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(cell_id, resource_id) == progress
+    assert campaign.id in sim.survey.campaigns
