@@ -220,12 +220,16 @@ class ExternalPopulationSourceRow:
     id: str
     remaining_people: int
     max_acquisition_per_day: int
+    available_today: int
 
 
 @dataclass(frozen=True)
 class PopulationView:
     current_count: int
     desired_count: int | None
+    target_unmet_count: int
+    target_local_receivable: int
+    target_blockers: tuple[str, ...]
     committed_count: int
     housing_physical: int
     housing_usable: int

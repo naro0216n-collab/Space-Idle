@@ -698,9 +698,11 @@ class LocationProjectorMixin:
                 for facility in sim.facilities.all_at(location_id)
                 if sim.facilities.definitions[facility.definition_id].life_support is not None
             )
+            target_unmet, local_receivable, target_blockers = pop.local_target_preview(location_id, sim.day)
             population_view = PopulationView(
                 sum(group.count for group in people),
                 pop.targets.get(location_id),
+                target_unmet, local_receivable, target_blockers,
                 sum(group.count for group in people if group.activity_commitment_ref),
                 pop.housing_capacity(location_id, sim.day, active=False),
                 pop.housing_capacity(location_id, sim.day),
@@ -709,7 +711,7 @@ class LocationProjectorMixin:
                 sum(group.count * pop.crew_factor(group) for group in people if not group.activity_commitment_ref),
                 sum(group.count * group.deprivation for group in people),
                 tuple(sorted(resource_demand.items())),
-                tuple(ExternalPopulationSourceRow(definition.id, pop.external_remaining[definition.id], definition.max_acquisition_per_day)
+                tuple(ExternalPopulationSourceRow(definition.id, pop.external_remaining[definition.id], definition.max_acquisition_per_day, pop.external_available(definition.id, sim.day))
                       for definition in sorted(pop.external_definitions.values(), key=lambda source: source.id)
                       if definition.operational_node_id == location_id),
             )

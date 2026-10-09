@@ -88,20 +88,49 @@ def test_population_targets_sources_and_deprivation_are_single_save_state(tmp_pa
     sim = app._simulation
     node = str(ids.EARTH)
     original = sim.population.count_at(ids.EARTH)
-    app.execute(SetPopulationTarget(node, original + 5))
+    source = app.query(GetOperationalNode(node)).population.external_sources[0]
+    quota = source.max_acquisition_per_day
+    first_remaining = source.remaining_people
+    app.execute(SetPopulationTarget(node, original + quota + 3))
     assert sim.population.count_at(ids.EARTH) == original
-    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.EARTH_LIFE_SUPPORT)
-    app.execute(PauseFacility(str(housing.id)))
+
+    # Acceptance occurs only at the next physical Boundary, with a finite
+    # external source and a common per-day acquisition quota.
     sim.advance_days(1)
+    view = app.query(GetOperationalNode(node)).population
+    assert view.current_count == original + quota
+    assert view.target_unmet_count == 3
+    assert view.external_sources[0].remaining_people == first_remaining - quota
+    assert view.external_sources[0].available_today == 0
+    assert view.target_local_receivable == 0
+    assert sim.population.count_at(ids.EARTH) + sim.population.external_remaining[source.id] == original + first_remaining
+
     path = tmp_path / 'population.json'
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application_for_load, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
     assert capture_state(loaded._simulation) == capture_state(sim)
-    assert loaded.query(GetOperationalNode(node)).population.desired_count == original + 5
-    assert loaded._simulation.population.external_remaining == sim.population.external_remaining
-    sim.advance_days(3)
-    loaded._simulation.advance_days(3)
+    assert loaded.query(GetOperationalNode(node)).population.external_sources[0].available_today == 0
+
+    # A second canonical day replenishes only the quota, not the finite source.
+    sim.advance_days(1)
+    loaded._simulation.advance_days(1)
     assert capture_state(loaded._simulation) == capture_state(sim)
-    loaded.execute(ClearPopulationTarget(node))
-    assert loaded.query(GetOperationalNode(node)).population.desired_count is None
-    assert loaded._simulation.population.count_at(ids.EARTH) <= original
+    assert app.query(GetOperationalNode(node)).population.current_count == original + quota + 3
+    assert sim.population.external_remaining[source.id] == first_remaining - quota - 3
+    assert app.query(GetOperationalNode(node)).population.external_sources[0].available_today == quota - 3
+
+    # Clearing the intent does not remove people; an inoperable provider also
+    # blocks further intake rather than minting population against an empty bed.
+    app.execute(ClearPopulationTarget(node))
+    assert app.query(GetOperationalNode(node)).population.desired_count is None
+    app.execute(SetPopulationTarget(node, original + quota + 6))
+    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.EARTH_LIFE_SUPPORT)
+    app.execute(PauseFacility(str(housing.id)))
+    prior_count = sim.population.count_at(ids.EARTH)
+    sim.advance_days(1)
+    view = app.query(GetOperationalNode(node)).population
+    assert view.current_count == prior_count
+    assert view.target_unmet_count == 3
+    assert 'housing_full' in view.target_blockers
+    assert view.deprivation_person_days > 0
+    assert sim.population.external_remaining[source.id] == first_remaining - quota - 3

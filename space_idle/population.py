@@ -6,6 +6,7 @@ import math
 from .execution_requirements import (
     AllocationConstraintKey, ExecutionAllocationPlan, ExecutionRequirementBundle,
     PoolRequirement, ResourceRequirement, ServiceCapacityRequirement, pool_constraint,
+    resource_constraint, service_constraint, allocate_execution_requirements,
 )
 from .facilities import FacilityBook
 from .facility_lifecycle import FacilityLifecycleBlocker
@@ -85,6 +86,10 @@ class PopulationService:
     groups: dict[EntityId, PopulationGroup] = field(default_factory=dict)
     targets: dict[SpatialNodeId, int] = field(default_factory=dict)
     external_remaining: dict[str, int] = field(default_factory=dict)
+    # Daily quota accounting, not another people Stock.  A completed boundary
+    # and subsequent dispatches must draw from the same finite source quota.
+    external_acquisition_day: int = -1
+    external_acquired_today: dict[str, int] = field(default_factory=dict)
     _next_group_id: int = 0
     _day_fulfillment: dict[SpatialNodeId, float] = field(default_factory=dict, repr=False)
 
@@ -151,6 +156,127 @@ class PopulationService:
             for identifier, definition in sorted(self.external_definitions.items())
         }
 
+    def external_available(self, source_id: str, day: int) -> int:
+        definition = self.external_definitions[source_id]
+        used = (self.external_acquired_today.get(source_id, 0)
+                if self.external_acquisition_day == day else 0)
+        return max(0, min(self.external_remaining[source_id],
+                          definition.max_acquisition_per_day - used))
+
+    def _acquire_external(self, source_id: str, count: int, day: int) -> None:
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise ValueError('acquisition must be a positive integer')
+        if count > self.external_available(source_id, day):
+            raise ValueError('external supply quota or remaining people exhausted')
+        if self.external_acquisition_day != day:
+            self.external_acquisition_day = day
+            self.external_acquired_today.clear()
+        self.external_remaining[source_id] -= count
+        self.external_acquired_today[source_id] = self.external_acquired_today.get(source_id, 0) + count
+
+    def _supportable_admission(self, node_id: SpatialNodeId, requested: int, day: int) -> int:
+        """Estimate immediately supportable integer arrivals using the common allocator.
+
+        This evaluates the same Life Support bundles as execution against the
+        currently available Inventory. Other activities still compete with them
+        during the authoritative daily Allocation; this is not an extra solver or
+        a reservation of future Resource.
+        """
+        existing = self.count_at(node_id)
+        housing = self.housing_capacity(node_id, day)
+        providers = [
+            (facility, definition.life_support)
+            for facility, definition in self._facilities_at(node_id, day)
+            if definition.life_support is not None
+        ]
+        provider_capacity = sum(spec.person_days_per_day * facility.level for facility, spec in providers)
+        upper = min(requested, max(0, housing - existing),
+                    max(0, math.floor(provider_capacity + 1e-9) - existing))
+        if upper == 0:
+            return 0
+
+        def feasible(additional: int) -> bool:
+            people = existing + additional
+            bundles = self._life_support_bundles_at(node_id, people, day)
+            capacities = {
+                pool_constraint('life_support_need', scope_id=str(node_id)): float(people),
+                pool_constraint('housing', scope_id=str(node_id)): float(housing),
+                service_constraint(node_id, 'life_support'): provider_capacity,
+            }
+            for facility, spec in providers:
+                capacities[pool_constraint('life_support_provider', scope_id=str(facility.id))] = (
+                    spec.person_days_per_day * facility.level
+                )
+                for resource, _ in spec.net_resources:
+                    capacities[resource_constraint(node_id, resource)] = self.inventory.amount(node_id, resource)
+            allocated = allocate_execution_requirements(bundles, capacities)
+            return sum(allocated.allocated(row.id) for row in bundles) + 1e-7 >= people
+
+        low, high = 0, upper
+        while low < high:
+            candidate = (low + high + 1) // 2
+            if feasible(candidate):
+                low = candidate
+            else:
+                high = candidate - 1
+        return low
+
+    def local_target_preview(self, node_id: SpatialNodeId, day: int) -> tuple[int, int, tuple[str, ...]]:
+        target = self.targets.get(node_id)
+        if target is None:
+            return 0, 0, ()
+        unmet = max(0, target - self.count_at(node_id))
+        if not unmet:
+            return 0, 0, ()
+        sources = tuple(source_id for source_id, source in sorted(self.external_definitions.items())
+                        if source.operational_node_id == node_id)
+        available = sum(self.external_available(source_id, day) for source_id in sources)
+        receivable = self._supportable_admission(node_id, min(unmet, available), day)
+        blockers: list[str] = []
+        if not sources:
+            blockers.append('transport_required')
+        elif available == 0:
+            blockers.append('external_supply_limit')
+        if self.housing_capacity(node_id, day) <= self.count_at(node_id):
+            blockers.append('housing_full')
+        if receivable < min(unmet, available) and self.housing_capacity(node_id, day) > self.count_at(node_id):
+            blockers.append('life_support_or_resource_limit')
+        return unmet, receivable, tuple(blockers)
+
+    def acquire_for_local_targets(self, day: int) -> None:
+        """Accept finite external people only at their existing source Node.
+
+        A target at another Node creates transport demand, never direct
+        population insertion. Local arrivals use the same finite daily quota as
+        later manual dispatches and are constrained by current living capacity.
+        """
+        for node_id, desired in sorted(self.targets.items(), key=lambda row: str(row[0])):
+            missing = desired - self.count_at(node_id)
+            if missing <= 0:
+                continue
+            sources = [identifier for identifier, source in sorted(self.external_definitions.items())
+                       if source.operational_node_id == node_id]
+            available = sum(self.external_available(identifier, day) for identifier in sources)
+            headroom = self._supportable_admission(node_id, min(missing, available), day)
+            for source_id in sources:
+                count = min(headroom, self.external_available(source_id, day))
+                if count == 0:
+                    continue
+                self._acquire_external(source_id, count, day)
+                self._add_uncommitted_at(node_id, count)
+                headroom -= count
+                if headroom == 0:
+                    break
+
+    def _add_uncommitted_at(self, node_id: SpatialNodeId, count: int) -> None:
+        """Merge only with an identical group; preserve accumulated deprivation."""
+        for group in self.groups_at(node_id):
+            if (group.activity_commitment_ref is None and group.deprivation == 0
+                    and group.mortality_remainder == 0):
+                group.count += count
+                return
+        self.initialize(node_id, count)
+
     def set_target(self, node_id: SpatialNodeId, count: int) -> None:
         if not self.graph.has_operational_node(node_id):
             raise ValueError('unknown population target node')
@@ -213,30 +339,37 @@ class PopulationService:
                     )
         return capacities
 
-    def execution_requirement_bundles(self, day: int) -> tuple[ExecutionRequirementBundle, ...]:
+    def _life_support_bundles_at(
+        self, node_id: SpatialNodeId, people: int, day: int,
+    ) -> tuple[ExecutionRequirementBundle, ...]:
+        if not people:
+            return ()
         rows: list[ExecutionRequirementBundle] = []
-        for node_id in sorted(self.graph.operational_node_ids(), key=str):
-            people = self.count_at(node_id)
-            if not people:
+        for facility, definition in self._facilities_at(node_id, day):
+            spec = definition.life_support
+            if spec is None:
                 continue
-            for facility, definition in self._facilities_at(node_id, day):
-                spec = definition.life_support
-                if spec is None:
-                    continue
-                requirements = (
-                    ServiceCapacityRequirement('life_support', 1),
-                    PoolRequirement('life_support_need', 1, scope_id=str(node_id)),
-                    PoolRequirement('housing', 1, scope_id=str(node_id)),
-                    PoolRequirement('life_support_provider', 1, scope_id=str(facility.id)),
-                ) + tuple(ResourceRequirement(resource, rate) for resource, rate in spec.net_resources)
-                rows.append(ExecutionRequirementBundle(
-                    id=self._provider_bundle_id(facility.id),
-                    owner_kind='population', owner_id=facility.id,
-                    purpose='life_support', operational_node_id=node_id,
-                    requested_execution=min(people, spec.person_days_per_day * facility.level),
-                    priority=ActivityPriority(5), requirements=requirements,
-                ))
+            requirements = (
+                ServiceCapacityRequirement('life_support', 1),
+                PoolRequirement('life_support_need', 1, scope_id=str(node_id)),
+                PoolRequirement('housing', 1, scope_id=str(node_id)),
+                PoolRequirement('life_support_provider', 1, scope_id=str(facility.id)),
+            ) + tuple(ResourceRequirement(resource, rate) for resource, rate in spec.net_resources)
+            rows.append(ExecutionRequirementBundle(
+                id=self._provider_bundle_id(facility.id),
+                owner_kind='population', owner_id=facility.id,
+                purpose='life_support', operational_node_id=node_id,
+                requested_execution=min(people, spec.person_days_per_day * facility.level),
+                priority=ActivityPriority(5), requirements=requirements,
+            ))
         return tuple(rows)
+
+    def execution_requirement_bundles(self, day: int) -> tuple[ExecutionRequirementBundle, ...]:
+        return tuple(
+            bundle
+            for node_id in sorted(self.graph.operational_node_ids(), key=str)
+            for bundle in self._life_support_bundles_at(node_id, self.count_at(node_id), day)
+        )
 
     def supplys(self, day: int, *, node_id: SpatialNodeId | None = None) -> tuple[SupplyRequirement, ...]:
         rows: list[SupplyRequirement] = []
@@ -312,6 +445,15 @@ class PopulationService:
         for identifier, remaining in self.external_remaining.items():
             if isinstance(remaining, bool) or not isinstance(remaining, int) or not 0 <= remaining <= self.external_definitions[identifier].initial_people:
                 raise ValueError('invalid external population remaining')
+        if isinstance(self.external_acquisition_day, bool) or not isinstance(self.external_acquisition_day, int) or self.external_acquisition_day < -1:
+            raise ValueError('invalid external acquisition day')
+        for identifier, acquired in self.external_acquired_today.items():
+            if identifier not in self.external_definitions or isinstance(acquired, bool) or not isinstance(acquired, int) or acquired < 0:
+                raise ValueError('invalid daily external acquisition')
+            if acquired > self.external_definitions[identifier].max_acquisition_per_day:
+                raise ValueError('external acquisition exceeds daily quota')
+        if self.external_acquisition_day == -1 and self.external_acquired_today:
+            raise ValueError('external acquisition counts without a day')
         for source in self.external_definitions.values():
             if not self.graph.has_operational_node(source.operational_node_id):
                 raise ValueError('external provider location missing')

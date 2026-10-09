@@ -20,12 +20,14 @@ def capture_population_state(sim):
         'targets': [{'node_id': str(node), 'desired_count': count}
                     for node, count in sorted(population.targets.items(), key=lambda pair: str(pair[0]))],
         'external_remaining': dict(sorted(population.external_remaining.items())),
+        'external_acquisition_day': population.external_acquisition_day,
+        'external_acquired_today': dict(sorted(population.external_acquired_today.items())),
         'next_group_id': population._next_group_id,
     }
 
 
 def restore_population_state(sim, state):
-    row = require_fields(state, {'groups', 'targets', 'external_remaining', 'next_group_id'}, 'population state')
+    row = require_fields(state, {'groups', 'targets', 'external_remaining', 'external_acquisition_day', 'external_acquired_today', 'next_group_id'}, 'population state')
     service = sim.population
     groups = {}
     for raw in decode_list(row['groups'], 'population groups'):
@@ -56,6 +58,11 @@ def restore_population_state(sim, state):
     service.groups = groups
     service.targets = targets
     service.external_remaining = {identifier: decode_int(value, 'external source remaining') for identifier, value in remaining.items()}
+    service.external_acquisition_day = decode_int(row['external_acquisition_day'], 'external acquisition day')
+    service.external_acquired_today = {
+        identifier: decode_int(value, 'external acquired today')
+        for identifier, value in decode_dict(row['external_acquired_today'], 'external acquired today').items()
+    }
     service._next_group_id = decode_int(row['next_group_id'], 'next population group id')
     if service._next_group_id < 0:
         raise ValueError('negative population group counter')

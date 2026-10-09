@@ -620,6 +620,9 @@ class Simulation:
             self.logistics.settle_cargo_boundary_execution(self.day, boundary_execution)
             self.market.settle_matured_buys(self.day, boundary_execution, self.inventory)
 
+        if self.population is not None:
+            self.population.acquire_for_local_targets(self.day)
+
         # Project procurement is an internal durable reservation lifecycle unrelated
         # to the External Resource Market. Its clock maturation remains boundary-owned.
         self.projects.advance_procurement(self.day)

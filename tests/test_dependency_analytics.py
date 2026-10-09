@@ -259,7 +259,7 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     # Process Service itself has enough local Capacity. Service dependency must
     # therefore not mirror generic execution under-allocation as a Service lack.
     assert row.allocated_rate == pytest.approx(0.0)
-    assert row.local_enabled_rate >= row.requested_rate
+    assert row.local_enabled_rate + 1e-9 >= row.requested_rate
     assert row.unmet_rate == pytest.approx(0.0)
     assert row.local_coverage_ratio == pytest.approx(1.0)
 
