@@ -24,7 +24,8 @@ class PassengerProjectorMixin:
             if source is None or source.operational_node_id != origin:
                 raise ValueError('external source is not at origin')
             available = population.external_available(query.source_external_provider_id, sim.day)
-        housing = max(0, population.housing_capacity(destination, sim.day) - population.count_at(destination))
+        housing = max(0, population.housing_capacity(destination, sim.day) - population.count_at(destination)
+                      - population._inbound_by_node().get(destination, 0))
         receive = population._supportable_admission(destination, min(query.requested_count, housing), sim.day)
         options = population.transfer_preview(origin, destination, query.requested_count, sim.day)
         external_sources = tuple(
@@ -68,16 +69,7 @@ class PassengerProjectorMixin:
             mode = None if source is None else ('dedicated' if source.dedicated_vehicle_definition_id is not None else 'service')
             blockers = ()
             if pending and not transit_count:
-                if source is None:
-                    blockers = ('transport_service_required',)
-                elif mode == 'dedicated':
-                    option = population.dedicated_dispatch_option(
-                        self._simulation.transport,
-                        order.origin_node_id, order.destination_node_id, pending,
-                        source.dedicated_vehicle_definition_id, source.dedicated_units,
-                        self._simulation.day, source.movement_hard_constraint,
-                    )
-                    blockers = option.blockers
+                blockers = population.transfer_order_blockers(order, self._simulation.day)
             rows.append(PassengerTransferRow(
                 str(order.id), str(order.origin_node_id), str(order.destination_node_id),
                 order.requested_count, pending, transit_count, order.delivered_count,

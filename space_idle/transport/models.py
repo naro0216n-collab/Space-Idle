@@ -350,6 +350,9 @@ class PassengerServiceTransit:
     started_day: int
     last_settled_day: int
     onboard_resources: dict[DefinitionId, float]
+    # Time spent physically aboard the preceding Service at intermediate
+    # transfer endpoints.  A transfer never teleports to a missing next Service.
+    handoff_wait_days: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.legs or self.started_day < 0:
@@ -363,17 +366,28 @@ class PassengerServiceTransit:
         for left, right in zip(self.legs, self.legs[1:]):
             if left.destination_id != right.origin_id:
                 raise ValueError('non-contiguous passenger service legs')
+        if not self.handoff_wait_days:
+            self.handoff_wait_days = [0] * (len(self.legs) - 1)
+        if (len(self.handoff_wait_days) != len(self.legs) - 1
+                or any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+                       for value in self.handoff_wait_days)):
+            raise ValueError('invalid intermediate Service waiting durations')
 
     @property
     def arrival_day(self) -> int:
-        return self.started_day + sum(leg.duration_days for leg in self.legs)
+        return self.started_day + sum(leg.duration_days for leg in self.legs) + sum(self.handoff_wait_days)
+
+    def transfer_boundary_day(self, completed_leg_index: int) -> int:
+        return (self.started_day + sum(leg.duration_days for leg in self.legs[:completed_leg_index + 1])
+                + sum(self.handoff_wait_days[:completed_leg_index + 1]))
 
     def active_leg(self, day: int) -> PassengerServiceLeg:
         elapsed = max(0, day - self.started_day - 1)
-        for leg in self.legs:
-            if elapsed < leg.duration_days:
+        for index, leg in enumerate(self.legs):
+            days = leg.duration_days + (self.handoff_wait_days[index] if index < len(self.handoff_wait_days) else 0)
+            if elapsed < days:
                 return leg
-            elapsed -= leg.duration_days
+            elapsed -= days
         return self.legs[-1]  # real onboard holding uses the final vehicle
 
 

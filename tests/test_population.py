@@ -376,3 +376,137 @@ def test_population_target_prefers_available_owned_surplus_then_finite_external_
             + sum(sim.population.external_remaining.values())) == initial_total
     assert all(group.activity_commitment_ref is None
                for group in sim.population.groups.values())
+
+@pytest.mark.parametrize('dedicated', [False, True])
+def test_arrived_passengers_disembark_before_leftover_stock_is_admitted(tmp_path, monkeypatch, dedicated):
+    """Arrival holding retains actual cargo/Fleet without holding already admitted people."""
+    app = build_game_application()
+    sim = app._simulation
+    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
+    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
+        sim.inventory.add(ids.LEO, resource, 2.0)
+    if not dedicated:
+        capacity = sim.transport.transport_capacity_for_units(
+            ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
+        )
+        sim.transport.create_transport_allocation(
+            ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
+            target_capacity=capacity, day=sim.day,
+        )
+        sim.transport.advance_fleet_state(sim.day)
+    app.execute(RequestPassengerTransfer(
+        str(ids.EARTH), str(ids.LEO), 1,
+        capacity_source_constraint=(PassengerCapacityChoice(
+            dedicated_vehicle_definition_id=str(ids.REUSABLE_LAUNCH_VEHICLE), dedicated_units=1,
+        ) if dedicated else None),
+    ))
+    sim.advance_days(1)
+    order = next(iter(sim.population.transfer_orders.values()))
+    assert order.transit_count(sim.population.groups) == 1
+    transit = (next(iter(sim.transport.movement_executions.values())) if dedicated
+               else next(iter(sim.transport.passenger_service_transits.values())))
+    # Model an already-loaded surplus from the same finite Inventory.  A
+    # normal transfer carries just its planned life-support demand, but the
+    # arrival boundary must also conserve legitimate leftover onboard Stock.
+    surplus = 0.01
+    sim.inventory.stock[(ids.EARTH, ids.WATER)] -= surplus
+    if dedicated:
+        from space_idle.transport.models import MovementExecutionPayloadResource
+        transit.payload_resources = tuple(
+            MovementExecutionPayloadResource(row.resource_id, row.amount_t + (surplus if row.resource_id == ids.WATER else 0))
+            for row in transit.payload_resources
+        )
+    else:
+        transit.onboard_resources[ids.WATER] += surplus
+    arrival = transit.completion_day if dedicated else transit.arrival_day
+    recovery_node = (ids.EARTH if dedicated else ids.LEO)
+    previous_admit = sim.inventory.can_admit_resources
+    monkeypatch.setattr(sim.inventory, 'can_admit_resources',
+                        lambda node, resources: False if node == recovery_node else previous_admit(node, resources))
+    while sim.day < arrival:
+        sim.advance_days(1)
+    assert order.delivered_count == 1
+    assert not order.in_transit_group_refs
+    assert sim.population.count_at(ids.LEO) >= 1
+    if dedicated:
+        assert not sim.transport.movement_executions
+        commitment = sim.transport.fleet_commitments[sim.population._passenger_commitment_id(order.id)]
+        assert commitment.operational_node_id == recovery_node
+        assert sum(commitment.onboard_resources.values()) > 0
+    else:
+        still_held = next(iter(sim.transport.passenger_service_transits.values()))
+        assert not still_held.passenger_group_refs
+        assert sum(still_held.onboard_resources.values()) > 0
+
+    saved = tmp_path / 'unloaded-after-disembark.json'
+    stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    save_game(app, saved, saved_at=stamp)
+    restored, _ = load_game(saved, build_game_application_for_load, now=stamp)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    monkeypatch.setattr(sim.inventory, 'can_admit_resources', previous_admit)
+    sim.advance_days(1)
+    restored._simulation.advance_days(1)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert not sim.transport.passenger_service_transits
+    assert sim.population._passenger_commitment_id(order.id) not in sim.transport.fleet_commitments
+
+
+def test_passenger_intermediate_service_handoff_waits_in_real_cabin_and_preserves_people(monkeypatch):
+    from types import SimpleNamespace
+    from space_idle.population import ExternalPopulationSourceDefinition
+    from space_idle.transport.models import PassengerAccommodation, PassengerServiceLeg, PassengerServiceTransit
+    from space_idle.shared import EntityId, DefinitionId
+
+    app = build_game_application()
+    sim = app._simulation
+    pop = sim.population
+    source = pop.groups_at(ids.EARTH)[0]
+    passenger = pop._split_group(source, 1)
+    transit_id = EntityId('test.passenger.legchain')
+    pop.move_group_to_execution(passenger.id, transit_id)
+    cabin = PassengerAccommodation(2, 0.1, 2.0, 2.0, 0.05, ((ids.WATER, 0.01),))
+    allocation = EntityId('test.passenger.allocation')
+    first = PassengerServiceLeg('first', allocation, ids.EARTH, ids.LEO, 1, cabin, 0.15)
+    second = PassengerServiceLeg('second', allocation, ids.LEO, ids.EARTH, 1, cabin, 0.15)
+    pop.inventory.consume_allocated(ids.EARTH, ids.WATER, 0.03)
+    transit = PassengerServiceTransit(transit_id, None, (passenger.id,), (first, second), sim.day,
+                                     sim.day, {ids.WATER: 0.03})
+    sim.transport.passenger_service_transits[transit_id] = transit
+    monkeypatch.setattr(sim.transport, 'transport_service_supplies', lambda day: ())
+    pop.settle_transit_arrivals(sim.day + 1)
+    assert transit.handoff_wait_days == [1]
+    assert transit.active_leg(sim.day + 2) == first
+    assert pop.groups[passenger.id].position.ref == str(transit_id)
+    assert transit.onboard_resources[ids.WATER] == pytest.approx(0.02)
+
+    supply = SimpleNamespace(key='second', source_id=ids.LEO, destination_id=ids.EARTH,
+                             capacity_t_per_day=0.2)
+    monkeypatch.setattr(sim.transport, 'transport_service_supplies', lambda day: (supply,))
+    pop.settle_transit_arrivals(sim.day + 2)
+    assert transit.handoff_wait_days == [1]
+    assert transit.active_leg(sim.day + 3) == second
+    pop.settle_transit_arrivals(sim.day + 3)
+    assert transit_id not in sim.transport.passenger_service_transits
+    assert pop.count_at(ids.EARTH) == 30
+    assert pop.groups[passenger.id].position.ref == str(ids.EARTH)
+    assert pop.inventory.amount(ids.EARTH, ids.WATER) > 0
+
+
+def test_external_population_eligibility_is_derived_from_existing_research():
+    from space_idle.population import ExternalPopulationSourceDefinition
+    app = build_game_application()
+    sim = app._simulation
+    pop = sim.population
+    source_id = next(iter(pop.external_definitions))
+    before = pop.external_definitions[source_id]
+    tech = next(iter(sim.research.definitions))
+    pop.external_definitions[source_id] = ExternalPopulationSourceDefinition(
+        before.id, before.operational_node_id, before.initial_people,
+        before.max_acquisition_per_day, (tech,),
+    )
+    completed = tech in sim.technology.completed
+    if completed:
+        sim.technology.completed.remove(tech)
+    assert pop.external_available(source_id, sim.day) == 0
+    sim.technology.completed.add(tech)
+    assert pop.external_available(source_id, sim.day) > 0

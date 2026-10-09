@@ -68,6 +68,7 @@ class ExternalPopulationSourceDefinition:
     operational_node_id: SpatialNodeId
     initial_people: int
     max_acquisition_per_day: int
+    required_technology_ids: tuple[DefinitionId, ...] = ()
 
     def __post_init__(self) -> None:
         for value in (self.initial_people, self.max_acquisition_per_day):
@@ -75,6 +76,8 @@ class ExternalPopulationSourceDefinition:
                 raise ValueError('external population quantities must be nonnegative integers')
         if not self.id:
             raise ValueError('external population source id required')
+        if len(set(self.required_technology_ids)) != len(self.required_technology_ids):
+            raise ValueError('duplicate external population technology prerequisite')
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,7 @@ class PopulationService:
     _day_fulfillment: dict[SpatialNodeId, float] = field(default_factory=dict, repr=False)
     transport: object | None = field(default=None, repr=False, compare=False)
     logistics: object | None = field(default=None, repr=False, compare=False)
+    technology_state: object | None = field(default=None, repr=False, compare=False)
     _service_dispatch_choices: dict[EntityId, tuple] = field(default_factory=dict, repr=False, compare=False)
     _dispatch_options: dict[EntityId, PassengerDispatchOption] = field(default_factory=dict, repr=False, compare=False)
 
@@ -271,6 +275,12 @@ class PopulationService:
 
     def external_available(self, source_id: str, day: int) -> int:
         definition = self.external_definitions[source_id]
+        if definition.required_technology_ids and (
+            self.technology_state is None or
+            any(technology not in self.technology_state.completed
+                for technology in definition.required_technology_ids)
+        ):
+            return 0
         used = (self.external_acquired_today.get(source_id, 0)
                 if self.external_acquisition_day == day else 0)
         return max(0, min(self.external_remaining[source_id],
@@ -658,6 +668,39 @@ class PopulationService:
                 ))
         return tuple(rows)
 
+    def transfer_order_blockers(self, order: PassengerTransferOrder, day: int) -> tuple[str, ...]:
+        """Present the same scoped transport admission used by dispatch planning."""
+        pending = order.pending_count(self.groups)
+        if not pending:
+            return ()
+        source = order.capacity_source_constraint
+        if source is not None and source.dedicated_vehicle_definition_id is not None:
+            if self.transport is not None and self.transport.fleet_commitment_snapshot(self._passenger_commitment_id(order.id)) is not None:
+                return ('fleet_recovery_waiting',)
+            option = self.dedicated_dispatch_option(
+                self.transport, order.origin_node_id, order.destination_node_id, pending,
+                source.dedicated_vehicle_definition_id, source.dedicated_units, day,
+                source.movement_hard_constraint,
+            )
+            blockers = list(option.blockers)
+        else:
+            try:
+                option, _, _ = self._service_route_option(
+                    order.origin_node_id, order.destination_node_id, pending, day,
+                    None if source is None else frozenset(source.transport_allocation_ids),
+                )
+                blockers = list(option.blockers)
+            except ValueError:
+                blockers = ['transport_service_required']
+        available = (self.free_count_at(order.origin_node_id)
+                     if order.source_external_provider_id is None
+                     else self.external_available(order.source_external_provider_id, day))
+        if not available:
+            blockers.append('no_source_people')
+        if not self._supportable_admission(order.destination_node_id, min(pending, max(available, 1)), day):
+            blockers.append('destination_life_support_or_housing')
+        return tuple(dict.fromkeys(blockers))
+
     def _service_route_option(
         self, origin: SpatialNodeId, destination: SpatialNodeId, requested: int, day: int,
         allowed_allocations: frozenset[EntityId] | None = None,
@@ -734,13 +777,47 @@ class PopulationService:
             inbound[order.destination_node_id] = inbound.get(order.destination_node_id, 0) + order.transit_count(self.groups)
         return inbound
 
-    def _automatic_passenger_demands(self, day: int) -> tuple[PassengerDispatchDemand, ...]:
+    def inbound_arrival_schedule(self) -> dict[SpatialNodeId, tuple[int, int]]:
+        """Confirmed physical arrivals only; no speculative target population."""
+        scheduled: dict[SpatialNodeId, list[tuple[int, int]]] = {}
+        if self.transport is not None:
+            for transit in self.transport.passenger_service_transits.values():
+                count = sum(self.groups[ref].count for ref in transit.passenger_group_refs)
+                if count:
+                    node = transit.legs[-1].destination_id
+                    scheduled.setdefault(node, []).append((transit.arrival_day, count))
+            for order in self.transfer_orders.values():
+                movement = self.transport.movement_execution_snapshot(self._passenger_execution_id(order.id))
+                if movement is not None:
+                    count = order.transit_count(self.groups)
+                    if count:
+                        scheduled.setdefault(order.destination_node_id, []).append((movement.completion_day, count))
+        return {node: (min(day for day, _ in rows), sum(count for _, count in rows))
+                for node, rows in scheduled.items()}
+
+    def outbound_by_node(self) -> dict[SpatialNodeId, int]:
+        result: dict[SpatialNodeId, int] = {}
+        if self.transport is not None:
+            for transit in self.transport.passenger_service_transits.values():
+                count = sum(self.groups[ref].count for ref in transit.passenger_group_refs)
+                node = transit.legs[0].origin_id
+                result[node] = result.get(node, 0) + count
+            for order in self.transfer_orders.values():
+                if self.transport.movement_execution_snapshot(self._passenger_execution_id(order.id)) is not None:
+                    result[order.origin_node_id] = result.get(order.origin_node_id, 0) + order.transit_count(self.groups)
+        return result
+
+    def _automatic_passenger_demands(
+        self, day: int, *, destination_node_id: SpatialNodeId | None = None,
+    ) -> tuple[PassengerDispatchDemand, ...]:
         """Derived unmet target movements through already owned Service capacity."""
         if self.logistics is None:
             return ()
         inbound = self._inbound_by_node()
         candidates: list[PassengerDispatchDemand] = []
         for destination, target in sorted(self.targets.items(), key=lambda item: str(item[0])):
+            if destination_node_id is not None and destination != destination_node_id:
+                continue
             accepted_manual = sum(
                 order.pending_count(self.groups)
                 for order in self.transfer_orders.values()
@@ -987,7 +1064,8 @@ class PopulationService:
         bundles: list[ExecutionRequirementBundle] = []
         for order in sorted(self.transfer_orders.values(), key=lambda row: str(row.id)):
             pending = order.pending_count(self.groups)
-            if pending <= 0 or self._passenger_execution_id(order.id) in transport.movement_executions:
+            if (pending <= 0 or self._passenger_execution_id(order.id) in transport.movement_executions
+                    or self._passenger_commitment_id(order.id) in transport.fleet_commitments):
                 continue
             choice = order.capacity_source_constraint
             # Unconstrained Orders intentionally use Transport Service only;
@@ -1125,6 +1203,24 @@ class PopulationService:
                         group_id for group_id in transit.passenger_group_refs if group_id in self.groups
                     )
                     transit.last_settled_day = elapsed_day
+                    # A fixed next leg can take these passengers only if its
+                    # actual physical Service is available at this endpoint.
+                    # Otherwise the preceding cabin stays occupied and burns
+                    # real provisions; later Fleet allocation changes cannot
+                    # silently teleport the manifest to another vehicle.
+                    for leg_index, next_leg in enumerate(transit.legs[1:]):
+                        if elapsed_day != transit.transfer_boundary_day(leg_index):
+                            continue
+                        available = any(
+                            edge.key == next_leg.service_key
+                            and edge.source_id == next_leg.origin_id
+                            and edge.destination_id == next_leg.destination_id
+                            and edge.capacity_t_per_day + 1e-9 >= next_leg.payload_mass_t
+                            for edge in transport.transport_service_supplies(elapsed_day)
+                        )
+                        if not available:
+                            transit.handoff_wait_days[leg_index] += 1
+                        break
             # A vessel and its unused provisions do not disappear when the
             # last passenger dies in flight. Continue the fixed physical leg
             # until arrival; then settle the remaining onboard Resource through
@@ -1136,14 +1232,18 @@ class PopulationService:
             destination = transit.legs[-1].destination_id
             if count and self._supportable_admission(destination, count, day) < count:
                 continue
-            if not self.inventory.can_admit_resources(destination, transit.onboard_resources):
-                continue
+            # People and provisions are separate physical obligations.  An
+            # already arrived vessel keeps its unused cargo and service-cycle
+            # backpressure if the destination cannot accept that cargo.
             for group_id in survivors:
                 self.settle_arrival(group_id, destination)
                 if order is not None:
                     order.in_transit_group_refs.remove(group_id)
             if order is not None:
                 order.delivered_count += count
+            transit.passenger_group_refs = ()
+            if not self.inventory.can_admit_resources(destination, transit.onboard_resources):
+                continue
             for resource, amount in transit.onboard_resources.items():
                 if amount > 1e-12:
                     self.inventory.add(destination, resource, amount)
@@ -1157,6 +1257,13 @@ class PopulationService:
             if movement is None:
                 if order.in_transit_group_refs:
                     raise RuntimeError('in-transit people have no physical Movement')
+                commitment_id = self._passenger_commitment_id(order.id)
+                commitment = transport.fleet_commitment_snapshot(commitment_id)
+                if commitment is not None:
+                    if commitment.operational_node_id is None:
+                        raise RuntimeError('passenger Fleet recovery lacks physical Node')
+                    if transport.recover_fleet_provisions(commitment_id, commitment.operational_node_id):
+                        transport.release_fleet_commitment(commitment_id, day=day)
                 continue
             # Each elapsed game day is settled exactly once at its boundary.
             # Provisions are already onboard Movement-owned stock; Inventory
@@ -1184,23 +1291,21 @@ class PopulationService:
                 continue  # onboard hold is real: Fleet remains unavailable
             recovery_node = (order.origin_node_id if movement.final_asset_disposition.value == 'origin'
                              else order.destination_node_id)
-            if not self.inventory.can_admit_resources(recovery_node, onboard):
-                continue
             for group_id in order.in_transit_group_refs:
                 self.settle_arrival(group_id, order.destination_node_id)
             order.delivered_count += count
             order.in_transit_group_refs.clear()
-            for resource, amount in onboard.items():
-                if amount > 1e-12:
-                    self.inventory.add(recovery_node, resource, amount)
             transport.receive_fleet_commitment(
-                movement.fleet_commitment_id,
-                order.origin_node_id if movement.final_asset_disposition.value == 'origin'
-                else order.destination_node_id,
+                movement.fleet_commitment_id, recovery_node,
                 execution_id=execution_id, day=day,
             )
+            # Finite Movement has physically ended.  Transfer residual Stock
+            # to the existing Fleet-owned cabin before deleting its execution;
+            # that Fleet remains committed until Inventory can admit it.
+            transport.provision_fleet_commitment(movement.fleet_commitment_id, spec, onboard)
             transport.finish_movement_execution(execution_id)
-            transport.release_fleet_commitment(movement.fleet_commitment_id, day=day)
+            if transport.recover_fleet_provisions(movement.fleet_commitment_id, recovery_node):
+                transport.release_fleet_commitment(movement.fleet_commitment_id, day=day)
 
     def set_target(self, node_id: SpatialNodeId, count: int) -> None:
         if not self.graph.has_operational_node(node_id):
@@ -1329,9 +1434,11 @@ class PopulationService:
     def supplys(self, day: int, *, node_id: SpatialNodeId | None = None) -> tuple[SupplyRequirement, ...]:
         rows: list[SupplyRequirement] = []
         nodes = (node_id,) if node_id is not None else sorted(self.graph.operational_node_ids(), key=str)
+        inbound = self.inbound_arrival_schedule()
         for current_id in nodes:
             people = self.count_at(current_id)
-            if not people:
+            inbound_day, incoming = inbound.get(current_id, (day, 0))
+            if not people and not incoming:
                 continue
             providers = [
                 (facility, definition.life_support)
@@ -1344,16 +1451,29 @@ class PopulationService:
             # One need pool is shared across all providers. Forecast its total
             # instead of counting each provider as another full population.
             ratio = min(1.0, people / total_capacity)
+            future_ratio = min(1.0, (people + incoming) / total_capacity)
             for facility, spec in providers:
                 demand = spec.person_days_per_day * facility.level * ratio
+                future_demand = spec.person_days_per_day * facility.level * future_ratio
                 for resource, rate in spec.net_resources:
-                    rows.append(SupplyRequirement(
-                        id=EntityId(f'supply.population:{facility.id}:{resource}'),
-                        owner_kind='population', owner_id=facility.id,
-                        destination_id=current_id, resource_id=resource,
-                        amount_t=demand * rate, priority=ActivityPriority(5),
-                        recurring_rate_t_per_day=demand * rate,
-                    ))
+                    if demand * rate > 1e-12:
+                        rows.append(SupplyRequirement(
+                            id=EntityId(f'supply.population:{facility.id}:{resource}'),
+                            owner_kind='population', owner_id=facility.id,
+                            destination_id=current_id, resource_id=resource,
+                            amount_t=demand * rate, priority=ActivityPriority(5),
+                            recurring_rate_t_per_day=demand * rate,
+                        ))
+                    extra = (future_demand - demand) * rate
+                    if extra > 1e-12:
+                        rows.append(SupplyRequirement(
+                            id=EntityId(f'supply.population.inbound:{facility.id}:{resource}'),
+                            owner_kind='population', owner_id=facility.id,
+                            destination_id=current_id, resource_id=resource,
+                            amount_t=extra, priority=ActivityPriority(5),
+                            forecast_requirement_day=inbound_day,
+                            purpose='confirmed_population_arrival',
+                        ))
         return tuple(rows)
 
     def consume_allocated(self, execution: ExecutionAllocationPlan, day: int) -> None:

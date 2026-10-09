@@ -218,6 +218,7 @@ def build_base_simulation(
     )
     population.transport = transport
     population.logistics = logistics
+    population.technology_state = technology
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),
         facilities, inventory, power, transport, research, service_capacity_registry, population,

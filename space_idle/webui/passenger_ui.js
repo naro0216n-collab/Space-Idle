@@ -9,7 +9,7 @@
   const statusName={pending:'未出発',active:'輸送中',completed:'輸送終了',cancelled:'取消済み'};
   const blockers={no_passenger_seats:'座席なし',no_source_people:'出発人員不足',seats_or_payload_limit:'座席・質量容量不足',
     operation_or_onboard_resources:'燃料・船内生活Resource不足',destination_life_support_or_housing:'到着先Housing・生命維持不足',
-    transport_service_required:'成立済みTransport Serviceが必要'};
+    transport_service_required:'成立済みTransport Serviceが必要',fleet_recovery_waiting:'前便Fleetの資源荷卸し・回収待ち'};
   const roots=()=>[['location',document.getElementById('passengerLocationMount')],['logistics',document.getElementById('passengerLogisticsMount')]].filter(([,el])=>el);
   const key=(kind)=>`passengers:${kind}`;
   function currentDraft(kind){

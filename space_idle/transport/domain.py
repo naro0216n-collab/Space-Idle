@@ -370,6 +370,7 @@ def capture_transport(sim: Any) -> dict[str, Any]:
              "passenger_group_refs": [str(ref) for ref in transit.passenger_group_refs],
              "started_day": transit.started_day, "last_settled_day": transit.last_settled_day,
              "onboard_resources": {str(resource): amount for resource, amount in sorted(transit.onboard_resources.items())},
+             "handoff_wait_days": list(transit.handoff_wait_days),
              "legs": [{
                  "service_key": leg.service_key, "allocation_id": str(leg.allocation_id),
                  "origin_id": str(leg.origin_id), "destination_id": str(leg.destination_id),
@@ -653,7 +654,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     for index, raw in enumerate(decode_list(data['passenger_service_transits'], 'passenger service transits')):
         row = require_fields(raw, {
             'id', 'order_id', 'passenger_group_refs', 'started_day',
-            'last_settled_day', 'onboard_resources', 'legs',
+            'last_settled_day', 'onboard_resources', 'legs', 'handoff_wait_days',
         }, f'passenger service transit[{index}]')
         legs = []
         for leg_index, raw_leg in enumerate(decode_list(row['legs'], 'passenger service legs')):
@@ -694,6 +695,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             tuple(legs), decode_int(row['started_day'], 'departure day'),
             decode_int(row['last_settled_day'], 'settled day'),
             {DefinitionId(key): decode_float(amount, 'onboard stock') for key, amount in resources.items()},
+            [decode_int(value, 'handoff waiting days') for value in decode_list(row['handoff_wait_days'], 'handoff waiting days')],
         )
         if transit.id in tr.passenger_service_transits:
             raise ValueError('duplicate passenger service transit ID')

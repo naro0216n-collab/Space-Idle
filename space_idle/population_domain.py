@@ -130,6 +130,10 @@ def restore_population_state(sim, state):
 
 def validate_configuration(sim, ctx: ValidationContext) -> None:
     del ctx
+    for source in sim.population.external_definitions.values():
+        for technology in source.required_technology_ids:
+            if technology not in sim.research.definitions:
+                raise ValueError(f'external population source technology not defined: {technology}')
     for definition in sim.facilities.definitions.values():
         if definition.life_support is not None:
             for resource_id, _ in definition.life_support.net_resources:

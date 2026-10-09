@@ -221,6 +221,7 @@ class ExternalPopulationSourceRow:
     remaining_people: int
     max_acquisition_per_day: int
     available_today: int
+    missing_technologies: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,15 @@ class PopulationView:
     deprivation_person_days: float
     resource_demand_per_day: tuple[tuple[str, float], ...]
     external_sources: tuple[ExternalPopulationSourceRow, ...]
+    inbound_count: int = 0
+    outbound_count: int = 0
+    expected_count_after_confirmed_arrivals: int = 0
+    crew_service_used_per_day: float = 0.0
+    # Resource, current daily need, on-hand, in-transit/arrival-waiting,
+    # confirmed future daily need.  All quantities originate in owning Domains.
+    living_resource_flows: tuple[tuple[str, float, float, float, float], ...] = ()
+    # Origin, people, external source or None, route days, shared payload tonnes.
+    target_transport_candidates: tuple[tuple[str, int, int, str | None, int, float, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)

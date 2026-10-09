@@ -538,6 +538,44 @@ def run(browser) -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="location"]').click()
             _assert(page.locator("#operationsView").is_visible(), "location section must open the location decision canvas")
             _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
+            # Population Target and one-shot transfer are distinct player
+            # decisions. Exercise both on the real browser/server boundary,
+            # including preview, an accepted finite intent and cancellation.
+            _select_location(page, ids.EARTH)
+            page.locator('[data-section-tab="location"][data-tab="overview"]').click()
+            pop_card = page.locator('#operationsView .decision-card', has=page.locator('[data-population-target-input]'))
+            pop_card.wait_for(timeout=10000)
+            initial_people = runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.current_count
+            pop_card.locator('[data-population-target-input]').fill(str(initial_people + 2))
+            pop_card.locator('[data-set-population-target]').click()
+            page.wait_for_function(
+                'count => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === count',
+                arg=initial_people + 2,
+            )
+            _assert(runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.desired_count == initial_people + 2,
+                    'population Target UI must change the authoritative intent')
+            pop_card.locator('[data-clear-population-target]').click()
+            page.wait_for_function(
+                '() => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === null',
+            )
+            passenger_card = page.locator('#passengerLocationMount')
+            passenger_card.locator('[data-passenger-field="destination"]').select_option(str(ids.LEO))
+            passenger_card.locator('[data-passenger-field="count"]').fill('1')
+            passenger_card.locator('[data-passenger-preview]').click()
+            passenger_card.locator('.passenger-option').first.wait_for(timeout=10000)
+            _assert('出発可能' in passenger_card.locator('[data-passenger-options]').inner_text(),
+                    'passenger preview must show feasible capacity and blockers at the decision point')
+            passenger_card.locator('.passenger-option input[type="radio"]').first.check()
+            passenger_card.locator('[data-passenger-submit]').click()
+            passenger_card.locator('[data-passenger-cancel]').first.wait_for(timeout=10000)
+            _assert(len(runtime._app._simulation.population.transfer_orders) == 1,
+                    'finite transfer request must create exactly one Population Order')
+            passenger_card.locator('[data-passenger-cancel]').first.click()
+            page.wait_for_function(
+                "() => document.querySelector('#passengerLocationMount [data-passenger-orders]')?.textContent?.includes('取消済み')",
+            )
+            _assert(next(iter(runtime._app._simulation.population.transfer_orders.values())).cancelled_count == 1,
+                    'cancellation must account for the pending passenger without moving any human')
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
                 f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'

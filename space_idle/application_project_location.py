@@ -26,7 +26,7 @@ from .application_views import (
 )
 from .app_contracts.ui_reports import ComparisonValueRow
 from .execution_requirements import ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement
-from .shared import SpatialNodeId
+from .shared import DefinitionId, SpatialNodeId
 from .disposal import project_salvage_recovery
 from .construction.models import FacilityDecommissionTarget, ProjectStatus
 from .spatial import EnvironmentFieldScope, SpatialContextId
@@ -689,16 +689,46 @@ class LocationProjectorMixin:
             pop = sim.population
             people = pop.groups_at(location_id)
             resource_demand: dict[str, float] = {}
+            future_demand: dict[str, float] = {}
             for supply in pop.supplys(sim.day, node_id=location_id):
                 if supply.destination_id == location_id:
                     key = str(supply.resource_id)
-                    resource_demand[key] = resource_demand.get(key, 0.0) + supply.amount_t
+                    ledger = (future_demand if supply.purpose == 'confirmed_population_arrival'
+                              else resource_demand)
+                    ledger[key] = ledger.get(key, 0.0) + supply.amount_t
+            inbound_resources: dict[str, float] = {}
+            for segment in sim.logistics.cargo_flow_snapshots():
+                if segment.final_destination_id == location_id:
+                    key = str(segment.resource_id)
+                    inbound_resources[key] = inbound_resources.get(key, 0.0) + segment.amount_t
+            for waiting in sim.logistics.arrival_waiting_snapshots():
+                if waiting.final_destination_id == location_id:
+                    key = str(waiting.resource_id)
+                    inbound_resources[key] = inbound_resources.get(key, 0.0) + waiting.amount_t
             executed_life_support = sum(
                 next((row.allocated_execution for row in execution_allocations.allocations if row.bundle_id == pop._provider_bundle_id(facility.id)), 0.0)
                 for facility in sim.facilities.all_at(location_id)
                 if sim.facilities.definitions[facility.definition_id].life_support is not None
             )
             target_unmet, local_receivable, target_blockers = pop.local_target_preview(location_id, sim.day)
+            confirmed_inbound = pop._inbound_by_node().get(location_id, 0)
+            confirmed_outbound = pop.outbound_by_node().get(location_id, 0)
+            source_candidates = []
+            if pop.targets.get(location_id) is not None and target_unmet:
+                for demand in pop._automatic_passenger_demands(sim.day, destination_node_id=location_id):
+                    try:
+                        option, _, _ = pop._service_route_option(
+                            demand.origin_node_id, location_id, demand.requested_count, sim.day,
+                        )
+                    except ValueError:
+                        continue
+                    source_candidates.append((
+                        str(demand.origin_node_id), demand.requested_count,
+                        min(demand.requested_count, option.possible_people),
+                        demand.source_external_provider_id, option.latency_days,
+                        min(demand.requested_count, option.possible_people) * option.payload_per_person_t,
+                        option.blockers,
+                    ))
             population_view = PopulationView(
                 sum(group.count for group in people),
                 pop.targets.get(location_id),
@@ -711,9 +741,23 @@ class LocationProjectorMixin:
                 sum(group.count * pop.crew_factor(group) for group in people if not group.activity_commitment_ref),
                 sum(group.count * group.deprivation for group in people),
                 tuple(sorted(resource_demand.items())),
-                tuple(ExternalPopulationSourceRow(definition.id, pop.external_remaining[definition.id], definition.max_acquisition_per_day, pop.external_available(definition.id, sim.day))
+                tuple(ExternalPopulationSourceRow(
+                    definition.id, pop.external_remaining[definition.id],
+                    definition.max_acquisition_per_day, pop.external_available(definition.id, sim.day),
+                    tuple(sim.research.definitions[tech].display_name for tech in definition.required_technology_ids
+                          if tech not in sim.technology.completed),
+                )
                       for definition in sorted(pop.external_definitions.values(), key=lambda source: source.id)
                       if definition.operational_node_id == location_id),
+                inbound_count=confirmed_inbound,
+                outbound_count=confirmed_outbound,
+                expected_count_after_confirmed_arrivals=pop.count_at(location_id) + confirmed_inbound,
+                crew_service_used_per_day=service_allocations.summary(location_id, 'crew').allocated_rate,
+                living_resource_flows=tuple((key, resource_demand.get(key, 0.0),
+                                             sim.inventory.amount(location_id, DefinitionId(key)),
+                                             inbound_resources.get(key, 0.0), future_demand.get(key, 0.0))
+                                            for key in sorted(set(resource_demand) | set(future_demand))),
+                target_transport_candidates=tuple(source_candidates),
             )
 
         return OperationalNodeView(

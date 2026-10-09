@@ -174,9 +174,21 @@ class ScientificExplorationService:
             return definition.minimum_payload_t
         vehicle = self.transport.vehicle_definition(state.vehicle_definition_id)
         assert vehicle is not None
-        onboard = self._crew_resource_load(definition, state, day)
+        # Once an Activity has physically departed, the return leg carries its
+        # surviving Population and real remaining Fleet-owned provisions, not
+        # the launch-day crew count and a second hypothetical supply load.
+        if state.phase is ScientificExplorationPhase.RETURN_PREPARING:
+            people = self.population.activity_count(self._crew_owner(definition))
+            commitment = (None if state.fleet_commitment_id is None else
+                          self.transport.fleet_commitment_snapshot(state.fleet_commitment_id))
+            if commitment is None:
+                raise RuntimeError('returning Crew lacks physical Fleet provision ownership')
+            onboard = dict(commitment.onboard_resources)
+        else:
+            people = definition.required_crew
+            onboard = self._crew_resource_load(definition, state, day)
         return definition.minimum_payload_t + vehicle.passengers.loaded_payload_mass(
-            definition.required_crew, onboard,
+            people, onboard,
         ) / definition.required_units
 
     def _crew_blockers(self, definition: ScientificExplorationDefinition,

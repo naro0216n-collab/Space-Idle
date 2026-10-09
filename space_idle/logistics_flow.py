@@ -109,6 +109,18 @@ class LogisticsFlowMixin:
                 direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
                 key = ('allocation', leg.allocation_id, direction)
                 backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
+            # A missed intermediate handoff keeps the preceding Service's
+            # cabin occupied.  It cannot be counted as available Cargo mass.
+            for index, delay in enumerate(transit.handoff_wait_days):
+                if not delay or transit.last_settled_day >= transit.transfer_boundary_day(index):
+                    continue
+                leg = transit.legs[index]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError('Passenger handoff references missing Transport Allocation')
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
         for edge in self.transport.transport_service_supplies(day):
             occupied = backpressure.get(self._capacity_owner_key_from_supply(edge), 0.0)
             if occupied <= 1e-12:
