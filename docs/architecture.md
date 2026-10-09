@@ -1203,6 +1203,8 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 Definition間の静的関係、特定Scenarioでの現在の実行可能性、日次の実績Flowは異なる分析層とする。静的Graphで到達しただけの利用手段を実行可能とは判定しない。分析結果はJSON等の読取Projectionとして出力し、Node/Relationの追加や変更に伴う診断根拠を追跡可能にする。
 
+比較実験は開発用の独立したApplicationインスタンスをScenarioごとに構成し、Player CommandをApplication境界から適用して通常のcanonical dayで進行させる。初期authoritative Stateのfingerprint、Content/World/Scenario identity、適用Commandと拒否理由、日別のOwner State観測を記録する。定義依存グラフのfingerprintは登録済み関係の同一性を表すもので、Worldの全物理パラメータを含むContent全体のfingerprintと同一視しない。在庫差分は純増減量であり、実際の生産・消費・物流の総flowとは区別する。比較用の判定、変更条件、進行経路をSimulationへ常設せず、Playerに提供する推奨攻略順を導出しない。
+
 ## 18. アーキテクチャ定義の要約
 
 本作のCoreは、Research / Knowledgeの成長、物理的な産業拡大、空間的な拠点拡大、それを支えるResource / Service Capacity / Movement / Logisticsを一つの状態モデルへ接続する。

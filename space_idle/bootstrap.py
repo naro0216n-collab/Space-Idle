@@ -4,11 +4,11 @@ from .application import GameApplication
 from .content.base_catalog import build_base_catalog
 from .content.base_scenario import build_standard_scenario_definition
 from .composition.base_simulation import build_base_simulation
+from .scenario import ScenarioDefinition
 from .validation import validate_catalog_coverage, validate_runtime_state, validate_simulation_configuration
 
 
-def _compose_base_application(*, apply_scenario: bool) -> GameApplication:
-    scenario = build_standard_scenario_definition()
+def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinition) -> GameApplication:
     catalog = build_base_catalog()
     simulation = build_base_simulation(
         catalog, population_rules=scenario.population_rules,
@@ -35,9 +35,19 @@ def _compose_base_application(*, apply_scenario: bool) -> GameApplication:
 
 def build_game_application() -> GameApplication:
     """Compose a new standard-scenario game."""
-    return _compose_base_application(apply_scenario=True)
+    return _compose_base_application(apply_scenario=True, scenario=build_standard_scenario_definition())
+
+
+def build_game_application_for_scenario(scenario: ScenarioDefinition) -> GameApplication:
+    """Compose and validate a fresh game from the supplied new-game Scenario.
+
+    Used by explicit development experiments without editing a running game's
+    authoritative State. Uses the same Scenario application and day-0 boundary
+    as a normal new game; never re-applies Scenario values on Save Load.
+    """
+    return _compose_base_application(apply_scenario=True, scenario=scenario)
 
 
 def build_game_application_for_load() -> GameApplication:
     """Compose the base definitions with empty runtime State for Persistence restore."""
-    return _compose_base_application(apply_scenario=False)
+    return _compose_base_application(apply_scenario=False, scenario=build_standard_scenario_definition())

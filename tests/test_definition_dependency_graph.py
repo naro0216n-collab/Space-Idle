@@ -251,3 +251,100 @@ def test_live_state_observation_uses_owned_state_and_is_distinct_from_definition
         assert any(row.context_id == str(interface.provider_id)
                    and row.kind.startswith("external_market_") for row in scoped.metrics)
         break
+
+
+def test_canonical_experiments_replay_player_commands_and_preserve_absent_metrics():
+    from scripts.analysis_experiments import (
+        ExperimentCase, run_experiments, compare_experiments,
+    )
+    from space_idle.application_commands import StartResearch
+
+    app = build_game_application()
+    technology = next(iter(app._simulation.research.definitions))
+    # The two cases start from independently composed Scenario/Domain States.
+    cases = (
+        ExperimentCase("baseline", build_game_application, lambda _app, _day: ()),
+        ExperimentCase("research", build_game_application,
+                       lambda _app, day: (StartResearch(str(technology)),) if day == 0 else ()),
+        ExperimentCase("rejected", build_game_application,
+                       lambda _app, day: (StartResearch("unregistered.technology"),) if day == 0 else ()),
+    )
+    observed = run_experiments(cases, days=2)
+    repeated = run_experiments(cases, days=2)
+    assert [run.to_json_data() for run in observed] == [run.to_json_data() for run in repeated]
+    assert {run.initial_state_sha256 for run in observed}.__len__() == 1
+    assert {run.definition_graph_sha256 for run in observed}.__len__() == 1
+    assert all([snapshot.day for snapshot in run.observations] == [0, 1, 2] for run in observed)
+    assert observed[2].rejected_commands[0].code == "not_found"
+    assert not observed[1].rejected_commands
+    assert observed[0].observations == observed[2].observations
+    differences = compare_experiments(observed)
+    assert differences["baseline"] == "baseline"
+    assert differences["comparisons"][0]["same_initial_state"]
+    # RP or resulting research activity differs due to a *real* Application Command.
+    assert differences["comparisons"][0]["metric_differences"]
+
+    # A missing metric is never silently converted into zero or an invented flow.
+    from space_idle.analysis_observation import StateObservation, StateMetric
+    from dataclasses import replace
+    base = observed[0]
+    expanded = replace(observed[1], observations=(
+        StateObservation(0, base.scenario_id, ()),
+        StateObservation(1, base.scenario_id, ()),
+        StateObservation(2, base.scenario_id, (StateMetric(
+            "inventory_stock", "new-resource", "another-node", 1, "t", "inventory.stock"),)),
+    ))
+    missing = compare_experiments((base, expanded))["comparisons"][0]["metric_differences"]
+    new = next(row for row in missing if row["subject_id"] == "new-resource")
+    assert new["baseline_final"] is None and new["variant_initial"] is None
+    assert new["final_difference"] is None and new["variant_net_change"] is None
+
+
+def test_experiment_input_requires_explicit_time_and_real_command_types():
+    from scripts.analysis_experiments import ExperimentCase, run_experiments
+    from space_idle.application_commands import AdvanceTime
+    from scripts.compare_experiments import parse_cases
+    import pytest
+
+    with pytest.raises(ValueError, match="names must be unique"):
+        run_experiments((ExperimentCase("same", build_game_application, lambda a, d: ()),
+                         ExperimentCase("same", build_game_application, lambda a, d: ())), days=0)
+    with pytest.raises(ValueError, match="cannot control"):
+        run_experiments((ExperimentCase("bad", build_game_application,
+                                         lambda a, d: (AdvanceTime(5),)),), days=1)
+    with pytest.raises(ValueError, match="outside experiment horizon"):
+        parse_cases({"days": 2, "cases": [{"name": "late", "commands": [
+            {"day": 2, "type": "StartResearch", "args": {"research_id": "anything"}},
+        ]}]})
+    with pytest.raises(ValueError, match="unknown or unsupported"):
+        parse_cases({"days": 1, "cases": [{"name": "untyped", "commands": [
+            {"day": 0, "type": "MagicResult", "args": {}},
+        ]}]})
+
+
+def test_comparison_accepts_distinct_validated_scenario_definitions_without_mutating_live_state():
+    from dataclasses import replace
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle import build_game_application_for_scenario
+    from scripts.analysis_experiments import ExperimentCase, run_experiments, compare_experiments
+
+    initial = build_standard_scenario_definition()
+    first = initial.inventory_stock[0]
+    more = replace(initial, id="test.scenario.resource_perturbation", inventory_stock=(
+        replace(first, amount_t=first.amount_t + 10.0), *initial.inventory_stock[1:],
+    ))
+    cases = (
+        ExperimentCase("normal", lambda: build_game_application_for_scenario(initial), lambda _app, _day: ()),
+        ExperimentCase("extra", lambda: build_game_application_for_scenario(more), lambda _app, _day: ()),
+    )
+    runs = run_experiments(cases, days=1)
+    differences = compare_experiments(runs)["comparisons"][0]
+    assert not differences["same_initial_state"]
+    assert not differences["same_scenario"]
+    change = next(row for row in differences["metric_differences"]
+                  if row["kind"] == "inventory_stock" and
+                  row["subject_id"] == str(first.resource_id) and
+                  row["context_id"] == str(first.operational_node_id))
+    assert change["variant_initial"] - change["baseline_initial"] == 10.0
+    assert change["final_difference"] is not None
+    assert build_standard_scenario_definition() == initial

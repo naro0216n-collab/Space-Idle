@@ -1,7 +1,7 @@
 """Space Idle public application boundary."""
 
 from .version import VERSION as __version__
-from .bootstrap import build_game_application
+from .bootstrap import build_game_application, build_game_application_for_scenario
 from .application import (
     AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CancelBuild,
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
