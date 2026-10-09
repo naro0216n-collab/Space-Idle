@@ -73,13 +73,30 @@ def run(*, browser=None) -> None:
             page.set_viewport_size({"width": 1024, "height": 834})
             page.locator('#operationsView [data-toggle-inspector]').click()
             scroller = page.locator("#researchTreeScroll")
-            scroll_metrics = page.evaluate(
-                "el => ({width: el.clientWidth, scrollWidth: el.scrollWidth})", scroller.element_handle()
+            # Wait for the new viewport's layout before scrolling. Keep the same
+            # mounted element as the observation target across a real refresh:
+            # rebuilding that scrollport is itself a loss of user interaction.
+            page.wait_for_function(
+                "() => { const el=document.querySelector('#researchTreeScroll'); "
+                "return el && el.isConnected && el.scrollWidth > el.clientWidth; }",
+                timeout=10000,
             )
-            assert scroll_metrics["scrollWidth"] > scroll_metrics["width"]
-            page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
-            initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
+            initial_tree_scroll = page.evaluate(
+                """() => {
+                    const el=document.querySelector('#researchTreeScroll');
+                    el.scrollLeft=Math.min(180,el.scrollWidth-el.clientWidth);
+                    window.__researchScrollportUnderTest=el;
+                    return el.scrollLeft;
+                }"""
+            )
             assert initial_tree_scroll > 0
+            page.evaluate(
+                """() => {
+                    window.__researchSnapshotApplied=false;
+                    document.addEventListener('spaceidle:snapshot',
+                        () => { window.__researchSnapshotApplied=true; }, {once:true});
+                }"""
+            )
 
             with page.expect_response(
                 lambda response: response.request.method == "GET"
@@ -88,6 +105,10 @@ def run(*, browser=None) -> None:
             ) as explicit_refresh:
                 page.locator("#refreshButton").click()
             assert explicit_refresh.value.ok
+            page.wait_for_function("() => window.__researchSnapshotApplied === true", timeout=10000)
+            assert page.evaluate(
+                "() => document.querySelector('#researchTreeScroll') === window.__researchScrollportUnderTest"
+            )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "research"
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1

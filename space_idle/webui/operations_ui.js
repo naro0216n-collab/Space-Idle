@@ -693,11 +693,49 @@
     return true;
   }
 
+  function patchResearchTab(root,html){
+    if(root.dataset.renderedTab!=='research')return false;
+    const card=root.querySelector(':scope > .research-tree-card');
+    const provider=root.querySelector(':scope > .research-provider-summary');
+    const scroll=card?.querySelector(':scope > #researchTreeScroll');
+    const stage=scroll?.querySelector(':scope > #researchTree');
+    if(!card||!provider||!scroll||!stage)return false;
+    const template=document.createElement('template');
+    template.innerHTML=html.trim();
+    const nextCard=template.content.querySelector('.research-tree-card');
+    const nextProvider=template.content.querySelector('.research-provider-summary');
+    const nextScroll=nextCard?.querySelector(':scope > #researchTreeScroll');
+    const nextStage=nextScroll?.querySelector(':scope > #researchTree');
+    if(!nextCard||!nextProvider||!nextScroll||!nextStage)return false;
+    const oldChildren=[...card.children],newChildren=[...nextCard.children];
+    if(oldChildren.length!==newChildren.length||oldChildren.indexOf(scroll)!==newChildren.indexOf(nextScroll))return false;
+
+    // Keep the real scroll container and its stage connected throughout the
+    // authoritative refresh. Replacing an ancestor can discard a just-applied
+    // user scroll in WebKit before the next capture, even when we restore offsets.
+    if(stage.getAttribute('style')!==nextStage.getAttribute('style'))stage.setAttribute('style',nextStage.getAttribute('style'));
+    A.replaceHtmlPreservingKeyed(stage,nextStage.innerHTML,[
+      {selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id']},
+    ]);
+    for(let index=0;index<oldChildren.length;index++){
+      const live=oldChildren[index],next=newChildren[index];
+      if(live===scroll)continue;
+      if(live.outerHTML!==next.outerHTML)live.replaceWith(next);
+    }
+    if(provider.innerHTML!==nextProvider.innerHTML){
+      A.replaceHtmlPreservingKeyed(provider,nextProvider.innerHTML,[
+        {selector:'[data-draft-key]',attributes:['data-draft-key','data-draft-scope']},
+      ]);
+    }
+    return true;
+  }
+
   function renderActiveTab(){
     const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab,surface:renderSurfaceTab};
     const root=$('#operationsTabContent');
     const html=(renderers[state.activeTab]||renderOverviewTab)();
     if(state.activeTab==='survey'&&patchSurveyDecisionSurface(root,html)){root.dataset.renderedTab=state.activeTab;return;}
+    if(state.activeTab==='research'&&patchResearchTab(root,html)){root.dataset.renderedTab=state.activeTab;return;}
     const viewport=root.querySelector('.surface-map-viewport');
     const oldScrollKey=root.dataset.surfaceMapScrollKey;
     if(viewport&&oldScrollKey)surfaceMapScrollByContext.set(oldScrollKey,{left:viewport.scrollLeft,top:viewport.scrollTop});
