@@ -1008,7 +1008,7 @@ UNKNOWN
 
 Survey Provider Definitionはsurvey rate、coverage / reach model、max Knowledge Level、observation precision、必要Operation / Infrastructure / source Capability、minimum source units等を持つ。Survey ServiceはproviderのSpatial contextとtarget Cellの関係からreachabilityを判定する。軌道Remote Survey providerは対象天体にSurface Locationが存在しなくても広域Cellを観測できる。 Observation ModeごとのTechnologyは消費しないEligibility Requirementであり、Survey Serviceが他のReach/Site/Source Capabilityと同じ時点の判定へ合成する。Technology Domainの単一Stateを参照し、Survey Campaignのauthoritative StateやProvider Assignmentへ解禁フラグを複製しない。未解禁Modeは候補・blockerに残し、実Execution Bundleを発生させない。
 
-Fleet-backed Survey ProviderはSurvey Domainが `SurveyProviderAssignmentState` をauthoritativeなprovider-use intentとして所有し、そのStateがFleet Domainの排他的Fleet Commitmentを参照する。Fleet quantityと排他所有はFleet Domainだけが所有し、Survey Campaignへ複製しない。Player Commandはprovider用途へ配分する希望Fleet quantityを受け取り、Provider AssignmentからSurvey Service Capacityを導出してFacility providerの能力と同じExecution allocationへ供給する。
+Survey Provider Definitionは特定のFacility / Vehicle Definition IDを供給元として固定せず、必須source Capability集合を宣言する。Observation Modeも追加source Capabilityを要求でき、両集合とSpatial / Movement Reachを実際の供給元Definitionごとに判定する。Survey Service CapacityはProviderと物理source Definitionの組で独立して供給・配分し、一方のAssetに適合しないModeへ他方のCapacityを転用しない。Facility側は実Facility StateのCapability・稼働状態・Power等から供給を導出し、同じFacility Definitionを複数Survey Providerが重複計上するContentはConfiguration Validationで拒否する。Fleet-backed Survey ProviderはSurvey Domainが `SurveyProviderAssignmentState` をauthoritativeなprovider-use intentとして所有し、そのStateがFleet Domainの排他的Fleet Commitmentを参照する。Assignmentの一意性はProvider・Operational Node・Vehicle Definitionの組とし、同一Providerへ複数機種を独立に割当可能とする。Fleet quantityと排他所有はFleet Domainだけが所有し、Survey Campaignへ複製しない。Player Commandはprovider用途へ配分する機種別希望Fleet quantityを受け取り、Provider AssignmentからSurvey Service Capacityを導出してFacility providerの能力と同じExecution allocationへ供給する。
 
 ```text
 SurveyProviderAssignmentState
@@ -1026,7 +1026,7 @@ SurveyCampaignState
   target_cell_ids
   resource_ids
   goal_knowledge_level
-  provider_constraint?
+  provider_constraint?  # provider + operational node + optional source definition
   observation_mode_constraint?
   activity_priority
   control_state
@@ -1034,7 +1034,7 @@ SurveyCampaignState
 
 別の永続Region Entityを必須にせず、UIの地域選択はtarget_cell_idsへ解決する。CampaignはKnowledge Stateからscope内の未完了targetを導出し、完了済みtargetをactive allocationから外して余剰Survey Capacityを同じscopeの未完了targetへ再配分できる。scope外targetを追加せず、goal Knowledge Levelを越えて進行しない。同じKnowledge progressをCampaign Stateへ重複保存しない。
 
-Provider / Observation Modeは物理的な能力差を表すDefinitionとして維持する。Campaignのscope / goalを満たす候補が一意、またはゲーム上同等ならCoreが決定論的に解決できる。必要Fleet拘束量、Resource消費、Reach、所要時間、Infrastructure Requirement、Knowledge上限等に戦略差がある候補が複数残る場合はApplicationへ候補差を返し、Playerがhard constraintを指定できる。登録順やID順だけで戦略的に異なる候補を暗黙選択しない。
+Provider / Observation Modeは物理的な能力差を表すDefinitionとして維持する。Campaignのscope / goalを満たす候補が一意、またはゲーム上同等ならCoreが決定論的に解決できる。必要Fleet拘束量、Resource消費、Reach、所要時間、Infrastructure Requirement、Knowledge上限等に戦略差がある候補が複数残る場合はApplicationへ候補差を返し、Playerがprovider / node / optional source DefinitionとObservation Modeのhard constraintを指定できる。機種別Reachや稼働容量の差がある場合は供給元も候補の区別と保存対象に含め、登録順やID順だけで戦略的に異なる候補を暗黙選択しない。
 
 PauseはCampaignのSurvey execution需要を停止するがProvider Assignmentを変更しない。Founding / Development等はSurvey内部Stateを直接読まず、typed Knowledge Eligibilityを通してtarget / subject / minimum levelを要求する。Survey KnowledgeはStatic Resource Potential自体とは分離し、Dynamic Physical Environmentも別Stateとして更新する。Scientific Exploration RPとSurvey Knowledgeを同一state machineへ混在させない。
 

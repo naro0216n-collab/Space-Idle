@@ -451,11 +451,11 @@ def build_definition_dependency_graph(
             for provider in sim.survey.providers.values():
                 owner = _node("survey_provider", provider.id)
                 nodes.append(owner)
-                relations.append(DependencyRelation(
-                    "uses_asset_definition",
-                    _node("vehicle" if provider.source_kind.value == "fleet" else "facility", provider.source_definition_id), owner,
-                    f"survey_provider:{provider.id}:source_definition_id",
-                ))
+                for capability in sorted(provider.required_source_capabilities):
+                    relations.append(DependencyRelation(
+                        "requires_capability", _node("capability", capability), owner,
+                        f"survey_provider:{provider.id}:required_source_capabilities",
+                    ))
                 for mode in provider.observation_modes:
                     mode_node = _node("survey_mode", f"{provider.id}/{mode.id}")
                     nodes.append(mode_node)

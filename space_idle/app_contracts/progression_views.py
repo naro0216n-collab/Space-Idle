@@ -295,10 +295,12 @@ class SurveyCampaignRow:
     goal_knowledge_level: int
     provider_constraint_definition_id: str | None
     provider_constraint_operational_node_id: str | None
+    provider_constraint_source_definition_id: str | None
     observation_mode_constraint: str | None
     projected_provider_definition_id: str | None
     projected_provider_display_name: str | None
     projected_provider_operational_node_id: str | None
+    projected_source_definition_id: str | None
     projected_observation_mode_id: str | None
     projected_observation_mode_display_name: str | None
     observation_mode_constraint_display_name: str | None

@@ -182,7 +182,7 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
     )
 
     provider = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION]
-    service_type = sim.survey.service_type_for_provider(provider.id)
+    service_type = sim.survey.service_type_for_provider(provider.id, ids.ROBOTIC_GEOLOGY_STATION)
     expected_rate = provider.capacity_units_per_source_per_day
     assert sim.facilities.installed_capability_at(ids.EARTH, "surface_survey")
     assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)

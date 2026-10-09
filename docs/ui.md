@@ -453,7 +453,7 @@ Surface Mapを主要Canvasとし、Cellまたは地域scope、Resource scope、g
 
 Surface MapとSurveyのCell選択は共通の地理的概略配置を使う。緯度・経度の表示点に可変サイズの操作カードを直接重ねるのではなく、各Cellの操作領域が重複しない配置を導出し、隣接関係を示す。表示の間隔・画面上の距離は実際の距離や移動所要時間を意味しない。Cellが増加した場合も隣の操作領域を覆わせず、Canvas内のスクロールと全Cellに到達できる選択一覧を提供する。選択一覧とMapは同一のCell選択／調査scopeを操作し、別の正本を持たない。地表の再描画や同期で選択、フォーカス、マップ内スクロール、調査Draftを失わない。
 
-Applicationがresolved provider / observation modeを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。
+Applicationがresolved provider / observation modeと実際のFacility / Vehicle供給元、拠点、配備数、利用可能Service Capacityを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。異なる機種の候補や排他的Fleet Commitmentは同じProvider名にまとめて隠さず、供給元のhard constraintはCampaignの他の設定とともに保持する。
 
 Map LayerはEnvironment、Knowledge、Resource Potential、Location territory、Movement accessibility等を切り替え、全情報を常時重ねない。選択Cell Inspectorでは判断情報を統合する。
 

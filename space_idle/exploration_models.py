@@ -130,11 +130,13 @@ class SurveyObservationModeSpec:
 class SurveyProviderSpec:
     id: DefinitionId
     source_kind: SurveyProviderSourceKind
-    source_definition_id: DefinitionId
+    required_source_capabilities: frozenset[str]
     observation_modes: tuple[SurveyObservationModeSpec, ...]
     capacity_units_per_source_per_day: float = 1.0
 
     def __post_init__(self) -> None:
+        if not self.required_source_capabilities or any(not item for item in self.required_source_capabilities):
+            raise ValueError("survey provider requires physical source capabilities")
         if not self.observation_modes:
             raise ValueError("survey provider must define at least one observation mode")
         if self.capacity_units_per_source_per_day <= 0:
@@ -160,6 +162,7 @@ class SurveyCampaignControlState(str, Enum):
 class SurveyProviderConstraint:
     provider_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
+    source_definition_id: DefinitionId | None = None
 
 
 @dataclass

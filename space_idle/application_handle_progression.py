@@ -130,6 +130,7 @@ class ProgressionCommandHandlerMixin:
                     provider_constraint = SurveyProviderConstraint(
                         DefinitionId(command.provider_constraint.provider_definition_id),
                         self._require_operational_node(command.provider_constraint.operational_node_id),
+                        None if command.provider_constraint.source_definition_id is None else DefinitionId(command.provider_constraint.source_definition_id),
                     )
                 if isinstance(command, StartSurvey):
                     campaign_id = sim.survey.start(

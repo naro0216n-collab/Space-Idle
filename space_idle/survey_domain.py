@@ -52,6 +52,7 @@ def capture_survey(sim: Any) -> dict[str, Any]:
                     None if c.provider_constraint is None else {
                         "provider_definition_id": str(c.provider_constraint.provider_definition_id),
                         "operational_node_id": str(c.provider_constraint.operational_node_id),
+                        "source_definition_id": (None if c.provider_constraint.source_definition_id is None else str(c.provider_constraint.source_definition_id)),
                     }
                 ),
                 "observation_mode_constraint": c.observation_mode_constraint,
@@ -144,7 +145,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
         else:
             constraint = require_fields(
                 constraint_data,
-                {"provider_definition_id", "operational_node_id"},
+                {"provider_definition_id", "operational_node_id", "source_definition_id"},
                 "survey provider_constraint",
             )
             provider_constraint = SurveyProviderConstraint(
@@ -154,6 +155,7 @@ def restore_survey(sim: Any, data: dict[str, Any]) -> None:
                 SpatialNodeId(
                     decode_str(constraint["operational_node_id"], "survey operational_node_id")
                 ),
+                None if constraint["source_definition_id"] is None else DefinitionId(decode_str(constraint["source_definition_id"], "survey source_definition_id")),
             )
         target_cell_ids = tuple(
             SurfaceCellId(decode_str(value, "survey target_cell_id"))
@@ -216,39 +218,32 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(len(target.thresholds) == 3, f"survey target must define three knowledge thresholds: {key}")
         _require(all(v >= 0 for v in target.thresholds), f"negative survey threshold: {key}")
         _require(tuple(sorted(target.thresholds)) == target.thresholds, f"unsorted survey thresholds: {key}")
+    facility_owners: dict[DefinitionId, DefinitionId] = {}
     for provider_id, provider in sim.survey.providers.items():
         _require(provider_id == provider.id, f"survey provider key mismatch: {provider_id}")
         _require(provider.capacity_units_per_source_per_day > 0, f"non-positive survey provider capacity: {provider_id}")
+        sources = sim.survey.compatible_source_definition_ids(provider)
+        _require(bool(sources), f"Survey provider has no compatible physical source: {provider_id}")
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            _require(provider.source_definition_id in ctx.facility_defs, f"survey provider references unknown facility: {provider_id}")
-        else:
-            _require(sim.transport.vehicle_definition(provider.source_definition_id) is not None, f"survey provider references unknown Vehicle: {provider_id}")
+            for source_id in sources:
+                prior = facility_owners.setdefault(source_id, provider_id)
+                _require(prior == provider_id,
+                         f"Facility supplies multiple Survey providers: {source_id}: {prior}/{provider_id}")
         for mode in provider.observation_modes:
-            _require(KnowledgeLevel.PRESENCE_PROBABILITY <= mode.max_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, f"invalid Survey Knowledge cap: {provider_id}/{mode.id}")
+            _require(KnowledgeLevel.PRESENCE_PROBABILITY <= mode.max_knowledge_level <= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL,
+                     f"invalid Survey Knowledge cap: {provider_id}/{mode.id}")
             _require(mode.minimum_source_units > 0, f"invalid Survey minimum source units: {provider_id}/{mode.id}")
             _require(mode.prerequisite_technologies.issubset(ctx.known_technologies),
                      f"Survey mode references unknown technology: {provider_id}/{mode.id}")
             validate_site_requirements(mode.site_requirements, ctx.known_capabilities, f"survey:{provider_id}/{mode.id}")
-            if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-                source_definition = ctx.facility_defs.get(provider.source_definition_id)
-                available_source_capabilities = (
-                    set() if source_definition is None
-                    else {row.id for row in source_definition.capability_supplies}
-                )
-            else:
-                source_definition = sim.transport.vehicle_definition(provider.source_definition_id)
-                available_source_capabilities = (
-                    set() if source_definition is None
-                    else set(source_definition.generic_capabilities)
-                )
-            _require(
-                mode.required_source_capabilities.issubset(available_source_capabilities),
-                f"Survey mode requires capabilities not supplied by its provider source: {provider_id}/{mode.id}",
-            )
+            _require(any(not sim.survey._source_capability_failures(provider, mode, source_id) for source_id in sources),
+                     f"Survey mode has no compatible source: {provider_id}/{mode.id}")
             if mode.reach.required_operation_types:
-                _require(provider.source_kind is SurveyProviderSourceKind.FLEET, f"Survey movement operations require Fleet-backed provider: {provider_id}/{mode.id}")
+                _require(provider.source_kind is SurveyProviderSourceKind.FLEET,
+                         f"Survey movement operations require Fleet-backed provider: {provider_id}/{mode.id}")
                 for operation_type in mode.reach.required_operation_types:
-                    _require(sim.transport.operation_registry.supports(operation_type), f"Survey mode references unknown Movement Operation: {provider_id}/{mode.id}/{operation_type}")
+                    _require(sim.transport.operation_registry.supports(operation_type),
+                             f"Survey mode references unknown Movement Operation: {provider_id}/{mode.id}/{operation_type}")
 
 
 def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
@@ -332,7 +327,7 @@ def validate_survey_runtime(sim: Any) -> None:
                 key in sim.survey.estimated_potential,
                 f"estimated Survey Knowledge lacks an estimated potential value: {key}",
             )
-    provider_node_keys: set[tuple[DefinitionId, SpatialNodeId]] = set()
+    provider_node_keys: set[tuple[DefinitionId, SpatialNodeId, DefinitionId]] = set()
     for assignment_id, assignment in sim.survey.provider_assignments.items():
         _require(assignment.id == assignment_id, f"Survey Provider assignment key mismatch: {assignment_id}")
         _require(assignment.provider_definition_id in sim.survey.providers, f"Survey Provider assignment references unknown provider: {assignment_id}")
@@ -340,8 +335,8 @@ def validate_survey_runtime(sim: Any) -> None:
         provider = sim.survey.providers.get(assignment.provider_definition_id)
         if provider is not None:
             _require(provider.source_kind is SurveyProviderSourceKind.FLEET, f"Survey Provider assignment references non-Fleet provider: {assignment_id}")
-            _require(assignment.vehicle_definition_id == provider.source_definition_id, f"Survey Provider assignment Vehicle mismatch: {assignment_id}")
-        key = (assignment.provider_definition_id, assignment.operational_node_id)
+            _require(sim.survey.source_is_compatible(provider, assignment.vehicle_definition_id), f"Survey Provider assignment Vehicle lacks capabilities: {assignment_id}")
+        key = (assignment.provider_definition_id, assignment.operational_node_id, assignment.vehicle_definition_id)
         _require(key not in provider_node_keys, f"duplicate Survey Provider assignment: {key}")
         provider_node_keys.add(key)
         _require(
@@ -372,6 +367,10 @@ def validate_survey_runtime(sim: Any) -> None:
             _require(
                 constraint.provider_definition_id in sim.survey.providers,
                 f"campaign references unknown survey provider: {campaign_id}",
+            )
+            _require(
+                constraint.source_definition_id is None or sim.survey.source_is_compatible(sim.survey.providers[constraint.provider_definition_id], constraint.source_definition_id),
+                f"campaign references incompatible survey source: {campaign_id}",
             )
             _require(
                 sim.graph.has_operational_node(constraint.operational_node_id),

@@ -95,15 +95,15 @@ def build_survey_providers() -> dict:
     return {
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
             ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,
-            ids.ROBOTIC_SURVEY_PACKAGE, (local_robotic,),
+            frozenset({"surface_survey", "robotic_prospecting_kit"}), (local_robotic,),
         ),
         ids.ROBOTIC_GEOLOGY_STATION: SurveyProviderSpec(
             ids.ROBOTIC_GEOLOGY_STATION, SurveyProviderSourceKind.FACILITY,
-            ids.ROBOTIC_GEOLOGY_STATION, (local_geology,),
+            frozenset({"surface_survey", "robotic_geology_equipment"}), (local_geology,),
         ),
         ids.LUNAR_FLEET_SURVEY_PROVIDER: SurveyProviderSpec(
             ids.LUNAR_FLEET_SURVEY_PROVIDER, SurveyProviderSourceKind.FLEET,
-            ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,
+            frozenset({"survey_sensor"}),
             (remote_orbital, fleet_remote, deep_space_remote),
         ),
     }

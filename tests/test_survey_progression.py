@@ -15,7 +15,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.facilities import FacilityDef
+from space_idle.facilities import FacilityDef, CapabilitySupply
 from space_idle.exploration_models import SurveyCampaignControlState, SurveyProviderConstraint
 from space_idle.shared import DefinitionId
 from space_idle.survey import (
@@ -189,14 +189,14 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
                 DefinitionId("test.provider.a"),
                 SurveyProviderSpec(
                     DefinitionId("test.provider.a"),
-                    SurveyProviderSourceKind.FLEET, source, (mode,),
+                    SurveyProviderSourceKind.FLEET, frozenset({"survey_sensor"}), (mode,),
                 ),
             ),
             (
                 DefinitionId("test.provider.b"),
                 SurveyProviderSpec(
                     DefinitionId("test.provider.b"),
-                    SurveyProviderSourceKind.FLEET, source, (mode,),
+                    SurveyProviderSourceKind.FLEET, frozenset({"survey_sensor"}), (mode,),
                 ),
             ),
         ]
@@ -204,7 +204,7 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
             rows.reverse()
         sim.survey.providers = dict(rows)
         for provider_id, _ in rows:
-            sim.survey.create_provider_assignment(provider_id, ids.LUNAR_ORBIT, 1)
+            sim.survey.create_provider_assignment(provider_id, ids.LUNAR_ORBIT, 1, source)
         campaign_id = _start_campaign(
             app, (ids.MOON_CELL_FARSIDE_HIGHLANDS,), (ids.MINERAL_FEEDSTOCK,),
             constrained=False,
@@ -278,14 +278,14 @@ def test_explicit_provider_constraint_never_falls_back_to_another_provider():
     sim = app._simulation
     source_id = DefinitionId("test.facility.earth_only_survey")
     provider_id = DefinitionId("test.provider.earth_only_survey")
-    sim.facilities.definitions[source_id] = FacilityDef(source_id, "Earth survey")
+    sim.facilities.definitions[source_id] = FacilityDef(source_id, "Earth survey", (CapabilitySupply("test_earth_survey"),))
     sim.facilities.install(source_id, ids.LEO)
     mode = SurveyObservationModeSpec(
         "same_body_only", 5.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
         KnowledgeLevel.PRESENCE_PROBABILITY, 0.2, 0.1,
     )
     sim.survey.providers[provider_id] = SurveyProviderSpec(
-        provider_id, SurveyProviderSourceKind.FACILITY, source_id, (mode,)
+        provider_id, SurveyProviderSourceKind.FACILITY, frozenset({"test_earth_survey"}), (mode,)
     )
     campaign_id = app.execute(StartSurvey(
         (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),), (str(ids.MINERAL_FEEDSTOCK),), 1,
@@ -418,7 +418,7 @@ def test_initial_orbital_survey_uses_real_exclusive_fleet_and_survives_save_load
     provider = sim.survey.provider(ids.LUNAR_FLEET_SURVEY_PROVIDER)
     vehicle_id = ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT
     assert provider.source_kind is SurveyProviderSourceKind.FLEET
-    assert provider.source_definition_id == vehicle_id
+    assert sim.survey.source_is_compatible(provider, vehicle_id)
     assert {mode.id for mode in provider.observation_modes} >= {
         "remote_orbital_spectrometry", "fleet_remote_mapping",
     }
@@ -454,3 +454,82 @@ def test_initial_orbital_survey_uses_real_exclusive_fleet_and_survives_save_load
     ))
     assert restored._simulation.survey.provider_assignment_for(provider.id, ids.LUNAR_ORBIT) is None
     assert restored._simulation.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == pool.total_units
+
+
+def test_survey_provider_separates_compatible_vehicle_commitments_modes_and_capacity(tmp_path):
+    from datetime import datetime, timezone
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import capture_state, load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    provider_id = ids.LUNAR_FLEET_SURVEY_PROVIDER
+    main_vehicle = ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT
+    alternative_vehicle = ids.DEEP_SPACE_PROBE
+    node = ids.LUNAR_ORBIT
+    assert set(sim.survey.compatible_source_definition_ids(sim.survey.provider(provider_id))) >= {
+        main_vehicle, alternative_vehicle,
+    }
+    sim.transport.add_fleet_units(alternative_vehicle, 1, node, day=sim.day)
+    second_id = app.execute(SetSurveyProviderFleetQuantity(
+        str(provider_id), str(node), str(alternative_vehicle), 1,
+    )).created_id
+    assert second_id
+    original = sim.survey.provider_assignment_for(provider_id, node, main_vehicle)
+    alternate = sim.survey.provider_assignment_for(provider_id, node, alternative_vehicle)
+    assert original is not None and alternate is not None
+    assert original.fleet_commitment_ref != alternate.fleet_commitment_ref
+
+    # Both assets offer the same observation mode, but different Fleet
+    # commitments cannot be selected via Provider ID alone.
+    target1 = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    target2 = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    resource = ids.MINERAL_FEEDSTOCK
+    campaign_id = _start_campaign(app, (target1,), (resource,), constrained=False)
+    campaign = sim.survey.campaigns[campaign_id]
+    projection = sim.survey.campaign_projection(campaign, day=sim.day)
+    comparable = [row for row in projection.candidates
+                  if row.provider_definition_id == provider_id
+                  and row.observation_mode_id == 'remote_orbital_spectrometry'
+                  and row.viable]
+    assert {row.source_definition_id for row in comparable} == {main_vehicle, alternative_vehicle}
+    assert projection.resolved_candidate is None
+    assert 'survey_decision_required' in projection.resolution_blockers
+    view = next(row for row in app.query(GetSurveys(str(node))).campaigns if row.id == campaign_id)
+    keys = {row.comparison_key for row in view.candidates if row.observation_mode_id == 'remote_orbital_spectrometry'
+            and row.provider_definition_id == str(provider_id)}
+    assert len(keys) == 2
+
+    app.execute(UpdateSurvey(
+        campaign_id, (str(target1),), (str(resource),), 1,
+        SurveyProviderConstraintInput(str(provider_id), str(node), str(main_vehicle)),
+        'remote_orbital_spectrometry',
+    ))
+    second_campaign_id = app.execute(StartSurvey(
+        (str(target2),), (str(resource),), 1,
+        SurveyProviderConstraintInput(str(provider_id), str(node), str(alternative_vehicle)),
+        'remote_orbital_spectrometry',
+    )).created_id
+    assert second_campaign_id
+    bundles = sim.survey.execution_requirement_bundles(sim.day)
+    services = {row.requirements[0].service_type for row in bundles
+                if row.owner_id in (campaign_id, second_campaign_id)}
+    assert services == {
+        sim.survey.service_type_for_provider(provider_id, main_vehicle),
+        sim.survey.service_type_for_provider(provider_id, alternative_vehicle),
+    }
+    app.execute(AdvanceTime(1))
+    assert sim.survey.progress(target1, resource) > 0
+    assert sim.survey.progress(target2, resource) > 0
+
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / 'survey-mixed-fleet.json'
+    save_game(app, path, saved_at=saved_at)
+    restored, _ = load_game(path, build_game_application_for_load, now=saved_at)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    restored.execute(SetSurveyProviderFleetQuantity(
+        str(provider_id), str(node), str(alternative_vehicle), 0,
+    ))
+    assert restored._simulation.survey.provider_assignment_for(provider_id, node, alternative_vehicle) is None
+    assert restored._simulation.survey.provider_assignment_for(provider_id, node, main_vehicle) is not None
+    assert restored._simulation.transport.fleet_free_units(alternative_vehicle, node) >= 1

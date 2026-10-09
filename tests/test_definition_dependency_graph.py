@@ -21,7 +21,7 @@ def test_registered_definition_graph_reuses_real_content_without_gameplay_side_e
     assert sim.day == original_day
     assert sim.technology.completed == original_technology
     assert json.loads(json.dumps(graph.to_json_data())) == graph.to_json_data()
-    assert any(edge.kind == "uses_asset_definition" and edge.target.kind == "survey_provider"
+    assert any(edge.kind == "requires_capability" and edge.target.kind == "survey_provider"
                for edge in graph.relations)
     assert any(edge.kind == "uses_asset_definition" and edge.target.kind == "research_provider"
                for edge in graph.relations)

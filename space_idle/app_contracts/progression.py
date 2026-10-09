@@ -59,6 +59,7 @@ class SetSurveyProviderFleetQuantity:
 class SurveyProviderConstraintInput:
     provider_definition_id: str
     operational_node_id: str
+    source_definition_id: str | None = None
 
 @dataclass(frozen=True)
 class StartSurvey:
