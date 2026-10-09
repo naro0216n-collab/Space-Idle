@@ -264,7 +264,8 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
             axis.key for axis in row.comparison_axes
         }
 
-def test_explicit_constraint_failure_never_falls_back_to_other_provider():
+
+def test_explicit_provider_constraint_never_falls_back_to_another_provider():
     app = build_game_application()
     sim = app._simulation
     source_id = DefinitionId("test.facility.earth_only_survey")
@@ -322,19 +323,6 @@ def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitm
 
 
 
-def test_knowledge_consumers_depend_on_typed_requirement_not_campaign_internal_state():
-    app = build_game_application()
-    sim = app._simulation
-    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
-    requirement = KnowledgeRequirement(key[0], key[1], KnowledgeLevel.PRESENCE_PROBABILITY)
-    assert sim.survey.knowledge_requirement_failures(requirement)
-    campaign_id = _start_campaign(app, (key[0],), (key[1],))
-    assert campaign_id in sim.survey.campaigns
-    assert sim.survey.knowledge_requirement_failures(requirement)
-    sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
-    assert sim.survey.knowledge_requirement_failures(requirement) == ()
-
-
 # Physical targets use the same Survey progress and owner as owned-Cell targets.
 def _remote_campaign(*, goal: int) -> StartSurvey:
     return StartSurvey(
@@ -367,6 +355,8 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert len({row.body_id for row in global_view.items}) > 3
     assert all(row.visible_potential is None for row in mars_view.items)
 
+    requirement = KnowledgeRequirement(cell, resource, KnowledgeLevel.PRESENCE_PROBABILITY)
+    assert sim.survey.knowledge_requirement_failures(requirement)
     before = next(row for row in app.query(GetSurveys()).items
                   if row.cell_id == str(cell) and row.resource_id == str(resource))
     assert before.location_id is None
@@ -379,10 +369,12 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert blockers == ()
     assert candidate is not None
     assert candidate.max_knowledge_level == KnowledgeLevel.PRESENCE_PROBABILITY
+    assert sim.survey.knowledge_requirement_failures(requirement)
 
     app.execute(AdvanceTime(8))
     assert campaign.control_state is SurveyCampaignControlState.COMPLETED
     assert sim.survey.knowledge_level(cell, resource) == KnowledgeLevel.PRESENCE_PROBABILITY
+    assert sim.survey.knowledge_requirement_failures(requirement) == ()
     assert sim.survey.visible_potential(cell, resource) is None
     assert frozenset(sim.graph.operational_node_ids()) == initial_nodes
     assert dict(sim.transport.fleet_pools) == initial_fleet

@@ -138,7 +138,7 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 
 
 @pytest.mark.parametrize("seconds_per_day", [0, -1, float("nan"), float("inf"), -float("inf")])
-def test_offline_day_conversion_requires_finite_positive_duration(seconds_per_day):
+def test_offline_policy_rejects_invalid_day_duration(seconds_per_day):
     with pytest.raises(ValueError, match="real_seconds_per_game_day"):
         OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
 
@@ -153,9 +153,7 @@ def test_offline_day_conversion_requires_finite_positive_duration(seconds_per_da
         (1e308, 1e-308, "representable game time"),
     ],
 )
-def test_invalid_offline_elapsed_or_conversion_preserves_authoritative_state(
-    elapsed, seconds_per_day, reason
-):
+def test_invalid_offline_elapsed_preserves_authoritative_state(elapsed, seconds_per_day, reason):
     app = build_game_application()
     before = capture_state(app._simulation)
     with pytest.raises(ValueError, match=reason):
@@ -165,7 +163,7 @@ def test_invalid_offline_elapsed_or_conversion_preserves_authoritative_state(
     assert capture_state(app._simulation) == before
 
 
-def test_offline_resume_cap_still_bounds_large_finite_elapsed_time():
+def test_offline_resume_cap_bounds_large_finite_elapsed_time():
     app = build_game_application()
     policy = OfflineProgressPolicy(real_seconds_per_game_day=1e-308, max_game_days_per_resume=2)
     result = app._simulation.advance_offline(1e308, policy)

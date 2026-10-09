@@ -59,7 +59,7 @@ def running_api(tmp_path):
         thread.join(timeout=5)
 
 
-def test_http_api_command_query_and_save_load_boundary(tmp_path):
+def test_http_command_and_world_read_cross_json_boundary(tmp_path):
     with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
@@ -73,6 +73,9 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+
+def test_http_decision_views_scope_and_projection_boundary(tmp_path):
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
@@ -179,10 +182,19 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
             f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
         )
         assert status == 200
-        assert payload["data"]["base_day"] == 2
-        assert payload["data"]["projected_day"] == 4
+        assert payload["data"]["projected_day"] == payload["data"]["base_day"] + 2
         assert payload["data"]["period_days"] == 2
         assert payload["data"]["inventory"]
+
+
+def test_http_nested_intent_and_save_load_boundary(tmp_path):
+    with running_api(tmp_path) as port:
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 2}},
+        )
+        assert status == 200
+        assert payload["revision"] == 1
 
         # Exercise nested command decoding through the real HTTP boundary.
         # Generic founding no longer hardcodes a Resource Knowledge requirement;

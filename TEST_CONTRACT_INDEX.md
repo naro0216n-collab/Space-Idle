@@ -1,21 +1,26 @@
 # Test contract ownership index
 
-This is a navigation index for the **current** test suite, not a game specification or
-an independent testing policy. `docs/design.md`, `docs/architecture.md`, and
-`docs/development-principles.md` §6 remain authoritative. The detailed execution
-and publish procedure is in `DEVELOPMENT.md`.
+This is a navigation index for the **current** test suite, not an exhaustive
+contract inventory, game specification, or independent testing policy.
+`docs/design.md`, `docs/architecture.md`, and `docs/development-principles.md`
+record the accepted design; their test enumerations are not automatically an
+optimal decomposition of the suite. The detailed execution and publish
+procedure is in `DEVELOPMENT.md`.
 
-Before adding a regression test, find the owning contract in this table. Extend its
-existing invariant/transition scenario where possible; add a distinct test only
-when a separately falsifiable *current* contract has no suitable owner. An
-individual defect, Content ID, migration step, or UI implementation detail does
-not by itself create a new contract. Review adjacent layers for duplicate
-assertions: Domain owns rules, Application owns their projection, HTTP owns the
-boundary, and browser acceptance owns actual interaction continuity.
+Begin with the game decision or state loss a defect would cause, including risks
+not listed explicitly in the documents. Check whether the intended design is
+coherent before turning its wording into permanent assertions. Then identify
+which boundary can falsify that behavior and use the table to find an existing
+owner. Prefer extending a cohesive contract scenario to adding a defect-shaped
+regression case; remove redundant checks across layers. Do not merge unrelated
+failure modes or hide parameter cases inside a loop merely to lower collected
+pytest counts: separate failures should remain independently diagnosable.
+Domain tests own rules, Application tests their projection, HTTP tests the
+boundary, and browser acceptance tests actual interaction continuity.
 
 | Owning contract | Test modules / acceptance entrypoint | Boundary verified |
 | --- | --- | --- |
-| Domain ownership, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Dependency direction, deterministic allocation, extensible contracts |
+| State boundaries, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Static import direction and selected Transport/Logistics ownership checks; allocation and extension contracts. Not exhaustive enforcement of every Domain's state ownership |
 | Time and normal/offline Simulation | `tests/test_time_progression.py` | Clock control, invalid elapsed time, canonical day transitions |
 | Authoritative state and derived-state restoration | `tests/test_persistence.py` | Whole-snapshot roundtrip, Offline equivalence, validation/atomic save, cache rederivation |
 | Resource accounting and market | `tests/test_inventory_admission.py`, `tests/test_market.py`, `tests/test_maintenance.py` | Pool admission, funds and stock conservation, ongoing operating allocation |

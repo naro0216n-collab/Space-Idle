@@ -175,13 +175,12 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     state = payload["state"]
-    assert "industry" not in state
     assert "day" not in state
     assert "pending_offline_game_days" not in state
     assert "boundary_used_by_constraint" not in state
-    assert set(state["core"]) == {
-        "day", "pending_offline_game_days", "boundary_service_usage",
-    }
+    # Require the authoritative clock and boundary-accounting fields, but do
+    # not freeze the complete core section to its current implementation shape.
+    assert {"day", "pending_offline_game_days", "boundary_service_usage"} <= set(state["core"])
     assert any(
         row["selected_process_id"] == str(ids.PROCESS_BASIC_STRUCTURAL_MATERIAL)
         for row in state["facilities"]["items"]

@@ -47,6 +47,7 @@ def test_pytest_entrypoint_preserves_success_and_failure(tmp_path):
     assert "1 failed" in "\n".join(failed["output_tail"])
 
 
+
 def test_tool_response_is_not_a_pytest_result(tmp_path):
     test_file = tmp_path / "test_slow.py"
     test_file.write_text("import time\ndef test_slow():\n    time.sleep(1.5)\n", encoding="utf-8")
@@ -75,7 +76,6 @@ def test_runner_launch_errors_do_not_fabricate_pytest_failure(tmp_path, monkeypa
         with patch.object(local_test_run, "print") as output:
             local_test_run._status(run_id)
     assert json.loads(output.call_args[0][0])["status"] == "interrupted"
-
 
 def test_entrypoint_rejects_nested_commands_and_bad_run_ids():
     with pytest.raises(ValueError, match="pytest arguments only"):

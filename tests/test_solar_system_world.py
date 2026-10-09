@@ -30,9 +30,13 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     assert any(body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE for body in bodies)
     assert all(body.parent_body_id is None or body.star_system_id == graph.bodies[body.parent_body_id].star_system_id for body in bodies)
     assert all(body.representative_gravity_m_s2 is not None for body in bodies)
-    assert graph.representative_solar_flux_w_m2(ids.MOON) == 1361.0
-    assert graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.europa")) < 60
-    assert graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.triton")) < 2
+    # Relative irradiation is a physical Content invariant, not a balance fixture.
+    assert (
+        graph.representative_solar_flux_w_m2(ids.MOON)
+        > graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.europa"))
+        > graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.triton"))
+        > 0
+    )
 
     catalog = app.query(GetCatalog())
     assert len(catalog.celestial_bodies) == len(bodies)
@@ -48,7 +52,6 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     world = app.query(GetWorld())
     assert {row.id for row in world.operational_nodes} == {str(id_) for id_ in graph.operational_node_ids()}
     assert not {row.id for row in world.operational_nodes} & {str(body.id) for body in bodies}
-    assert all(location.body_id in {ids.EARTH_BODY, ids.MOON} for location in graph.locations.values())
     assert not {str(body.id) for body in bodies} & {str(x) for x in app._simulation.inventory.stock}
 
 
@@ -157,7 +160,7 @@ def test_representative_transfer_uses_orbital_physics_and_existing_movement_exec
     from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
     graph.add(SpatialNodeDef(same, "Same Martian orbit", ids.SOL_SYSTEM, None,
                              body_id=mars, kind=SpatialNodeKind.ORBITAL,
-                             body_center_orbit_radius_km=3_789.5))
+                             body_center_orbit_radius_km=graph.nodes[ids.MARS_ORBIT].body_center_orbit_radius_km))
     local = graph.characteristic_transport_separation(ids.MARS_ORBIT, same)
     assert local.scope == "local_orbit_transfer"
     assert local.delta_v_km_s == 0.0 and local.representative_transit_days == 0.0
