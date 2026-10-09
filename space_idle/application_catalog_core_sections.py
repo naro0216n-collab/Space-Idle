@@ -40,7 +40,7 @@ def project_facilities(projector):
 def project_processes(projector):
     return tuple(
         ProcessDefinitionRow(
-            str(process.id), process.display_name, str(process.facility_def_id),
+            str(process.id), process.display_name, tuple(sorted(process.required_capabilities)),
             tuple((str(resource_id), amount) for resource_id, amount in sorted(process.inputs_per_day.items(), key=lambda item: str(item[0]))),
             tuple((str(resource_id), amount) for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda item: str(item[0]))),
         )

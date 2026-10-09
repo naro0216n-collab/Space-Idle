@@ -54,7 +54,7 @@ class FacilityDefinitionRow:
 class ProcessDefinitionRow:
     id: str
     display_name: str
-    facility_definition_id: str
+    required_capabilities: tuple[str, ...]
     inputs_per_day: tuple[tuple[str, float], ...]
     outputs_per_day: tuple[tuple[str, float], ...]
 

@@ -613,8 +613,7 @@ class ProjectProjectorMixin:
             ) + tuple((failure.code, failure.detail) for failure in site_failures)
             process_options = tuple(
                 (str(process.id), process.display_name)
-                for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
-                if process.facility_def_id == recipe.facility_def_id
+                for process in sim.industry.compatible_processes(recipe.facility_def_id)
             )
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport

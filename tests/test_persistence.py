@@ -100,7 +100,7 @@ def _make_nontrivial_state():
     selected_process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
     process_facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.definition_id == selected_process.facility_def_id
+        if selected_process in sim.industry.compatible_processes(row.definition_id)
     )
     app.execute(SetFacilityProcess(str(process_facility.id), str(selected_process.id)))
 

@@ -97,7 +97,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert candidate.process_options == tuple(
         (str(process.id), process.display_name)
         for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
-        if process.facility_def_id == definition.id
+        if process in sim.industry.compatible_processes(definition.id)
     )
     assert build_options.comparison_axes
     assert any(axis.differs for axis in build_options.comparison_axes)
@@ -129,13 +129,13 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
     facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.definition_id == process.facility_def_id
+        if process in sim.industry.compatible_processes(row.definition_id)
     )
     alternate_process_id = DefinitionId("test.process.alternate_structural_material")
     sim.industry.processes[alternate_process_id] = ProcessSpec(
         alternate_process_id,
         "Alternate structural material",
-        process.facility_def_id,
+        process.required_capabilities,
         {},
         {ids.STRUCTURAL_COMPONENTS: 0.01},
     )
@@ -218,3 +218,64 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         row for row in catalog.facilities if row.id == str(ids.ROBOTIC_GEOLOGY_STATION)
     )
     assert robotic.placement_scope == "SURFACE_CELL"
+
+
+def test_process_interface_can_be_shared_by_a_differently_named_higher_throughput_facility():
+    """Facility identity is not an Industry permission or an execution-rate ceiling."""
+    from dataclasses import replace
+
+    from space_idle import AdvanceTime
+    from space_idle.validation import validate_runtime_state, validate_simulation_configuration
+
+    app = build_game_application()
+    sim = app._simulation
+    source_def = sim.facilities.definitions[ids.BASIC_STRUCTURAL_MATERIAL_PLANT]
+    process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
+    alternative_id = DefinitionId('test.facility.independent_interface')
+    sim.facilities.definitions[alternative_id] = replace(
+        source_def, id=alternative_id, process_throughput_per_day=2.0,
+    )
+    assert sim.industry.compatible_processes(alternative_id) == (process,)
+    # Missing or partial interfaces must not silently permit a precise Process.
+    basic_only_id = DefinitionId('test.facility.basic_only')
+    machine_shop = sim.facilities.definitions[ids.MACHINE_SHOP]
+    from space_idle.facilities import CapabilitySupply
+    sim.facilities.definitions[basic_only_id] = replace(
+        machine_shop, id=basic_only_id,
+        capability_supplies=(CapabilitySupply('basic_machine_shop'),),
+    )
+    assert ids.PROCESS_BASIC_MACHINING in {
+        row.id for row in sim.industry.compatible_processes(basic_only_id)
+    }
+    assert ids.PROCESS_PRECISION_COMPONENTS not in {
+        row.id for row in sim.industry.compatible_processes(basic_only_id)
+    }
+    new_id = sim.facilities.install(alternative_id, ids.EARTH)
+    # Disable only the old producer so its effect cannot mask the new Asset's flow.
+    for facility in sim.facilities.facilities.values():
+        if facility.definition_id == source_def.id:
+            facility.paused = True
+
+    sim.inventory.add(ids.EARTH, ids.MINERAL_FEEDSTOCK, 50.0)
+    sim.inventory.add(ids.EARTH, ids.METAL_ORE, 50.0)
+    validate_simulation_configuration(sim)
+    validate_runtime_state(sim)
+    bundle = next(row for row in sim.industry.execution_requirement_bundles(
+        ids.EARTH, sim.facilities, sim.inventory, sim.day
+    ) if row.owner_id == new_id)
+    assert bundle.requested_execution == pytest.approx(2.0)
+
+    projection = sim.tick_decision_projection()
+    allocation = projection.allocations.execution.allocation(bundle.id)
+    assert allocation.allocated_execution > 0
+    row = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
+               if row.facility_id == str(new_id))
+    assert row.process_id == str(process.id)
+    assert dict(row.input_rates_per_day)[str(ids.MINERAL_FEEDSTOCK)] == pytest.approx(
+        process.inputs_per_day[ids.MINERAL_FEEDSTOCK] * allocation.allocated_execution
+    )
+    assert dict(row.output_rates_per_day)[str(ids.STRUCTURAL_COMPONENTS)] == pytest.approx(
+        process.outputs_per_day[ids.STRUCTURAL_COMPONENTS] * allocation.allocated_execution
+    )
+    app.execute(AdvanceTime(1))
+    assert sim.day > 0

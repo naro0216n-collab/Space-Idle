@@ -416,6 +416,7 @@ class LocationProjectorMixin:
             )
             option_rows: list[IndustryProcessOptionRow] = []
             for option_process in compatible:
+                throughput = definition.process_throughput_per_day
                 requirements = sim.industry.execution_requirements_for_process(
                     option_process, sim.inventory
                 )
@@ -425,32 +426,32 @@ class LocationProjectorMixin:
                 for requirement in requirements:
                     if isinstance(requirement, ResourceRequirement):
                         available = sim.inventory.available(location_id, requirement.resource_id)
-                        required = requirement.amount_per_execution
+                        required = requirement.amount_per_execution * throughput
                         if available + 1e-9 < required:
                             projected_blocker_codes.append(
                                 f"resource:{location_id}:{requirement.resource_id}:{available:g}/{required:g}"
                             )
                     elif isinstance(requirement, ServiceCapacityRequirement):
                         service_requirements.append(
-                            (requirement.service_type, requirement.amount_per_execution)
+                            (requirement.service_type, requirement.amount_per_execution * throughput)
                         )
                     elif isinstance(requirement, StockOrPoolAdmissionRequirement):
                         admission = sim.inventory.admission_state_for_pool(
                             location_id, requirement.pool_id
                         ).admission_capacity_t
-                        storage_burden += requirement.amount_per_execution
-                        if admission + 1e-9 < requirement.amount_per_execution:
+                        storage_burden += requirement.amount_per_execution * throughput
+                        if admission + 1e-9 < requirement.amount_per_execution * throughput:
                             projected_blocker_codes.append(
-                                f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution:g}"
+                                f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution * throughput:g}"
                             )
                 comparison_values = (
                     ComparisonValueRow(
                         axis_key="input_total_t",
-                        number_value=sum(option_process.inputs_per_day.values()),
+                        number_value=sum(option_process.inputs_per_day.values()) * throughput,
                     ),
                     ComparisonValueRow(
                         axis_key="output_total_t",
-                        number_value=sum(option_process.outputs_per_day.values()),
+                        number_value=sum(option_process.outputs_per_day.values()) * throughput,
                     ),
                     ComparisonValueRow(
                         axis_key="storage_burden_t", number_value=storage_burden
@@ -458,14 +459,14 @@ class LocationProjectorMixin:
                     *(
                         ComparisonValueRow(
                             axis_key=f"input:{resource_id}",
-                            number_value=option_process.inputs_per_day.get(resource_id, 0.0),
+                            number_value=option_process.inputs_per_day.get(resource_id, 0.0) * throughput,
                         )
                         for resource_id in input_resource_ids
                     ),
                     *(
                         ComparisonValueRow(
                             axis_key=f"output:{resource_id}",
-                            number_value=option_process.outputs_per_day.get(resource_id, 0.0),
+                            number_value=option_process.outputs_per_day.get(resource_id, 0.0) * throughput,
                         )
                         for resource_id in output_resource_ids
                     ),
@@ -476,13 +477,15 @@ class LocationProjectorMixin:
                     input_rates_per_day=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
-                            option_process.inputs_per_day.items(), key=lambda row: str(row[0])
+                            ((key, value * throughput) for key, value in option_process.inputs_per_day.items()),
+                            key=lambda row: str(row[0])
                         )
                     ),
                     output_rates_per_day=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
-                            option_process.outputs_per_day.items(), key=lambda row: str(row[0])
+                            ((key, value * throughput) for key, value in option_process.outputs_per_day.items()),
+                            key=lambda row: str(row[0])
                         )
                     ),
                     service_requirements=tuple(service_requirements),

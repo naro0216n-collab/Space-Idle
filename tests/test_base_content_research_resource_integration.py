@@ -64,7 +64,8 @@ def test_base_resource_methods_connect_surveyed_geology_to_processing_and_constr
     assert processes
     assert all(set(process.inputs_per_day) | set(process.outputs_per_day) <= resource_ids
                for process in processes)
-    assert all(process.facility_def_id in sim.facilities.definitions for process in processes)
+    assert all(any(process in sim.industry.compatible_processes(definition_id)
+                   for definition_id in sim.facilities.definitions) for process in processes)
 
     # Reachability is through explicitly described input/output edges. There is
     # no assumption that all resources substitute for one another.

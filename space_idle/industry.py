@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from .execution_requirements import (
     ExecutionRequirementBundle,
@@ -8,7 +9,7 @@ from .execution_requirements import (
     ServiceCapacityRequirement,
     StockOrPoolAdmissionRequirement,
 )
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityDef
 from .inventory import InventoryBook
 from .power import PowerSnapshot
 from .service_capacity import ServiceCapacityScope
@@ -23,6 +24,8 @@ from .production import (
 @dataclass
 class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExecutionMixin):
     processes: dict[DefinitionId, ProcessSpec]
+    # Read-only reference to the Composition-owned Facility Definitions; no Facility State is copied.
+    facility_defs: Mapping[DefinitionId, FacilityDef]
 
     SERVICE_TYPE_PREFIX = "process:"
 
@@ -82,7 +85,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 owner_id=facility.id,
                 purpose=f"process:{process.id}",
                 operational_node_id=location_id,
-                requested_execution=1.0,
+                requested_execution=self.facility_defs[facility.definition_id].process_throughput_per_day,
                 priority=facility.activity_priority,
                 requirements=self.execution_requirements_for_process(process, inventory),
             ))
@@ -104,10 +107,15 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     ) -> frozenset[DefinitionId]:
         if service_type not in self.service_capacity_types():
             raise KeyError(service_type)
+        process_id = DefinitionId(service_type[len(self.SERVICE_TYPE_PREFIX):])
+        process = self.processes.get(process_id)
+        if process is None:
+            return frozenset()
         return frozenset(
-            process.facility_def_id
-            for process in self.processes.values()
-            if self.process_service_type(process.id) == service_type
+            facility_id for facility_id, definition in self.facility_defs.items()
+            if process.required_capabilities <= frozenset(
+                capability.id for capability in definition.capability_supplies
+            )
         )
 
     def service_capacity_upstream_services(
@@ -129,7 +137,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     ) -> tuple[float, float]:
         if power is None:
             nominal = sum(
-                1.0
+                self.facility_defs[facility.definition_id].process_throughput_per_day
                 for facility in facilities.active_compatible_at(location_id, day)
                 for process in (self.process_for(facility),)
                 if process is not None and self.process_service_type(process.id) == service_type
@@ -159,7 +167,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             if process is None:
                 continue
             key = (location_id, self.process_service_type(process.id))
-            nominal[key] = nominal.get(key, 0.0) + 1.0
+            throughput = self.facility_defs[facility.definition_id].process_throughput_per_day
+            nominal[key] = nominal.get(key, 0.0) + throughput
             upstream = (provider_factors or {}).get(facility.id, 1.0)
             factor = max(
                 0.0,
@@ -170,7 +179,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     * upstream,
                 ),
             )
-            enabled[key] = enabled.get(key, 0.0) + factor
+            enabled[key] = enabled.get(key, 0.0) + throughput * factor
         return nominal, enabled
 
     def supplys(
@@ -189,7 +198,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             for resource_id, amount_t in process.inputs_per_day.items():
                 if amount_t > 1e-12:
                     key = (resource_id, int(facility.activity_priority))
-                    required[key] = required.get(key, 0.0) + amount_t
+                    required[key] = (required.get(key, 0.0) + amount_t
+                                     * self.facility_defs[facility.definition_id].process_throughput_per_day)
 
         owner_id = EntityId(f"industry.site:{location_id}")
         requirements: list[SupplyRequirement] = []

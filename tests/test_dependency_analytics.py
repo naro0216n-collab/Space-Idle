@@ -90,7 +90,7 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
     app._simulation.industry.processes[ids.PROCESS_BASIC_MACHINERY] = ProcessSpec(
         process.id,
         process.display_name,
-        process.facility_def_id,
+        process.required_capabilities,
         {ids.MACHINERY: 0.5},
         {ids.STRUCTURAL_COMPONENTS: 0.1},
     )

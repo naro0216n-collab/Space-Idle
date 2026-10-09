@@ -50,7 +50,7 @@ def build_facility_definitions() -> dict:
         ids.ORE_PROCESSING: FacilityDef(ids.ORE_PROCESSING, "鉱石処理設備", req._capabilities("ore_processing"), surface, surface),
         ids.METALLURGY: FacilityDef(ids.METALLURGY, "金属精錬設備", req._capabilities("metallurgy"), surface, surface),
         ids.FABRICATION_WORKSHOP: FacilityDef(ids.FABRICATION_WORKSHOP, "構造材加工工場", req._capabilities("structural_fabrication"), surface, surface),
-        ids.MACHINE_SHOP: FacilityDef(ids.MACHINE_SHOP, "機械工場", req._capabilities("basic_machine_shop"), surface, surface),
+        ids.MACHINE_SHOP: FacilityDef(ids.MACHINE_SHOP, "機械工場", req._capabilities("basic_machine_shop", "precision_machining"), surface, surface),
         ids.HEAVY_EQUIPMENT_ASSEMBLY: FacilityDef(ids.HEAVY_EQUIPMENT_ASSEMBLY, "重機組立設備", req._capabilities("heavy_equipment_assembly"), surface, surface),
         ids.MINERAL_QUARRY: FacilityDef(ids.MINERAL_QUARRY, "露天鉱物採掘場", req._capabilities("mineral_extraction"), surface, surface, 0.10),
         ids.METAL_ORE_MINE: FacilityDef(ids.METAL_ORE_MINE, "露天金属鉱山", req._capabilities("metal_ore_extraction"), surface, surface, 0.10),
@@ -59,7 +59,7 @@ def build_facility_definitions() -> dict:
         ids.BASIC_MACHINERY_WORKS: FacilityDef(ids.BASIC_MACHINERY_WORKS, "基礎機械製作所", req._capabilities("basic_machinery_production"), surface, surface, 0.09),
     }
     definitions[ids.FOOD_FARM] = FacilityDef(
-        ids.FOOD_FARM, '閉鎖式食料栽培設備', installation_requirements=surface, operating_requirements=surface,
+        ids.FOOD_FARM, '閉鎖式食料栽培設備', req._capabilities('food_hydroponics'), installation_requirements=surface, operating_requirements=surface,
     )
     definitions[ids.CREWED_ORBITAL_LABORATORY] = replace(
         definitions[ids.CREWED_ORBITAL_LABORATORY], housing_capacity=8,

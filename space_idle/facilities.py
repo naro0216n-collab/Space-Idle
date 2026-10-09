@@ -82,12 +82,16 @@ class FacilityDef:
     decommission_recovery_fraction: float = 0.0
     housing_capacity: int = 0
     life_support: LifeSupportSpec | None = None
+    # Nominal units of the selected Process executed per canonical day.
+    process_throughput_per_day: float = 1.0
 
     def __post_init__(self) -> None:
         if isinstance(self.housing_capacity, bool) or not isinstance(self.housing_capacity, int) or self.housing_capacity < 0:
             raise ValueError("housing must be a nonnegative integer capacity")
         if not math.isfinite(self.maintenance_fraction_per_year) or self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
+        if not math.isfinite(self.process_throughput_per_day) or self.process_throughput_per_day < 0:
+            raise ValueError("facility process throughput must be finite and nonnegative")
         if not isinstance(self.placement_scope, FacilityPlacementScope):
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
         if not 0.0 <= self.decommission_recovery_fraction <= 1.0:

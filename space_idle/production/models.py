@@ -8,7 +8,7 @@ from ..shared import DefinitionId, EntityId
 class ProcessSpec:
     id: DefinitionId
     display_name: str
-    facility_def_id: DefinitionId
+    required_capabilities: frozenset[str]
     inputs_per_day: dict[DefinitionId, float]
     outputs_per_day: dict[DefinitionId, float]
 

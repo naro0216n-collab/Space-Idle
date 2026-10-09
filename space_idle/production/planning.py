@@ -44,9 +44,11 @@ class IndustryPlanningMixin:
                 allocation = execution_allocations.allocation(bundle_id)
             except KeyError:
                 scale = 0.0
+                executed = 0.0
                 limiting = ()
             else:
                 scale = allocation.fulfillment
+                executed = allocation.allocated_execution
                 limiting = allocation.limiting_constraints
             reasons: list[str] = []
             if scale < 1.0 - 1e-9:
@@ -67,8 +69,8 @@ class IndustryPlanningMixin:
                 process.id,
                 scale,
                 tuple(dict.fromkeys(reasons)),
-                {resource_id: amount * scale for resource_id, amount in process.inputs_per_day.items()},
-                {resource_id: amount * scale for resource_id, amount in process.outputs_per_day.items()},
+                {resource_id: amount * executed for resource_id, amount in process.inputs_per_day.items()},
+                {resource_id: amount * executed for resource_id, amount in process.outputs_per_day.items()},
             ))
         return tuple(snapshots)
 
