@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from e2e_support import choose_priority, isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, priority_group, isolated_browser_context, monitored_page, wait_for_server
 
 import os
 from pathlib import Path
@@ -137,7 +137,7 @@ def run(browser) -> None:
             )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "construction"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
-            assert _priority_group(page, "#buildPlanPriorityInput").is_visible()
+            assert priority_group(page, "#buildPlanPriorityInput").is_visible()
             assert priority.input_value() == draft_priority
             assert page.evaluate("el => document.activeElement === el", priority_button.element_handle())
 

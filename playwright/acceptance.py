@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from e2e_support import choose_priority, isolated_browser_context, monitored_page, priority_group as _priority_group, wait_for_server
+from e2e_support import choose_priority, isolated_browser_context, monitored_page, priority_group, wait_for_server
 
 import json
 import os
@@ -557,7 +557,7 @@ def run(browser) -> dict[str, object]:
                 and upgrade_deltas.first.locator('[data-upgrade-value-role="target"]').count() == 1,
                 "upgrade differences must present current and target values in the same Inspector",
             )
-            _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
+            _assert(priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
             choose_priority(page, "#upgradePlanPriorityInput", 4)
             # Periodic-sync draft continuity is exercised in interaction_continuity.
@@ -587,7 +587,7 @@ def run(browser) -> dict[str, object]:
                 page.locator('#inspectorContent [data-project-routing-constraint]').count() > 0,
                 "project Supply Requirements must expose Routing Constraint actions at the decision point",
             )
-            _assert(_priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
+            _assert(priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectProcurementTimingPolicy").is_enabled(), "mutable procurement timing policy must stay visible and enabled")
             choose_priority(page, "#projectPriorityInput", 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
@@ -612,7 +612,7 @@ def run(browser) -> dict[str, object]:
             _assert(decommission_button.count() == 1, "facility inspector must expose the Application-projected decommission action")
             _assert(decommission_button.is_enabled(), "unblocked facility decommission must be selectable")
             _assert("見込回収量" in page.locator('#inspectorContent').inner_text(), "decommission decision must expose projected salvage before commitment")
-            _assert(_priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
+            _assert(priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
             _assert(page.locator('#decommissionPlanProcurementTimingPolicy').is_visible(), "decommission planning must expose procurement timing")
             choose_priority(page, '#decommissionPlanPriorityInput', 2)
             page.locator('#decommissionPlanProcurementTimingPolicy').select_option('extended_wait')
@@ -1227,7 +1227,7 @@ def run(browser) -> dict[str, object]:
                 "Comparison detail must preserve the canonical Inspector hierarchy",
             )
             page.locator('#inspectorContent [data-inspect="survey-campaign"]').click()
-            _assert(_priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
+            _assert(priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
             page.wait_for_function(
                 "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",
                 timeout=10000,
