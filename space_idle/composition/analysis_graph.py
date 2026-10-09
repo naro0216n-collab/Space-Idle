@@ -42,6 +42,15 @@ def build_definition_dependency_graph(
             for provider in sim.survey.providers.values():
                 for mode in provider.observation_modes:
                     all_capabilities.update(mode.required_source_capabilities)
+        services = {"power", "life_support", "onboard_life_support"}
+        services.update(supply.service_type
+                        for facility in sim.facilities.definitions.values()
+                        for supply in facility.service_capacity_supplies)
+        for vehicle in sim.transport.vehicle_definitions():
+            for service in (vehicle.production.service_type, vehicle.maintenance.service_type,
+                            vehicle.retirement.service_type):
+                if service is not None:
+                    services.add(service)
         resource_pools = {
             resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY
             for resource in catalog.resources.values()
@@ -52,7 +61,9 @@ def build_definition_dependency_graph(
             tuple(_node("resource", value) for value in catalog.resources)
             + tuple(_node("storage_pool", pool) for pool in sorted(resource_pools))
             + tuple(_node("capability", cap) for cap in sorted(all_capabilities))
-            + (_node("research_point_pool", "research_points"),),
+            + tuple(_node("service_capacity", service) for service in sorted(services))
+            + (_node("capacity_pool", "housing"), _node("capacity_pool", "passenger_seats"),
+               _node("research_point_pool", "research_points")),
             tuple(DependencyRelation(
                 "uses_storage_pool", _node("resource", resource.id),
                 _node("storage_pool", resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY),
@@ -114,15 +125,60 @@ def build_definition_dependency_graph(
                     "supplies_capability", owner, _node("capability", supply.id),
                     f"facility:{facility.id}:capability_supplies",
                 ))
+            for supply in facility.service_capacity_supplies:
+                relations.append(DependencyRelation(
+                    "nominal_service_supply", owner, _node("service_capacity", supply.service_type),
+                    f"facility:{facility.id}:service_capacity_supplies:{supply.service_type}",
+                    supply.nominal_rate, "service_units/day", "per_installed_facility",
+                    condition=f"scope:{supply.scope.value};active_and_maintained",
+                ))
+            if facility.housing_capacity:
+                relations.append(DependencyRelation(
+                    "nominal_housing_capacity", owner, _node("capacity_pool", "housing"),
+                    f"facility:{facility.id}:housing_capacity", facility.housing_capacity,
+                    "people", "per_facility_level", condition="installed_and_habitable",
+                ))
+            if facility.life_support is not None:
+                support = _node("life_support_method", facility.id)
+                nodes.append(support)
+                relations.append(DependencyRelation(
+                    "uses_asset_definition", owner, support,
+                    f"facility:{facility.id}:life_support",
+                ))
+                relations.append(DependencyRelation(
+                    "nominal_life_support_supply", support, _node("service_capacity", "life_support"),
+                    f"facility:{facility.id}:life_support.person_days_per_day",
+                    facility.life_support.person_days_per_day, "person_days/day",
+                    "per_facility_level", condition="active_power_maintenance_and_allocation",
+                ))
+                for resource_id, rate in facility.life_support.net_resources:
+                    relations.append(DependencyRelation(
+                        "consumes_resource", _node("resource", resource_id), support,
+                        f"facility:{facility.id}:life_support.net_resources:{resource_id}",
+                        rate, "t/person_day", "per_supported_person_day",
+                    ))
+            if facility.maintenance_fraction_per_year:
+                policy = _node("facility_maintenance_policy", facility.id)
+                nodes.append(policy)
+                relations.append(DependencyRelation(
+                    "maintenance_investment_fraction", owner, policy,
+                    f"facility:{facility.id}:maintenance_fraction_per_year",
+                    facility.maintenance_fraction_per_year, "fraction/year",
+                    "of_actual_instance_investment",
+                ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("facility", facilities, relation_kinds={"supplies_capability"})
+    registry.register("facility", facilities, relation_kinds={
+        "supplies_capability", "nominal_service_supply", "nominal_housing_capacity",
+        "uses_asset_definition", "nominal_life_support_supply", "consumes_resource",
+        "maintenance_investment_fraction",
+    })
 
     def power_and_storage() -> DependencyFragment:
         # Nominal installed supply and load. Daily usable power and storage are
         # resolved from physical environment, pause, maintenance and allocation
         # by their owner domains, not inferred from these static edges.
-        nodes = {_node("service_capacity", "power")}
+        nodes = set()
         relations = []
         for facility_id, spec in sim.power.specs.items():
             facility = _node("facility", facility_id)
@@ -303,10 +359,84 @@ def build_definition_dependency_graph(
                     "unlocks_method", _node("technology", technology), production,
                     f"vehicle:{vehicle.id}:production.prerequisite_technologies",
                 ))
+            if vehicle.production.service_type is not None:
+                relations.append(DependencyRelation(
+                    "requires_service_capacity", _node("service_capacity", vehicle.production.service_type), production,
+                    f"vehicle:{vehicle.id}:production.service_type",
+                    condition=f"production_days:{vehicle.production.days:g};installed_service_required",
+                ))
+            if vehicle.maintenance.turnaround_days or vehicle.maintenance.resources or vehicle.maintenance.service_type:
+                method = _node("vehicle_turnaround_method", vehicle.id)
+                nodes.append(method)
+                relations.append(DependencyRelation(
+                    "uses_asset_definition", owner, method, f"vehicle:{vehicle.id}:maintenance",
+                ))
+                if vehicle.maintenance.service_type is not None:
+                    relations.append(DependencyRelation(
+                        "requires_service_capacity", _node("service_capacity", vehicle.maintenance.service_type), method,
+                        f"vehicle:{vehicle.id}:maintenance.service_type",
+                        condition=f"turnaround_days:{vehicle.maintenance.turnaround_days:g}",
+                    ))
+                for resource_id, amount in vehicle.maintenance.resources:
+                    relations.append(DependencyRelation(
+                        "consumes_resource", _node("resource", resource_id), method,
+                        f"vehicle:{vehicle.id}:maintenance.resources:{resource_id}",
+                        amount, "t", "per_turnaround",
+                    ))
+            if vehicle.retirement.enabled:
+                method = _node("vehicle_retirement_method", vehicle.id)
+                nodes.append(method)
+                relations.append(DependencyRelation(
+                    "retires_vehicle", owner, method, f"vehicle:{vehicle.id}:retirement",
+                    vehicle.retirement.work_days_per_unit, "work_days", "per_vehicle",
+                ))
+                if vehicle.retirement.service_type is not None:
+                    relations.append(DependencyRelation(
+                        "requires_service_capacity", _node("service_capacity", vehicle.retirement.service_type), method,
+                        f"vehicle:{vehicle.id}:retirement.service_type",
+                    ))
+                for resource_id, amount in vehicle.retirement.resources_per_unit:
+                    relations.append(DependencyRelation(
+                        "consumes_resource", _node("resource", resource_id), method,
+                        f"vehicle:{vehicle.id}:retirement.resources_per_unit:{resource_id}",
+                        amount, "t", "per_vehicle",
+                    ))
+                for resource_id, amount in vehicle.retirement.recovery_resources_per_unit:
+                    relations.append(DependencyRelation(
+                        "recovers_resource", method, _node("resource", resource_id),
+                        f"vehicle:{vehicle.id}:retirement.recovery_resources_per_unit:{resource_id}",
+                        amount, "t", "maximum_recovery_per_vehicle",
+                        condition="requires_irreversible_retirement_and_usable_storage",
+                    ))
+            if vehicle.passengers.seats:
+                method = _node("onboard_life_support_method", vehicle.id)
+                nodes.append(method)
+                relations.append(DependencyRelation(
+                    "nominal_passenger_seats", owner, _node("capacity_pool", "passenger_seats"),
+                    f"vehicle:{vehicle.id}:passengers.seats", vehicle.passengers.seats,
+                    "people", "per_vehicle",
+                ))
+                relations.append(DependencyRelation(
+                    "uses_asset_definition", owner, method, f"vehicle:{vehicle.id}:passengers",
+                ))
+                relations.append(DependencyRelation(
+                    "nominal_life_support_supply", method, _node("service_capacity", "onboard_life_support"),
+                    f"vehicle:{vehicle.id}:passengers.life_support_person_days_per_day",
+                    vehicle.passengers.life_support_person_days_per_day,
+                    "person_days/day", "per_vehicle", condition="onboard_power_and_provisions_required",
+                ))
+                for resource_id, rate in vehicle.passengers.net_resources_per_person_day:
+                    relations.append(DependencyRelation(
+                        "consumes_resource", _node("resource", resource_id), method,
+                        f"vehicle:{vehicle.id}:passengers.net_resources_per_person_day:{resource_id}",
+                        rate, "t/person_day", "per_onboard_person_day",
+                    ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("vehicle_production", vehicle_production, relation_kinds={
         "produces_vehicle", "supplies_capability", "consumes_resource", "unlocks_method",
+        "requires_service_capacity", "uses_asset_definition", "retires_vehicle",
+        "recovers_resource", "nominal_passenger_seats", "nominal_life_support_supply",
     })
 
     def observations() -> DependencyFragment:

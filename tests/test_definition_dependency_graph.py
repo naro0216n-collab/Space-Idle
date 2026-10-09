@@ -102,6 +102,63 @@ def test_installed_power_storage_and_external_market_remain_typed_nominal_depend
             assert rows[0].quantity == capacity
             assert rows[0].unit == "t" and rows[0].time_basis == "per_installed_facility"
 
+    # Service, housing and life support are not fungible: a housing slot is
+    # installed stock capacity, whereas oxygen/water throughput is a daily flow.
+    for facility in sim.facilities.definitions.values():
+        owner = DependencyNode("facility", str(facility.id))
+        for service in facility.service_capacity_supplies:
+            rows = edges("nominal_service_supply", owner,
+                         DependencyNode("service_capacity", service.service_type))
+            assert len(rows) == 1 and rows[0].quantity == service.nominal_rate
+            assert rows[0].time_basis == "per_installed_facility"
+        if facility.housing_capacity:
+            row = edges("nominal_housing_capacity", owner,
+                        DependencyNode("capacity_pool", "housing"))[0]
+            assert (row.quantity, row.unit) == (facility.housing_capacity, "people")
+        if facility.life_support is not None:
+            support = DependencyNode("life_support_method", str(facility.id))
+            assert edges("uses_asset_definition", owner, support)
+            row = edges("nominal_life_support_supply", support,
+                        DependencyNode("service_capacity", "life_support"))[0]
+            assert row.quantity == facility.life_support.person_days_per_day
+            assert row.unit == "person_days/day"
+            for rid, rate in facility.life_support.net_resources:
+                row = edges("consumes_resource", DependencyNode("resource", str(rid)), support)[0]
+                assert (row.quantity, row.unit) == (rate, "t/person_day")
+        if facility.maintenance_fraction_per_year:
+            row = edges("maintenance_investment_fraction", owner,
+                        DependencyNode("facility_maintenance_policy", str(facility.id)))[0]
+            assert (row.quantity, row.time_basis) == (
+                facility.maintenance_fraction_per_year, "of_actual_instance_investment")
+
+    for vehicle in sim.transport.vehicle_definitions():
+        owner = DependencyNode("vehicle", str(vehicle.id))
+        production = DependencyNode("vehicle_production_method", str(vehicle.id))
+        if vehicle.production.service_type is not None:
+            assert edges("requires_service_capacity",
+                         DependencyNode("service_capacity", vehicle.production.service_type), production)
+        if vehicle.retirement.enabled:
+            method = DependencyNode("vehicle_retirement_method", str(vehicle.id))
+            assert edges("retires_vehicle", owner, method)
+            for rid, amount in vehicle.retirement.recovery_resources_per_unit:
+                row = edges("recovers_resource", method, DependencyNode("resource", str(rid)))[0]
+                assert (row.quantity, row.time_basis) == (amount, "maximum_recovery_per_vehicle")
+        if vehicle.maintenance.turnaround_days or vehicle.maintenance.resources or vehicle.maintenance.service_type:
+            method = DependencyNode("vehicle_turnaround_method", str(vehicle.id))
+            assert edges("uses_asset_definition", owner, method)
+            for rid, amount in vehicle.maintenance.resources:
+                row = edges("consumes_resource", DependencyNode("resource", str(rid)), method)[0]
+                assert (row.quantity, row.time_basis) == (amount, "per_turnaround")
+        if vehicle.passengers.seats:
+            method = DependencyNode("onboard_life_support_method", str(vehicle.id))
+            assert edges("nominal_passenger_seats", owner,
+                         DependencyNode("capacity_pool", "passenger_seats"))
+            assert edges("nominal_life_support_supply", method,
+                         DependencyNode("service_capacity", "onboard_life_support"))
+            for rid, rate in vehicle.passengers.net_resources_per_person_day:
+                row = edges("consumes_resource", DependencyNode("resource", str(rid)), method)[0]
+                assert (row.quantity, row.unit) == (rate, "t/person_day")
+
     # External buy availability and offer prices have distinct units, semantics,
     # and interface requirements. Neither is a player-owned inventory stock.
     market = next(iter(sim.market.provider_defs.values()))
