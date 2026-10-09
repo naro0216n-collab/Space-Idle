@@ -119,3 +119,78 @@ def test_installed_power_storage_and_external_market_remain_typed_nominal_depend
     assert not expanded.diagnostics
     assert any(row.source == DependencyNode("market_provider", str(other.id))
                and row.kind == "external_buy_offer" for row in expanded.relations)
+
+
+def test_live_state_observation_uses_owned_state_and_is_distinct_from_definition_graph():
+    from space_idle.analysis_observation import observe_state
+    from space_idle.shared import EntityId
+
+    app = build_game_application()
+    sim = app._simulation
+    key = next(key for key, amount in sim.inventory.stock.items() if amount >= 2)
+    node_id, resource_id = key
+    start = observe_state(sim, operational_node_ids=frozenset({node_id}),
+                          resource_ids=frozenset({resource_id}))
+    initial = {(m.kind, m.subject_id, m.context_id): m.quantity for m in start.metrics}
+    def amount(observation, kind):
+        return next(row.quantity for row in observation.metrics if row.kind == kind)
+
+    assert start.day == sim.day and start.scenario_id == sim.scenario_id
+    assert start.operational_node_ids == (str(node_id),)
+    assert start.resource_ids == (str(resource_id),)
+    assert start.to_json_data()["scope"] == {
+        "operational_node_ids": [str(node_id)], "resource_ids": [str(resource_id)],
+    }
+    assert all(row.context_id == str(node_id) and row.subject_id == str(resource_id)
+               for row in start.metrics if row.kind.startswith("inventory_"))
+    # Provider quantities retain their provider scope even when the Node has
+    # an interface; they are never counted as local Inventory.
+    assert all(row.kind.startswith(("inventory_", "external_market_"))
+               for row in start.metrics)
+    assert amount(start, "inventory_available") == max(
+        0.0, amount(start, "inventory_stock") - amount(start, "inventory_reserved"))
+    assert json.loads(json.dumps(start.to_json_data())) == start.to_json_data()
+
+    owner = EntityId("analysis.test.reservation")
+    assert sim.inventory.reserve(owner, node_id, resource_id, 1) == 1
+    observed = observe_state(sim, operational_node_ids=frozenset({node_id}),
+                             resource_ids=frozenset({resource_id}))
+    assert amount(observed, "inventory_stock") == amount(start, "inventory_stock")
+    assert amount(observed, "inventory_reserved") == amount(start, "inventory_reserved") + 1
+    assert amount(observed, "inventory_available") == amount(start, "inventory_available") - 1
+    assert sim.day == start.day
+
+    sim.inventory.release_reservation(owner)
+    assert {(m.kind, m.subject_id, m.context_id): m.quantity for m in
+            observe_state(sim, operational_node_ids=frozenset({node_id}),
+                          resource_ids=frozenset({resource_id})).metrics} == initial
+    complete = observe_state(sim)
+    kinds = {metric.kind for metric in complete.metrics}
+    assert {"physical_storage_capacity", "usable_storage_capacity",
+            "storage_pool_occupied", "storage_pool_admission_available",
+            "external_market_supply_available", "funds_balance", "fleet_total"} <= kinds
+    assert any(metric.provenance.startswith("inventory.") for metric in complete.metrics)
+    assert observe_state(sim) == complete  # no implicit tick / mutable analysis state
+
+    for (pool_node, pool_key), _physical in sim.inventory.physical_storage_capacity_t.items():
+        admission = sim.inventory.admission_state_for_pool(pool_node, pool_key)
+        observed_pool = {(m.kind, m.subject_id, m.context_id): m.quantity
+                         for m in complete.metrics}
+        assert observed_pool[("storage_pool_occupied", pool_key, str(pool_node))] == admission.occupied_t
+        assert observed_pool[("storage_pool_over_capacity", pool_key, str(pool_node))] == admission.over_capacity_t
+
+    # Supply committed to a pending Buy Order cannot simultaneously be
+    # advertised as freely available for another purchase.
+    for provider_id, state in sim.market.provider_states.items():
+        for rid, remaining in state.supply_available_t.items():
+            rows = {(m.kind, m.subject_id, m.context_id): m.quantity for m in complete.metrics}
+            assert rows[("external_market_supply_remaining", str(rid), str(provider_id))] == remaining
+            assert rows[("external_market_supply_available", str(rid), str(provider_id))] == (
+                sim.market.available_provider_supply_t(provider_id, rid))
+    for interface in sim.market.interfaces.values():
+        if not interface.enabled:
+            continue
+        scoped = observe_state(sim, operational_node_ids=frozenset({interface.operational_node_id}))
+        assert any(row.context_id == str(interface.provider_id)
+                   and row.kind.startswith("external_market_") for row in scoped.metrics)
+        break
