@@ -21,7 +21,7 @@ from space_idle.construction import (
     FacilityDecommissionRecipe,
     FacilityUpgradeRecipe,
 )
-from space_idle.facilities import FacilityDef, FacilityLifecycle
+from space_idle.facilities import CapabilitySupply, FacilityDef, FacilityLifecycle
 from space_idle.facility_lifecycle import FacilityLifecycleBlocker
 from space_idle.persistence import load_game, save_game
 from space_idle.research import (
@@ -300,6 +300,7 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
     sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
         UPGRADE_FACILITY,
         "Upgrade target fixture",
+        capability_supplies=(CapabilitySupply("test_upgrade_research_instrument"),),
     )
     sim.facilities.definitions[UPGRADE_CONTRACTOR] = FacilityDef(
         UPGRADE_CONTRACTOR,
@@ -309,7 +310,7 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
     sim.research.providers[UPGRADE_FACILITY] = ResearchProviderSpec(
         UPGRADE_FACILITY,
         ResearchProviderSourceKind.FACILITY,
-        UPGRADE_FACILITY,
+        frozenset({"test_upgrade_research_instrument"}),
         tier=1,
         levels=(
             ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),

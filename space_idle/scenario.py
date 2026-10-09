@@ -51,6 +51,7 @@ class ScenarioProviderFleetAssignment:
     """Initial provider use of real Fleet units; quantity remains owned by Fleet."""
     provider_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
+    vehicle_definition_id: DefinitionId
     units: int
 
 
@@ -147,21 +148,19 @@ class ScenarioDefinition:
         if self.survey_fleet_assignments and sim.survey is None:
             raise ValueError("Scenario has Survey Fleet assignments without Survey Domain")
         for row in self.survey_fleet_assignments:
-            provider = sim.survey.provider(row.provider_definition_id)
             sim.survey.set_provider_fleet_quantity(
                 row.provider_definition_id,
                 row.operational_node_id,
-                provider.source_definition_id,
+                row.vehicle_definition_id,
                 row.units,
                 day=sim.day,
             )
 
         for row in self.research_fleet_assignments:
-            provider = sim.research.providers[row.provider_definition_id]
             sim.research.set_provider_fleet_quantity(
                 row.provider_definition_id,
                 row.operational_node_id,
-                provider.source_definition_id,
+                row.vehicle_definition_id,
                 row.units,
                 day=sim.day,
             )

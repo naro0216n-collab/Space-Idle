@@ -183,7 +183,7 @@ class ResearchProviderSourceKind(str, Enum):
 class ResearchProviderSpec:
     id: DefinitionId
     source_kind: ResearchProviderSourceKind
-    source_definition_id: DefinitionId
+    required_source_capabilities: frozenset[str]
     tier: int
     levels: tuple[ResearchProviderLevelSpec, ...]
     site_requirements: SiteRequirements = SiteRequirements()
@@ -193,6 +193,8 @@ class ResearchProviderSpec:
         import math
         if not math.isfinite(self.crew_person_days_per_research_point) or self.crew_person_days_per_research_point < 0:
             raise ValueError("research provider Crew requirement must be finite and nonnegative")
+        if not self.required_source_capabilities or any(not item for item in self.required_source_capabilities):
+            raise ValueError("research provider requires nonempty physical source capabilities")
         if self.tier < 1:
             raise ValueError("research provider tier must be positive")
         if not self.levels:
@@ -202,6 +204,9 @@ class ResearchProviderSpec:
             if level.level in seen:
                 raise ValueError(f"duplicate research provider level: {level.level}")
             seen.add(level.level)
+
+    def accepts_source(self, capabilities) -> bool:
+        return self.required_source_capabilities.issubset(set(capabilities))
 
     def level_spec(self, level: int) -> ResearchProviderLevelSpec:
         for spec in self.levels:

@@ -211,45 +211,46 @@ class ResearchProgressionProjectorMixin:
             if provider.source_kind is ResearchProviderSourceKind.FLEET
         )
         for provider in sorted(fleet_providers, key=lambda row: str(row.id)):
-            for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
-                assignment = sim.research.provider_assignment_for(
-                    provider.id, node.id, provider.source_definition_id
-                )
-                committed_units = (
-                    0 if assignment is None
-                    else sim.research.provider_assignment_quantity(assignment.id)
-                )
-                free_units = sim.transport.fleet_free_units(
-                    provider.source_definition_id, node.id
-                )
-                failures = sim.research.provider_assignment_site_failures(
-                    provider.id, node.id, day=sim.day
-                )
-                blocker_rows = [(failure.code, failure.detail) for failure in failures]
-                if committed_units == 0 and free_units == 0:
-                    blocker_rows.append((
-                        "fleet_unavailable",
-                        "No free compatible Fleet units are available at this operational node",
+            for vehicle in sorted(sim.research.compatible_vehicle_definitions(provider.id), key=lambda row: str(row.id)):
+                for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
+                    assignment = sim.research.provider_assignment_for(
+                        provider.id, node.id, vehicle.id
+                    )
+                    committed_units = (
+                        0 if assignment is None
+                        else sim.research.provider_assignment_quantity(assignment.id)
+                    )
+                    free_units = sim.transport.fleet_free_units(
+                        vehicle.id, node.id
+                    )
+                    failures = sim.research.provider_assignment_site_failures(
+                        provider.id, node.id, day=sim.day
+                    )
+                    blocker_rows = [(failure.code, failure.detail) for failure in failures]
+                    if committed_units == 0 and free_units == 0:
+                        blocker_rows.append((
+                            "fleet_unavailable",
+                            "No free compatible Fleet units are available at this operational node",
+                        ))
+                    blockers = tuple(blocker_rows)
+                    max_units = committed_units if failures else committed_units + free_units
+                    rows.append(ResearchProviderFleetRow(
+                        provider_definition_id=str(provider.id),
+                        vehicle_definition_id=str(vehicle.id),
+                        operational_node_id=str(node.id),
+                        tier=provider.tier,
+                        assignment_id=None if assignment is None else str(assignment.id),
+                        committed_units=committed_units,
+                        free_units=free_units,
+                        max_units=max_units,
+                        blockers=constraints_from_pairs(
+                            blockers,
+                            affected_action="set_research_provider_fleet",
+                            related_entity_kind="research_provider",
+                            related_entity_id=str(provider.id),
+                        ),
+                        can_set_quantity=(committed_units > 0 or max_units > 0),
                     ))
-                blockers = tuple(blocker_rows)
-                max_units = committed_units if failures else committed_units + free_units
-                rows.append(ResearchProviderFleetRow(
-                    provider_definition_id=str(provider.id),
-                    vehicle_definition_id=str(provider.source_definition_id),
-                    operational_node_id=str(node.id),
-                    tier=provider.tier,
-                    assignment_id=None if assignment is None else str(assignment.id),
-                    committed_units=committed_units,
-                    free_units=free_units,
-                    max_units=max_units,
-                    blockers=constraints_from_pairs(
-                        blockers,
-                        affected_action="set_research_provider_fleet",
-                        related_entity_kind="research_provider",
-                        related_entity_id=str(provider.id),
-                    ),
-                    can_set_quantity=(committed_units > 0 or max_units > 0),
-                ))
         return tuple(rows)
 
     def _research_provider_rows(self, power_by_location, execution_allocations) -> tuple[ResearchProviderRow, ...]:
@@ -280,7 +281,7 @@ class ResearchProgressionProjectorMixin:
                 id=str(facility.id),
                 provider_definition_id=str(provider.id),
                 source_kind=provider.source_kind.value,
-                source_definition_id=str(provider.source_definition_id),
+                source_definition_id=str(facility.definition_id),
                 operational_node_id=str(facility.operational_node_id),
                 tier=provider.tier,
                 level=facility.level,

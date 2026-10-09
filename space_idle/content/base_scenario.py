@@ -83,10 +83,10 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
             ScenarioFleet(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT),
         ),
         survey_fleet_assignments=(
-            ScenarioProviderFleetAssignment(ids.LUNAR_FLEET_SURVEY_PROVIDER, ids.LUNAR_ORBIT, 1),
+            ScenarioProviderFleetAssignment(ids.LUNAR_FLEET_SURVEY_PROVIDER, ids.LUNAR_ORBIT, ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1),
         ),
         research_fleet_assignments=(
-            ScenarioProviderFleetAssignment(ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER, ids.LEO, 1),
+            ScenarioProviderFleetAssignment(ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER, ids.LEO, ids.ORBITAL_OBSERVATION_SPACECRAFT, 1),
         ),
         known_surface_resources=known,
         initial_population=(ScenarioPopulation(ids.EARTH, 30),),

@@ -100,13 +100,18 @@ def build_definition_dependency_graph(
                         time_basis="per_stage",
                     ))
         for provider in sim.research.providers.values():
-            source = _node("vehicle" if provider.source_kind.value == "fleet" else "facility", provider.source_definition_id)
             target = _node("research_provider", provider.id)
             nodes.append(target)
-            relations.append(DependencyRelation(
-                "uses_asset_definition", source, target,
-                f"research_provider:{provider.id}:source_definition_id",
-            ))
+            if provider.source_kind.value == "fleet":
+                sources = (("vehicle", definition.id) for definition in sim.research.compatible_vehicle_definitions(provider.id))
+            else:
+                sources = (("facility", definition_id) for definition_id in sim.research.compatible_facility_definition_ids(provider.id))
+            for source_kind, definition_id in sources:
+                relations.append(DependencyRelation(
+                    "uses_asset_definition", _node(source_kind, definition_id), target,
+                    f"research_provider:{provider.id}:required_source_capabilities",
+                    condition="source_capabilities:" + ",".join(sorted(provider.required_source_capabilities)),
+                ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("research", research, relation_kinds={

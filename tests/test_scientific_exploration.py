@@ -28,7 +28,7 @@ from space_idle import (
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from space_idle.facilities import FacilityDef
+from space_idle.facilities import CapabilitySupply, FacilityDef
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
 )
@@ -379,7 +379,8 @@ def test_rp_admission_blocks_only_active_science_and_shares_recovered_headroom()
     storage_definition_id = DefinitionId("test.facility.exploration_rp_storage")
     storage_provider_id = DefinitionId("test.research_provider.exploration_rp_storage")
     sim.facilities.definitions[storage_definition_id] = FacilityDef(
-        storage_definition_id, "Exploration RP storage fixture"
+        storage_definition_id, "Exploration RP storage fixture",
+        capability_supplies=(CapabilitySupply("test_exploration_research_storage"),),
     )
     for assignment in tuple(sim.research.provider_assignments.values()):
         sim.research.release_provider_assignment(assignment.id, day=sim.day)
@@ -387,7 +388,7 @@ def test_rp_admission_blocks_only_active_science_and_shares_recovered_headroom()
         storage_provider_id: ResearchProviderSpec(
             storage_provider_id,
             ResearchProviderSourceKind.FACILITY,
-            storage_definition_id,
+            frozenset({"test_exploration_research_storage"}),
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 4.0, 100.0, 0.0),),
         )

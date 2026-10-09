@@ -26,13 +26,42 @@ class ResearchCapacityMixin:
             provider
             for provider in self.providers.values()
             if provider.source_kind is ResearchProviderSourceKind.FACILITY
-            and provider.source_definition_id == facility.definition_id
+            and provider.accepts_source(
+                row.id for row in self.facilities.definitions[facility.definition_id].capability_supplies
+            )
         )
         if len(matches) > 1:
             raise RuntimeError(
-                f"multiple Research Providers reference facility definition: {facility.definition_id}"
+                f"multiple Research Providers match physical Facility capabilities: {facility.definition_id}"
             )
         return matches[0] if matches else None
+
+    def compatible_vehicle_definitions(self, provider_definition_id: DefinitionId):
+        provider = self.providers[provider_definition_id]
+        if provider.source_kind is not ResearchProviderSourceKind.FLEET:
+            return ()
+        return tuple(
+            definition for definition in self.transport.vehicle_definitions()
+            if provider.accepts_source(definition.performance.generic_capabilities)
+        )
+
+    def compatible_facility_definition_ids(self, provider_definition_id: DefinitionId):
+        provider = self.providers[provider_definition_id]
+        if provider.source_kind is not ResearchProviderSourceKind.FACILITY:
+            return frozenset()
+        return frozenset(
+            definition.id for definition in self.facilities.definitions.values()
+            if provider.accepts_source(row.id for row in definition.capability_supplies)
+        )
+
+    def vehicle_satisfies_provider(self, provider_definition_id: DefinitionId, vehicle_definition_id: DefinitionId) -> bool:
+        provider = self.providers[provider_definition_id]
+        definition = self.transport.vehicle_definition(vehicle_definition_id)
+        return (
+            provider.source_kind is ResearchProviderSourceKind.FLEET
+            and definition is not None
+            and provider.accepts_source(definition.performance.generic_capabilities)
+        )
 
     def facility_provider_spec(self, facility_id: EntityId):
         """Return the Research Provider represented by a Facility State, if any."""
@@ -202,8 +231,8 @@ class ResearchCapacityMixin:
             raise KeyError(provider_definition_id)
         if provider.source_kind is not ResearchProviderSourceKind.FLEET:
             raise ValueError("Research Provider fleet quantity requires a Fleet-backed provider")
-        if provider.source_definition_id != vehicle_definition_id:
-            raise ValueError("Research Provider vehicle does not match provider definition")
+        if not self.vehicle_satisfies_provider(provider_definition_id, vehicle_definition_id):
+            raise ValueError("Research Provider vehicle lacks required source capabilities")
         if not self.facilities.environment.graph.has_operational_node(operational_node_id):
             raise KeyError(operational_node_id)
         if quantity < 0:
@@ -219,13 +248,14 @@ class ResearchCapacityMixin:
             self.resize_provider_assignment(assignment.id, quantity)
             return assignment.id
         return self.create_provider_assignment(
-            provider_definition_id, operational_node_id, quantity, day=day
+            provider_definition_id, operational_node_id, vehicle_definition_id, quantity, day=day
         )
 
     def create_provider_assignment(
         self,
         provider_definition_id: DefinitionId,
         operational_node_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
         quantity: int,
         *,
         priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY,
@@ -238,6 +268,8 @@ class ResearchCapacityMixin:
             raise ValueError("Research Provider assignment requires a Fleet-backed provider")
         if not self.facilities.environment.graph.has_operational_node(operational_node_id):
             raise KeyError(operational_node_id)
+        if not self.vehicle_satisfies_provider(provider_definition_id, vehicle_definition_id):
+            raise ValueError("Research Provider vehicle lacks required source capabilities")
         if quantity <= 0:
             raise ValueError("Research Provider assignment quantity must be positive")
         site_failures = self.provider_assignment_site_failures(
@@ -253,7 +285,7 @@ class ResearchCapacityMixin:
         self.transport.commit_fleet_units(
             commitment_id,
             FleetActivityRef("research_provider_assignment", assignment_id),
-            provider.source_definition_id,
+            vehicle_definition_id,
             operational_node_id,
             quantity,
         )
@@ -262,7 +294,7 @@ class ResearchCapacityMixin:
         self.provider_assignments[assignment_id] = ResearchProviderAssignmentState(
             id=assignment_id,
             provider_definition_id=provider_definition_id,
-            vehicle_definition_id=provider.source_definition_id,
+            vehicle_definition_id=vehicle_definition_id,
             operational_node_id=operational_node_id,
             priority=priority,
             paused=False,
@@ -272,6 +304,8 @@ class ResearchCapacityMixin:
 
     def resize_provider_assignment(self, assignment_id: EntityId, quantity: int) -> None:
         assignment = self.provider_assignments[assignment_id]
+        if not self.vehicle_satisfies_provider(assignment.provider_definition_id, assignment.vehicle_definition_id):
+            raise ValueError("Research Provider vehicle lacks required source capabilities")
         if quantity <= 0:
             raise ValueError("Research Provider assignment quantity must be positive")
         self.transport.resize_fleet_commitment(assignment.fleet_commitment_ref, quantity)
@@ -306,8 +340,8 @@ class ResearchCapacityMixin:
             return 0.0
         assignment = self.provider_assignments[assignment_id]
         provider = self.providers[assignment.provider_definition_id]
-        if assignment.vehicle_definition_id != provider.source_definition_id:
-            raise RuntimeError(f"Research Provider assignment vehicle mismatch: {assignment_id}")
+        if not self.vehicle_satisfies_provider(assignment.provider_definition_id, assignment.vehicle_definition_id):
+            raise RuntimeError(f"Research Provider assignment vehicle lacks required source capabilities: {assignment_id}")
         return (
             provider.level_spec(1).research_execution_per_day
             * self.provider_assignment_quantity(assignment_id)
@@ -340,8 +374,8 @@ class ResearchCapacityMixin:
         provider = self.providers[assignment.provider_definition_id]
         if provider.source_kind is not ResearchProviderSourceKind.FLEET:
             raise RuntimeError("Research Provider assignment references non-Fleet provider")
-        if assignment.vehicle_definition_id != provider.source_definition_id:
-            raise RuntimeError(f"Research Provider assignment vehicle mismatch: {assignment_id}")
+        if not self.vehicle_satisfies_provider(assignment.provider_definition_id, assignment.vehicle_definition_id):
+            raise RuntimeError(f"Research Provider assignment vehicle lacks required source capabilities: {assignment_id}")
         site_failures = self.provider_assignment_site_failures(
             assignment.provider_definition_id, assignment.operational_node_id, day=day
         )
@@ -369,9 +403,10 @@ class ResearchCapacityMixin:
         if service_type != "research_execution":
             raise KeyError(service_type)
         return frozenset(
-            provider.source_definition_id
+            definition_id
             for provider in self.providers.values()
             if provider.source_kind is ResearchProviderSourceKind.FACILITY
+            for definition_id in self.compatible_facility_definition_ids(provider.id)
         )
 
     def service_capacity_upstream_services(self, service_type: str) -> frozenset[str]:

@@ -272,7 +272,7 @@ def build_vehicle_definitions() -> dict:
                     ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
                 ),),
                 endurance_days=180.0,
-                generic_capabilities=("observation_sensor", "docking_interface", "refueling_interface"),
+                generic_capabilities=("optical_observation_instrument", "docking_interface", "refueling_interface"),
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=3.0,

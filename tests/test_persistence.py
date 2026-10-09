@@ -443,7 +443,7 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
         app._simulation.research.providers[provider_id] = ResearchProviderSpec(
             provider_id,
             ResearchProviderSourceKind.FLEET,
-            ids.REUSABLE_ORBITAL_CARGO_TUG,
+            frozenset({"docking_interface"}),
             tier=2,
             levels=(ResearchProviderLevelSpec(1, 2.0, 25.0, 1.5),),
         )
