@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..facilities import FacilityDef, FacilityPlacementScope
+from ..facilities import FacilityDef, FacilityPlacementScope, LifeSupportSpec
 from . import base_ids as ids
 from . import base_requirements as req
 
@@ -58,17 +58,32 @@ def build_facility_definitions() -> dict:
         ids.BASIC_STRUCTURAL_MATERIAL_PLANT: FacilityDef(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, "基礎構造材工場", req._capabilities("basic_structural_material"), surface, surface, 0.09),
         ids.BASIC_MACHINERY_WORKS: FacilityDef(ids.BASIC_MACHINERY_WORKS, "基礎機械製作所", req._capabilities("basic_machinery_production"), surface, surface, 0.09),
     }
+    definitions[ids.FOOD_FARM] = FacilityDef(
+        ids.FOOD_FARM, '閉鎖式食料栽培設備', installation_requirements=surface, operating_requirements=surface,
+    )
+    definitions[ids.CREWED_ORBITAL_LABORATORY] = replace(
+        definitions[ids.CREWED_ORBITAL_LABORATORY], housing_capacity=8,
+        life_support=LifeSupportSpec(8, ((ids.FOOD, 0.001), (ids.WATER, 0.002), (ids.OXYGEN, 0.003))),
+    )
     # Maintenance rates are Content balance. Mature/general equipment uses a
     # modest baseline while deliberately inefficient opening industry carries
     # a higher burden above. No location identity participates in this rule.
+    definitions[ids.HABITAT] = FacilityDef(
+        ids.HABITAT, '与圧居住モジュール', housing_capacity=24,
+        installation_requirements=surface, operating_requirements=surface,
+        life_support=LifeSupportSpec(24, ((ids.FOOD, 0.001), (ids.WATER, 0.002), (ids.OXYGEN, 0.003))),
+    )
+    # Environmental eligibility and net replenishment are Content, not Core
+    # exceptions keyed to the planet name.
+    definitions[ids.EARTH_LIFE_SUPPORT] = FacilityDef(
+        ids.EARTH_LIFE_SUPPORT, '地上居住・生活供給設備', housing_capacity=160,
+        installation_requirements=req.BREATHABLE_SURFACE_SITE,
+        operating_requirements=req.BREATHABLE_SURFACE_SITE,
+        life_support=LifeSupportSpec(160, ((ids.FOOD, 0.001), (ids.WATER, 0.002))),
+    )
     for definition_id, definition in tuple(definitions.items()):
         if definition.maintenance_fraction_per_year <= 1e-12:
-            definitions[definition_id] = FacilityDef(
-                definition.id, definition.display_name, definition.capability_supplies,
-                definition.installation_requirements, definition.operating_requirements, 0.05,
-                placement_scope=definition.placement_scope,
-                service_capacity_supplies=definition.service_capacity_supplies,
-            )
+            definitions[definition_id] = replace(definition, maintenance_fraction_per_year=0.05)
     definitions = {
         definition_id: replace(definition, decommission_recovery_fraction=0.5)
         for definition_id, definition in definitions.items()

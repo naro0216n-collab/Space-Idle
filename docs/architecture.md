@@ -571,6 +571,18 @@ Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。
 
 詳細期間予測は同じSimulationを一時複製してcanonical dayを進め、期間末日の収支に加えて各Node / Resource利用可能在庫の期間内最小値・発生日を観測する。各dayの実際に採用された共通AllocationからResource要求／割当未達を、Logisticsの発送結果から期限到来Supply Requirementの未発送量を、Logistics-owned Cargoから中継待機／最終目的地入庫待機を、それぞれ別の時系列指標として導出する。実行配分未達は同時に必要なService等の制約によっても発生するため、在庫不足量と断定しない。Simulationの正準Allocationを再計算せずread-onlyに観測し、独立した予測Stateは保存しない。
 
+### 8.5 Population / Housing / Life Support
+
+`Population` が全人数のauthoritative Stateを所有する。Groupは `id, count>0, position, activity_commitment_ref?, deprivation, mortality_remainder` を持ち、positionはOperational Node、未設立Physical Target、確定済みTransport Executionのいずれか一つとする。Mission、Movement、Fleet、Facility、Transportは乗員人数Stockを複製せず、PopulationGroup IDを参照する。Groupは所在・Activity拘束・不足値・死亡端数が一致する場合だけ集約し、分割時は不足値を継承して端数総量を決定論的に保存する。物理的な移動とGroup分割統合は人間を増減させない。
+
+PopulationはNodeごとの任意 `PopulationTarget(desired_count>=0)`、外部人員供給元の `remaining_people>=0`、有限 `PassengerTransferOrder` も所有する。外部供給元のDefinitionは接続Earth Node、有限の初期人数、日次取得上限、取得可否条件を保持する。未取得の人員をPlayer Groupへ生成せず、実際に成立した出発または同一Earth Nodeでの受入でだけ有限残員を減算する。移送や取得は新しい人口の生成ではなく所有境界の変化であり、外部残員とPlayer人口の総和は実際の死亡数だけ減少する。
+
+Facility / Vehicle Definitionと実在AssetはHousing人数Stock上限とLife Support Provider容量（person-day/day）を所有する。Housingの物理容量と環境・稼働状態で利用可能な容量を区別し、既住人口が占有する。Providerは正味Food / Water / Oxygenなどの通常Resource per person-day、Power、Maintenance、上流Service、Site Eligibilityを持つ。Life Supportは人口1人あたり毎日1 person-dayを要求し、Housing Stock、ProviderのService、共通Resource Requirementsを同じPriority 5 Execution Requirement BundleでAllocateして成立分だけ消費する。Provider側の変動Resource要求とPopulation側の要求を二重生成せず、独立の人口用Inventory / Allocation Solverは作らない。同じ保護Scope内では充足を人数比例配分する。人口が存在する間はFacility operation Pauseや人口目標の有無で生命維持需要を消さない。
+
+日次充足率を `f` としたときGroupの累積不足は `max(0, old_deprivation + (1-f) - recovery_rate*f)` とする。死亡creditは `old_remainder + old_count * mortality_rate * max(0, new_deprivation-lethal_threshold)`、死亡数は `min(old_count, floor(credit))`、生残Groupの端数は `credit - floor(credit)` とし、全滅時または死亡数がGroup人数上限へ達した場合に超過creditを保存しない。翌日のCrew Service capacity倍率は `clamp(1-new_deprivation/incapacitation_threshold,0,1)`。RateとThresholdはScenario定義の有限な正数とする。人的作業Serviceは現地にいる未拘束人員の有効人日から生成し、通常Service Capacityとして公平配分する。Missionが必要とする整数Crewは別の排他的Activity commitmentとし、帰還条件まで解放しない。
+
+HousingやLife Support設備の意図的なDecommission / 移動では既存人口と取り消せない到着義務を収容できなければblockする。事故による失効は人間を消さず実際の不足を生む。未設立Physical Targetでは実在Vehicle、積載Resource、展開設備をscopeとして評価する。Surface Cellの環境は本来のSiteを使い、Node代表値へ置き換えない。通常Resource需要はProviderの正味Supply Requirementを共通Logisticsへ出し、生活専用のTarget StockやResource配送経路は作らない。
+
 ## 9. Constructionモデル
 
 ### 9.1 建設能力
@@ -848,6 +860,16 @@ Sellでは遠隔Resourceのためにprovider demandを先行予約しない。Pl
 
 Market InterfaceへのResource輸送はPlayer-owned Fleet / Transport Capacityと通常Logisticsを利用する。External MarketはPlayerへ汎用Transport Serviceを供給せず、Resource取引以外の支出・収入経路を持たない。
 
+### 10.10 人口移送とTransport Execution
+
+`PassengerTransferOrder` はPopulationの一回限りのPlayer intentで、origin Node、destination Node、指定合計人数、Activity Priority、外部人員供給元の任意指定、Service経路またはfree Fleet専用便の任意のhard constraint、受入済み人数、取消済み人数、Transit中のPopulationGroup参照を保持する。Order状態は `requested = 未出発 + Transit + delivered + cancelled` から導出する。人口目標とMissionなしで独立に作成し、現在利用可能な非拘束人数を超える要求を受理しない。未出発分は人員を排他的に予約せず、部分dispatchの都度源人数と物理制約を再評価する。取消は未出発分だけを cancelled に移し、既出発者の輸送義務と位置は残す。
+
+既存Transport Service上の有限旅客dispatchは貨物と同じFleet cycle・共通Mass Capacityを競合消費し、確定Leg、到着日、Onboard Resource、Service identityをTransportが所有するTransit obligationに集約する。free Fleet専用便は既存one-shot Movement ExecutionにPassenger ownerを追加し、Fleet排他commitと物理Arrival / recoveryに従ってsettleする。未指定の手段は成立済みServiceだけを正準評価し、明示専用便指定や固定Service経路を後から勝手に切り替えない。
+
+Vehicle Definitionには座席、旅客1人あたり標準質量、船内Life Support / Power、航行時補給条件を設け、貨物、旅客、船内補給Resourceを同一Payload制約へ計上する。Transport Allocationのforward/reverse `t/day` は貨物・旅客共通mass targetを維持し、座席とmassは同一Fleetから一度だけ導出する。出発時に実在Inventoryからonboard Resourceへownership transferし、航行中は船内Life Supportによって一度だけ消費する。Node側Powerを船内へ無償転用しない。中継降機と直接乗継、到着先Housing / Docking不足による実在船内滞留、有限Resource、不足時の死亡もPopulation正本とTransportの物理状態を整合させる。既commitのLeg・Fleet・到着日を後日のAllocation変更によって遡及変更しない。
+
+人口目標未達への自動増員は目標超過のPlayer-owned Nodeの非拘束人員、次に有限な地球外部人員供給元の順でCandidateを作り、輸送時間・負担・stable IDで決定論的に選ぶ。確定Inbound、Outbound、Mission帰還を考慮した到着時点期待人数で過不足を評価し、手動Orderと人口目標の両方が同じ人数・外部日次quota・Housing・Fleet・Transport Capacity・Resourceを競合配分する。人口目標自体は人員生成、Fleet生成、強制退去を生まない。
+
 ## 11. Research Point / Research / Knowledgeモデル
 
 Research Pointは通常貨物Inventoryとは分離し、組織全体の共有Knowledge PoolとしてResearch Stateが所有する。Research ProviderはOperational Node上のFacility / Fleet等のDefinition-backed providerからRP生成量と貯蔵能力を供給できるが、生成したRPをprovider所在地専用pointにはしない。
@@ -937,7 +959,7 @@ Domainごとに同じExperience値を重複保存しない。Experience category
 
 ### 11.4 Human operation abstraction
 
-有人運用はcrew-ratedなVehicle / Facility property、Habitation / Life Support等のCapability / Service Capacity、消耗Execution Requirement / Supply Requirement、Environment Requirementから表現する。Crew個人・人口の配置、成長、リスクが独立したプレイヤー判断を構成する場合は、そのState ownershipと状態遷移を独立Domainとして定義する。
+有人運用は§8.5のPopulationから有限Crew Serviceおよび排他的Mission Crew commitmentを取得し、crew-ratedなVehicle / Facility属性、Housing / Life Support、正味Resource・Power Requirement、Environment Requirementで評価する。独立のCrew個人State・職種・シフト・定期交代制度・人口専用Allocationを持たず、無人で成立するResearch・Facilityへは人員を要求しない。
 
 ---
 
@@ -1062,6 +1084,8 @@ Query DTOはJSON化可能なimmutableデータとする。UI側が可否・維�
 Body選択を持つQueryは、静的Celestial Bodyカタログの親子関係と対象BodyだけのSurface Cell／非運用non-surface Contextを結合する。非地表Founding候補は既存Foundingの計画可否・Movement・Resource要求から投影し、UI固有の設立規則を増やさない。Survey KnowledgeのBody scopeは投影する対象Cellと関連Campaignの選択に適用し、調査・科学・輸送のState所有を変更しない。Physical Contextを追加するだけでは一般のOperational Node間Movement探索を拡張しない。
 
 Queryは要求されたscopeを不必要に拡大しない。origin / destination、Operational Node、Entity ID等で対象が限定されている場合は、そのscopeから必要な派生状態を導出する。同一Application snapshot内で複数Queryが同じ派生状態を必要とする場合は同じprojection / indexを再利用し、各Query・各rowから全世界候補を再生成しない。read Queryはauthoritative Stateを変更せず、性能上の都合だけでDomain-owned derived indexを無条件にinvalidateしない。
+
+PopulationのGroup（位置・人数・commitment・不足・死亡端数）、人口目標、有限PassengerTransferOrderの要求／受入／取消／Transit参照、外部人員供給元の有限残員はPopulation sectionに保存する。Transit obligation、Onboard Resource、Movement Execution、Fleet commitmentは各既存所有Domainのsectionに置き、Load時に位置参照と物理的義務を照合する。Housing余力、Service割当、充足率、Crew供給、Forecast等の派生値をSaveへ重複保存しない。
 
 ## 14. Save / Load / Offline Progress
 

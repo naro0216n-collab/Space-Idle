@@ -5,7 +5,7 @@ from ..service_capacity import ServiceCapacityScope
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import (
-    CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
+    AtmosphericPartialPressureRange, CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
     SpatialClassification, SpatialClassificationRequirement,
 )
 from ..spatial import AtmosphereField, RadiationField, ThermalField
@@ -49,6 +49,16 @@ ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
             "environment:atmospheric_surface",
             "十分な大気圧を持つ地表が必要",
             minimum=50000.0,
+        ),
+    ),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+BREATHABLE_SURFACE_SITE = SiteRequirements(
+    environment=(
+        AtmosphericPartialPressureRange(
+            DefinitionId('base.species.o2'),
+            'environment:breathable_oxygen', '呼吸可能な酸素分圧が必要',
+            minimum_pa=16000.0,
         ),
     ),
     spatial_classification_requirements=SURFACE_CLASSIFICATION,

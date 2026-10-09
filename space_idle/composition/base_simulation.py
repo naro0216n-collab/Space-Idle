@@ -13,6 +13,7 @@ from ..transport.service import TransportService
 from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
+from ..population import PopulationService, PopulationRules, ExternalPopulationSourceDefinition
 from ..research import ResearchService
 from ..service_capacity import ServiceCapacityRegistry
 from ..simulation import Simulation
@@ -60,7 +61,10 @@ from ..content.base_transport import (
 )
 
 
-def build_base_simulation(catalog: GameCatalog) -> Simulation:
+def build_base_simulation(
+    catalog: GameCatalog, *, population_rules: PopulationRules,
+    external_population_sources: tuple[ExternalPopulationSourceDefinition, ...],
+) -> Simulation:
     """Compose static base-game definitions with empty authoritative runtime State."""
     graph, environment = build_world_definition()
 
@@ -212,11 +216,16 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         build_contract_templates(), facilities, power, service_capacity_registry
     )
 
+    population = PopulationService(
+        facilities, inventory, graph, population_rules,
+        {source.id: source for source in external_population_sources},
+    )
+    facility_lifecycle_registry.register_blocker_provider('population', population)
     sim = Simulation(
         day=0, market=market, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
-        service_capacity_registry=service_capacity_registry,
+        service_capacity_registry=service_capacity_registry, population=population,
         research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,

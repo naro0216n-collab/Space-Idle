@@ -6,6 +6,7 @@ from .market import MarketInterfaceState
 from .shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .supply import SupplyRoutingConstraintScope
 from .spatial import OperationalNodeState
+from .population import PopulationRules, ExternalPopulationSourceDefinition
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,12 @@ class ScenarioSupplyRoutingConstraint:
 
 
 @dataclass(frozen=True)
+class ScenarioPopulation:
+    operational_node_id: SpatialNodeId
+    count: int
+
+
+@dataclass(frozen=True)
 class ScenarioDefinition:
     """Content-owned new-game state definition.
 
@@ -87,6 +94,9 @@ class ScenarioDefinition:
     market_provider_ids: tuple[DefinitionId, ...] = ()
     market_interfaces: tuple[ScenarioMarketInterface, ...] = ()
     routing_constraints: tuple[ScenarioSupplyRoutingConstraint, ...] = ()
+    initial_population: tuple[ScenarioPopulation, ...] = ()
+    external_population_sources: tuple[ExternalPopulationSourceDefinition, ...] = ()
+    population_rules: PopulationRules = PopulationRules(0.25, 0.05, 2.0, 3.0)
 
     def apply(self, sim) -> None:
         sim.require_uninitialized_runtime_state()
@@ -144,4 +154,8 @@ class ScenarioDefinition:
                 required_via_node_ids=row.required_via_node_ids,
                 required_transport_allocation_ids=row.required_transport_allocation_ids,
             )
+        if sim.population is not None:
+            for row in self.initial_population:
+                sim.population.initialize(row.operational_node_id, row.count)
+            sim.population.initialize_external_sources()
         sim.mark_runtime_state_initialized()

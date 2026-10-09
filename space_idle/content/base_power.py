@@ -7,6 +7,9 @@ from . import base_ids as ids
 def build_power_specs() -> dict:
     return {
         ids.EARTH_RESEARCH_LAB: PowerSpec(None, 0.10),
+        ids.EARTH_LIFE_SUPPORT: PowerSpec(None, 0.04),
+        ids.FOOD_FARM: PowerSpec(None, 0.14),
+        ids.HABITAT: PowerSpec(None, 0.08),
         ids.EARTH_OBSERVATION_SATELLITE: PowerSpec(SolarGeneration(0.08 / 0.62, 1361.0), 0.025),
         ids.LUNAR_RESOURCE_SURVEY_ORBITER: PowerSpec(SolarGeneration(0.12 / 0.62, 1361.0), 0.04),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: PowerSpec(SolarGeneration(0.24 / 0.62, 1361.0), 0.10),

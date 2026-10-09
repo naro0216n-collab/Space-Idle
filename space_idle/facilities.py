@@ -54,6 +54,20 @@ class ServiceCapacitySupply:
 
 
 @dataclass(frozen=True)
+class LifeSupportSpec:
+    person_days_per_day: float
+    net_resources: tuple[tuple[DefinitionId, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.person_days_per_day) or self.person_days_per_day <= 0:
+            raise ValueError('life support service rate must be positive and finite')
+        if len({item[0] for item in self.net_resources}) != len(self.net_resources):
+            raise ValueError('duplicate net life support Resource')
+        if any(not math.isfinite(rate) or rate < 0 for _, rate in self.net_resources):
+            raise ValueError('invalid net life support Resource rate')
+
+
+@dataclass(frozen=True)
 class FacilityDef:
     id: DefinitionId
     display_name: str
@@ -66,9 +80,13 @@ class FacilityDef:
     placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
     service_capacity_supplies: tuple[ServiceCapacitySupply, ...] = ()
     decommission_recovery_fraction: float = 0.0
+    housing_capacity: int = 0
+    life_support: LifeSupportSpec | None = None
 
     def __post_init__(self) -> None:
-        if self.maintenance_fraction_per_year < 0:
+        if isinstance(self.housing_capacity, bool) or not isinstance(self.housing_capacity, int) or self.housing_capacity < 0:
+            raise ValueError("housing must be a nonnegative integer capacity")
+        if not math.isfinite(self.maintenance_fraction_per_year) or self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
         if not isinstance(self.placement_scope, FacilityPlacementScope):
             raise ValueError("facility placement scope must be a FacilityPlacementScope")

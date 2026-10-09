@@ -375,6 +375,15 @@
     const currentAnalytics=state.dependencyAnalyticsCurrent;
     const dependencyRows=(currentAnalytics?.current_resources||[]).filter((row)=>row.local_production_gap_per_day>1e-9||row.unmet_demand_t>1e-9).map((row)=>`<button type="button" class="overview-dependency" data-inspect="dependency-resource" data-id="${esc(row.id)}"><strong>${esc(row.display_name)}</strong><span>現地生産差 ${fmt(row.local_production_gap_per_day,2)} /日</span><span>未発送 ${fmt(row.unmet_demand_t,2)} t</span></button>`).join('')||'<div class="empty-state compact-empty">現地生産差・未発送ともに0</div>';
 
+    const pop=loc.population;
+    const populationCard=pop?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">人口</span><h3>居住・生命維持</h3></div><span class="badge ${pop.life_support_allocated+1e-9<pop.life_support_required?'warn':'ok'}">${fmt(pop.current_count,0)} 人</span></div>
+      <div class="capacity-quad"><div><span>現在人数</span><strong>${fmt(pop.current_count,0)} 人</strong></div><div><span>人口目標</span><strong>${pop.desired_count==null?'未設定':`${fmt(pop.desired_count,0)} 人`}</strong></div><div><span>利用可能居住枠</span><strong>${fmt(pop.housing_usable,0)} / ${fmt(pop.housing_physical,0)} 人</strong></div><div><span>活動拘束</span><strong>${fmt(pop.committed_count,0)} 人</strong></div></div>
+      <div class="overview-capacity"><div class="overview-capacity-heading"><strong>Life Support（person-day/日）</strong><span>割当見込 ${fmt(pop.life_support_allocated,2)} / 需要 ${fmt(pop.life_support_required,2)}</span></div><div class="cell-sub">Crew供給可能 ${fmt(pop.crew_capacity,2)} 人日/日 · 累積不足 ${fmt(pop.deprivation_person_days,2)} 人日</div></div>
+      <div class="cell-sub">正味生活資源 / 日: ${(pop.resource_demand_per_day||[]).map(([resource,amount])=>`${esc(resourceName(resource))} ${fmt(amount,3)} t`).join(' · ')||'なし'}</div>
+      ${(pop.external_sources||[]).map((source)=>`<div class="cell-sub">外部人員供給元 ${esc(source.id)}: 残 ${fmt(source.remaining_people,0)} 人 · 最大取得 ${fmt(source.max_acquisition_per_day,0)} 人/日</div>`).join('')}
+      <div class="form-row"><label>維持したい人口目標<input type="number" min="0" step="1" value="${pop.desired_count??pop.current_count}" data-population-target-input data-draft-key="population:${esc(loc.id)}:target" data-structured-draft data-draft-scope="population:${esc(loc.id)}"></label><button type="button" data-set-population-target>目標を設定</button><button type="button" data-clear-population-target ${pop.desired_count==null?'disabled':''}>設定解除</button></div>
+      <div class="cell-sub">人口目標は希望数の指定です。設定・解除だけでは人口の増減や強制転出は行いません。</div></section>`:'';
+
     const infra=loc.surface_infrastructure;
     const infraCard=infra?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">地表</span><h3>地表インフラ</h3></div><span class="badge ${infra.fulfillment<0.999999?'warn':'ok'}">${pct(infra.fulfillment)}</span></div><div class="capacity-quad"><div><span>基準能力</span><strong>${fmt(infra.nominal_capacity,2)}</strong></div><div><span>利用可能</span><strong>${fmt(infra.available_capacity,2)}</strong></div><div><span>需要</span><strong>${fmt(infra.requested_capacity,2)}</strong></div><div><span>余力</span><strong>${fmt(infra.spare_capacity,2)}</strong></div></div>${(infra.limiting_factors||[]).length?`<div class="issue-stack compact-issues">${infra.limiting_factors.map((factor)=>`<div class="issue"><div class="issue-title">${esc(blockerText(factor))}</div></div>`).join('')}</div>`:''}</section>`:'';
 
@@ -385,6 +394,7 @@
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">案件</span><h3>進行中案件</h3></div><button type="button" class="small-action" data-tab="construction">建設へ</button></div><div class="overview-project-list">${projectRows}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">設備</span><h3>停止・制約のある設備</h3></div><button type="button" class="small-action" data-tab="facilities">設備へ</button></div><div class="overview-project-list">${facilityRows}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">依存</span><h3>生産差・未充足</h3></div><button type="button" class="small-action" data-tab="inventory">分析</button></div><div class="overview-dependency-list">${dependencyRows}</div></section>
+      ${populationCard}
       ${infraCard}
     </div>`;
   }
@@ -1300,6 +1310,16 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
+    const popSet=event.target.closest('[data-set-population-target]');
+    if(popSet){
+      const input=$('[data-population-target-input]');
+      const value=Number(input?.value);
+      if(!input||input.value.trim()===''||!Number.isSafeInteger(value)||value<0){banner('人口目標には0以上の整数を指定してください','error');return;}
+      try{await command('SetPopulationTarget',{operational_node_id:state.operationalNodeId,desired_count:value});await A.completeActiveDraft(`population:${state.operationalNodeId}`);banner('人口目標を設定しました');}catch{}
+      return;
+    }
+    const popClear=event.target.closest('[data-clear-population-target]');
+    if(popClear){try{await command('ClearPopulationTarget',{operational_node_id:state.operationalNodeId});await A.completeActiveDraft(`population:${state.operationalNodeId}`);banner('人口目標を解除しました');}catch{}return;}
     const surveyLayer=event.target.closest('[data-survey-map-layer]');if(surveyLayer){surveyMapLayer=surveyLayer.dataset.surveyMapLayer||'knowledge';const map=$('.survey-scope-map');if(map)map.dataset.surveyLayer=surveyMapLayer;$$('[data-survey-map-layer]').forEach((button)=>{const active=button.dataset.surveyMapLayer===surveyMapLayer;button.classList.toggle('is-active',active);button.setAttribute('aria-pressed',active?'true':'false');});return;}
     const surveyCellIndex=event.target.closest('[data-survey-focus-cell]');
     if(surveyCellIndex){

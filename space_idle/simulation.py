@@ -9,6 +9,7 @@ from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .contracts import ContractService
 from .domain import DomainExtension
 from .market import MarketBuyAllocationPlan, MarketService
+from .population import PopulationService
 from .facilities import FacilityBook
 from .founding import OperationalNodeFoundingService
 from .industry import IndustryService
@@ -146,6 +147,7 @@ class Simulation:
     projects: ProjectService
     technology: TechnologyState
     service_capacity_registry: ServiceCapacityRegistry
+    population: PopulationService | None = None
     founding: OperationalNodeFoundingService | None = None
     contracts: ContractService | None = None
     research: ResearchService | None = None
@@ -295,6 +297,8 @@ class Simulation:
         if self.scientific_exploration is not None:
             requirements.extend(self.scientific_exploration.supplys(self.day))
         requirements.extend(self.market.sell_supply_requirements())
+        if self.population is not None:
+            requirements.extend(self.population.supplys(self.day))
         seen: set[object] = set()
         for requirement in requirements:
             if requirement.id in seen:
@@ -344,6 +348,8 @@ class Simulation:
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
         rows.extend(self.transport.fleet_retirement_execution_requirement_bundles(self.day))
         rows.extend(self.market.sell_execution_bundles())
+        if self.population is not None:
+            rows.extend(self.population.execution_requirement_bundles(self.day))
         service_scopes = self.service_capacity_scopes()
         rows = [
             with_service_capacity_conservation(row, service_scopes)
@@ -1342,6 +1348,8 @@ class Simulation:
         # physical Interface inventory and credits Funds after this tick's allocation.
         self.market.create_buy_commitments(allocations.market_buys, self.day)
         self.market.settle_sells(allocations.execution, self.inventory)
+        if self.population is not None:
+            self.population.consume_allocated(allocations.execution, self.day)
         if self.maintenance is not None:
             self.maintenance.advance_day(allocations.execution, self.day)
 
@@ -1403,6 +1411,8 @@ class Simulation:
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
+        if self.population is not None:
+            self.population.settle_deprivation()
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
         if self.projects.settle_completions(

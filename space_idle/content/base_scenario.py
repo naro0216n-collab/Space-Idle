@@ -8,8 +8,10 @@ from ..scenario import (
     ScenarioMarketInterface,
     ScenarioStorageInfrastructure,
     ScenarioSurfaceLocation,
+    ScenarioPopulation,
 )
 from . import base_ids as ids
+from ..population import PopulationRules, ExternalPopulationSourceDefinition
 from .base_market import EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER
 
 STANDARD_SCENARIO_ID = "base.scenario.standard"
@@ -18,6 +20,8 @@ STANDARD_SCENARIO_ID = "base.scenario.standard"
 def build_standard_scenario_definition() -> ScenarioDefinition:
     S, M, E = ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS
     facilities = (
+        ScenarioFacility(ids.EARTH_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
+        ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.EARTH_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
         ScenarioFacility(ids.EARTH_OBSERVATION_SATELLITE, ids.LEO, invested_resources=((S, 1.5), (M, 1.0), (E, 1.0))),
         ScenarioFacility(ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT, invested_resources=((S, 1.5), (M, 1.0), (E, 1.5))),
@@ -44,6 +48,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioInventoryStock(ids.EARTH, ids.MACHINERY, 100.0),
         ScenarioInventoryStock(ids.EARTH, ids.PRECISION_ELECTRONICS, 70.0),
         ScenarioInventoryStock(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 120.0),
+        ScenarioInventoryStock(ids.EARTH, ids.FOOD, 500.0),
         ScenarioInventoryStock(ids.EARTH, ids.WATER, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.OXYGEN, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.HYDROGEN, 2000.0),
@@ -77,6 +82,11 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
             ScenarioFleet(ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT),
         ),
         known_surface_resources=known,
+        initial_population=(ScenarioPopulation(ids.EARTH, 30),),
+        external_population_sources=(
+            ExternalPopulationSourceDefinition('base.population.earth_recruitment', ids.EARTH, 5000, 8),
+        ),
+        population_rules=PopulationRules(0.25, 0.05, 2.0, 3.0),
         funds_balance_musd=1800.0,
         market_provider_ids=(EARTH_MARKET_PROVIDER,),
         market_interfaces=(

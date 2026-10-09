@@ -216,6 +216,28 @@ class ExtractionResourceRow:
 
 
 @dataclass(frozen=True)
+class ExternalPopulationSourceRow:
+    id: str
+    remaining_people: int
+    max_acquisition_per_day: int
+
+
+@dataclass(frozen=True)
+class PopulationView:
+    current_count: int
+    desired_count: int | None
+    committed_count: int
+    housing_physical: int
+    housing_usable: int
+    life_support_required: float
+    life_support_allocated: float
+    crew_capacity: float
+    deprivation_person_days: float
+    resource_demand_per_day: tuple[tuple[str, float], ...]
+    external_sources: tuple[ExternalPopulationSourceRow, ...]
+
+
+@dataclass(frozen=True)
 class OperationalNodeView:
     id: str
     display_name: str
@@ -237,3 +259,4 @@ class OperationalNodeView:
     extraction_resources: tuple[ExtractionResourceRow, ...]
     projects: tuple[ProjectRow, ...]
     surface_location: SurfaceLocationDecisionRow | None = None
+    population: PopulationView | None = None

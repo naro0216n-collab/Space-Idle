@@ -6,6 +6,10 @@ from . import base_ids as ids
 
 def build_process_specs() -> dict:
     return {
+        ids.PROCESS_FOOD_PRODUCTION: ProcessSpec(
+            ids.PROCESS_FOOD_PRODUCTION, '食料水耕生産', ids.FOOD_FARM,
+            {ids.WATER: 0.18}, {ids.FOOD: 0.36},
+        ),
         ids.PROCESS_ELECTROLYSIS: ProcessSpec(ids.PROCESS_ELECTROLYSIS, "水電解", ids.ELECTROLYSIS_PLANT, {ids.WATER: 0.50}, {ids.OXYGEN: 0.44, ids.HYDROGEN: 0.055}),
         ids.PROCESS_PROPELLANT_BLEND: ProcessSpec(ids.PROCESS_PROPELLANT_BLEND, "化学推進剤調製", ids.PROPELLANT_PLANT, {ids.OXYGEN: 0.40, ids.HYDROGEN: 0.05}, {ids.PROPELLANT: 0.45}),
         ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", ids.MINERAL_SINTERING, {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}),

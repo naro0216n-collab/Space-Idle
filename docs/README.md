@@ -27,6 +27,7 @@
 | Scientific Exploration / Research / Knowledge | §11–13 | §11–12 |
 | Resource Survey | §14 | §12.2 |
 | Operational Node Founding / Location development / external-dependency analytics | §8.1, §15 | §5.4, §8.4, §9.5 |
+| Population / Housing / Life Support / Crew / Passenger Transfer | §15.1 | §8.5, §10.10 |
 | Automation / canonical day / Offline | §16, §19 | §3.4, §14 |
 | Application / UI | §18、`ui.md` | §3.3, §13, §16 |
 | Save / Load / Validation / Test | §19 | §14–15 |

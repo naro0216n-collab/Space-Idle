@@ -17,6 +17,7 @@ from .application_views import (
     InventoryRow,
     ResourceAllocationRow,
     OperationalNodeView,
+    PopulationView, ExternalPopulationSourceRow,
     SurfaceInfrastructureLoadRow,
     SurfaceInfrastructureRow,
     SurfaceAccessAnchorRow,
@@ -683,6 +684,36 @@ class LocationProjectorMixin:
                 improvement_ids,
             )
 
+        population_view = None
+        if sim.population is not None:
+            pop = sim.population
+            people = pop.groups_at(location_id)
+            resource_demand: dict[str, float] = {}
+            for supply in pop.supplys(sim.day, node_id=location_id):
+                if supply.destination_id == location_id:
+                    key = str(supply.resource_id)
+                    resource_demand[key] = resource_demand.get(key, 0.0) + supply.amount_t
+            executed_life_support = sum(
+                next((row.allocated_execution for row in execution_allocations.allocations if row.bundle_id == pop._provider_bundle_id(facility.id)), 0.0)
+                for facility in sim.facilities.all_at(location_id)
+                if sim.facilities.definitions[facility.definition_id].life_support is not None
+            )
+            population_view = PopulationView(
+                sum(group.count for group in people),
+                pop.targets.get(location_id),
+                sum(group.count for group in people if group.activity_commitment_ref),
+                pop.housing_capacity(location_id, sim.day, active=False),
+                pop.housing_capacity(location_id, sim.day),
+                float(pop.count_at(location_id)),
+                executed_life_support,
+                sum(group.count * pop.crew_factor(group) for group in people if not group.activity_commitment_ref),
+                sum(group.count * group.deprivation for group in people),
+                tuple(sorted(resource_demand.items())),
+                tuple(ExternalPopulationSourceRow(definition.id, pop.external_remaining[definition.id], definition.max_acquisition_per_day)
+                      for definition in sorted(pop.external_definitions.values(), key=lambda source: source.id)
+                      if definition.operational_node_id == location_id),
+            )
+
         return OperationalNodeView(
             str(location_id),
             node.display_name,
@@ -704,4 +735,5 @@ class LocationProjectorMixin:
             tuple(extraction_resources),
             self._project_rows(location_id),
             self._surface_location_decision_row(location_id),
+            population_view,
         )

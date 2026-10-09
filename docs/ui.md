@@ -350,6 +350,14 @@ Locationを開いた後は設備、建設、Inventory、依存関係等を同じ
 
 ---
 
+### 8.3 Population / 居住と生命維持
+
+Location Overviewでは現在人数、任意の人口目標、Activity拘束人員、Inbound / Outbound、Housingの物理／利用可能／占有数、Life Supportの人数比例需要と実割当、生活Resourceごとの正味消費・現地在庫・補給中量、累積不足・翌日Crew能力、受入blockerを表示する。Earth外部人員供給元には有限残員・日次上限・当日取得可能数を表示する。現在値、次tick配分見込み、到着時点期待人数、将来Forecastを区別する。人口目標設定・解除の位置は固定し、目標を下げても人口消去や自動退去を意味しない。人口目標Previewには人数の出所、既Inbound、輸送時間・座席・質量、必要生活Resource、到着先Housing / Life Support、競合するCapacityを示す。
+
+Location OverviewとTransportの双方で、任意のorigin / destinationと正の整数人数を指定する一回限りの旅客移送を独立操作として提供する。未設定の人口目標やMission作成を要求しない。Transport Serviceの便とfree Fleetによる専用便を選択候補として並べ、所要日数、使用Fleet・Service、出発確定人数、未出発待機人数、共通Cargo Capacityへの影響、必要Resource、到着先受入余力、出発元の人口目標への影響、blockerをApplication Previewから表示する。Order一覧には要求／未出発／Transit／到着受入済み／取消済み人数を示し、未発送人数の取消操作を固定位置に置く。明示した輸送方法が使えなくなれば別の方法へ無断切替しない。
+
+Facility InspectorはHousing人数容量、Life Support Providerの人日/日供給、正味Resource・Power負荷、Pause・Decommissionの人員影響を表示する。Fleet / Transport Inspectorは共通Mass Capacity・seatと貨物／旅客の使用内訳、船内Resource、専用便によるfree Fleet拘束を表示する。Mission Inspectorでは必要Crew、拘束済み人数、Transit中乗員、船内Resource、帰還条件を表示する。操作可否と不足理由はApplication DTOを正本とし、UIで別の人口・輸送可否ルールを組み立てない。
+
 ## 9. Facility
 
 Facility一覧は比較用途として、各Facilityの次の状態を短く表示する。

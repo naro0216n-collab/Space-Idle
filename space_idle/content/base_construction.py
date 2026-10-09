@@ -16,6 +16,13 @@ from . import base_requirements as req
 
 def build_construction_recipes() -> dict:
     return {
+        ids.FOOD_FARM: req._surface_recipe(ids.FOOD_FARM, 6, 4, 2, 28),
+        ids.HABITAT: ConstructionRecipe(
+            ids.HABITAT,
+            (req._structure_resource(5), req._machinery_resource(4)),
+            28.0, SiteRequirements(), frozenset(), True,
+        ),
+        ids.EARTH_LIFE_SUPPORT: req._surface_recipe(ids.EARTH_LIFE_SUPPORT, 6, 4, 1, 30),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ConstructionRecipe(
             ids.MICROGRAVITY_EXPERIMENT_PLATFORM,
             (req._structure_resource(2.0), req._machinery_resource(1.5), req._electronics_resource(1.5)),

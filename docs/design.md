@@ -693,6 +693,22 @@ Resource flowとPower等のService dependencyを一つの「Energy」値へ混�
 
 同じ高Potential地点へ採掘設備を追加し続けるほど限界収益は低下するため、既存Locationの高密度化、隣接地域への拡張、別Locationの設立と物流投資を比較する。資源枯渇を強制移住の主因にはしない。発展した拠点をPrestige等で操作不能にせず、新技術は既存Facility更新、Surface Infrastructure増強、再開発理由にもする。
 
+### 15.1 人口・居住・有人活動
+
+人口は有限な人数と物理的な所在を持つ。無人拠点、短期有人探査、常設基地、大規模居住地は同一の人口・設備・Resource・Activity・Transport契約で成立する。滞在期間や拠点規模を理由に人口種別、定住段階、拠点Levelを切り替えない。「恒久的な居住地」とは、実在する設備と生活Resourceの継続的供給により人口を維持できる拠点を指す。
+
+Playerは、拠点に維持したい人口目標、任意の二つの成立済みOperational Node間の一回限りの旅客移送、有人Activity、Facility・Industry・Research・Fleet・Transport Capacityへの投資を判断する。人口目標に従う自動補充と明示的な有限旅客移送は別の意図であり、人口目標が未設定・充足済みでも旅客移送できる。自動補充は供給元の設定目標を割らず、明示的な移送では供給元目標を割ってもよいが結果の欠員をPreviewする。人数不足からFacility、Fleet、Transport Allocation、技術解禁を暗黙生成しない。
+
+人口はEarthの有限な初期Player人口と、地球側のPlayer管理外に存在する有限人員供給元から始まる。人員供給元は有限残員、日次取得上限、取得可否条件を持ち、現実に受け入れられる移送が出発またはEarth側での直接受入に成立したときだけPlayer人口へ移管する。出生日数、年齢・寿命による人口増殖、給与、職種、シフト、家族、幸福度、居住性スコア、定期交代、居住地Levelは導入しない。死亡以外に既存の人間を消去しない。
+
+Housingは設備が保持できる人数単位のStock Capacity、Life Supportは人日/日単位のService Capacity、人的作業は人日/日単位の共通Service Capacityである。有人Vehicleと居住Facilityは実際の場所と稼働条件でこれらを供給し、利用資格のCapabilityとは区別する。居住枠は住民の存在だけで消費し、電力・酸素不足をHousingにもLife Supportにも二重の致死判定で加えない。Life Supportは実際の人口数を基礎として最優先の共通Allocationに参加し、Food、Water、Oxygen等の正味Resource、Power、Maintenanceと競合する。再生水・再生空気はProviderの正味補給要求を低下させる効果とし、内部循環を通常Inventoryへの生産として二重計上しない。現地での可食物・水等の生産と輸送は通常Industry / Logisticsを利用する。
+
+Life Support不足の当日割合は人口Groupへ同条件で公平に配分する。各Groupは累積不足日と死亡端数を保持し、Scenarioの正の回復・死亡・致死・作業不能率から当日末に減耗と翌日労働能力を決定する。同日の食料生産とLife Supportの循環は作らず、当日不足の人的作業への影響は翌日に適用する。Facilityは必要なときだけCrew Serviceを要求し、有限の有人Missionは全期間の整数乗員を排他的に拘束する。Missionが終了しても帰還前の乗員を消去・解放しない。
+
+旅客はCargo Inventory上のResourceではなく、物理Movementを行うPopulationである。移送は成立済みTransport Serviceの座席・共通質量余力を利用する方法と、free Fleetを明示指定してone-shot Movementへcommitする専用便の双方が可能である。いずれも人数・座席・旅客質量・航行用Resource・Fleet・所要日数・到着先Housing / Life Supportを同じ物理能力で制限する。定常輸送Capacityのtargetは貨物と旅客の共通搭載質量（t/日）を維持し、旅客専用の追加Transport Networkや人数/日targetを新設しない。有限Orderは指定総人数を一度だけ輸送し、部分dispatch可能とする。出発済み乗員は取消で即時帰還・消去されず、未発送分だけが取消可能である。未受入の到着人員は実在する船内待機・Resource制約へ残し、無償滞留させない。
+
+人口由来の生活物資需要は共通Supply RequirementとDependency AnalyticsのCURRENT / FORECASTへ統合する。人口自立度を独立のLevel・判定・Stockにはせず、生活Resourceの現地生産、外部補給、枯渇見通し、Earthの外部人員供給への依存を別々の測定値で示す。
+
 ## 16. 自動進行と自動化
 
 ゲーム時間は通常状態で自動進行する。プレイヤーは一時停止と複数段階の速度変更を行う。

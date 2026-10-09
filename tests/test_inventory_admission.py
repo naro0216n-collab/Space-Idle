@@ -6,6 +6,7 @@ from space_idle import GetOperationalNode, build_game_application
 from space_idle.catalog import ResourceDef
 from space_idle.content import base_ids as ids
 from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
+from space_idle.execution_requirements import StockOrPoolAdmissionRequirement, admission_constraint
 from space_idle.shared import DefinitionId, SpatialNodeId
 
 
@@ -75,7 +76,20 @@ def test_execution_bundles_share_one_default_pool_admission_capacity():
         for row in rows
         if sim.inventory.storage_pool_for_resource(row.output_resource_id) == pool
     )
-    assert default_pool_output == pytest.approx(1.0)
+    # The default storage pool is shared with Industry (including Food), so
+    # Extraction alone is not entitled to the entire vacant tonne.
+    constraint = admission_constraint(node, pool)
+    allocation = decision.allocations.execution
+    summed_admission = sum(
+        row.allocated_execution * requirement.amount_per_execution
+        for row in allocation.allocations
+        for requirement in allocation.bundle(row.bundle_id).requirements
+        if isinstance(requirement, StockOrPoolAdmissionRequirement)
+        and requirement.constraint_key(allocation.bundle(row.bundle_id).operational_node_id) == constraint
+    )
+    assert 0 < default_pool_output <= 1.0
+    assert summed_admission == pytest.approx(allocation.used_by_constraint[constraint])
+    assert summed_admission == pytest.approx(1.0)
     state = sim.inventory.admission_state_for_pool(node, pool)
     assert state.admission_capacity_t == pytest.approx(1.0)
 

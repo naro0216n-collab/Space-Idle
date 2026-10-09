@@ -10,7 +10,10 @@ from .validation import validate_catalog_coverage, validate_runtime_state, valid
 def _compose_base_application(*, apply_scenario: bool) -> GameApplication:
     scenario = build_standard_scenario_definition()
     catalog = build_base_catalog()
-    simulation = build_base_simulation(catalog)
+    simulation = build_base_simulation(
+        catalog, population_rules=scenario.population_rules,
+        external_population_sources=scenario.external_population_sources,
+    )
     simulation.scenario_id = scenario.id
 
     # Static World / Content definitions must be valid independently of any
