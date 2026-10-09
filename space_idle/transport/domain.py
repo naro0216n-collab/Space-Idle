@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from ..domain import (
     DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int, decode_list,
@@ -95,6 +96,42 @@ def _restore_movement_endpoint(value: Any, field: str) -> MovementEndpoint:
     )
 
 
+def _capture_passenger_accommodation(accommodation: PassengerAccommodation | None) -> dict[str, Any] | None:
+    if accommodation is None:
+        return None
+    return {
+        "seats": accommodation.seats,
+        "person_mass_t": accommodation.person_mass_t,
+        "life_support_person_days_per_day": accommodation.life_support_person_days_per_day,
+        "onboard_power_mw": accommodation.onboard_power_mw,
+        "power_mw_per_person": accommodation.power_mw_per_person,
+        "net_resources_per_person_day": [
+            {"resource_id": str(resource), "rate": rate}
+            for resource, rate in accommodation.net_resources_per_person_day
+        ],
+    }
+
+
+def _restore_passenger_accommodation(value: Any, field: str) -> PassengerAccommodation | None:
+    if value is None:
+        return None
+    row = require_fields(value, {
+        "seats", "person_mass_t", "life_support_person_days_per_day",
+        "onboard_power_mw", "power_mw_per_person", "net_resources_per_person_day",
+    }, field)
+    return PassengerAccommodation(
+        decode_int(row["seats"], f"{field} seats"),
+        decode_float(row["person_mass_t"], f"{field} person mass"),
+        decode_float(row["life_support_person_days_per_day"], f"{field} life support"),
+        decode_float(row["onboard_power_mw"], f"{field} power"),
+        decode_float(row["power_mw_per_person"], f"{field} power/person"),
+        tuple((DefinitionId(decode_str(p["resource_id"], f"{field} resource")),
+               decode_float(p["rate"], f"{field} rate"))
+              for item in decode_list(row["net_resources_per_person_day"], f"{field} resources")
+              for p in (require_fields(item, {"resource_id", "rate"}, f"{field} resource"),)),
+    )
+
+
 def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
     return {
         "id": str(row.id),
@@ -108,17 +145,7 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
             {"resource_id": str(payload.resource_id), "amount_t": payload.amount_t}
             for payload in row.payload_resources
         ],
-        "passenger_accommodation": None if row.passenger_accommodation is None else {
-            "seats": row.passenger_accommodation.seats,
-            "person_mass_t": row.passenger_accommodation.person_mass_t,
-            "life_support_person_days_per_day": row.passenger_accommodation.life_support_person_days_per_day,
-            "onboard_power_mw": row.passenger_accommodation.onboard_power_mw,
-            "power_mw_per_person": row.passenger_accommodation.power_mw_per_person,
-            "net_resources_per_person_day": [
-                {"resource_id": str(resource), "rate": rate}
-                for resource, rate in row.passenger_accommodation.net_resources_per_person_day
-            ],
-        },
+        "passenger_accommodation": _capture_passenger_accommodation(row.passenger_accommodation),
         "legs": [
             {
                 "movement_plan_id": str(leg.movement_plan_id),
@@ -240,23 +267,7 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
             )
         )
 
-    accommodation = None
-    if data['passenger_accommodation'] is not None:
-        row = require_fields(data['passenger_accommodation'], {
-            'seats', 'person_mass_t', 'life_support_person_days_per_day',
-            'onboard_power_mw', 'power_mw_per_person', 'net_resources_per_person_day',
-        }, f'{field} passenger accommodation')
-        accommodation = PassengerAccommodation(
-            decode_int(row['seats'], f'{field} seats'),
-            decode_float(row['person_mass_t'], f'{field} person mass'),
-            decode_float(row['life_support_person_days_per_day'], f'{field} onboard life support'),
-            decode_float(row['onboard_power_mw'], f'{field} onboard power'),
-            decode_float(row['power_mw_per_person'], f'{field} power/person'),
-            tuple((DefinitionId(decode_str(p['resource_id'], f'{field} onboard resource')),
-                   decode_float(p['rate'], f'{field} onboard resource rate'))
-                  for item in decode_list(row['net_resources_per_person_day'], f'{field} onboard resources')
-                  for p in (require_fields(item, {'resource_id', 'rate'}, f'{field} onboard resource'),)),
-        )
+    accommodation = _restore_passenger_accommodation(data["passenger_accommodation"], f"{field} passenger accommodation")
     return MovementExecution(
         id=EntityId(decode_str(data["id"], f"{field} id")),
         owner_id=EntityId(decode_str(data["owner_id"], f"{field} owner_id")),
@@ -301,6 +312,8 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "operational_node_id": None if row.operational_node_id is None else str(row.operational_node_id),
                 "movement_execution_id": None if row.movement_execution_id is None else str(row.movement_execution_id),
                 "physical_target": None if row.physical_target is None else _capture_movement_endpoint(row.physical_target),
+                "onboard_resources": {str(resource): amount for resource, amount in sorted(row.onboard_resources.items())},
+                "onboard_accommodation": _capture_passenger_accommodation(row.onboard_accommodation),
             }
             for row in sorted(tr.fleet_commitments.values(), key=lambda row: str(row.id))
         ],
@@ -455,6 +468,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     commitment_fields = {
         "id", "owner_activity_type", "owner_activity_id", "vehicle_definition_id",
         "quantity", "operational_node_id", "movement_execution_id", "physical_target",
+        "onboard_resources", "onboard_accommodation",
     }
     for index, raw in enumerate(
         decode_list(data["fleet_commitments"], "transport fleet_commitments")
@@ -496,6 +510,9 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
                     row["physical_target"], "transport fleet physical_target",
                 )
             ),
+            onboard_resources={DefinitionId(resource): decode_float(amount, "fleet onboard Resource")
+                               for resource, amount in decode_dict(row["onboard_resources"], "fleet onboard Resources").items()},
+            onboard_accommodation=_restore_passenger_accommodation(row["onboard_accommodation"], "fleet onboard accommodation"),
         )
 
     tr.transport_allocations = {}
@@ -1010,6 +1027,11 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(commitment_id == commitment.id, f"fleet commitment key mismatch: {commitment_id}")
         _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"fleet commitment references unknown vehicle definition: {commitment_id}")
         _require(commitment.quantity > 0, f"fleet commitment has non-positive quantity: {commitment_id}")
+        _require(all(resource in sim.inventory.resource_definitions and math.isfinite(amount) and amount >= 0
+                     for resource, amount in commitment.onboard_resources.items()),
+                 f"fleet commitment has invalid onboard Resources: {commitment_id}")
+        _require(not commitment.onboard_resources or commitment.onboard_accommodation is not None,
+                 f"fleet onboard Resource has no Life Support Provider: {commitment_id}")
         _require(
             sum(value is not None for value in (
                 commitment.operational_node_id, commitment.movement_execution_id,

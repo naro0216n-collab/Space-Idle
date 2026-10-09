@@ -260,6 +260,15 @@ class ScientificExplorationProjectorMixin:
                     ),
                     required_units=definition.required_units,
                     minimum_payload_t=definition.minimum_payload_t,
+                    required_crew=definition.required_crew,
+                    committed_crew=sim.population.activity_count(service._crew_owner(definition)),
+                    crew_in_transit=sum(
+                        group.count for group in sim.population.activity_groups(service._crew_owner(definition))
+                        if group.position.kind == "transport_execution"
+                    ),
+                    onboard_resources=(() if commitment is None else tuple(
+                        (str(resource), amount) for resource, amount in commitment.onboard_resources
+                    )),
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
                     fleet_commitment_id=fleet_commitment_id,

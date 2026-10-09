@@ -148,10 +148,6 @@ def build_base_simulation(
         facilities, inventory, power, service_capacity_registry, transport, technology_state=technology,
         experience_rules=build_experience_contribution_rules(),
     )
-    scientific_exploration = ScientificExplorationService(
-        build_scientific_exploration_definitions(),
-        facilities, inventory, power, transport, research, service_capacity_registry,
-    )
     transport.register_fleet_commitment_owner_resolver(
         "founding", lambda owner_id: owner_id in founding.projects
     )
@@ -222,6 +218,10 @@ def build_base_simulation(
     )
     population.transport = transport
     population.logistics = logistics
+    scientific_exploration = ScientificExplorationService(
+        build_scientific_exploration_definitions(),
+        facilities, inventory, power, transport, research, service_capacity_registry, population,
+    )
     transport.register_fleet_commitment_owner_resolver(
         'passenger_transfer', lambda owner_id: owner_id in population.transfer_orders,
     )

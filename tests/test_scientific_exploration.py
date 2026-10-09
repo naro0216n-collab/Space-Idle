@@ -670,3 +670,95 @@ def _arrive_unoperated_science_on_abort(app):
     commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
     assert commitment.physical_target.physical_target_node_id == ids.MARS_ORBIT
     validate_runtime_state(sim)
+
+
+def test_crewed_exploration_keeps_population_and_onboard_resources_until_physical_return(tmp_path):
+    """Mission crew cannot be reallocated while the real Fleet is transporting it."""
+    app = build_game_application()
+    sim = app._simulation
+    mission = ids.CREWED_CISLUNAR_EXPEDITION
+    craft = ids.REUSABLE_ORBITAL_CARGO_TUG
+    service = sim.scientific_exploration
+    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
+    destination_habitat = sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LUNAR_ORBIT)
+    sim.refresh_storage()
+    sim.population.initialize(ids.LEO, 2)
+    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN, ids.PROPELLANT):
+        sim.inventory.add(ids.LEO, resource, 50.0)
+        if resource != ids.PROPELLANT:
+            sim.inventory.add(ids.LUNAR_ORBIT, resource, 50.0)
+
+    initial_people = sum(group.count for group in sim.population.groups.values())
+    app.execute(StartScientificExploration(str(mission)))
+    assert app.query(GetScientificExplorations()).items
+    row = next(row for row in app.query(GetScientificExplorations()).items if row.id == str(mission))
+    assert row.required_crew == 2 and row.committed_crew == 0
+    assert any(option.vehicle_definition_id == str(craft) and not option.blockers for option in row.fleet_options)
+    app.execute(AssignExplorationFleet(str(mission), str(craft)))
+    state = service.campaigns[mission]
+    for node_id, resource, amount, _purpose in service._preparation_requirements(service.definitions[mission], state, sim.day):
+        if sim.inventory.available(node_id, resource) + 1e-9 < amount:
+            sim.inventory.add(node_id, resource, amount)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == 'outbound'
+    crew = sim.population.activity_groups(service._crew_owner(service.definitions[mission]))
+    assert sum(group.count for group in crew) == 2
+    assert all(group.position.kind == 'transport_execution' for group in crew)
+    assert sim.population.free_count_at(ids.LEO) == 0
+    cabin = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert sum(amount for _, amount in cabin.onboard_resources) > 0
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    save_path = tmp_path / 'crewed-science.json'
+    save_game(app, save_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(save_path, build_game_application_for_load)
+    assert capture_state(loaded._simulation)['population'] == capture_state(sim)['population']
+    assert capture_state(loaded._simulation)['transport'] == capture_state(sim)['transport']
+    completion = sim.transport.movement_execution_snapshot(state.movement_execution_id).completion_day
+    sim.facilities.pause(destination_habitat)
+    app.execute(AdvanceTime(completion - sim.day))
+    assert state.phase.value == 'outbound'
+    assert all(group.position.kind == 'transport_execution' for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    sim.facilities.resume(destination_habitat)
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == 'active'
+    assert all(group.position.kind == 'operational_node' for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    assert all(group.activity_commitment_ref is not None for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    while state.phase.value == 'active':
+        app.execute(AdvanceTime(1))
+    assert state.phase.value == 'return_preparing'
+    for node_id, resource, amount, _purpose in service._preparation_requirements(
+        service.definitions[mission], state, sim.day, returning=True
+    ):
+        if sim.inventory.available(node_id, resource) + 1e-9 < amount:
+            sim.inventory.add(node_id, resource, amount)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == 'returning'
+    returning = sim.transport.movement_execution_snapshot(state.movement_execution_id)
+    assert returning is not None
+    assert sim.population.free_count_at(ids.LEO) == 0
+    app.execute(AdvanceTime(returning.completion_day - sim.day))
+    assert state.phase.value == 'complete'
+    assert sim.population.free_count_at(ids.LEO) == 2
+    assert sim.transport.fleet_free_units(craft, ids.LEO) >= 1
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    assert not sim.population.activity_groups(service._crew_owner(service.definitions[mission]))
+    # Canonical day and offline/save replay preserve crew, Fleet and Resource stock.
+    loaded._simulation.facilities.pause(destination_habitat)
+    loaded.execute(AdvanceTime(completion - loaded._simulation.day))
+    loaded._simulation.facilities.resume(destination_habitat)
+    loaded.execute(AdvanceTime(1))
+    loaded_science = loaded._simulation.scientific_exploration
+    loaded_mission = loaded_science.campaigns[mission]
+    assert loaded_mission.phase.value == 'active'
+    while loaded_mission.phase.value == 'active':
+        loaded.execute(AdvanceTime(1))
+    for node_id, resource, amount, _purpose in loaded_science._preparation_requirements(
+        loaded_science.definitions[mission], loaded_mission, loaded._simulation.day, returning=True
+    ):
+        if loaded._simulation.inventory.available(node_id, resource) + 1e-9 < amount:
+            loaded._simulation.inventory.add(node_id, resource, amount)
+    loaded.execute(AdvanceTime(2))
+    back = loaded._simulation.transport.movement_execution_snapshot(loaded_mission.movement_execution_id)
+    loaded.execute(AdvanceTime(back.completion_day - loaded._simulation.day))
+    assert capture_state(loaded._simulation) == capture_state(sim)

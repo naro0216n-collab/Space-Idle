@@ -274,14 +274,27 @@ def test_competing_orders_share_arrival_space_and_service_transit_mortality_pres
     # Make an actual onboard Life Support failure fatal. A dead Group cannot
     # remain as a manifest reference or silently become a new pending passenger.
     transit = next(iter(sim.transport.passenger_service_transits.values()))
-    for resource in transit.onboard_resources:
-        transit.onboard_resources[resource] = 0.0
+    # Both Domain ownership directions must reconcile at a Save/Load boundary.
+    # An Order still owning a person is invalid if Transport loses its manifest.
+    from space_idle.population_domain import validate_runtime as validate_population_runtime
+    passenger_manifest = transit.passenger_group_refs
+    transit.passenger_group_refs = ()
+    with pytest.raises(ValueError, match='matching Transport manifest'):
+        validate_population_runtime(sim)
+    transit.passenger_group_refs = passenger_manifest
+    validate_population_runtime(sim)
+    remaining_water = transit.onboard_resources[ids.WATER]
+    destination_water = sim.inventory.amount(ids.LEO, ids.WATER)
+    laboratory_spec = sim.facilities.definitions[ids.CREWED_ORBITAL_LABORATORY].life_support
+    resident_water_per_day = sim.population.count_at(ids.LEO) * dict(laboratory_spec.net_resources)[ids.WATER]
+    transit.onboard_resources[ids.FOOD] = 0.0
     sim.population.rules = PopulationRules(0.5, 100.0, 0.1, 4.0)
     sim.advance_days(1)
     assert active.deceased_count == 1
     assert (active.pending_count(sim.population.groups), active.transit_count(sim.population.groups),
             active.delivered_count, active.status(sim.population.groups)) == (0, 0, 0, 'failed')
     assert not sim.transport.passenger_service_transits
+    assert sim.inventory.amount(ids.LEO, ids.WATER) == pytest.approx(destination_water - resident_water_per_day + remaining_water)
     assert sum(group.count for group in sim.population.groups.values()) == initial_total - 1
     sim.population.validate()
 

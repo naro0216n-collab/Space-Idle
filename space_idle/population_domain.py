@@ -142,7 +142,58 @@ def validate_configuration(sim, ctx: ValidationContext) -> None:
 
 
 def validate_runtime(sim) -> None:
+    """Match Population-owned headcounts to Transport-owned physical obligations.
+
+    Each owner validates its own State independently; this cross-domain check
+    confirms that an Order cannot refer to a person absent from its vessel,
+    including after a Save/Load reconstruction.
+    """
     sim.population.validate()
+    population = sim.population
+    transport = sim.transport
+    service_manifest: dict[EntityId, tuple[EntityId, EntityId | None]] = {}
+    for transit_id, transit in transport.passenger_service_transits.items():
+        for group_id in transit.passenger_group_refs:
+            if group_id in service_manifest:
+                raise ValueError(f'Population group has duplicate vessel membership: {group_id}')
+            service_manifest[group_id] = (transit_id, transit.order_id)
+
+    dedicated_members: set[EntityId] = set()
+    for order in population.transfer_orders.values():
+        constraint = order.capacity_source_constraint
+        dedicated = constraint is not None and constraint.dedicated_vehicle_definition_id is not None
+        if dedicated and order.in_transit_group_refs:
+            execution_id = population._passenger_execution_id(order.id)
+            execution = transport.movement_execution_snapshot(execution_id)
+            if execution is None or execution.kind.value != 'passenger_transfer':
+                raise ValueError(f'Passenger Order has no active physical Movement: {order.id}')
+        for group_id in order.in_transit_group_refs:
+            group = population.groups[group_id]
+            if dedicated:
+                if group_id in service_manifest or group_id in dedicated_members:
+                    raise ValueError(f'Passenger is committed to multiple vehicles: {group_id}')
+                if group.position.ref != str(execution_id):
+                    raise ValueError(f'Passenger Movement position mismatch: {group_id}')
+                dedicated_members.add(group_id)
+            elif service_manifest.get(group_id, (None, None))[1] != order.id:
+                raise ValueError(f'Passenger Order lacks matching Transport manifest: {order.id}/{group_id}')
+
+    for group_id, (transit_id, owner_id) in service_manifest.items():
+        if owner_id is None:
+            if group_id in dedicated_members:
+                raise ValueError(f'Automatic and dedicated passenger ownership overlap: {group_id}')
+        elif group_id not in population.transfer_orders[owner_id].in_transit_group_refs:
+            raise ValueError(f'Passenger manifest lacks matching Order: {transit_id}/{group_id}')
+
+    for group_id, group in population.groups.items():
+        if group.position.kind != 'transport_execution':
+            continue
+        if group_id not in service_manifest and group_id not in dedicated_members:
+            # Other finite Activity types may move people only with a real
+            # Movement and an exclusive Activity commitment.
+            if (group.activity_commitment_ref is None or
+                    transport.movement_execution_snapshot(EntityId(group.position.ref)) is None):
+                raise ValueError(f'Population in transit lacks physical owner: {group_id}')
 
 
 DOMAIN_EXTENSION = DomainExtension(

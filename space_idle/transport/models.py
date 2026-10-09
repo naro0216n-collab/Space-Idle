@@ -95,6 +95,10 @@ class FleetCommitmentState:
     operational_node_id: SpatialNodeId | None = None
     movement_execution_id: EntityId | None = None
     physical_target: MovementEndpoint | None = None
+    # Finite shipboard Resources remain Transport-owned while an Activity
+    # retains this Fleet, including at an unestablished physical target.
+    onboard_resources: dict[DefinitionId, float] = field(default_factory=dict)
+    onboard_accommodation: PassengerAccommodation | None = None
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
@@ -107,6 +111,8 @@ class FleetCommitmentState:
             )
         if self.physical_target is not None and self.physical_target.operational_node_id is not None:
             raise ValueError("fleet physical target must not be an Operational Node")
+        if any(not math.isfinite(value) or value < 0 for value in self.onboard_resources.values()):
+            raise ValueError("fleet onboard Resource must be finite and nonnegative")
 
     @property
     def in_movement(self) -> bool:
@@ -122,6 +128,8 @@ class FleetCommitmentSnapshot:
     operational_node_id: SpatialNodeId | None
     movement_execution_id: EntityId | None
     physical_target: MovementEndpoint | None = None
+    onboard_resources: tuple[tuple[DefinitionId, float], ...] = ()
+    onboard_accommodation: PassengerAccommodation | None = None
 
     @property
     def in_movement(self) -> bool:
@@ -344,8 +352,8 @@ class PassengerServiceTransit:
     onboard_resources: dict[DefinitionId, float]
 
     def __post_init__(self) -> None:
-        if not self.legs or not self.passenger_group_refs or self.started_day < 0:
-            raise ValueError('passenger service transit needs actual people and legs')
+        if not self.legs or self.started_day < 0:
+            raise ValueError('passenger service transit needs actual legs')
         if self.last_settled_day < self.started_day:
             raise ValueError('invalid passenger transit settlement day')
         if len(set(self.passenger_group_refs)) != len(self.passenger_group_refs):

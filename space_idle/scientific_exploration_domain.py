@@ -11,7 +11,7 @@ from .scientific_exploration import (
     ScientificExplorationState, ScientificExplorationTerminationIntent,
 )
 from .shared import DefinitionId, EntityId
-from .transport.models import FleetActivityRef, MovementExecutionKind
+from .transport.models import FleetActivityRef, MovementExecutionKind, MovementEndpoint
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
 
@@ -138,6 +138,29 @@ def validate_runtime(sim: Any) -> None:
         _require(1 <= int(state.priority) <= 5, f"scientific exploration priority must be 1..5: {definition_id}")
         _require(definition_id in service.definitions, f"scientific exploration state references unknown definition: {definition_id}")
         definition = service.definitions[definition_id]
+        # Only Population owns real crew counts and coordinates. The Activity
+        # may own requirements and an exclusive reference, never another stock.
+        crew = sim.population.activity_groups(service._crew_owner(definition))
+        crew_count = sum(group.count for group in crew)
+        _require(crew_count <= definition.required_crew,
+                 f"scientific exploration over-committed crew: {definition_id}")
+        needs_crew = state.phase in {
+            ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.ACTIVE,
+            ScientificExplorationPhase.RETURN_PREPARING, ScientificExplorationPhase.RETURNING,
+        }
+        if not needs_crew:
+            _require(crew_count == 0,
+                     f"inactive scientific exploration retains crew: {definition_id}")
+        if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
+            _require(all(group.position.kind == 'transport_execution'
+                         and group.position.ref == str(state.movement_execution_id) for group in crew),
+                     f"scientific exploration crew Movement reference mismatch: {definition_id}")
+        if state.phase in {ScientificExplorationPhase.ACTIVE, ScientificExplorationPhase.RETURN_PREPARING}:
+            expected_kind = ('physical_target' if isinstance(definition.destination, MovementEndpoint)
+                             else 'operational_node')
+            _require(all(group.position.kind == expected_kind
+                         and group.position.ref == str(definition.destination_id) for group in crew),
+                     f"scientific exploration crew destination mismatch: {definition_id}")
         physical_target = service._physical_target(definition)
         if physical_target is not None:
             _require(state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN,

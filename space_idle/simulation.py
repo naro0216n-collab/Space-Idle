@@ -1436,6 +1436,8 @@ class Simulation:
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
+        if self.scientific_exploration is not None:
+            self.scientific_exploration.settle_crew_life_support()
         if self.population is not None:
             self.population.settle_deprivation()
         if self.research is not None:

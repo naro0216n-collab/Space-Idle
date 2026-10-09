@@ -207,6 +207,10 @@ class ScientificExplorationRow:
     consumable_resources: tuple[tuple[str, float], ...]
     required_units: int
     minimum_payload_t: float
+    required_crew: int
+    committed_crew: int
+    crew_in_transit: int
+    onboard_resources: tuple[tuple[str, float], ...]
     required_vehicle_capabilities: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
     fleet_commitment_id: str | None

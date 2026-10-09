@@ -170,3 +170,4 @@ SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 # Scientific Exploration campaigns are finite science activities, separate from resource survey.
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")
 MARS_ORBIT_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.mars_orbit_observation")
+CREWED_CISLUNAR_EXPEDITION = DefinitionId("base.scientific_exploration.crewed_cislunar_expedition")

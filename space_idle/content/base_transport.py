@@ -187,6 +187,11 @@ def build_vehicle_definitions() -> dict:
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.0), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+            passengers=PassengerAccommodation(
+                seats=4, life_support_person_days_per_day=4, onboard_power_mw=0.4,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
         ),
         ids.DEEP_SPACE_FREIGHTER: VehicleDef(
             id=ids.DEEP_SPACE_FREIGHTER,
