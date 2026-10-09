@@ -365,29 +365,6 @@ class Simulation:
             self.service_capacity_providers(), self.facilities
         )
 
-    def _service_provider_factors(
-        self,
-        location_id: SpatialNodeId,
-        service_type: str,
-        resolved_plan: ServiceCapacityAllocationPlan,
-        dependencies: tuple[ServiceCapacityDependency, ...],
-    ) -> dict | None:
-        surface = self.surface_infrastructure
-        if surface is None:
-            return None
-        if not any(
-            edge.service_type == service_type
-            and edge.upstream_service_type == surface.service_type
-            for edge in dependencies
-        ):
-            return None
-        provider = self._service_capacity_provider(service_type)
-        if provider is None:
-            return None
-        return surface.provider_availability_factors(
-            location_id, service_type, provider, self.facilities, resolved_plan, self.day
-        )
-
     def service_capacity_providers(self) -> tuple[ServiceCapacityProvider, ...]:
         """Return configured finite-service providers through Domain registration."""
         rows: list[ServiceCapacityProvider] = []
@@ -417,30 +394,6 @@ class Simulation:
         except KeyError as exc:
             raise KeyError(f"no service capacity provider for {service_type}") from exc
 
-    def _service_capacity_provider(
-        self, service_type: str
-    ) -> ServiceCapacityProvider | None:
-        return self.service_capacity_registry.provider_for(service_type)
-
-    def _service_supply_at(
-        self,
-        location_id: SpatialNodeId,
-        service_type: str,
-        power: PowerSnapshot,
-        provider_factors: dict | None,
-    ) -> tuple[float, float]:
-        provider = self._service_capacity_provider(service_type)
-        if provider is None:
-            return (0.0, 0.0)
-        return provider.service_capacity_supply_at(
-            location_id,
-            service_type,
-            self.facilities,
-            power,
-            self.day,
-            provider_factors=provider_factors,
-        )
-
     def _service_allocation_types(
         self, requests: tuple[ServiceCapacityRequest, ...]
     ) -> tuple[str, ...]:
@@ -454,31 +407,37 @@ class Simulation:
         service_type: str,
         *,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        requests: tuple[ServiceCapacityRequest, ...],
+        locations: tuple[SpatialNodeId, ...],
+        stage_requests: tuple[ServiceCapacityRequest, ...],
+        provider: ServiceCapacityProvider | None,
+        surface_dependent: bool,
         resolved_plan: ServiceCapacityAllocationPlan,
-        dependencies: tuple[ServiceCapacityDependency, ...],
     ) -> ServiceCapacityAllocationPlan:
-        locations = tuple(
-            sorted(
-                self._active_locations() | set(self.graph.operational_node_ids()),
-                key=str,
-            )
-        )
-        stage_requests = tuple(
-            request for request in requests if request.service_type == service_type
-        )
         nominal: dict[tuple[SpatialNodeId, str], float] = {}
         enabled: dict[tuple[SpatialNodeId, str], float] = {}
         limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
         requested_locations = {request.operational_node_id for request in stage_requests}
+        positive_request_locations = {
+            request.operational_node_id for request in stage_requests
+            if request.requested_rate > 1e-12
+        }
         for location_id in locations:
             power = power_by_location[location_id]
-            provider_factors = self._service_provider_factors(
-                location_id, service_type, resolved_plan, dependencies
-            )
-            nominal_rate, enabled_rate = self._service_supply_at(
-                location_id, service_type, power, provider_factors
-            )
+            if provider is None:
+                nominal_rate, enabled_rate = 0.0, 0.0
+            else:
+                factors = (
+                    self.surface_infrastructure.provider_availability_factors(
+                        location_id, service_type, provider, self.facilities,
+                        resolved_plan, self.day,
+                    )
+                    if surface_dependent and self.surface_infrastructure is not None
+                    else None
+                )
+                nominal_rate, enabled_rate = provider.service_capacity_supply_at(
+                    location_id, service_type, self.facilities, power, self.day,
+                    provider_factors=factors,
+                )
             if (
                 nominal_rate <= 1e-12
                 and enabled_rate <= 1e-12
@@ -490,11 +449,7 @@ class Simulation:
             enabled[key] = enabled_rate
             factors: list[str] = []
             if nominal_rate <= 1e-12:
-                if any(
-                    request.operational_node_id == location_id
-                    and request.requested_rate > 1e-12
-                    for request in stage_requests
-                ):
+                if location_id in positive_request_locations:
                     factors.append("provider_absent")
             elif enabled_rate + 1e-9 < nominal_rate:
                 factors.append("provider_dependency")
@@ -516,17 +471,41 @@ class Simulation:
         service_types = self._service_allocation_types(requests)
         dependencies = self.service_capacity_dependencies()
         order = service_capacity_dependency_order(service_types, dependencies)
+        locations = tuple(sorted(
+            self._active_locations() | set(self.graph.operational_node_ids()), key=str
+        ))
+        requests_by_type: dict[str, list[ServiceCapacityRequest]] = {}
+        for request in requests:
+            requests_by_type.setdefault(request.service_type, []).append(request)
+        # Resolve ownership once for this allocation, rather than scanning all
+        # Domain providers again for every service at every physical Location.
+        # The same duplicate-owner contract as provider_for() applies.
+        providers: dict[str, ServiceCapacityProvider] = {}
+        for provider in self.service_capacity_registry.providers():
+            for service_type in provider.service_capacity_types():
+                if service_type in providers:
+                    raise RuntimeError(f"multiple service capacity providers own {service_type}")
+                providers[service_type] = provider
+        surface_dependent = (
+            set() if self.surface_infrastructure is None else {
+                edge.service_type for edge in dependencies
+                if edge.upstream_service_type == self.surface_infrastructure.service_type
+            }
+        )
         plans: list[ServiceCapacityAllocationPlan] = []
-        for service_type in order:
-            plans.append(
-                self._allocate_service_stage(
-                    service_type,
-                    power_by_location=power_by_location,
-                    requests=requests,
-                    resolved_plan=merge_service_capacity_plans(plans),
-                    dependencies=dependencies,
+        with self.facilities.compatible_projection_scope():
+            for service_type in order:
+                plans.append(
+                    self._allocate_service_stage(
+                        service_type,
+                        power_by_location=power_by_location,
+                        locations=locations,
+                        stage_requests=tuple(requests_by_type.get(service_type, ())),
+                        provider=providers.get(service_type),
+                        surface_dependent=service_type in surface_dependent,
+                        resolved_plan=merge_service_capacity_plans(plans),
+                    )
                 )
-            )
         return merge_service_capacity_plans(plans)
 
     def service_capacity_allocation_projection(self) -> ServiceCapacityAllocationPlan:

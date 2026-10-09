@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 import math
@@ -106,6 +107,24 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
+    _compatible_projection: dict[tuple[SpatialNodeId, int], tuple[FacilityState, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @contextmanager
+    def compatible_projection_scope(self):
+        """Reuse facility eligibility only within one read-only allocation.
+
+        Eligibility depends on mutable Facility and Environment state. Keeping
+        this derivation inside an allocation call, not across canonical phases
+        or Commands, avoids stale results and adds no saved domain state.
+        """
+        previous = self._compatible_projection
+        self._compatible_projection = {}
+        try:
+            yield
+        finally:
+            self._compatible_projection = previous
 
     def copy_for_environment(self, environment: EnvironmentResolver) -> "FacilityBook":
         """Create an isolated mutable facility snapshot bound to another environment.
@@ -299,7 +318,14 @@ class FacilityBook:
         return not self.activation_failures(facility, day)
 
     def active_compatible_at(self, operational_node_id: SpatialNodeId, day: int) -> list[FacilityState]:
-        return [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
+        scope = self._compatible_projection
+        key = (operational_node_id, day)
+        if scope is not None and key in scope:
+            return list(scope[key])
+        active = [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
+        if scope is not None:
+            scope[key] = tuple(active)
+        return active
 
     def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
         facility = self.facilities[facility_id]

@@ -610,7 +610,7 @@ def _finish_unoperated_science(app):
     assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
 
 
-def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources():
+def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources(short_interplanetary_transit):
     app = build_game_application()
     sim = app._simulation
     before_survey = capture_state(sim)["survey"]
@@ -631,7 +631,7 @@ def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources():
         assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
 
 
-def test_unoperated_science_save_load_and_abort_preserve_fleet(tmp_path):
+def test_unoperated_science_save_load_and_abort_preserve_fleet(tmp_path, short_interplanetary_transit):
     app = build_game_application()
     state, _, _ = _start_unoperated_science(app)
     _arrive_unoperated_science(app)

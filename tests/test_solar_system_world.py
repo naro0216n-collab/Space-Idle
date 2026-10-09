@@ -400,7 +400,7 @@ def test_martian_surface_founding_and_long_transit_preserve_state_across_save_an
     assert len(sim.facilities.all_at(destination_id)) == len(recipe.deployed_facilities)
 
 
-def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(tmp_path):
+def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(tmp_path, short_interplanetary_transit):
     """A physical orbit is not a logistics endpoint until founded and supplied."""
     from datetime import datetime, timezone
 
@@ -483,7 +483,7 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     validate_runtime_state(sim)
 
 
-def test_giant_planet_orbit_operates_without_surface_and_with_local_environment():
+def test_giant_planet_orbit_operates_without_surface_and_with_local_environment(short_interplanetary_transit):
     """A remote orbital installation retains local power/maintenance constraints."""
     from space_idle import AdvanceTime, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding
     from space_idle.spatial import AtmosphereField, IlluminationField, RadiationField
