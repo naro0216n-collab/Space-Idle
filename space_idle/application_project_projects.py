@@ -173,10 +173,10 @@ class ProjectProjectorMixin:
         definition = sim.facilities.definitions[facility.definition_id]
 
         if sim.extraction is not None:
-            extraction_spec = sim.extraction.specs.get(facility.definition_id)
+            extraction_spec = sim.extraction.method_for_definition(facility.definition_id)
             if extraction_spec is not None:
-                current = extraction_spec.nominal_capacity_t_per_day * facility.level
-                target = extraction_spec.nominal_capacity_t_per_day * target_level
+                current = sim.extraction.nominal_capacity(facility)
+                target = definition.extraction_capacity_t_per_day * target_level
                 if abs(target - current) > 1e-9:
                     rows.append(FacilityUpgradeDifferenceRow(
                         "capacity", "抽出公称Capacity", current, target, "t/日"

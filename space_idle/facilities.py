@@ -84,6 +84,8 @@ class FacilityDef:
     life_support: LifeSupportSpec | None = None
     # Nominal units of the selected Process executed per canonical day.
     process_throughput_per_day: float = 1.0
+    # Installed capacity for a compatible extraction method; not a method-owned rate.
+    extraction_capacity_t_per_day: float = 0.0
 
     def __post_init__(self) -> None:
         if isinstance(self.housing_capacity, bool) or not isinstance(self.housing_capacity, int) or self.housing_capacity < 0:
@@ -92,6 +94,8 @@ class FacilityDef:
             raise ValueError("facility maintenance fraction must be non-negative")
         if not math.isfinite(self.process_throughput_per_day) or self.process_throughput_per_day < 0:
             raise ValueError("facility process throughput must be finite and nonnegative")
+        if not math.isfinite(self.extraction_capacity_t_per_day) or self.extraction_capacity_t_per_day < 0:
+            raise ValueError("facility extraction capacity must be finite and nonnegative")
         if not isinstance(self.placement_scope, FacilityPlacementScope):
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
         if not 0.0 <= self.decommission_recovery_fraction <= 1.0:

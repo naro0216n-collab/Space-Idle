@@ -533,6 +533,8 @@ Allocation結果として確定したexecution fulfillmentだけProcessを進め
 
 有限 `Deposit remaining` を採掘の正本にしない。地表資源はSurface Cellごとの静的 `Resource Potential` と、Locationに設置された採掘Facilityが供給するNominal Extraction Capacityから継続的なThroughputを導出する。
 
+`Extraction Definition` は一意の採掘方式ID、対象Resource、出力Resource、必要Capability、Site/Knowledge・地質/地形条件を表す。Facility DefinitionはそのCapabilityとInstalled Extraction Capacityを提供し、Facility Levelに応じた容量を供給する。採掘方式と設備IDの一対一参照を置かず、複数設備が同じ方式を参照できる。現在の単一方式設備では適格方式が一意でないContentを拒否し、登録順に基づき勝手に選ばない。複数方式の切替がPlayer判断となるContentを導入する場合に限り、Facility所有の選択StateとApplication操作を設ける。方式の適格性・Opportunity判定と、有限Capacity/Storage AdmissionのExecution Requirement・settlementを分離し、Resourceの正本はInventoryに置く。
+
 Resource Potentialは残量、Facility slot数、固定最大`t/day`のいずれでもなく、追加採掘能力をどの程度高い限界生産性で利用できる地域かを表す。各developed Surface CellについてStatic PotentialにPhysical Environment・地質accessibilityを適用して `Cell Effective Opportunity` を導出し、それらをLocation単位へ集約する。
 
 ```text

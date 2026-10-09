@@ -254,9 +254,11 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
         return
     _require(sim.extraction.graph is sim.graph, "extraction service must use simulation spatial graph")
     for definition_id, spec in sim.extraction.specs.items():
-        _require(definition_id == spec.facility_def_id, f"extraction spec key mismatch: {definition_id}")
-        _require(definition_id in ctx.facility_defs, f"extraction spec references unknown facility: {definition_id}")
-        _require(spec.nominal_capacity_t_per_day >= 0, f"negative extraction capacity: {definition_id}")
+        _require(definition_id == spec.id, f"extraction method key mismatch: {definition_id}")
+        _require(
+            spec.required_capabilities.issubset(ctx.known_capabilities),
+            f"extraction method requires unknown capability: {definition_id}",
+        )
         if spec.minimum_knowledge_level is not None:
             _require(
                 sim.extraction.survey is not None,

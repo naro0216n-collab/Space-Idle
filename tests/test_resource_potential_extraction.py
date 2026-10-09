@@ -192,7 +192,7 @@ def test_extraction_stops_when_output_storage_admission_is_full():
         )
         if row.output_t_per_day > 0
     )
-    spec = sim.extraction.specs[initial.facility_def_id]
+    spec = sim.extraction.method_for_definition(initial.facility_def_id)
     free = sim.inventory.admission_state(
         ids.EARTH, spec.output_resource_id
     ).admission_capacity_t
@@ -217,3 +217,68 @@ def test_extraction_stops_when_output_storage_admission_is_full():
         ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
     )
     assert sim.inventory.amount(ids.EARTH, spec.output_resource_id) == before
+
+
+def test_independently_named_facility_reuses_extraction_method_and_preserves_shared_opportunity():
+    from dataclasses import replace
+    from space_idle.shared import DefinitionId
+
+    app = build_game_application()
+    sim = app._simulation
+    before = _resource_snapshot(sim, ids.METAL_ORE)
+    original = sim.facilities.definitions[ids.METAL_ORE_MINE]
+    alternate_id = DefinitionId("test.high_capacity_borehole")
+    sim.facilities.definitions[alternate_id] = replace(
+        original, id=alternate_id, display_name="Experimental borehole",
+        extraction_capacity_t_per_day=original.extraction_capacity_t_per_day * 2,
+    )
+    sim.extraction = ExtractionService(
+        sim.extraction.specs, sim.graph, sim.environment,
+        sim.surface_infrastructure, sim.survey, sim.facilities.definitions,
+    )
+    assert sim.extraction.method_for_definition(alternate_id) is sim.extraction.method_for_definition(ids.METAL_ORE_MINE)
+    alternate = sim.facilities.install(alternate_id, ids.EARTH)
+    after = _resource_snapshot(sim, ids.METAL_ORE)
+    assert after.installed_nominal_capacity_t_per_day == pytest.approx(
+        before.installed_nominal_capacity_t_per_day + sim.extraction.nominal_capacity(sim.facilities.facilities[alternate])
+    )
+    assert after.output_t_per_day > before.output_t_per_day
+    assert after.effective_opportunity == before.effective_opportunity
+    assert after.output_t_per_day < before.output_t_per_day + sim.extraction.nominal_capacity(sim.facilities.facilities[alternate])
+
+    projected = app.query(GetOperationalNode(str(ids.EARTH)))
+    resource = next(row for row in projected.extraction_resources if row.resource_id == str(ids.METAL_ORE))
+    assert resource.installed_nominal_capacity_t_per_day == pytest.approx(after.installed_nominal_capacity_t_per_day)
+    assert resource.output_t_per_day == pytest.approx(after.output_t_per_day)
+
+    power = sim.tick_decision_projection().allocations.power_by_location[ids.EARTH]
+    allocation = sim.tick_decision_projection().allocations.execution
+    output = sum(
+        row.output_t_per_day for row in sim.extraction.snapshots(
+            ids.EARTH, sim.facilities, sim.inventory, power, sim.day, allocation
+        ) if row.resource_id == ids.METAL_ORE
+    )
+    assert output == pytest.approx(after.output_t_per_day)
+
+
+def test_extraction_method_requires_explicit_capability_and_unambiguous_match():
+    from dataclasses import replace
+    from space_idle.shared import DefinitionId
+
+    sim = build_game_application()._simulation
+    source = sim.facilities.definitions[ids.METAL_ORE_MINE]
+    method = sim.extraction.method_for_definition(source.id)
+    unqualified = replace(source, id=DefinitionId("test.unqualified"), capability_supplies=())
+    with pytest.raises(ValueError, match="requires one extraction method"):
+        ExtractionService(
+            sim.extraction.specs, sim.graph, sim.environment,
+            sim.surface_infrastructure, sim.survey,
+            {unqualified.id: unqualified},
+        )
+    second = replace(method, id=DefinitionId("test.equivalent_method"))
+    with pytest.raises(ValueError, match="found 2"):
+        ExtractionService(
+            {method.id: method, second.id: second}, sim.graph, sim.environment,
+            sim.surface_infrastructure, sim.survey,
+            {source.id: source},
+        )

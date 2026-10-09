@@ -111,30 +111,36 @@ def build_survey_providers() -> dict:
 
 
 def build_extraction_specs() -> dict:
-    return {
-        ids.MINERAL_QUARRY: ExtractionSpec(
-            ids.MINERAL_QUARRY, ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK, 2.4,
+    methods = (
+        ExtractionSpec(
+            ids.EXTRACTION_CRUST_MINERAL, frozenset({"mineral_extraction"}),
+            ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK,
             req.SURFACE_SITE, "crust_accessibility", "terrain_factor",
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-        ids.METAL_ORE_MINE: ExtractionSpec(
-            ids.METAL_ORE_MINE, ids.METAL_ORE, ids.METAL_ORE, 1.7,
+        ExtractionSpec(
+            ids.EXTRACTION_CRUST_ORE, frozenset({"metal_ore_extraction"}),
+            ids.METAL_ORE, ids.METAL_ORE,
             req.SURFACE_SITE, "crust_accessibility", "bearing_capacity_factor",
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-        ids.INDUSTRIAL_WATER_INTAKE: ExtractionSpec(
-            ids.INDUSTRIAL_WATER_INTAKE, ids.WATER, ids.WATER, 1.0,
+        ExtractionSpec(
+            ids.EXTRACTION_WATER_INTAKE, frozenset({"industrial_water_supply"}),
+            ids.WATER, ids.WATER,
             req.ATMOSPHERIC_SURFACE_SITE, "crust_accessibility", "terrain_factor",
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-        ids.VOLATILE_EXTRACTOR: ExtractionSpec(
-            ids.VOLATILE_EXTRACTOR, ids.VOLATILE_BEARING_MATERIAL, ids.VOLATILE_BEARING_MATERIAL, 6.0,
+        ExtractionSpec(
+            ids.EXTRACTION_COLD_VOLATILES, frozenset({"volatile_extraction"}),
+            ids.VOLATILE_BEARING_MATERIAL, ids.VOLATILE_BEARING_MATERIAL,
             req.COLD_VOLATILE_SURFACE_SITE, "regolith_accessibility", "bearing_capacity_factor",
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-        ids.VACUUM_MINERAL_HARVESTER: ExtractionSpec(
-            ids.VACUUM_MINERAL_HARVESTER, ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK, 8.0,
+        ExtractionSpec(
+            ids.EXTRACTION_VACUUM_GRANULAR, frozenset({"granular_mineral_extraction"}),
+            ids.MINERAL_FEEDSTOCK, ids.MINERAL_FEEDSTOCK,
             req.VACUUM_SURFACE_SITE, "regolith_accessibility", "terrain_factor",
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
-    }
+    )
+    return {method.id: method for method in methods}

@@ -286,6 +286,8 @@ Salvageを全量受け入れられないことだけを理由にFacility removal
 
 地表資源は有限埋蔵量を消費する方式ではなく、Surface Cell × Resourceごとの `Resource Potential` と、そこへ投入した採掘設備能力の組み合わせから継続的な採掘Throughputを得る。Resource Potentialは「残量」や「建設可能鉱山数」ではなく、その地域が追加採掘投資をどの程度高い限界生産性で受け入れられるかを表す、非枯渇のOpportunity scaleとする。一次Resourceのidentityは産地や採掘方式ではなく産業上の物質状態を表し、地球の骨材と月面レゴリスのように同じ下流用途を持つ粒状鉱物原料は `Mineral Feedstock` として扱う。月面の水資源Opportunityは処理済みWaterではなく `Volatile-bearing Material` として表し、採取後の処理ProcessでWaterへ回収する。
 
+採掘方式は、対象Resource、Knowledge、地質・地形・Environment条件、必要Capabilityを定義し、特定Facility Definition IDに所有させない。異なる設備や世代が同じ方式を使用でき、Facility Definition側のInstalled Extraction CapacityとLevelが設備投資の差を表す。複数の異なる方式を切り替える意義がない設備は方式を一つに定める。複数方式を選ばせる場合だけ明示的なPlayer選択を設け、登録順による暗黙の決定は行わない。
+
 同一Location内の採掘Facilityが供給するNominal Extraction Capacityを合算し、開発済みSurface Cell群から得られるEffective Resource Opportunityに対して、Generic Core共通の単調増加・限界収益逓減responseから実効採掘量を導出する。設備を追加して総採掘量が通常減少する式にはせず、同じOpportunityへ過度に集中するほど追加投資1単位あたりの増産量が低下する構造とする。
 
 ```text

@@ -171,3 +171,10 @@ SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")
 MARS_ORBIT_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.mars_orbit_observation")
 CREWED_CISLUNAR_EXPEDITION = DefinitionId("base.scientific_exploration.crewed_cislunar_expedition")
+
+# Extraction methods are distinct from the facilities which can perform them.
+EXTRACTION_CRUST_MINERAL = DefinitionId("base.extraction.crust_mineral")
+EXTRACTION_CRUST_ORE = DefinitionId("base.extraction.crust_ore")
+EXTRACTION_WATER_INTAKE = DefinitionId("base.extraction.water_intake")
+EXTRACTION_COLD_VOLATILES = DefinitionId("base.extraction.cold_volatiles")
+EXTRACTION_VACUUM_GRANULAR = DefinitionId("base.extraction.vacuum_granular")

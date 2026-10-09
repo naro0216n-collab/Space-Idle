@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 import math
 
 from .execution_requirements import (
@@ -9,7 +10,7 @@ from .execution_requirements import (
     ServiceCapacityRequirement,
     StockOrPoolAdmissionRequirement,
 )
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityDef, FacilityState
 from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
@@ -31,6 +32,29 @@ class ExtractionService:
     environment: EnvironmentResolver
     surface_infrastructure: SurfaceInfrastructureService
     survey: SurveyService | None = None
+    facility_definitions: Mapping[DefinitionId, FacilityDef] = field(default_factory=dict)
+    _method_by_facility: dict[DefinitionId, ExtractionSpec] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if any(key != method.id for key, method in self.specs.items()):
+            raise ValueError("extraction method definition key mismatch")
+        methods: dict[DefinitionId, ExtractionSpec] = {}
+        for definition_id, definition in self.facility_definitions.items():
+            if definition.extraction_capacity_t_per_day <= 0:
+                continue
+            supplied = frozenset(capability.id for capability in definition.capability_supplies)
+            compatible = [method for method in self.specs.values()
+                          if method.required_capabilities <= supplied]
+            if len(compatible) != 1:
+                raise ValueError(f"facility {definition_id} requires one extraction method, found {len(compatible)}")
+            methods[definition_id] = compatible[0]
+        self._method_by_facility = methods
+
+    def method_for_definition(self, definition_id: DefinitionId) -> ExtractionSpec | None:
+        return self._method_by_facility.get(definition_id)
+
+    def nominal_capacity(self, facility: FacilityState) -> float:
+        return self.facility_definitions[facility.definition_id].extraction_capacity_t_per_day * facility.level
 
     @classmethod
     def service_type(cls, resource_id: DefinitionId) -> str:
@@ -96,10 +120,10 @@ class ExtractionService:
         if location is None:
             return (0, 0)
         specs = [
-            self.specs[facility.definition_id]
+            self.method_for_definition(facility.definition_id)
             for facility in facilities.all_at(location_id)
-            if facility.definition_id in self.specs
-            and self.specs[facility.definition_id].resource_id == resource_id
+            if self.method_for_definition(facility.definition_id) is not None
+            and self.method_for_definition(facility.definition_id).resource_id == resource_id
         ]
         eligible = blocked = 0
         for cell_id in location.developed_cell_ids:
@@ -128,10 +152,10 @@ class ExtractionService:
         # deliberately absent here and constrains extraction service execution
         # once, through the shared service-capacity dependency graph.
         active_specs = {
-            facility.definition_id: self.specs[facility.definition_id]
+            facility.definition_id: self.method_for_definition(facility.definition_id)
             for facility in facilities.active_compatible_at(location_id, day)
-            if facility.definition_id in self.specs
-            and self.specs[facility.definition_id].resource_id == resource_id
+            if self.method_for_definition(facility.definition_id) is not None
+            and self.method_for_definition(facility.definition_id).resource_id == resource_id
         }
         if not active_specs:
             return 0.0
@@ -166,11 +190,11 @@ class ExtractionService:
         fulfillment_by = {}
         reasons = {}
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
-            spec = self.specs.get(facility.definition_id)
+            spec = self.method_for_definition(facility.definition_id)
             if spec is None:
                 continue
             spec_by[facility.id] = spec
-            nominal = spec.nominal_capacity_t_per_day * facility.level
+            nominal = self.nominal_capacity(facility)
             nominal_by[facility.id] = nominal
             failures = facilities.activation_failures(facility, day)
             if failures:
@@ -204,7 +228,7 @@ class ExtractionService:
             raise KeyError(service_type)
         return frozenset(
             definition_id
-            for definition_id, spec in self.specs.items()
+            for definition_id, spec in self._method_by_facility.items()
             if self.service_type(spec.resource_id) == service_type
         )
 
@@ -227,9 +251,9 @@ class ExtractionService:
     ) -> tuple[float, float]:
         if power is None:
             nominal = sum(
-                spec.nominal_capacity_t_per_day * facility.level
+                self.nominal_capacity(facility)
                 for facility in facilities.active_compatible_at(location_id, day)
-                for spec in (self.specs.get(facility.definition_id),)
+                for spec in (self.method_for_definition(facility.definition_id),)
                 if spec is not None and self.service_type(spec.resource_id) == service_type
             )
             return (nominal, nominal)
@@ -267,21 +291,21 @@ class ExtractionService:
         active = [
             facility
             for facility in facilities.active_compatible_at(location_id, day)
-            if facility.definition_id in self.specs
+            if self.method_for_definition(facility.definition_id) is not None
         ]
         result: dict[EntityId, float] = {}
-        resources = sorted({self.specs[f.definition_id].resource_id for f in active}, key=str)
+        resources = sorted({self.method_for_definition(f.definition_id).resource_id for f in active}, key=str)
         for resource_id in resources:
-            rows = [f for f in active if self.specs[f.definition_id].resource_id == resource_id]
+            rows = [f for f in active if self.method_for_definition(f.definition_id).resource_id == resource_id]
             installed = math.fsum(
-                self.specs[f.definition_id].nominal_capacity_t_per_day * f.level for f in rows
+                self.nominal_capacity(f) for f in rows
             )
             response = self.diminishing_response(
                 installed,
                 self.effective_opportunity(location_id, resource_id, facilities, day=day),
             )
             for facility in rows:
-                nominal = self.specs[facility.definition_id].nominal_capacity_t_per_day * facility.level
+                nominal = self.nominal_capacity(facility)
                 result[facility.id] = 0.0 if installed <= 1e-12 else response * nominal / installed
         return result
 
@@ -295,10 +319,10 @@ class ExtractionService:
         full_output = self._full_output_by_facility(location_id, facilities, day)
         rows = []
         for facility in sorted(facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)):
-            spec = self.specs.get(facility.definition_id)
+            spec = self.method_for_definition(facility.definition_id)
             if spec is None:
                 continue
-            nominal = spec.nominal_capacity_t_per_day * facility.level
+            nominal = self.nominal_capacity(facility)
             if nominal <= 1e-12:
                 continue
             requirements = [ServiceCapacityRequirement(self.service_type(spec.resource_id), nominal)]
@@ -335,16 +359,16 @@ class ExtractionService:
             for cell_id in location.developed_cell_ids:
                 resource_ids.update(self.graph.surface_cells[cell_id].resource_potential_by_resource)
         for facility in facilities.all_at(location_id):
-            spec = self.specs.get(facility.definition_id)
+            spec = self.method_for_definition(facility.definition_id)
             if spec is not None:
                 resource_ids.add(spec.resource_id)
         rows = []
         for resource_id in sorted(resource_ids, key=str):
             active = [
                 f for f in facilities.active_compatible_at(location_id, day)
-                if (spec := self.specs.get(f.definition_id)) is not None and spec.resource_id == resource_id
+                if (spec := self.method_for_definition(f.definition_id)) is not None and spec.resource_id == resource_id
             ]
-            installed = math.fsum(self.specs[f.definition_id].nominal_capacity_t_per_day * f.level for f in active)
+            installed = math.fsum(self.nominal_capacity(f) for f in active)
             output = 0.0
             weighted_scale = 0.0
             for facility in active:
@@ -352,7 +376,7 @@ class ExtractionService:
                     scale = execution_allocations.fulfillment(self.execution_bundle_id(facility.id))
                 except KeyError:
                     scale = 0.0
-                nominal = self.specs[facility.definition_id].nominal_capacity_t_per_day * facility.level
+                nominal = self.nominal_capacity(facility)
                 weighted_scale += nominal * scale
                 output += full_output.get(facility.id, 0.0) * scale
             operational = 0.0 if installed <= 1e-12 else weighted_scale / installed
@@ -396,10 +420,10 @@ class ExtractionService:
         }
         rows = []
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
-            spec = self.specs.get(facility.definition_id)
+            spec = self.method_for_definition(facility.definition_id)
             if spec is None:
                 continue
-            nominal = spec.nominal_capacity_t_per_day * facility.level
+            nominal = self.nominal_capacity(facility)
             reasons = [f"facility:{code}" for code, _ in facilities.activation_failures(facility, day)]
             try:
                 allocation = execution_allocations.allocation(self.execution_bundle_id(facility.id))

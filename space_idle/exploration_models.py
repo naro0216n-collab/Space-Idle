@@ -207,18 +207,18 @@ class SurveyProviderAssignmentState:
 
 @dataclass(frozen=True)
 class ExtractionSpec:
-    facility_def_id: DefinitionId
+    id: DefinitionId
+    required_capabilities: frozenset[str]
     resource_id: DefinitionId
     output_resource_id: DefinitionId
-    nominal_capacity_t_per_day: float
     opportunity_requirements: SiteRequirements = SiteRequirements()
     geology_accessibility_key: str | None = None
     terrain_accessibility_attribute: str | None = None
     minimum_knowledge_level: KnowledgeLevel | None = None
 
     def __post_init__(self) -> None:
-        if self.nominal_capacity_t_per_day < 0:
-            raise ValueError("nominal extraction capacity must be non-negative")
+        if not self.required_capabilities or any(not capability for capability in self.required_capabilities):
+            raise ValueError("extraction method requires explicit capability")
         if self.geology_accessibility_key is not None and not self.geology_accessibility_key:
             raise ValueError("geology accessibility key must not be empty")
         if self.terrain_accessibility_attribute is not None and not self.terrain_accessibility_attribute:
