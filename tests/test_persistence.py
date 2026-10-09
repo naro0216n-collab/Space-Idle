@@ -104,7 +104,7 @@ def _make_nontrivial_state():
     )
     app.execute(SetFacilityProcess(str(process_facility.id), str(selected_process.id)))
 
-    survey_provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    survey_provider_id = ids.LUNAR_FLEET_SURVEY_PROVIDER
     survey_mode_id = "remote_orbital_spectrometry"
     survey_goal = 2
     survey_cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
@@ -335,7 +335,7 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
         resource_ids=(str(ids.MINERAL_FEEDSTOCK),),
         goal_knowledge_level=1,
         provider_constraint=SurveyProviderConstraintInput(
-            str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT)
+            str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)
         ),
         observation_mode_constraint="remote_orbital_spectrometry",
     )).created_id

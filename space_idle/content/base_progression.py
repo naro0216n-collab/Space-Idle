@@ -93,10 +93,6 @@ def build_survey_providers() -> dict:
         prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-02")}),
     )
     return {
-        ids.LUNAR_RESOURCE_SURVEY_ORBITER: SurveyProviderSpec(
-            ids.LUNAR_RESOURCE_SURVEY_ORBITER, SurveyProviderSourceKind.FACILITY,
-            ids.LUNAR_RESOURCE_SURVEY_ORBITER, (remote_orbital, deep_space_remote),
-        ),
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
             ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,
             ids.ROBOTIC_SURVEY_PACKAGE, (local_robotic,),
@@ -107,7 +103,8 @@ def build_survey_providers() -> dict:
         ),
         ids.LUNAR_FLEET_SURVEY_PROVIDER: SurveyProviderSpec(
             ids.LUNAR_FLEET_SURVEY_PROVIDER, SurveyProviderSourceKind.FLEET,
-            ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, (fleet_remote,),
+            ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT,
+            (remote_orbital, fleet_remote, deep_space_remote),
         ),
     }
 

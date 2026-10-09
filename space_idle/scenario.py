@@ -47,6 +47,14 @@ class ScenarioFleet:
 
 
 @dataclass(frozen=True)
+class ScenarioSurveyFleetAssignment:
+    """Initial use of real Fleet units by a Survey Provider; no duplicate quantity."""
+    provider_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+    units: int
+
+
+@dataclass(frozen=True)
 class ScenarioMarketInterface:
     id: EntityId
     provider_id: DefinitionId
@@ -88,6 +96,7 @@ class ScenarioDefinition:
     storage_infrastructure: tuple[ScenarioStorageInfrastructure, ...] = ()
     inventory_stock: tuple[ScenarioInventoryStock, ...] = ()
     fleet: tuple[ScenarioFleet, ...] = ()
+    survey_fleet_assignments: tuple[ScenarioSurveyFleetAssignment, ...] = ()
     known_surface_resources: tuple[tuple[SurfaceCellId, DefinitionId], ...] = ()
     completed_technologies: tuple[DefinitionId, ...] = ()
     funds_balance_musd: float = 0.0
@@ -134,6 +143,17 @@ class ScenarioDefinition:
             for cell_id, resource_id in self.known_surface_resources:
                 sim.survey.initialize_known(cell_id, resource_id)
         sim.technology.replace(set(self.completed_technologies))
+        if self.survey_fleet_assignments and sim.survey is None:
+            raise ValueError("Scenario has Survey Fleet assignments without Survey Domain")
+        for row in self.survey_fleet_assignments:
+            provider = sim.survey.provider(row.provider_definition_id)
+            sim.survey.set_provider_fleet_quantity(
+                row.provider_definition_id,
+                row.operational_node_id,
+                provider.source_definition_id,
+                row.units,
+                day=sim.day,
+            )
 
         sim.market.initialize_funds(self.funds_balance_musd)
         for provider_id in self.market_provider_ids:

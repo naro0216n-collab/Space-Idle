@@ -187,7 +187,7 @@ def test_survey_method_technology_blocks_progress_without_discarding_campaign():
 
     app = build_game_application()
     sim = app._simulation
-    provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    provider_id = ids.LUNAR_FLEET_SURVEY_PROVIDER
     mode_id = "interplanetary_remote_spectrometry"
     mode = sim.survey.observation_mode(provider_id, mode_id)
     assert mode.prerequisite_technologies

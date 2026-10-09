@@ -11,7 +11,6 @@ def build_power_specs() -> dict:
         ids.FOOD_FARM: PowerSpec(None, 0.14),
         ids.HABITAT: PowerSpec(None, 0.08),
         ids.EARTH_OBSERVATION_SATELLITE: PowerSpec(SolarGeneration(0.08 / 0.62, 1361.0), 0.025),
-        ids.LUNAR_RESOURCE_SURVEY_ORBITER: PowerSpec(SolarGeneration(0.12 / 0.62, 1361.0), 0.04),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: PowerSpec(SolarGeneration(0.24 / 0.62, 1361.0), 0.10),
         ids.CREWED_ORBITAL_LABORATORY: PowerSpec(SolarGeneration(1.20 / 0.62, 1361.0), 0.65),
         ids.ROBOTIC_GEOLOGY_STATION: PowerSpec(SolarGeneration(0.28 / 0.78, 1361.0), 0.10),
