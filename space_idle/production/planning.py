@@ -52,6 +52,7 @@ class IndustryPlanningMixin:
                 limiting = allocation.limiting_constraints
             reasons: list[str] = []
             if scale < 1.0 - 1e-9:
+                reasons.extend(f"technology:{technology_id}" for technology_id in self.missing_process_technologies(process))
                 for key in limiting:
                     if key.kind == "resource":
                         reasons.append(f"input:{key.name}")

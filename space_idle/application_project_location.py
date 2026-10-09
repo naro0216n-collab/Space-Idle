@@ -416,6 +416,7 @@ class LocationProjectorMixin:
             )
             option_rows: list[IndustryProcessOptionRow] = []
             for option_process in compatible:
+                missing_technology = sim.industry.missing_process_technologies(option_process)
                 throughput = definition.process_throughput_per_day
                 requirements = sim.industry.execution_requirements_for_process(
                     option_process, sim.inventory
@@ -489,7 +490,12 @@ class LocationProjectorMixin:
                         )
                     ),
                     service_requirements=tuple(service_requirements),
-                    blockers=constraints_from_pairs(
+                    blockers=constraints_from_codes(
+                        tuple(f"technology:{technology_id}" for technology_id in missing_technology),
+                        affected_action="select_process",
+                        related_entity_kind="process_definition",
+                        related_entity_id=str(option_process.id),
+                    ) + constraints_from_pairs(
                         sim.facilities.activation_failures(facility, sim.day),
                         affected_action="run_process",
                         related_entity_kind="facility",
@@ -502,6 +508,7 @@ class LocationProjectorMixin:
                     ),
                     comparison_key=str(option_process.id),
                     comparison_values=comparison_values,
+                    can_select=not missing_technology,
                 ))
             process_comparison_axes = project_comparison_axes(
                 tuple(process_axis_definitions),

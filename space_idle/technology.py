@@ -16,6 +16,10 @@ class TechnologyState:
 
     completed: set[DefinitionId] = field(default_factory=set)
 
+    def missing(self, prerequisites: frozenset[DefinitionId]) -> tuple[DefinitionId, ...]:
+        """Canonical non-consuming technology eligibility for all methods."""
+        return tuple(sorted(prerequisites - self.completed, key=str))
+
     def is_unlocked(self, technology_id: DefinitionId) -> bool:
         return technology_id in self.completed
 

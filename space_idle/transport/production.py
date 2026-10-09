@@ -67,8 +67,8 @@ class VehicleProductionMixin:
         )
         if failures:
             raise ValueError(
-                "vehicle production site requirements not met: "
-                + "; ".join(failure.detail for failure in failures)
+                "vehicle production eligibility not met: "
+                + "; ".join(f"{failure.code}:{failure.detail}" for failure in failures)
             )
 
         self._vehicle_production_counter += 1
@@ -121,12 +121,13 @@ class VehicleProductionMixin:
         *,
         day: int = 0,
     ) -> tuple[SiteRequirementFailure, ...]:
-        return tuple(
-            failure
-            for failure in self.vehicle_production_site_failures(
+        production = self.vehicle_defs[vehicle_definition_id].production
+        missing = self.technology_state.missing(production.prerequisite_technologies)
+        return (
+            *(SiteRequirementFailure("technology", str(technology_id)) for technology_id in missing),
+            *(failure for failure in self.vehicle_production_site_failures(
                 vehicle_definition_id, location_id, day=day
-            )
-            if not failure.code.startswith("service:enabled")
+            ) if not failure.code.startswith("service:enabled")),
         )
 
     def vehicle_production_site_failures(

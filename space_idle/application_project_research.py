@@ -74,8 +74,16 @@ class ResearchProgressionProjectorMixin:
                 recipe.prerequisite_technologies,
             )
 
+        for process in sim.industry.processes.values():
+            append("process", str(process.id), process.display_name, process.prerequisite_technologies)
+        for vehicle in sim.transport.vehicle_definitions():
+            append("vehicle_production", str(vehicle.id), vehicle.display_name,
+                   vehicle.production.prerequisite_technologies)
+
         kind_order = {
             "research": 0,
+            "process": 1,
+            "vehicle_production": 2,
             "facility": 1,
             "facility_upgrade": 2,
             "surface_development": 3,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..industry import ProcessSpec
+from ..shared import DefinitionId
 from . import base_ids as ids
 
 
@@ -12,7 +13,7 @@ def build_process_specs() -> dict:
         ),
         ids.PROCESS_ELECTROLYSIS: ProcessSpec(ids.PROCESS_ELECTROLYSIS, "水電解", frozenset({"industrial_electrolysis"}), {ids.WATER: 0.50}, {ids.OXYGEN: 0.44, ids.HYDROGEN: 0.055}),
         ids.PROCESS_PROPELLANT_BLEND: ProcessSpec(ids.PROCESS_PROPELLANT_BLEND, "化学推進剤調製", frozenset({"propellant_production"}), {ids.OXYGEN: 0.40, ids.HYDROGEN: 0.05}, {ids.PROPELLANT: 0.45}),
-        ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", frozenset({"mineral_sintering"}), {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}),
+        ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", frozenset({"mineral_sintering"}), {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}, frozenset({DefinitionId("MC-MANUFACTURING-CONSTRUCTION-10")})),
         ids.PROCESS_VOLATILE_WATER_RECOVERY: ProcessSpec(ids.PROCESS_VOLATILE_WATER_RECOVERY, "揮発性成分回収", frozenset({"volatile_processing"}), {ids.VOLATILE_BEARING_MATERIAL: 1.0}, {ids.WATER: 0.35}),
         ids.PROCESS_ORE_PROCESS: ProcessSpec(ids.PROCESS_ORE_PROCESS, "鉱石処理", frozenset({"ore_processing"}), {ids.METAL_ORE: 2.5}, {ids.METAL_FEEDSTOCK: 1.0}),
         ids.PROCESS_METALLURGY: ProcessSpec(ids.PROCESS_METALLURGY, "金属精錬", frozenset({"metallurgy"}), {ids.METAL_FEEDSTOCK: 2.0}, {ids.BULK_STRUCTURE: 1.8}),

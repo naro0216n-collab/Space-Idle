@@ -341,6 +341,13 @@ class LogisticsStateProjectorMixin:
                 plan_failures = sim.transport.vehicle_production_plan_failures(
                     definition.id, node.id, day=sim.day
                 )
+                blockers = tuple(
+                    (failure.code, failure.detail) for failure in plan_failures
+                ) + tuple(
+                    (failure.code, failure.detail) for failure in sim.transport.vehicle_production_site_failures(
+                        definition.id, node.id, day=sim.day, power=power
+                    ) if failure.code.startswith("service:enabled")
+                )
                 rows.append(
                     VehicleProductionOptionRow(
                         vehicle_definition_id=str(definition.id),

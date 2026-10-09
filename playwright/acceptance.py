@@ -571,11 +571,16 @@ def run(browser) -> dict[str, object]:
             _assert(len(runtime._app._simulation.population.transfer_orders) == 1,
                     'finite transfer request must create exactly one Population Order')
             passenger_card.locator('[data-passenger-cancel]').first.click()
+            # Every Order row renders the "取消済み <count>" field, even before
+            # cancellation.  Observe the settled count, not the field label,
+            # so this assertion cannot race the asynchronous HTTP Command.
             page.wait_for_function(
-                "() => document.querySelector('#passengerLocationMount [data-passenger-orders]')?.textContent?.includes('取消済み')",
+                """() => [...document.querySelectorAll('#passengerLocationMount [data-passenger-orders] .detail-card')]
+                  .some(row => row.textContent.includes('取消済み 1 /'))""",
             )
-            _assert(next(iter(runtime._app._simulation.population.transfer_orders.values())).cancelled_count == 1,
-                    'cancellation must account for the pending passenger without moving any human')
+            order = next(iter(runtime._app._simulation.population.transfer_orders.values()))
+            _assert((order.cancelled_count, order.pending_count(runtime._app._simulation.population.groups)) == (1, 0),
+                    'cancellation must settle only the waiting passenger without moving any human')
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
                 f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'

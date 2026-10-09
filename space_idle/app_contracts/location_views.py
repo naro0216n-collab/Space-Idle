@@ -136,6 +136,7 @@ class IndustryProcessOptionRow:
     blockers: tuple[DecisionConstraintRow, ...]
     comparison_key: str
     comparison_values: tuple[ComparisonValueRow, ...]
+    can_select: bool = True
 
 
 @dataclass(frozen=True)

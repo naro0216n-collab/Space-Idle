@@ -275,6 +275,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.2), (ids.MACHINERY, 0.8), (ids.PRECISION_ELECTRONICS, 1.5)),
+                prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-01")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=1.5,

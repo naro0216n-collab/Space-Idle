@@ -100,7 +100,7 @@ def build_base_simulation(
         facilities=facilities,
     )
 
-    industry = IndustryService(build_process_specs(), facilities.definitions)
+    industry = IndustryService(build_process_specs(), facilities.definitions, technology)
 
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry

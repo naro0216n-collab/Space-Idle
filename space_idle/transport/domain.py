@@ -946,6 +946,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(vehicle.maintenance.turnaround_days >= 0, f"negative vehicle turnaround: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.maintenance.resources), f"negative vehicle turnaround resource: {vehicle_id}")
         _validate_unique_resources(vehicle.maintenance.resources, f"maintenance:{vehicle_id}")
+        _require(vehicle.production.prerequisite_technologies.issubset(ctx.known_technologies),
+                 f"vehicle production references unknown technology: {vehicle_id}")
         _require(vehicle.production.days >= 0, f"negative vehicle production time: {vehicle_id}")
         _require(all(amount >= 0 for _resource, amount in vehicle.production.resources), f"negative vehicle production resource: {vehicle_id}")
         _validate_unique_resources(vehicle.production.resources, f"production:{vehicle_id}")

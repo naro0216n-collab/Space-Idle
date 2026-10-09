@@ -18,6 +18,8 @@ def referenced_resources(sim: Any) -> set[DefinitionId]:
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for process_id, process in sim.industry.processes.items():
         _require(process_id == process.id, f"process definition key mismatch: {process_id}")
+        _require(process.prerequisite_technologies.issubset(ctx.known_technologies),
+                 f"process references unknown technology: {process_id}")
         _require(bool(process.required_capabilities), f"process has no required capability: {process_id}")
         _require(all(isinstance(cap, str) and cap for cap in process.required_capabilities),
                  f"invalid process capability: {process_id}")

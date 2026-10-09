@@ -6,6 +6,9 @@ from .models import ProcessSpec
 
 
 class ProcessSelectionMixin:
+    def missing_process_technologies(self, process: ProcessSpec) -> tuple[DefinitionId, ...]:
+        return self.technology_state.missing(process.prerequisite_technologies)
+
     def compatible_processes(self, facility_def_id: DefinitionId) -> tuple[ProcessSpec, ...]:
         """Content-defined interface compatibility, independent of Facility identity."""
         definition = self.facility_defs[facility_def_id]
@@ -33,4 +36,7 @@ class ProcessSelectionMixin:
     def set_process(self, facility: FacilityState, process_id: DefinitionId) -> None:
         if process_id not in {row.id for row in self.compatible_processes(facility.definition_id)}:
             raise ValueError("process is incompatible with facility")
+        missing = self.missing_process_technologies(self.processes[process_id])
+        if missing:
+            raise ValueError("process technology requirements not met: " + ", ".join(map(str, missing)))
         facility.selected_process_id = process_id

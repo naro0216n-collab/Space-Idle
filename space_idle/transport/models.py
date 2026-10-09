@@ -817,6 +817,7 @@ class VehicleProductionSpec:
     days: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
     site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
 
 class FleetRetirementPhase(str, Enum):

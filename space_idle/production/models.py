@@ -11,6 +11,7 @@ class ProcessSpec:
     required_capabilities: frozenset[str]
     inputs_per_day: dict[DefinitionId, float]
     outputs_per_day: dict[DefinitionId, float]
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
 @dataclass(frozen=True)
 class ProcessSnapshot:

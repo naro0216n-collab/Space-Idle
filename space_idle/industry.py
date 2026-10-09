@@ -15,6 +15,7 @@ from .power import PowerSnapshot
 from .service_capacity import ServiceCapacityScope
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
+from .technology import TechnologyState
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
     IndustryPlanningMixin, IndustryExecutionMixin,
@@ -26,6 +27,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     processes: dict[DefinitionId, ProcessSpec]
     # Read-only reference to the Composition-owned Facility Definitions; no Facility State is copied.
     facility_defs: Mapping[DefinitionId, FacilityDef]
+    technology_state: TechnologyState
 
     SERVICE_TYPE_PREFIX = "process:"
 
@@ -77,7 +79,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
         ):
             process = self.process_for(facility)
-            if process is None:
+            if process is None or self.missing_process_technologies(process):
                 continue
             rows.append(ExecutionRequirementBundle(
                 id=self.execution_bundle_id(facility.id),
@@ -142,7 +144,14 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 for process in (self.process_for(facility),)
                 if process is not None and self.process_service_type(process.id) == service_type
             )
-            return (nominal, nominal)
+            available = sum(
+                self.facility_defs[facility.definition_id].process_throughput_per_day
+                for facility in facilities.active_compatible_at(location_id, day)
+                for process in (self.process_for(facility),)
+                if process is not None and self.process_service_type(process.id) == service_type
+                and not self.missing_process_technologies(process)
+            )
+            return (nominal, available)
         nominal, enabled = self.service_supply(
             location_id, facilities, power, day, provider_factors=provider_factors
         )
@@ -179,6 +188,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     * upstream,
                 ),
             )
+            if self.missing_process_technologies(process):
+                factor = 0.0
             enabled[key] = enabled.get(key, 0.0) + throughput * factor
         return nominal, enabled
 
