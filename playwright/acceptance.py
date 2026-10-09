@@ -323,10 +323,12 @@ def run(browser) -> dict[str, object]:
     server_origin = f"http://127.0.0.1:{port}"
     server_thread = Thread(target=server.serve_forever, name="space-idle-e2e-http", daemon=True)
     server_thread.start()
+    checkpoint("server startup")
 
     results: dict[str, object] = {}
     try:
         wait_for_server(server_origin)
+        checkpoint("HTTP ready")
         with isolated_browser_context(
             browser,
             viewport={"width": 1194, "height": 834},

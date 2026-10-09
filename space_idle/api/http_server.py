@@ -5,6 +5,7 @@ import gzip
 from pathlib import Path
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 import json
 import ssl
 from typing import Any
@@ -34,6 +35,13 @@ class ApiServerConfig:
 
 class SpaceIdleHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        # HTTPServer's default reverse-DNS lookup is unused by our HTTP API and
+        # can block server startup on hosts without responsive DNS resolution.
+        TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
 
     def __init__(self, server_address, handler_class, *, runtime: GameRuntime, config: ApiServerConfig):
         super().__init__(server_address, handler_class)

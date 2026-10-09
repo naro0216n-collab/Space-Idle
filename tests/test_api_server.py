@@ -37,9 +37,15 @@ def _raw_request(port: int, path: str):
     return status, headers, data
 
 
-def test_http_api_command_query_and_save_load_boundary(tmp_path):
+def test_http_api_command_query_and_save_load_boundary(tmp_path, monkeypatch):
     runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
+    # Binding a local HTTP API must not depend on external name resolution.
+    # Keep the guard scoped to server construction, not the request client.
+    with monkeypatch.context() as guard:
+        def unexpected_lookup(_host):
+            raise AssertionError("HTTP API startup must not perform reverse DNS")
+        guard.setattr("http.server.socket.getfqdn", unexpected_lookup)
+        server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
