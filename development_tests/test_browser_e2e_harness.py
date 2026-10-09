@@ -34,13 +34,26 @@ def test_suite_runner_accepts_scenario_modules_without_registry_changes(
     runner.PLAYWRIGHT_DIR = tmp_path
     imported: list[str] = []
     executed: list[str] = []
+    received_browsers: list[object] = []
+    browser = object()
+
+    @contextmanager
+    def fake_managed_browser(_browser_name):
+        yield browser
+
+    monkeypatch.setattr(runner, "managed_browser", fake_managed_browser)
 
     for name in ("acceptance", "future_browser_contract"):
-        (tmp_path / f"{name}.py").write_text("def run(): pass\n", encoding="utf-8")
+        (tmp_path / f"{name}.py").write_text("def run(browser): pass\n", encoding="utf-8")
 
     def fake_import(name: str):
         imported.append(name)
-        return SimpleNamespace(run=lambda: executed.append(name))
+
+        def run(received):
+            executed.append(name)
+            received_browsers.append(received)
+
+        return SimpleNamespace(run=run)
 
     monkeypatch.setattr(runner.importlib, "import_module", fake_import)
     selected = ["acceptance", "future_browser_contract"]
@@ -48,9 +61,10 @@ def test_suite_runner_accepts_scenario_modules_without_registry_changes(
 
     assert imported == selected
     assert executed == selected
+    assert received_browsers == [browser, browser]
     output = capsys.readouterr().out
     assert "E2E suite bootstrap:" in output
-    assert "independent browser process per scenario" in output
+    assert "fresh BrowserContext per scenario" in output
     assert "E2E suite complete: 2 scenario(s)" in output
 
     # The same runner must reject missing and non-runnable scenario entries.
@@ -75,9 +89,8 @@ def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeyp
     assert support.browser_launch_kwargs("webkit") == {"headless": True}
 
 
-def test_browser_context_lifecycle_owns_independent_scenario_browsers(monkeypatch) -> None:
+def test_browser_context_lifecycle_isolates_each_scenario_and_closes_on_error() -> None:
     support = _load_module("space_idle_e2e_support_context_test", PLAYWRIGHT_DIR / "e2e_support.py")
-    opened: list[object] = []
 
     class FakeContext:
         def __init__(self):
@@ -89,37 +102,21 @@ def test_browser_context_lifecycle_owns_independent_scenario_browsers(monkeypatc
     class FakeBrowser:
         def __init__(self):
             self.contexts: list[FakeContext] = []
-            self.closed = False
 
         def new_context(self, **_options):
             context = FakeContext()
             self.contexts.append(context)
             return context
 
-        def close(self):
-            self.closed = True
-
-    @contextmanager
-    def fake_managed_browser(_browser_name):
-        browser = FakeBrowser()
-        opened.append(browser)
-        try:
-            yield browser
-        finally:
-            browser.close()
-
-    monkeypatch.setattr(support, "managed_browser", fake_managed_browser)
-
-    # Standalone scenarios own the browser; their contexts must not leak.
-    with support.isolated_browser_context("chromium", locale="ja-JP") as first:
+    browser = FakeBrowser()
+    with support.isolated_browser_context(browser, locale="ja-JP") as first:
         pass
-    with support.isolated_browser_context("chromium", locale="ja-JP") as second:
-        pass
-    assert len(opened) == 2
-    assert opened[0].contexts == [first]
-    assert opened[1].contexts == [second]
+    with pytest.raises(RuntimeError, match="scenario failure"):
+        with support.isolated_browser_context(browser, locale="ja-JP") as second:
+            raise RuntimeError("scenario failure")
+    assert browser.contexts == [first, second]
     assert first is not second and first.closed and second.closed
-    assert all(browser.closed for browser in opened)
+
 
 def test_monitored_page_fails_on_browser_specific_runtime_errors() -> None:
     support = _load_module("space_idle_e2e_support_monitor_test", PLAYWRIGHT_DIR / "e2e_support.py")

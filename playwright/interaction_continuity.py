@@ -29,7 +29,7 @@ def _choose_priority(page, holder_selector: str, level: int | str):
 
 
 
-def run() -> None:
+def run(browser) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -49,7 +49,7 @@ def run() -> None:
     try:
         wait_for_server(origin)
         with isolated_browser_context(
-            browser_name,
+            browser,
             viewport={"width": 1194, "height": 834},
         ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
@@ -237,7 +237,3 @@ def run() -> None:
         server.server_close()
         thread.join(timeout=5)
         temp_dir.cleanup()
-
-
-if __name__ == "__main__":
-    run()

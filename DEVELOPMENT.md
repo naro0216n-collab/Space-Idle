@@ -237,7 +237,7 @@ Fast CIは小変更ごとの承認ゲートではない。run生成を確認し�
 
 Gameplay、Windows、WebKitを通常Fast CIへ常設しない。
 
-Browser E2Eのscenario集合はworkflowが `playwright/run_suite.py <scenario...>` へ明示的に渡す。workflow YAMLをruntimeで再解析したり、完了markerやsecondary entrypointで重複実行を回避する制御は置かない。runnerは同一Python processでscenario moduleを順に読み込むが、各scenarioはPlaywright/browser process、BrowserContext、GameRuntime、save用temp directory、HTTP serverをそれぞれ新規作成し、browser固有状態を共有しない。Fast CIのChromium smokeは短時間で再現できる主要browser wiringを検証し、WebKit等のOS・engine差はFull Validationで検証する。runnerはbootstrap、各scenario、全体の実時間をCI logへ出力し、長期化時にsetupとscenario本体を切り分けられる状態を維持する。
+Browser E2Eのscenario集合はworkflowが `playwright/run_suite.py <scenario...>` へ明示的に渡す。workflow YAMLをruntimeで再解析したり、完了markerやsecondary entrypointで重複実行を回避する制御は置かない。runnerは1つのPlaywright / Browser processを所有し、同じbrowser engineのscenario moduleを同一Python process内で順次実行する。各scenarioは独立したBrowserContext / Page、GameRuntime、save用temp directory、HTTP serverを新規作成・終了し、Cookie、Storage、DOM、ゲーム状態を共有しない。Browser processは各scenarioの結果判定やGameRuntime Stateの所有者ではない。process自体の障害隔離を検証する場合は通常suiteとは目的を分ける。Fast CIのChromium smokeは短時間で再現できる主要browser wiringを検証し、WebKit等のOS・engine差はFull Validationで検証する。runnerはbootstrap、各scenario、全体の実時間をCI logへ出力し、長期化時にsetupとscenario本体を切り分けられる状態を維持する。
 
 Chromium scenarioはrunner imageに実browserが存在すればそれを優先して全シナリオで共通使用し、存在しない場合はPlaywright Chromiumを使用する。シナリオごとに異なるChromium binaryを偶発的に使い分けない。
 

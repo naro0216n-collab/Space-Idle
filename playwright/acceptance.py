@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from threading import Thread
 import tempfile
+import time
 
 from space_idle import (
     AdvanceTime,
@@ -178,10 +179,18 @@ def _advance_exploration_fixture_until(runtime, exploration_id: str, predicate, 
     raise AssertionError(f"E2E fixture could not prepare scientific exploration {exploration_id}")
 
 
-def run() -> dict[str, object]:
+def run(browser) -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
         raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
+
+    phase_started = time.monotonic()
+
+    def checkpoint(phase: str) -> None:
+        nonlocal phase_started
+        now = time.monotonic()
+        print(f"E2E acceptance phase {phase}: {now - phase_started:.3f}s", flush=True)
+        phase_started = now
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-e2e-")
     runtime = GameRuntime(
@@ -305,6 +314,7 @@ def run() -> dict[str, object]:
         )).can_apply
     )
 
+    checkpoint("fixture preparation")
     server = create_server(
         runtime,
         ApiServerConfig(host="127.0.0.1", port=0),
@@ -318,7 +328,7 @@ def run() -> dict[str, object]:
     try:
         wait_for_server(server_origin)
         with isolated_browser_context(
-            browser_name,
+            browser,
             viewport={"width": 1194, "height": 834},
             screen={"width": 1194, "height": 834},
             has_touch=True,
@@ -334,6 +344,7 @@ def run() -> dict[str, object]:
             page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
+            checkpoint("browser load")
             _assert(page.locator("#globalView").is_visible(), "global decision canvas should be visible by default")
             _assert(not page.locator("#operationsView").is_visible(), "location workspace must not coexist with global canvas")
             _assert(not page.locator("#logisticsView").is_visible(), "logistics workspace must not coexist with global canvas")
@@ -429,13 +440,16 @@ def run() -> dict[str, object]:
                 _assert_surface_targets_are_independent(page, '.surface-cell-button')
                 _assert(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"),
                         f"Surface map must scroll internally rather than widen {width}px landscape")
-                page.locator('.surface-cell-button').last.click()
             page.set_viewport_size({"width": 1024, "height": 834})
+            # One real Cell selection at the narrowest supported width verifies
+            # touch activation; layout and reachability are checked at all widths.
+            page.locator('.surface-cell-button').last.click()
             map_offset = page.locator('.surface-map-viewport').evaluate("""node => {
               node.scrollLeft=Math.min(100,node.scrollWidth-node.clientWidth);
               return node.scrollLeft;
             }""")
             page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
+            checkpoint("surface map decisions")
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             page.wait_for_function("() => document.querySelector('.surface-map-viewport') !== null")
             _assert(page.locator('.surface-map-viewport').evaluate("node => node.scrollLeft") == map_offset,
@@ -677,6 +691,7 @@ def run() -> dict[str, object]:
             _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
                     "current process must remain visibly selected")
 
+            checkpoint("research decisions")
             page.locator('.primary-nav-button[data-section="research"]').click()
             page.locator('.research-tree-card').wait_for(timeout=10000)
             _assert(page.locator('.research-rp-strip').count() == 1, "research canvas must expose RP state beside the primary DAG")
@@ -821,6 +836,7 @@ def run() -> dict[str, object]:
                 timeout=10000,
             )
 
+            checkpoint("exploration decisions")
             page.locator('.primary-nav-button[data-section="exploration"]').click()
             page.locator('[data-section-tab="exploration"][data-tab="scientific-exploration"]').click()
             exploration_rows = page.locator('[data-inspect="scientific-exploration"]')
@@ -1257,6 +1273,7 @@ def run() -> dict[str, object]:
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing
             # a fixed pre-existing lunar Location.
+            checkpoint("survey and founding decisions")
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             founding_cell = page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]')
             founding_cell.wait_for(timeout=10000)
@@ -1332,6 +1349,7 @@ def run() -> dict[str, object]:
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
+            checkpoint("responsive layout")
             page.locator('.primary-nav-button[data-section="location"]').click()
 
             page.set_viewport_size({"width": 1180, "height": 820})
@@ -1402,6 +1420,7 @@ def run() -> dict[str, object]:
             actual_allocations = page.evaluate("() => window.SpaceIdleApp?.state?.transportAllocations?.items?.length || 0")
             _assert(page.locator('[data-system-allocation-id]').count() == actual_allocations, "relation overview must preserve every independently editable Allocation")
 
+            checkpoint("operations and layout")
             results = {
                 "browser": browser_name,
                 "server": "in_process_http",
@@ -1422,7 +1441,3 @@ def run() -> dict[str, object]:
         server.server_close()
         server_thread.join(timeout=5)
         temp_dir.cleanup()
-
-
-if __name__ == "__main__":
-    print(json.dumps(run(), ensure_ascii=False, indent=2))

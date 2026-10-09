@@ -59,16 +59,15 @@ def managed_browser(browser_name: str) -> Iterator[Any]:
 
 @contextmanager
 def isolated_browser_context(
-    browser_name: str,
+    browser: Any,
     **context_options: Any,
 ) -> Iterator[Any]:
-    """Create a new browser process and context for each independent scenario."""
-    with managed_browser(browser_name) as owned_browser:
-        context = owned_browser.new_context(**context_options)
-        try:
-            yield context
-        finally:
-            context.close()
+    """Isolate scenario storage and pages using a fresh BrowserContext."""
+    context = browser.new_context(**context_options)
+    try:
+        yield context
+    finally:
+        context.close()
 
 
 @contextmanager
