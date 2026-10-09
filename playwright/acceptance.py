@@ -10,6 +10,7 @@ import tempfile
 
 from space_idle import (
     AdvanceTime,
+    GetOperationalNode,
     GetResearch,
     GetScientificExplorations,
     GetSurfaceMap,
@@ -177,7 +178,7 @@ def _advance_exploration_fixture_until(runtime, exploration_id: str, predicate, 
     raise AssertionError(f"E2E fixture could not prepare scientific exploration {exploration_id}")
 
 
-def run(*, browser=None) -> dict[str, object]:
+def run() -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
         raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
@@ -280,6 +281,14 @@ def run(*, browser=None) -> dict[str, object]:
     ))
     _prepare_research_comparison_fixture(runtime._app)
     _seed_scientific_exploration_resources(runtime._app)
+    # A process-capable Facility is selected from the Application projection.
+    # Discovering it by clicking every Facility is not a browser behavior under
+    # test and adds repeated Inspector/network work as the catalog expands.
+    process_fixture_id = next(
+        row.facility_id
+        for row in runtime._app.query(GetOperationalNode(str(ids.EARTH))).industry
+        if row.process_options
+    )
     research_projection = runtime._app.query(GetResearch()).items
     unlock_fixture = next(row for row in research_projection if row.unlocks)
     # Select a startable subject from the authoritative decision projection.
@@ -310,7 +319,6 @@ def run(*, browser=None) -> dict[str, object]:
         wait_for_server(server_origin)
         with isolated_browser_context(
             browser_name,
-            browser=browser,
             viewport={"width": 1194, "height": 834},
             screen={"width": 1194, "height": 834},
             has_touch=True,
@@ -659,16 +667,15 @@ def run(*, browser=None) -> dict[str, object]:
             # Process selection is a Direct Action. A facility with a process
             # option keeps the choices visible and does not require a second Apply.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
-            process_choice_found = False
-            facility_rows = page.locator('[data-inspect="facility"]')
-            for index in range(facility_rows.count()):
-                facility_rows.nth(index).click()
-                if page.locator('#inspectorContent [data-facility-process]').count() > 0:
-                    process_choice_found = True
-                    _assert(page.locator('#inspectorContent [data-set-facility-process]').count() == 0, "process selection must not require a second Apply action")
-                    _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1, "current process must remain visibly selected")
-                    break
-            _assert(process_choice_found, "base application must expose at least one facility process decision")
+            page.locator(
+                f'[data-inspect="facility"][data-id="{process_fixture_id}"]'
+            ).click()
+            _assert(page.locator('#inspectorContent [data-facility-process]').count() > 0,
+                    "Application process options must reach the Facility Inspector")
+            _assert(page.locator('#inspectorContent [data-set-facility-process]').count() == 0,
+                    "process selection must not require a second Apply action")
+            _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
+                    "current process must remain visibly selected")
 
             page.locator('.primary-nav-button[data-section="research"]').click()
             page.locator('.research-tree-card').wait_for(timeout=10000)

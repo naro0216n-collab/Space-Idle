@@ -624,7 +624,8 @@ def test_unoperated_science_roundtrip_uses_one_fleet_and_origin_resources(short_
     _arrive_unoperated_science(app)
     _finish_unoperated_science(app)
     assert state.phase.value == "complete"
-    assert state.research_points_awarded == pytest.approx(180.0)
+    definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
     assert capture_state(sim)["survey"] == before_survey
     assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
     for node, resource, _, _ in needs:
