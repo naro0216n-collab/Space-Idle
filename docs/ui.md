@@ -356,6 +356,8 @@ Location Overviewでは現在人数、任意の人口目標、Activity拘束人�
 
 Location OverviewとTransportの双方で、任意のorigin / destinationと正の整数人数を指定する一回限りの旅客移送を独立操作として提供する。未設定の人口目標やMission作成を要求しない。Transport Serviceの便とfree Fleetによる専用便を選択候補として並べ、所要日数、使用Fleet・Service、出発確定人数、未出発待機人数、共通Cargo Capacityへの影響、必要Resource、到着先受入余力、出発元の人口目標への影響、blockerをApplication Previewから表示する。Order一覧には要求／未出発／Transit／到着受入済み／取消済み人数を示し、未発送人数の取消操作を固定位置に置く。明示した輸送方法が使えなくなれば別の方法へ無断切替しない。
 
+旅客Orderの輸送終了は到着人数と死亡人数を区別して表示し、死亡があっただけで独立のランダム事故・失敗状態として表示しない。
+
 Facility InspectorはHousing人数容量、Life Support Providerの人日/日供給、正味Resource・Power負荷、Pause・Decommissionの人員影響を表示する。Fleet / Transport Inspectorは共通Mass Capacity・seatと貨物／旅客の使用内訳、船内Resource、専用便によるfree Fleet拘束を表示する。Mission Inspectorでは必要Crew、拘束済み人数、Transit中乗員、船内Resource、帰還条件を表示する。操作可否と不足理由はApplication DTOを正本とし、UIで別の人口・輸送可否ルールを組み立てない。
 
 ## 9. Facility
@@ -460,6 +462,10 @@ Presence probability、Estimated Potential + uncertainty、Measured Potential、
 Survey Inspectorではselected scope、Resource scope、goal、completed / remaining target、resolved provider / observation mode、Fleet commitment、estimated completion、blocker、strategic alternativesを確認できるようにする。
 
 ### 12.2 Scientific Exploration
+
+科学活動の実行可否はRequirementとFleet・Crew実在状態から示す。確率的成功率・事故率ではなく、進行量・Crew充足・船内Resourceと帰還blockerを判断地点で公開する。
+
+帰還後に船内Resourceの荷卸し待ちとなった場合は、Crewの降機済み状態とFleetのResource保管blockerを別々に示す。
 
 同じContextでtarget / mission、phase、science progress、RP budget / admission、Fleet commitment、Movement / return、Pause / Abort / Return / completion dispositionを確認する。Fleet数量だけの設定画面にしない。
 

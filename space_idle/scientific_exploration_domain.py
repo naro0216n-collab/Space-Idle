@@ -191,11 +191,15 @@ def validate_runtime(sim: Any) -> None:
                     ScientificExplorationPhase.PREPARING,
                     ScientificExplorationPhase.ACTIVE,
                     ScientificExplorationPhase.RETURN_PREPARING,
+                    ScientificExplorationPhase.RECOVERING,
                 }
                 if stationary:
                     if state.phase is ScientificExplorationPhase.PREPARING:
                         _require(commitment.operational_node_id == definition.origin_id,
                                  f"scientific exploration Fleet commitment origin mismatch: {definition_id}")
+                    elif state.phase is ScientificExplorationPhase.RECOVERING:
+                        _require(commitment.operational_node_id in {definition.origin_id, definition.destination_id},
+                                 f"scientific exploration Fleet recovery location mismatch: {definition_id}")
                     elif physical_target is None:
                         _require(commitment.operational_node_id == definition.destination_id,
                                  f"scientific exploration Fleet commitment location mismatch: {definition_id}")

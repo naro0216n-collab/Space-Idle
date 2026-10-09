@@ -581,7 +581,9 @@ Facility / Vehicle Definitionと実在AssetはHousing人数Stock上限とLife Su
 
 日次充足率を `f` としたときGroupの累積不足は `max(0, old_deprivation + (1-f) - recovery_rate*f)` とする。死亡creditは `old_remainder + old_count * mortality_rate * max(0, new_deprivation-lethal_threshold)`、死亡数は `min(old_count, floor(credit))`、生残Groupの端数は `credit - floor(credit)` とし、全滅時または死亡数がGroup人数上限へ達した場合に超過creditを保存しない。翌日のCrew Service capacity倍率は `clamp(1-new_deprivation/incapacitation_threshold,0,1)`。RateとThresholdはScenario定義の有限な正数とする。人的作業Serviceは現地にいる未拘束人員の有効人日から生成し、通常Service Capacityとして公平配分する。Missionが必要とする整数Crewは別の排他的Activity commitmentとし、帰還条件まで解放しない。
 
-HousingやLife Support設備の意図的なDecommission / 移動では既存人口と取り消せない到着義務を収容できなければblockする。事故による失効は人間を消さず実際の不足を生む。未設立Physical Targetでは実在Vehicle、積載Resource、展開設備をscopeとして評価する。Surface Cellの環境は本来のSiteを使い、Node代表値へ置き換えない。通常Resource需要はProviderの正味Supply Requirementを共通Logisticsへ出し、生活専用のTarget StockやResource配送経路は作らない。
+Nodeと実在VehicleではResource・Power・Housingの供給主体が異なるが、確定充足率を受けて不足蓄積・死亡・人的作業能力を更新する処理はPopulationが一度だけ所有する。船内正味Resource消費とLife Support fulfillmentはMission種別によらない共通Passenger Accommodation契約で評価する。Missionは必要人数・進行・帰還Intentだけを所有し、専用の死亡率・事故状態・確率的失敗状態を持たない。
+
+HousingやLife Support設備の意図的なDecommission / 移動では既存人口と取り消せない到着義務を収容できなければblockする。設備の実際の供給条件が失効した場合は人間を消さず実際の不足を生む。未設立Physical Targetでは実在Vehicle、積載Resource、展開設備をscopeとして評価する。Surface Cellの環境は本来のSiteを使い、Node代表値へ置き換えない。通常Resource需要はProviderの正味Supply Requirementを共通Logisticsへ出し、生活専用のTarget StockやResource配送経路は作らない。
 
 ## 9. Constructionモデル
 
@@ -868,6 +870,8 @@ Market InterfaceへのResource輸送はPlayer-owned Fleet / Transport Capacity�
 
 既存Transport Service上の有限旅客dispatchは貨物と同じFleet cycle・共通Mass Capacityを競合消費し、確定Leg、到着日、Onboard Resource、Service identityをTransportが所有するTransit obligationに集約する。free Fleet専用便は既存one-shot Movement ExecutionにPassenger ownerを追加し、Fleet排他commitと物理Arrival / recoveryに従ってsettleする。未指定の手段は成立済みServiceだけを正準評価し、明示専用便指定や固定Service経路を後から勝手に切り替えない。
 
+旅客Orderの輸送結果はPending / Active / Completed / Cancelledと、要求／輸送中／到着／死亡／取消人数から表示する。Completedは輸送義務が全てsettleしたことを示し、死亡や一部到着を別の確率的失敗状態へ変換しない。
+
 Vehicle Definitionには座席、旅客1人あたり標準質量、船内Life Support / Power、航行時補給条件を設け、貨物、旅客、船内補給Resourceを同一Payload制約へ計上する。Transport Allocationのforward/reverse `t/day` は貨物・旅客共通mass targetを維持し、座席とmassは同一Fleetから一度だけ導出する。出発時に実在Inventoryからonboard Resourceへownership transferし、航行中は船内Life Supportによって一度だけ消費する。Node側Powerを船内へ無償転用しない。中継降機と直接乗継、到着先Housing / Docking不足による実在船内滞留、有限Resource、不足時の死亡もPopulation正本とTransportの物理状態を整合させる。既commitのLeg・Fleet・到着日を後日のAllocation変更によって遡及変更しない。
 
 人口目標未達への自動増員は目標超過のPlayer-owned Nodeの非拘束人員、次に有限な地球外部人員供給元の順でCandidateを作り、輸送時間・負担・stable IDで決定論的に選ぶ。確定Inbound、Outbound、Mission帰還を考慮した到着時点期待人数で過不足を評価し、手動Orderと人口目標の両方が同じ人数・外部日次quota・Housing・Fleet・Transport Capacity・Resourceを競合配分する。人口目標自体は人員生成、Fleet生成、強制退去を生まない。
@@ -981,7 +985,7 @@ Exploration DomainはFleet総数を直接所有せず、Fleet Domainのcommitmen
 
 active science executionはRP Pool admission headroomをExecution Requirement Bundleへ含める。Pool headroom不足分についてscience progressと`awarded RP`だけを進めず、有限Campaign rewardを暗黙消失させない。往路・帰路等のMovement progressはscience progressと分離する。
 
-Pause中は新しいscience executionを進めないが、開始済みMovementはsettleする。Pauseだけでcommit Fleetをfreeへ戻さず、Abort / Return / Cancel等の明示transitionが必要な場合はCampaign lifecycleとして定義する。Campaign completion時はoriginへ戻す、destination Operational Nodeへ残す等のdispositionを明示し、Fleetを暗黙テレポートさせない。
+Pause中は新しいscience executionを進めないが、開始済みMovementはsettleする。Pauseだけでcommit Fleetをfreeへ戻さず、Abort / Return / Cancel等の明示transitionが必要な場合はCampaign lifecycleとして定義する。Campaign completion時はoriginへ戻す、destination Operational Nodeへ残す等のdispositionを明示し、Fleetを暗黙テレポートさせない。 有人CampaignのOperational Node到着では、乗員のPopulation settlement / Activity解放と、船内余剰ResourceのInventory Admission / Fleet解放を区別する。船内Resourceの受入不足は実在Fleetを `RECOVERING` に保持してblockerを出し、受入可能になると共通Fleet回収で完了する。到着したCrewをそのResourceの保管不足のみで船内に拘束しない。
 
 ### 12.2 Resource Survey
 

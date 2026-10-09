@@ -141,7 +141,7 @@ class PassengerTransferOrder:
         if self.cancelled_count:
             return 'cancelled'
         if self.pending_count(groups) == 0 and not self.in_transit_group_refs:
-            return 'completed' if self.delivered_count == self.requested_count else 'failed'
+            return 'completed'
         if self.in_transit_group_refs:
             return 'active'
         return 'pending'
@@ -438,6 +438,15 @@ class PopulationService:
     def activity_count(self, activity_ref: str) -> int:
         return sum(group.count for group in self.activity_groups(activity_ref))
 
+    def activity_work_fraction(self, activity_ref: str, required_people: int) -> float:
+        """Common effective Crew fulfillment for exclusive finite Activities."""
+        if required_people < 0:
+            raise ValueError('invalid Activity crew requirement')
+        if required_people == 0:
+            return 1.0
+        return min(1.0, sum(group.count * self.crew_factor(group)
+                            for group in self.activity_groups(activity_ref)) / required_people)
+
     def move_activity_to_execution(self, activity_ref: str, execution_id: EntityId) -> None:
         """Board all committed survivors, whether at a Node or a physical target."""
         selected = self.activity_groups(activity_ref)
@@ -472,6 +481,17 @@ class PopulationService:
             if group.count == 0:
                 del self.groups[group.id]
         return deaths
+
+    def settle_fleet_activity_life_support(self, activity_ref: str, fleet_commitment_id: EntityId) -> int:
+        """Settle an Activity's physical cabin without Activity-specific mortality rules."""
+        aboard = sum(group.count for group in self.activity_groups(activity_ref)
+                     if group.position.kind != 'operational_node')
+        if not aboard:
+            return 0
+        if self.transport is None:
+            raise RuntimeError('Fleet life support requires Transport')
+        fulfillment = self.transport.consume_fleet_life_support(fleet_commitment_id, aboard)
+        return self.settle_activity_life_support(activity_ref, fulfillment)
 
     def admission_capacity(self, node_id: SpatialNodeId, count: int, day: int) -> int:
         return self._supportable_admission(node_id, count, day)
@@ -1075,43 +1095,19 @@ class PopulationService:
                 raise RuntimeError('committed departure lost people')
         self._dispatch_options.clear()
 
-    @staticmethod
-    def _spend_onboard_life_support(accommodation, onboard: dict[DefinitionId, float], people: int) -> float:
-        """Settle one real shipboard Provider against its finite onboard stock.
-
-        Both scheduled Service and one-shot Movement use the same frozen
-        accommodation and Resource accounting, independent of their owner.
-        """
-        if people <= 0:
-            return 1.0
-        # Fleet seat, onboard Power and Provider throughput were admitted
-        # atomically at departure; a Service leg can span several actual Fleet
-        # units while its frozen accommodation is one Vehicle definition.
-        # Here only finite provisions can reduce the daily fulfillment.
-        fulfilled = 1.0
-        for resource, rate in accommodation.net_resources_per_person_day:
-            needed = people * rate
-            if needed > 1e-12:
-                fulfilled = min(fulfilled, max(0.0, onboard.get(resource, 0.0)) / needed)
-        for resource, rate in accommodation.net_resources_per_person_day:
-            used = people * rate * fulfilled
-            if used > 1e-12:
-                onboard[resource] = max(0.0, onboard.get(resource, 0.0) - used)
-        return fulfilled
-
     def settle_transit_arrivals(self, day: int) -> None:
         """Deliver arrived people before the new day; hold aboard when full."""
         transport = self.transport
         if transport is None:
             return
-        from .transport.models import MovementExecutionPayloadResource
+        from .transport.models import MovementExecutionPayloadResource, consume_onboard_life_support
         for transit_id, transit in sorted(tuple(transport.passenger_service_transits.items()), key=lambda item: str(item[0])):
             order = self.transfer_orders[transit.order_id] if transit.order_id is not None else None
             if transit.last_settled_day < day:
                 for elapsed_day in range(transit.last_settled_day + 1, day + 1):
                     passengers = sum(self.groups[group_id].count for group_id in transit.passenger_group_refs)
                     accommodation = transit.active_leg(elapsed_day).passenger_accommodation
-                    fulfillment = self._spend_onboard_life_support(
+                    fulfillment = consume_onboard_life_support(
                         accommodation, transit.onboard_resources, passengers,
                     )
                     for group_id in transit.passenger_group_refs:
@@ -1140,8 +1136,7 @@ class PopulationService:
             destination = transit.legs[-1].destination_id
             if count and self._supportable_admission(destination, count, day) < count:
                 continue
-            if any(self.inventory.admission_state(destination, resource).admission_capacity_t + 1e-9 < amount
-                   for resource, amount in transit.onboard_resources.items() if amount > 1e-12):
+            if not self.inventory.can_admit_resources(destination, transit.onboard_resources):
                 continue
             for group_id in survivors:
                 self.settle_arrival(group_id, destination)
@@ -1171,7 +1166,7 @@ class PopulationService:
             if spec is None:
                 raise RuntimeError('passenger Movement lacks frozen accommodation')
             passengers = order.transit_count(self.groups)
-            ratio = self._spend_onboard_life_support(spec, onboard, passengers)
+            ratio = consume_onboard_life_support(spec, onboard, passengers)
             movement.payload_resources = tuple(MovementExecutionPayloadResource(resource, amount)
                                                for resource, amount in sorted(onboard.items(), key=lambda row: str(row[0]))
                                                if amount > 1e-12)
@@ -1189,8 +1184,7 @@ class PopulationService:
                 continue  # onboard hold is real: Fleet remains unavailable
             recovery_node = (order.origin_node_id if movement.final_asset_disposition.value == 'origin'
                              else order.destination_node_id)
-            if any(self.inventory.admission_state(recovery_node, resource).admission_capacity_t + 1e-9 < amount
-                   for resource, amount in onboard.items() if amount > 1e-12):
+            if not self.inventory.can_admit_resources(recovery_node, onboard):
                 continue
             for group_id in order.in_transit_group_refs:
                 self.settle_arrival(group_id, order.destination_node_id)

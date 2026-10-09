@@ -24,6 +24,7 @@ from .models import (
     MovementEndpoint,
     OperationAssetDisposition,
     PassengerAccommodation,
+    consume_onboard_life_support,
     OperationSupportLocation,
     TransportAllocation,
     TransportCapacitySnapshot,
@@ -348,39 +349,15 @@ class FleetAllocationMixin:
     def consume_fleet_life_support(self, commitment_id: EntityId, people: int) -> float:
         """Consume shipboard Resource once per game day using Fleet-owned Stock."""
         state = self.fleet_commitments[commitment_id]
-        if isinstance(people, bool) or not isinstance(people, int) or people < 0:
-            raise ValueError('shipboard population must be a nonnegative integer')
-        if people == 0:
-            return 1.0
         spec = state.onboard_accommodation
         if spec is None:
-            return 0.0
-        count = state.quantity
-        ratio = min(1.0, spec.seats * count / people,
-                    spec.life_support_person_days_per_day * count / people)
-        if spec.power_mw_per_person > 1e-12:
-            ratio = min(ratio, spec.onboard_power_mw * count / (spec.power_mw_per_person * people))
-        for resource, per_person in spec.net_resources_per_person_day:
-            needed = people * per_person
-            if needed > 1e-12:
-                ratio = min(ratio, state.onboard_resources.get(resource, 0.0) / needed)
-        ratio = max(0.0, min(1.0, ratio))
-        for resource, per_person in spec.net_resources_per_person_day:
-            amount = people * per_person * ratio
-            if amount > 1e-12:
-                state.onboard_resources[resource] = max(0.0, state.onboard_resources.get(resource, 0.0) - amount)
-        return ratio
+            return 1.0 if people == 0 else 0.0
+        return consume_onboard_life_support(spec, state.onboard_resources, people, units=state.quantity)
 
     def can_admit_fleet_provisions(self, commitment_id: EntityId, node_id: SpatialNodeId) -> bool:
         """Assess atomic admission per shared physical Inventory storage pool."""
         state = self.fleet_commitments[commitment_id]
-        required_by_pool: dict[str, float] = {}
-        for resource, amount in state.onboard_resources.items():
-            if amount > 1e-12:
-                pool = self.inventory.storage_pool_for_resource(resource)
-                required_by_pool[pool] = required_by_pool.get(pool, 0.0) + amount
-        return all(self.inventory.admission_state_for_pool(node_id, pool).admission_capacity_t + 1e-9 >= required
-                   for pool, required in required_by_pool.items())
+        return self.inventory.can_admit_resources(node_id, state.onboard_resources)
 
     def recover_fleet_provisions(self, commitment_id: EntityId, node_id: SpatialNodeId) -> bool:
         """Unload onboard Stock into real Inventory before Fleet is released."""

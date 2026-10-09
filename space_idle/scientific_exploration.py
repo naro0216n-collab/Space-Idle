@@ -89,6 +89,7 @@ class ScientificExplorationPhase(str, Enum):
     ACTIVE = "active"
     RETURN_PREPARING = "return_preparing"
     RETURNING = "returning"
+    RECOVERING = "recovering"
     COMPLETE = "complete"
     ABORTED = "aborted"
 
@@ -163,8 +164,7 @@ class ScientificExplorationService:
         # flight and an unestablished site's entire Activity and return.
         site_days = (definition.duration_days if self._physical_target(definition) is not None else 0)
         days = math.ceil(travel_days + site_days - 1e-9)
-        return {resource: days * definition.required_crew * rate
-                for resource, rate in spec.net_resources_per_person_day if rate > 1e-12}
+        return spec.required_provisions(definition.required_crew, days)
 
     def _crew_payload_per_unit(
         self, definition: ScientificExplorationDefinition,
@@ -175,8 +175,8 @@ class ScientificExplorationService:
         vehicle = self.transport.vehicle_definition(state.vehicle_definition_id)
         assert vehicle is not None
         onboard = self._crew_resource_load(definition, state, day)
-        return definition.minimum_payload_t + (
-            definition.required_crew * vehicle.passengers.person_mass_t + sum(onboard.values())
+        return definition.minimum_payload_t + vehicle.passengers.loaded_payload_mass(
+            definition.required_crew, onboard,
         ) / definition.required_units
 
     def _crew_blockers(self, definition: ScientificExplorationDefinition,
@@ -187,31 +187,39 @@ class ScientificExplorationService:
         if vehicle is None:
             return ('unknown_vehicle_definition',)
         spec = vehicle.passengers
-        max_seats = min(spec.seats, spec.life_support_person_days_per_day) * definition.required_units
-        max_power = spec.onboard_power_mw * definition.required_units
         failures = []
-        if max_seats + 1e-9 < definition.required_crew:
-            failures.append(f'crew_cabin:{max_seats:g}/{definition.required_crew}')
-        if spec.power_mw_per_person * definition.required_crew > max_power + 1e-9:
-            failures.append('crew_onboard_power')
+        if spec.supportable_seats(definition.required_units) < definition.required_crew:
+            failures.append(f'crew_cabin:{spec.supportable_seats(definition.required_units)}/{definition.required_crew}')
         if self.population.free_count_at(definition.origin_id) < definition.required_crew:
             failures.append(f'crew_available:{self.population.free_count_at(definition.origin_id)}/{definition.required_crew}')
         return tuple(failures)
 
-    def _can_unload_cabin(self, state: ScientificExplorationState,
-                          destination: SpatialNodeId) -> bool:
-        if state.fleet_commitment_id is None:
-            return False
-        return self.transport.can_admit_fleet_provisions(state.fleet_commitment_id, destination)
+    def _finish_recovery(self, definition: ScientificExplorationDefinition,
+                         state: ScientificExplorationState, day: int) -> None:
+        """Keep Fleet and leftover Resource physically committed until unloaded."""
+        commitment_id = state.fleet_commitment_id
+        if commitment_id is None:
+            raise RuntimeError('scientific exploration recovery lacks Fleet')
+        commitment = self.transport.fleet_commitment_snapshot(commitment_id)
+        if commitment is None or commitment.operational_node_id is None:
+            raise RuntimeError('scientific exploration recovery lacks physical Node')
+        if not self.transport.recover_fleet_provisions(commitment_id, commitment.operational_node_id):
+            return
+        self.transport.release_fleet_commitment(commitment_id, day=day)
+        state.fleet_commitment_id = None
+        state.phase = (ScientificExplorationPhase.ABORTED
+                       if state.termination_intent is ScientificExplorationTerminationIntent.ABORT
+                       or state.progress_days + 1e-9 < definition.duration_days
+                       else ScientificExplorationPhase.COMPLETE)
+        state.termination_intent = None
 
-    def _unload_crew_and_fleet(self, definition: ScientificExplorationDefinition,
-                               state: ScientificExplorationState, node_id: SpatialNodeId) -> bool:
-        if state.fleet_commitment_id is None:
-            raise RuntimeError('scientific exploration lacks Fleet commitment for unloading')
-        if not self.transport.recover_fleet_provisions(state.fleet_commitment_id, node_id):
-            return False
-        self.population.release_activity(self._crew_owner(definition))
-        return True
+    def _begin_recovery(self, definition: ScientificExplorationDefinition,
+                        state: ScientificExplorationState, day: int) -> None:
+        """Disembark at a real Node independently from leftover cabin storage."""
+        if definition.required_crew:
+            self.population.release_activity(self._crew_owner(definition))
+        state.phase = ScientificExplorationPhase.RECOVERING
+        self._finish_recovery(definition, state, day)
 
     def settle_crew_life_support(self) -> None:
         """Daily shipboard life support: distinct from normal Node allocation."""
@@ -222,12 +230,7 @@ class ScientificExplorationService:
             if not definition.required_crew:
                 continue
             owner = self._crew_owner(definition)
-            groups = self.population.activity_groups(owner)
-            aboard = sum(group.count for group in groups if group.position.kind != 'operational_node')
-            if not aboard:
-                continue
-            fulfillment = self.transport.consume_fleet_life_support(state.fleet_commitment_id, aboard)
-            self.population.settle_activity_life_support(owner, fulfillment)
+            self.population.settle_fleet_activity_life_support(owner, state.fleet_commitment_id)
 
     def start(
         self, definition_id: DefinitionId, *, day: int = 0,
@@ -458,7 +461,7 @@ class ScientificExplorationService:
         if (disposition is ScientificExplorationCompletionDisposition.RELEASE_AT_DESTINATION
                 and self._physical_target(self.definitions[definition_id]) is not None):
             raise ValueError("unoperated science target cannot receive free Fleet")
-        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RETURN_PREPARING, ScientificExplorationPhase.RETURNING}:
+        if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RETURN_PREPARING, ScientificExplorationPhase.RETURNING, ScientificExplorationPhase.RECOVERING}:
             raise ValueError("scientific exploration completion disposition can no longer change")
         if disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN and state.vehicle_definition_id is not None:
             definition = self.definitions[definition_id]
@@ -467,7 +470,7 @@ class ScientificExplorationService:
 
     def can_abort(self, definition_id: DefinitionId) -> bool:
         state = self.campaigns.get(definition_id)
-        return state is not None and state.phase not in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}
+        return state is not None and state.phase not in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RECOVERING}
 
     def can_return(self, definition_id: DefinitionId) -> bool:
         state = self.campaigns.get(definition_id)
@@ -489,10 +492,13 @@ class ScientificExplorationService:
         self.inventory.release_reservation(self._input_reservation_owner_id(definition_id))
         self.inventory.release_reservation(self._input_reservation_owner_id(definition_id, returning=True))
         if state.fleet_commitment_id is not None:
-            if definition_id in self.definitions and self.definitions[definition_id].required_crew:
-                node = self.transport.fleet_commitment_snapshot(state.fleet_commitment_id).operational_node_id
-                if node is None or not self._unload_crew_and_fleet(self.definitions[definition_id], state, node):
-                    raise ValueError('onboard Resources require physical Inventory admission before abort')
+            definition = self.definitions[definition_id]
+            if definition.required_crew and state.phase in {
+                ScientificExplorationPhase.ACTIVE, ScientificExplorationPhase.RETURN_PREPARING,
+            }:
+                state.termination_intent = ScientificExplorationTerminationIntent.ABORT
+                self._begin_recovery(definition, state, day)
+                return
             self.transport.release_fleet_commitment(state.fleet_commitment_id, day=day)
             state.fleet_commitment_id = None
         state.phase = ScientificExplorationPhase.ABORTED
@@ -516,6 +522,8 @@ class ScientificExplorationService:
             return ("start",)
         if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED}:
             return ()
+        if state.phase is ScientificExplorationPhase.RECOVERING:
+            return ("continue",)
         if state.phase is ScientificExplorationPhase.AWAITING_FLEET:
             return ("assign_fleet",)
         if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
@@ -902,9 +910,7 @@ class ScientificExplorationService:
             readiness = 1.0
             if definition.required_crew:
                 owner = self._crew_owner(definition)
-                effective = sum(group.count * self.population.crew_factor(group)
-                                for group in self.population.activity_groups(owner))
-                readiness = max(0.0, min(1.0, effective / definition.required_crew))
+                readiness = self.population.activity_work_fraction(owner, definition.required_crew)
             requested = min(1.0, remaining) * readiness
             if requested <= 1e-12:
                 continue
@@ -1001,6 +1007,12 @@ class ScientificExplorationService:
             blockers.append("manual_pause")
         if state.vehicle_definition_id is None:
             blockers.append("fleet_unassigned")
+            return tuple(blockers)
+        if state.phase is ScientificExplorationPhase.RECOVERING:
+            commitment = self.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+            if commitment is not None and commitment.operational_node_id is not None:
+                if not self.transport.can_admit_fleet_provisions(state.fleet_commitment_id, commitment.operational_node_id):
+                    blockers.append('onboard_resource_admission')
             return tuple(blockers)
         if state.phase is ScientificExplorationPhase.PREPARING:
             if definition.required_crew:
@@ -1197,9 +1209,6 @@ class ScientificExplorationService:
                     crew = self.population.activity_count(self._crew_owner(definition))
                     if self.population.admission_capacity(definition.destination_id, crew, day) < crew:
                         continue
-                    if (state.termination_intent is ScientificExplorationTerminationIntent.ABORT
-                            and not self._can_unload_cabin(state, definition.destination_id)):
-                        continue
                 if physical_target is not None:
                     self.transport.receive_fleet_commitment_at_physical_target(
                         commitment_id, execution_id=execution_id,
@@ -1222,12 +1231,7 @@ class ScientificExplorationService:
                     if physical_target is not None:
                         state.phase = ScientificExplorationPhase.RETURN_PREPARING
                     else:
-                        if definition.required_crew and not self._unload_crew_and_fleet(definition, state, definition.destination_id):
-                            raise RuntimeError('scientific exploration arrival admission changed during settlement')
-                        self.transport.release_fleet_commitment(commitment_id, day=day)
-                        state.fleet_commitment_id = None
-                        state.phase = ScientificExplorationPhase.ABORTED
-                        state.termination_intent = None
+                        self._begin_recovery(definition, state, day)
                 elif state.termination_intent is ScientificExplorationTerminationIntent.RETURN:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                     state.termination_intent = None
@@ -1237,8 +1241,6 @@ class ScientificExplorationService:
                 if definition.required_crew:
                     crew = self.population.activity_count(self._crew_owner(definition))
                     if self.population.admission_capacity(definition.origin_id, crew, day) < crew:
-                        continue
-                    if not self._can_unload_cabin(state, definition.origin_id):
                         continue
                 self.transport.receive_fleet_commitment(
                     commitment_id,
@@ -1250,15 +1252,7 @@ class ScientificExplorationService:
                 state.movement_execution_id = None
                 if definition.required_crew:
                     self.population.settle_activity_at_target(self._crew_owner(definition), node_id=definition.origin_id)
-                    if not self._unload_crew_and_fleet(definition, state, definition.origin_id):
-                        raise RuntimeError('scientific exploration return Inventory changed during settlement')
-                self.transport.release_fleet_commitment(commitment_id, day=day)
-                state.fleet_commitment_id = None
-                if state.termination_intent is ScientificExplorationTerminationIntent.ABORT:
-                    state.phase = ScientificExplorationPhase.ABORTED
-                else:
-                    state.phase = ScientificExplorationPhase.COMPLETE
-                state.termination_intent = None
+                self._begin_recovery(definition, state, day)
 
     def advance_day(
         self,
@@ -1285,6 +1279,9 @@ class ScientificExplorationService:
             if state.vehicle_definition_id is None:
                 continue
             definition = self.definitions[definition_id]
+            if state.phase is ScientificExplorationPhase.RECOVERING:
+                self._finish_recovery(definition, state, day)
+                continue
             if state.phase is ScientificExplorationPhase.PREPARING:
                 if state.paused or not ready_at_snapshot.get(definition_id, False):
                     continue
@@ -1357,8 +1354,8 @@ class ScientificExplorationService:
         if commitment_id is None:
             raise RuntimeError("scientific exploration completion lacks Fleet commitment")
         if definition.required_crew:
-            if not self._unload_crew_and_fleet(definition, state, definition.destination_id):
-                return
+            self._begin_recovery(definition, state, day)
+            return
         self.transport.release_fleet_commitment(commitment_id, day=day)
         state.fleet_commitment_id = None
         state.phase = ScientificExplorationPhase.COMPLETE

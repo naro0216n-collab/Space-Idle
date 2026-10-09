@@ -29,6 +29,11 @@ def test_inventory_admission_preserves_stock_and_enforces_resource_pool_compatib
     admitted = inventory.admit(node, a, 8.0)
     assert admitted.fully_admitted
     assert inventory.amount(node, a) == pytest.approx(8.0)
+    # An arriving vessel's different Resources still occupy the same shared
+    # Storage pool; individual admission checks cannot authorize both.
+    assert inventory.can_admit_resources(node, {a: 1.0, b: 1.0})
+    assert not inventory.can_admit_resources(node, {a: 1.1, b: 1.1})
+    assert inventory.amount(node, a) == pytest.approx(8.0)
 
     inventory.set_capacity_snapshot(
         {(node, pool): 10.0}, {(node, pool): 5.0}, {(node, pool): ("storage_power_limited",)}

@@ -154,6 +154,18 @@ class InventoryBook:
     def admission_state(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> InventoryAdmissionState:
         return self.admission_state_for_pool(operational_node_id, self.storage_pool_for_resource(resource_id))
 
+    def can_admit_resources(self, operational_node_id: SpatialNodeId,
+                            resources: Mapping[DefinitionId, float]) -> bool:
+        """Check a batch against shared Storage pools, not each item separately."""
+        by_pool: dict[StoragePoolKey, float] = {}
+        for resource_id, amount in resources.items():
+            if amount <= _EPS:
+                continue
+            pool = self.storage_pool_for_resource(resource_id)
+            by_pool[pool] = by_pool.get(pool, 0.0) + amount
+        return all(self.admission_state_for_pool(operational_node_id, pool).admission_capacity_t + _EPS >= amount
+                   for pool, amount in by_pool.items())
+
     def amount(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.stock.get((operational_node_id, resource_id), 0.0)
 

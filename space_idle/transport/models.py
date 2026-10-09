@@ -905,6 +905,55 @@ class PassengerAccommodation:
         )
         return max(0, per_unit * units)
 
+    def required_provisions(self, people: int, days: float) -> dict[DefinitionId, float]:
+        """Physical onboard net consumption, independent of the activity owner."""
+        if people < 0 or not math.isfinite(days) or days < 0:
+            raise ValueError('invalid passenger provisioning demand')
+        return {resource: people * days * rate
+                for resource, rate in self.net_resources_per_person_day if rate > 0}
+
+    def loaded_payload_mass(self, people: int, provisions: dict[DefinitionId, float]) -> float:
+        return people * self.person_mass_t + sum(provisions.values())
+
+
+def consume_onboard_life_support(
+    accommodation: PassengerAccommodation,
+    onboard: dict[DefinitionId, float],
+    people: int,
+    *,
+    units: int | None = None,
+) -> float:
+    """One physical cabin's daily fulfillment and Resource settlement.
+
+    Fleet commitments specify their physical unit count. Scheduled Service
+    transits carry a departure-frozen accommodation whose shared seat/power
+    allocation was already committed for the leg, so their unit count is not
+    re-derived from a later Transport Allocation.
+    """
+    if isinstance(people, bool) or not isinstance(people, int) or people < 0:
+        raise ValueError('shipboard population must be a nonnegative integer')
+    if people == 0:
+        return 1.0
+    fulfillment = 1.0
+    if units is not None:
+        if units < 0:
+            raise ValueError('invalid onboard Fleet count')
+        fulfillment = min(1.0, accommodation.seats * units / people,
+                          accommodation.life_support_person_days_per_day * units / people)
+        if accommodation.power_mw_per_person > 0:
+            fulfillment = min(fulfillment, accommodation.onboard_power_mw * units
+                              / (accommodation.power_mw_per_person * people))
+    for resource, rate in accommodation.net_resources_per_person_day:
+        needed = people * rate
+        if needed > 1e-12:
+            fulfillment = min(fulfillment, max(0.0, onboard.get(resource, 0.0)) / needed)
+    fulfillment = max(0.0, min(1.0, fulfillment))
+    for resource, rate in accommodation.net_resources_per_person_day:
+        consumed = people * rate * fulfillment
+        if consumed > 1e-12:
+            onboard[resource] = max(0.0, onboard.get(resource, 0.0) - consumed)
+    return fulfillment
+
 
 @dataclass(frozen=True)
 class VehicleDef:

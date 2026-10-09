@@ -292,7 +292,7 @@ def test_competing_orders_share_arrival_space_and_service_transit_mortality_pres
     sim.advance_days(1)
     assert active.deceased_count == 1
     assert (active.pending_count(sim.population.groups), active.transit_count(sim.population.groups),
-            active.delivered_count, active.status(sim.population.groups)) == (0, 0, 0, 'failed')
+            active.delivered_count, active.status(sim.population.groups)) == (0, 0, 0, 'completed')
     assert not sim.transport.passenger_service_transits
     assert sim.inventory.amount(ids.LEO, ids.WATER) == pytest.approx(destination_water - resident_water_per_day + remaining_water)
     assert sum(group.count for group in sim.population.groups.values()) == initial_total - 1
