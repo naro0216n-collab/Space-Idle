@@ -333,3 +333,70 @@ def test_knowledge_consumers_depend_on_typed_requirement_not_campaign_internal_s
     assert sim.survey.knowledge_requirement_failures(requirement)
     sim.survey.knowledge_progress[key] = sim.survey.targets[key].thresholds[0]
     assert sim.survey.knowledge_requirement_failures(requirement) == ()
+
+
+# Physical targets use the same Survey progress and owner as owned-Cell targets.
+def _remote_campaign(*, goal: int) -> StartSurvey:
+    return StartSurvey(
+        target_cell_ids=(str(ids.MARS_CELL_POLAR_HIGHLANDS),),
+        resource_ids=(str(ids.VOLATILE_BEARING_MATERIAL),),
+        goal_knowledge_level=goal,
+        provider_constraint=SurveyProviderConstraintInput(
+            str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT),
+        ),
+        observation_mode_constraint="interplanetary_remote_spectrometry",
+    )
+
+
+def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership():
+    app = build_game_application()
+    sim = app._simulation
+    cell, resource = ids.MARS_CELL_POLAR_HIGHLANDS, ids.VOLATILE_BEARING_MATERIAL
+    initial_nodes = frozenset(sim.graph.operational_node_ids())
+    initial_fleet = dict(sim.transport.fleet_pools)
+
+    # One survey owner and knowledge projection, independently scoped by
+    # physical body; no remotely observed Cell becomes an owned Location.
+    global_view = app.query(GetSurveys())
+    mars_view = app.query(GetSurveys(body_id=str(ids.MARS_BODY)))
+    moon_view = app.query(GetSurveys(body_id=str(ids.MOON)))
+    assert mars_view.items and moon_view.items
+    assert {row.body_id for row in mars_view.items} == {str(ids.MARS_BODY)}
+    assert {row.body_id for row in moon_view.items} == {str(ids.MOON)}
+    assert not {row.cell_id for row in mars_view.items} & {row.cell_id for row in moon_view.items}
+    assert len({row.body_id for row in global_view.items}) > 3
+    assert all(row.visible_potential is None for row in mars_view.items)
+
+    before = next(row for row in app.query(GetSurveys()).items
+                  if row.cell_id == str(cell) and row.resource_id == str(resource))
+    assert before.location_id is None
+    assert before.knowledge_level == int(KnowledgeLevel.UNKNOWN)
+    assert before.visible_potential is None
+
+    campaign_id = app.execute(_remote_campaign(goal=1)).created_id
+    campaign = sim.survey.campaigns[campaign_id]
+    candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
+    assert blockers == ()
+    assert candidate is not None
+    assert candidate.max_knowledge_level == KnowledgeLevel.PRESENCE_PROBABILITY
+
+    app.execute(AdvanceTime(8))
+    assert campaign.control_state is SurveyCampaignControlState.COMPLETED
+    assert sim.survey.knowledge_level(cell, resource) == KnowledgeLevel.PRESENCE_PROBABILITY
+    assert sim.survey.visible_potential(cell, resource) is None
+    assert frozenset(sim.graph.operational_node_ids()) == initial_nodes
+    assert dict(sim.transport.fleet_pools) == initial_fleet
+    assert sim.graph.owner_of_cell(cell) is None
+
+    after = next(row for row in app.query(GetSurveys()).items
+                 if row.cell_id == str(cell) and row.resource_id == str(resource))
+    assert after.knowledge_level == int(KnowledgeLevel.PRESENCE_PROBABILITY)
+    assert after.location_id is None
+    assert after.visible_potential is None
+
+    beyond_mode = app.execute(_remote_campaign(goal=2)).created_id
+    candidate, blockers = sim.survey.resolve_campaign_candidate(
+        sim.survey.campaigns[beyond_mode], day=sim.day,
+    )
+    assert candidate is None
+    assert any("survey_provider_limit" in code for code in blockers)

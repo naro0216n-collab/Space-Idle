@@ -14,6 +14,7 @@ from space_idle import (
     GetScientificExplorations,
     GetSurfaceMap,
     GetSurveys,
+    GetSurveyCampaignIntentPreview,
     SetSurveyProviderFleetQuantity,
     StartResearch,
     build_game_application,
@@ -91,6 +92,26 @@ def _select_location(page, location_id: object) -> None:
           return title === name && Boolean(kind) && kind !== '地点状態を取得中';
         }""",
         arg=target_name,
+        timeout=10000,
+    )
+
+
+def _wait_for_periodic_sync(page) -> None:
+    """Observe the actual automatic fetch, including unchanged projections.
+
+    The server may answer ``unchanged`` without emitting a render event. Waiting
+    for a fixed wall-clock interval is neither an assertion about the sync nor
+    a reliable indication that its UI work has finished.
+    """
+    with page.expect_response(
+        lambda response: response.request.method == "GET"
+        and "/api/v1/ui-state" in response.url,
+        timeout=10000,
+    ) as response:
+        pass
+    _assert(response.value.ok, "automatic UI synchronization must succeed")
+    page.wait_for_function(
+        "() => !window.SpaceIdleApp.state.syncInFlight",
         timeout=10000,
     )
 
@@ -259,8 +280,20 @@ def run(*, browser=None) -> dict[str, object]:
     ))
     _prepare_research_comparison_fixture(runtime._app)
     _seed_scientific_exploration_resources(runtime._app)
-    unlock_fixture = next(
-        row for row in runtime._app.query(GetResearch()).items if row.unlocks
+    research_projection = runtime._app.query(GetResearch()).items
+    unlock_fixture = next(row for row in research_projection if row.unlocks)
+    # Select a startable subject from the authoritative decision projection.
+    # The browser still verifies the actual selection, command and lifecycle.
+    startable_research_id = next(row.id for row in research_projection if row.can_start)
+    # The browser should exercise one decision, not search every Cell/Resource/
+    # goal by triggering a network-backed preview for each DOM checkbox.
+    survey_scope = next(
+        (row.cell_id, row.resource_id, goal)
+        for row in runtime._app.query(GetSurveys(body_id=str(ids.MOON))).items
+        for goal in (1, 2, 3)
+        if runtime._app.query(GetSurveyCampaignIntentPreview(
+            (row.cell_id,), (row.resource_id,), goal,
+        )).can_apply
     )
 
     server = create_server(
@@ -328,7 +361,7 @@ def run(*, browser=None) -> dict[str, object]:
             first_global_node = global_nodes.first
             first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
             original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic sync must preserve map interaction targets")
             # Map placement and zoom are insufficient if redraws discard
             # keyboard focus: both selection and the focused control survive.
@@ -336,7 +369,7 @@ def run(*, browser=None) -> dict[str, object]:
             page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
             _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
                     "map redraw must retain keyboard focus on the same Operational Node")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
                     "authoritative periodic sync must not discard focused map controls")
             first_global_node.tap()
@@ -355,7 +388,7 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(selected_transport_node.is_visible(), "selected node must remain visible in Transport")
             _assert(selected_transport_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }") == original_position, "Transport must retain common spatial placement")
             _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled, "Transport must retain map pan / zoom")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(selected_transport_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic refresh must preserve Transport node identity")
             page.locator('.primary-nav-button[data-section="global"]').click()
             first_global_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
@@ -650,7 +683,7 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(bool(primary_blocker.inner_text().strip()), "blocked research node must identify its primary constraint")
             first_research_node = research_rows.first
             first_research_node.evaluate("node => { window.__spaceIdleResearchNode = node; }")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(
                 first_research_node.evaluate("node => node === window.__spaceIdleResearchNode"),
                 "periodic sync must preserve research decision targets while progress projections refresh",
@@ -666,7 +699,7 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="research"]').click()
             _assert(search_input.input_value() == selected_research_name, "returning from Location must preserve Research query")
             _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "returning from Location must preserve Research selection")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(search_input.input_value() == selected_research_name, "periodic refresh must retain an edited search query")
             search_input.fill('nonexistent-research-node-987654321')
             _assert(page.locator('#researchSearchResults [data-research-jump]').count() == 0, "zero search matches must be represented without filtering the DAG")
@@ -682,18 +715,16 @@ def run(*, browser=None) -> dict[str, object]:
                 unlock_fixture.unlocks[0].display_name in unlock_inspector_text,
                 "research unlock text must come from the Application projection",
             )
-            startable_research = None
-            for index in range(research_rows.count()):
-                research_rows.nth(index).click()
-                control = page.locator('#inspectorContent [data-lifecycle-control="research"]')
-                if (
-                    control.count() == 1
-                    and control.get_attribute('data-research-action') == 'start'
-                    and control.is_enabled()
-                ):
-                    startable_research = control
-                    break
-            _assert(startable_research is not None, "at least one projected Research decision must be startable")
+            page.locator(
+                f'#researchTree [data-inspect="research"][data-id="{startable_research_id}"]'
+            ).click()
+            startable_research = page.locator('#inspectorContent [data-lifecycle-control="research"]')
+            _assert(
+                startable_research.count() == 1
+                and startable_research.get_attribute('data-research-action') == 'start'
+                and startable_research.is_enabled(),
+                "Application-startable Research must expose an enabled Start command in the Inspector",
+            )
             _choose_priority(page, '#researchPriorityInput', 4)
             startable_research.click()
             research_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="research"]')
@@ -991,22 +1022,19 @@ def run(*, browser=None) -> dict[str, object]:
                     "all physical cells must be reachable without aiming at an edge")
             _assert(surface_cells.count() > 0, "surface map must render Application-projected body cells")
             _assert("base.cell." not in surface_cells.first.inner_text(), "surface map must present labels rather than internal cell ids")
-            surface_decision_found = False
-            for index in range(surface_cells.count()):
-                surface_cells.nth(index).click()
-                selected = surface_cells.nth(index).get_attribute('data-id')
-                page.wait_for_function("""cell => {
-                  const state = window.SpaceIdleApp.state;
-                  return state.inspector?.id === cell && state.surfaceMap?.cells?.some(
-                    row => row.id === cell && row.foundation_options?.length > 0);
-                }""", arg=selected, timeout=10000)
-                if (
-                    page.locator('#inspectorContent [data-surface-found]').count() > 0
-                    and "新拠点設立" in page.locator("#inspectorContent").inner_text()
-                ):
-                    surface_decision_found = True
-                    break
-            _assert(surface_decision_found, "Surface Map must expose the Application-projected founding decision on an unowned cell")
+            # The earlier Application-projected founding option identifies the
+            # target. The browser checks the actual map selection and Inspector,
+            # without opening unrelated Cells one by one as fixture discovery.
+            page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]').click()
+            page.wait_for_function("""cell => {
+              const state = window.SpaceIdleApp.state;
+              return state.inspector?.id === cell && state.surfaceMap?.cells?.some(
+                row => row.id === cell && row.foundation_options?.length > 0);
+            }""", arg=str(founding_fixture_cell), timeout=10000)
+            _assert(
+                page.locator('#inspectorContent [data-surface-found]').count() > 0,
+                "Surface Map must expose Application-projected Founding on an unowned Cell",
+            )
             selected_surface_projection = page.evaluate("""() => {
               const state=window.SpaceIdleApp.state;
               return state.surfaceMap.cells.find(cell => cell.id === state.inspector?.id);
@@ -1117,39 +1145,19 @@ def run(*, browser=None) -> dict[str, object]:
             survey_rows = page.locator('[data-inspect="survey"]')
             survey_rows.first.wait_for(timeout=10000)
             _assert(survey_rows.count() > 0, "Survey UI must expose at least one Application-projected target")
-            campaign_cell_id = campaign_resource_id = None
-            for row_index in range(survey_rows.count()):
-                survey_pair_id = survey_rows.nth(row_index).get_attribute("data-id")
-                if survey_pair_id is None or "::" not in survey_pair_id:
-                    continue
-                candidate_cell_id, candidate_resource_id = survey_pair_id.split("::", 1)
-                cell_checkbox = page.locator(
-                    f'[data-survey-draft-cell][value="{candidate_cell_id}"]'
-                )
-                resource_checkbox = page.locator(
-                    f'[data-survey-draft-resource][value="{candidate_resource_id}"]'
-                )
-                if cell_checkbox.count() == 0 or resource_checkbox.count() == 0:
-                    continue
-                cell_checkbox.check()
-                resource_checkbox.check()
-                for goal in ("1", "2", "3"):
-                    page.locator('#surveyDraftGoal').select_option(goal)
-                    page.wait_for_function(
-                        "() => !document.querySelector('[data-survey-start-intent-status]')?.textContent?.includes('可否確認中')",
-                        timeout=10000,
-                    )
-                    if page.locator('[data-start-survey-campaign]').is_enabled():
-                        campaign_cell_id = candidate_cell_id
-                        campaign_resource_id = candidate_resource_id
-                        break
-                if campaign_cell_id is not None:
-                    break
-                cell_checkbox.uncheck()
-                resource_checkbox.uncheck()
+            campaign_cell_id, campaign_resource_id, campaign_goal = survey_scope
+            cell_checkbox = page.locator(f'[data-survey-draft-cell][value="{campaign_cell_id}"]')
+            resource_checkbox = page.locator(f'[data-survey-draft-resource][value="{campaign_resource_id}"]')
             _assert(
-                campaign_cell_id is not None and campaign_resource_id is not None,
-                "Survey Campaign UI must expose at least one Application-approved scope / goal intent",
+                cell_checkbox.count() == 1 and resource_checkbox.count() == 1,
+                "Application-approved Survey intent must be available in the browser scope editor",
+            )
+            cell_checkbox.check()
+            resource_checkbox.check()
+            page.locator('#surveyDraftGoal').select_option(str(campaign_goal))
+            page.wait_for_function(
+                "() => !document.querySelector('[data-survey-start-intent-status]')?.textContent?.includes('可否確認中')",
+                timeout=10000,
             )
             _assert(
                 page.locator('[data-start-survey-campaign]').is_enabled(),

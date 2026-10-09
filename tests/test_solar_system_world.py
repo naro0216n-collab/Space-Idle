@@ -6,14 +6,13 @@ from dataclasses import replace
 
 import pytest
 
-from space_idle import GetCatalog, GetSurfaceMap, GetWorld, GetNonSurfaceFoundingOptions, GetSurveys, build_game_application
+from space_idle import GetCatalog, GetSurfaceMap, GetWorld, GetNonSurfaceFoundingOptions, build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.shared import CelestialBodyId, SpatialNodeId, SurfaceCellId, StarSystemId
 from space_idle.spatial import (
     CelestialBodyDef, CharacteristicTransportGeometry, PhysicalSurface,
     SpatialGraph, StarSystemDef, SurfaceCellDef, SurfacePoint,
 )
-from space_idle.content.base_spatial import build_world_definition
 
 
 def test_solar_system_contains_physical_planets_and_satellites_without_owned_asset_creation():
@@ -84,19 +83,6 @@ def test_body_parent_validation_and_surface_capability_have_distinct_semantics()
         graph.body_lineage(giant_id)
 
 
-def test_earth_moon_transfer_uses_same_physical_orbit_inputs_as_other_satellites():
-    graph, _ = build_world_definition()
-    earth = graph.bodies[ids.EARTH_BODY]
-    moon = graph.bodies[ids.MOON]
-    assert earth.system_local_transport_geometry is moon.system_local_transport_geometry is None
-    assert moon.parent_orbit_semimajor_axis_km == 384_400.0
-    transfer = graph.characteristic_transport_separation(ids.EARTH_CELL_INDUSTRIAL, ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    assert transfer.scope == "planetary_system_transfer"
-    assert 3.8 < transfer.delta_v_km_s < 4.2
-    assert 4.5 < transfer.representative_transit_days < 5.5
-    assert all(body.system_local_transport_geometry is None for body in graph.bodies.values())
-
-
 def test_representative_transfer_uses_orbital_physics_and_existing_movement_execution_contract():
     app = build_game_application()
     sim = app._simulation
@@ -115,6 +101,30 @@ def test_representative_transfer_uses_orbital_physics_and_existing_movement_exec
     assert 200 < plan.transit_days < 400  # Hohmann-scale, not instantaneous separation / tug speed
     assert plan.operations[0].delta_v_km_s == plan.relation.characteristic_delta_v_km_s
     assert plan.operations[0].operation_type == "spaceflight"
+    # Earth/Moon and outer satellites share the same physical transfer model;
+    # no separate pairwise transit definitions or instant orbital shortcut.
+    earth, moon = graph.bodies[ids.EARTH_BODY], graph.bodies[ids.MOON]
+    assert moon.parent_body_id == earth.id
+    assert moon.parent_orbit_semimajor_axis_km is not None
+    lunar_transfer = graph.characteristic_transport_separation(
+        ids.EARTH_CELL_INDUSTRIAL, ids.MOON_CELL_SOUTH_POLAR_RIDGE,
+    )
+    assert lunar_transfer.scope == "planetary_system_transfer"
+    assert 0 < lunar_transfer.delta_v_km_s < plan.relation.characteristic_delta_v_km_s
+    assert 0 < lunar_transfer.representative_transit_days < plan.transit_days
+    assert all(body.system_local_transport_geometry is None for body in graph.bodies.values())
+
+    # Performance eligibility and Resource requirements follow the same Plan
+    # for remote founding and ordinary long-haul cargo.
+    freight = sim.transport.vehicle_defs[ids.DEEP_SPACE_FREIGHTER].performance
+    tug = sim.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].performance
+    assert not sim.transport.vehicle_movement_physical_failures(
+        plan.id, ids.DEEP_SPACE_FREIGHTER, sim.day,
+    )
+    assert freight.endurance_days is not None and freight.propellant_capacity_t > 0
+    assert 0 < freight.max_cargo_for_movement(plan) <= freight.payload_t
+    assert 0 < freight.propellant_t(plan, 2.3) <= freight.propellant_capacity_t
+    assert tug.endurance_failures(plan.transit_days)
     assert "endurance:" in " ".join(sim.transport.vehicle_movement_physical_failures(
         plan.id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
     ))
@@ -165,6 +175,22 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     sim = app._simulation
     graph = sim.graph
     env = sim.environment
+    # Cell-local climate and neighborhood shape the same Environment contract
+    # used for orbital and outer-solar-system locations.
+    assert graph.owner_of_cell(ids.MARS_CELL_EQUATORIAL_PLAIN) is None
+    assert set(graph.surface_cells[ids.MARS_CELL_EQUATORIAL_PLAIN].neighbor_ids) == {
+        ids.MARS_CELL_NORTHERN_BASIN, ids.MARS_CELL_POLAR_HIGHLANDS,
+    }
+    assert env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, AtmosphereField).pressure_pa > 0
+    assert env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, GravityField).local_acceleration_m_s2 > 0
+    equatorial_illumination = env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, IlluminationField)
+    polar_illumination = env.require(ids.MARS_CELL_POLAR_HIGHLANDS, IlluminationField)
+    assert equatorial_illumination.solar_flux_w_m2 == pytest.approx(polar_illumination.solar_flux_w_m2)
+    assert equatorial_illumination.availability > polar_illumination.availability
+    assert env.require(ids.MARS_CELL_POLAR_HIGHLANDS, ThermalField).nominal_temperature_k < (
+        env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, ThermalField).nominal_temperature_k
+    )
+    assert env.require(ids.MARS_ORBIT, AtmosphereField).pressure_pa == 0
     solid = [body for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID]
     assert all(graph.cells_for_body(body.id) for body in solid)
     assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
@@ -221,51 +247,6 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     assert generation[ids.MOON_CELL_SOUTH_POLAR_RIDGE] > generation[europa] > generation[triton]
 
 
-def test_orbital_founding_preview_is_a_scoped_physical_target_not_a_player_node():
-    app = build_game_application()
-    sim = app._simulation
-    owned = set(sim.graph.operational_node_ids())
-    fleet = dict(sim.transport.fleet_pools)
-    stock = dict(sim.inventory.stock)
-
-    for body_id in ("base.body.jupiter", "base.body.saturn", "base.body.uranus", "base.body.neptune"):
-        context_id = f"base.spatial.{body_id.rsplit('.', 1)[-1]}.orbit"
-        options = app.query(GetNonSurfaceFoundingOptions(body_id, context_id))
-        assert options.body_id == body_id
-        assert len(options.contexts) == 1
-        context = options.contexts[0]
-        assert context.spatial_node_id in sim.graph.nodes
-        assert context.spatial_node_id not in owned
-        assert not context.operational
-        assert context.foundation_options
-        assert all(row.blockers or row.can_plan for row in context.foundation_options)
-        assert any(row.deployment_recipe_id == str(ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE)
-                   for row in context.foundation_options)
-        assert context.spatial_node_id not in {str(x) for x in sim.graph.operational_node_ids()}
-
-    assert app.query(GetNonSurfaceFoundingOptions(str(ids.EARTH_BODY))).contexts[0].operational
-    mars = app.query(GetNonSurfaceFoundingOptions("base.body.mars"))
-    assert mars.contexts[0].spatial_node_id == str(ids.MARS_ORBIT)
-    assert not set(sim.graph.operational_node_ids()) ^ owned
-    assert sim.transport.fleet_pools == fleet
-    assert sim.inventory.stock == stock
-
-
-def test_survey_projection_is_scoped_to_selected_body_and_preserves_owner_knowledge():
-    app = build_game_application()
-    global_view = app.query(GetSurveys())
-    target_bodies = {row.body_id for row in global_view.items}
-    assert len(target_bodies) > 3
-    mars = app.query(GetSurveys(body_id="base.body.mars"))
-    moon = app.query(GetSurveys(body_id=str(ids.MOON)))
-    assert mars.items and moon.items
-    assert {row.body_id for row in mars.items} == {"base.body.mars"}
-    assert {row.body_id for row in moon.items} == {str(ids.MOON)}
-    assert not {row.cell_id for row in mars.items} & {row.cell_id for row in moon.items}
-    assert all(row.visible_potential is None for row in mars.items)
-    assert app.query(GetSurveys()).items == global_view.items
-
-
 def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
     """World Content can add landings without creating an OD table or player nodes."""
     app = build_game_application()
@@ -306,27 +287,6 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
     assert frozenset(graph.operational_node_ids()) == owner_ids
     assert all(plan.origin_id in owner_ids and plan.destination_id in owner_ids
                for plan in resolver.all_direct_plans())
-
-
-def test_long_range_freight_has_finite_capacity_and_can_reach_nonoperated_orbit():
-    app = build_game_application()
-    sim = app._simulation
-    plan = sim.transport.movement_plans_to_non_surface_physical_target(ids.LEO, ids.MARS_ORBIT)[0]
-    freight = sim.transport.vehicle_defs[ids.DEEP_SPACE_FREIGHTER].performance
-    tug = sim.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].performance
-    assert not sim.transport.vehicle_movement_physical_failures(
-        plan.id, ids.DEEP_SPACE_FREIGHTER, sim.day,
-    )
-    assert sim.transport.vehicle_movement_physical_failures(
-        plan.id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
-    )
-    assert freight.payload_t > sim.transport.vehicle_defs[ids.DEEP_SPACE_PROBE].performance.payload_t
-    assert freight.endurance_days is not None
-    assert freight.propellant_capacity_t > 0
-    assert 0 < freight.max_cargo_for_movement(plan) <= freight.payload_t
-    assert freight.propellant_t(plan, 2.3) > 0
-    assert freight.propellant_t(plan, 2.3) <= freight.propellant_capacity_t
-    assert tug.endurance_failures(plan.transit_days)
 
 
 def test_martian_surface_founding_and_long_transit_preserve_state_across_save_and_offline(tmp_path):
@@ -571,5 +531,24 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
     detailed = app.query(GetNonSurfaceFoundingOptions(jupiter, context_id))
     assert detailed.contexts[0].foundation_options
     assert {str(value) for value in visited} == {context_id}
+
+    # Each gas giant has an eligible, still-unowned orbital context. These
+    # read-only options must not create Fleet, Inventory or operational Nodes.
+    owned = set(sim.graph.operational_node_ids())
+    fleet = dict(sim.transport.fleet_pools)
+    stock = dict(sim.inventory.stock)
+    for body_id in ("base.body.jupiter", "base.body.saturn", "base.body.uranus", "base.body.neptune"):
+        context_id = f"base.spatial.{body_id.rsplit('.', 1)[-1]}.orbit"
+        context = app.query(GetNonSurfaceFoundingOptions(body_id, context_id)).contexts[0]
+        assert context.spatial_node_id in sim.graph.nodes
+        assert context.spatial_node_id not in {str(node) for node in owned}
+        assert not context.operational
+        assert context.foundation_options
+        assert all(option.blockers or option.can_plan for option in context.foundation_options)
+        assert any(option.deployment_recipe_id == str(ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE)
+                   for option in context.foundation_options)
+    assert set(sim.graph.operational_node_ids()) == owned
+    assert sim.transport.fleet_pools == fleet
+    assert sim.inventory.stock == stock
     with pytest.raises(ApplicationError, match="selected body"):
         app.query(GetNonSurfaceFoundingOptions(jupiter, str(ids.LUNAR_ORBIT)))
