@@ -3,6 +3,8 @@ from __future__ import annotations
 import http.client
 import json
 from threading import Thread
+from contextlib import contextmanager
+from unittest.mock import patch
 
 from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -37,19 +39,28 @@ def _raw_request(port: int, path: str):
     return status, headers, data
 
 
-def test_http_api_command_query_and_save_load_boundary(tmp_path, monkeypatch):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    # Binding a local HTTP API must not depend on external name resolution.
-    # Keep the guard scoped to server construction, not the request client.
-    with monkeypatch.context() as guard:
-        def unexpected_lookup(_host):
-            raise AssertionError("HTTP API startup must not perform reverse DNS")
-        guard.setattr("http.server.socket.getfqdn", unexpected_lookup)
+@contextmanager
+def running_api(tmp_path):
+    """Isolate each HTTP contract, including startup free from reverse DNS."""
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=tmp_path,
+    )
+    with patch("http.server.socket.getfqdn", side_effect=AssertionError("Reverse DNS on HTTP bind")):
         server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_api_command_query_and_save_load_boundary(tmp_path):
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {"type": "AdvanceTime", "payload": {"days": 2}},
@@ -283,18 +294,10 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path, monkeypatch):
         )
         assert status == 400
         assert payload["error"]["code"] == "invalid_save"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+
 
 def test_http_api_rejects_stale_command_revision(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {"type": "AdvanceTime", "payload": {"days": 1}},
@@ -311,23 +314,10 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
         assert payload["error"]["code"] == "revision_conflict"
         assert payload["error"]["details"]["current_revision"] == 1
         assert headers.get("X-Space-Idle-Revision") == "1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):
-    runtime = GameRuntime(
-        new_game_factory=build_game_application,
-        load_factory=build_game_application_for_load,
-        save_dir=tmp_path,
-    )
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
         status, headers, payload = _request(port, "GET", path)
         assert status == 200
@@ -395,19 +385,10 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         assert payload["revision"] == 1
         assert headers["ETag"] != etag
         assert headers["ETag"] and headers["ETag"].startswith('"')
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         status, headers, body = _raw_request(port, "/")
         assert status == 200
         assert headers["Content-Type"].startswith("text/html")
@@ -415,7 +396,3 @@ def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
 
         status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
         assert status == 404
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)

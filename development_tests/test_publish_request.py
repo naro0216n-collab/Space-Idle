@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from development_tests.script_harness import (
-    commit_all, git, load_script, run_script, write_source_snapshot,
+    commit_all, git, load_script, read_content_tree_plan, run_script, write_source_snapshot,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,14 +162,11 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
 
     expected_paths = {str(chunk["path"]) for chunk in chunks}
     observed_paths: set[str] = set()
-    previous_tree = state["publish_base_tree"]
-    tree_packets = [Path(path) for path in summary["tree_packets"]]
+    tree_packets = summary["tree_packets"]
     assert len(tree_packets) == summary["tree_call_count"]
-    for index, packet_path in enumerate(tree_packets):
-        packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_tree"
+    final_tree, packets = read_content_tree_plan(tree_packets, state["publish_base_tree"])
+    for index, packet in enumerate(packets):
         assert packet["tree_batch_index"] == index
-        assert packet["action_args"]["base_tree_sha"] == previous_tree
         encoded_args = json.dumps(
             packet["action_args"], ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
@@ -179,10 +176,9 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
                 assert "content" in entry
                 assert "sha" not in entry
                 observed_paths.add(str(entry["path"]))
-        previous_tree = packet["expected_tree"]
 
     assert observed_paths == expected_paths
-    assert previous_tree == plan_data["final_tree"]
+    assert final_tree == plan_data["final_tree"]
 
     commit_packet = json.loads(Path(str(summary["commit_packet"])).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"

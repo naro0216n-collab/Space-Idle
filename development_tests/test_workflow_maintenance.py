@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from development_tests.script_harness import (
-    commit_all, git, load_script, run_script, write_source_snapshot,
+    commit_all, git, load_script, read_content_tree_plan, run_script, write_source_snapshot,
 )
 
 
@@ -97,16 +97,12 @@ def test_workflow_maintenance_generates_complete_content_tree_plan_and_requires_
     assert plan["normal_pre_ref_helper_round_trips"] == 0
     assert plan["tree_packets"]
 
-    previous_tree = plan["base_tree"]
-    for packet_path in plan["tree_packets"]:
-        packet = json.loads(Path(packet_path).read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_tree"
-        assert packet["action_args"]["base_tree_sha"] == previous_tree
+    final_tree, packets = read_content_tree_plan(plan["tree_packets"], plan["base_tree"])
+    for packet in packets:
         for element in packet["action_args"]["tree_elements"]:
             if element.get("sha") is not None:
                 assert "content" in element
-        previous_tree = packet["expected_tree"]
-    assert previous_tree == target_tree
+    assert final_tree == target_tree
 
     commit_packet = json.loads(Path(plan["commit_packet"]).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"

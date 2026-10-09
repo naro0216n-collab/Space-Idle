@@ -4,7 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from development_tests.script_harness import commit_all, git, load_script, run_script
+from development_tests.script_harness import (
+    commit_all, git, load_script, read_content_tree_plan, run_script,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL = ROOT / "scripts" / "publish_control_maintenance.py"
@@ -55,19 +57,15 @@ def test_control_maintenance_uses_content_tree_plan_and_direct_commit_to_ref_seq
     assert plan["normal_pre_ref_helper_round_trips"] == 0
     assert plan["tree_packets"]
 
+    final_tree, packets = read_content_tree_plan(plan["tree_packets"], base_tree)
     observed: set[str] = set()
-    previous_tree = base_tree
-    for packet_path in plan["tree_packets"]:
-        packet = json.loads(Path(packet_path).read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_tree"
-        assert packet["action_args"]["base_tree_sha"] == previous_tree
+    for packet in packets:
         for element in packet["action_args"]["tree_elements"]:
             assert "content" in element
             assert "sha" not in element
             observed.add(element["path"])
-        previous_tree = packet["expected_tree"]
     assert observed == set(CONTROL_PATHS)
-    assert previous_tree == plan["expected_tree"]
+    assert final_tree == plan["expected_tree"]
 
     commit_packet = json.loads(Path(plan["commit_packet"]).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"

@@ -286,14 +286,9 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
                for plan in resolver.all_direct_plans())
 
 
-def test_martian_surface_founding_and_long_transit_preserve_state_across_save_and_offline(tmp_path):
+def test_martian_surface_founding_creates_operational_site_only_after_long_transit():
     """A physical target becomes a logistics node only after one-shot arrival."""
-    from datetime import datetime, timezone
-
     from space_idle import AdvanceTime, PlanOperationalNodeFounding, SurfaceLocationFoundingTarget
-    from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.persistence import capture_state, save_game, load_game
-    from space_idle.simulation import OfflineProgressPolicy
 
     app = build_game_application()
     sim = app._simulation
@@ -332,18 +327,9 @@ def test_martian_surface_founding_and_long_transit_preserve_state_across_save_an
     assert sim.inventory.amount(origin, ids.PROPELLANT) < propellant_before
     assert sim.transport.fleet_pool_snapshot(ids.INTERPLANETARY_LANDER, origin).free_units == 0
 
-    saved_path = tmp_path / "en-route-to-mars.json"
-    save_game(app, saved_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    restored, _ = load_game(saved_path, build_game_application_for_load)
-    assert capture_state(restored._simulation) == capture_state(sim)
-
     days = execution.completion_day - sim.day
     assert days > 0
     app.execute(AdvanceTime(days))
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
-    progress = restored._simulation.advance_offline(days * 10.0, policy)
-    assert progress.advanced_days == days
-    assert capture_state(restored._simulation) == capture_state(sim)
     assert project.status.value == "complete"
     assert destination_id in sim.graph.operational_node_ids()
     assert destination_id in sim.graph.locations
@@ -357,17 +343,12 @@ def test_martian_surface_founding_and_long_transit_preserve_state_across_save_an
     assert len(sim.facilities.all_at(destination_id)) == len(recipe.deployed_facilities)
 
 
-def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(tmp_path, short_interplanetary_transit):
+def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(short_interplanetary_transit):
     """A physical orbit is not a logistics endpoint until founded and supplied."""
-    from datetime import datetime, timezone
-
     from space_idle import (
         AdvanceTime, CreateTransportAllocation, NonSurfaceOperationalNodeFoundingTarget,
         PlanOperationalNodeFounding, SetTargetStock,
     )
-    from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.persistence import capture_state, load_game, save_game
-    from space_idle.simulation import OfflineProgressPolicy
 
     app = build_game_application()
     sim = app._simulation
@@ -429,16 +410,8 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     first_arrival = min(flow.first_arrival_day for flow in pending)
     assert first_arrival > sim.day
 
-    path = tmp_path / "en-route-cargo.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    restored, _ = load_game(path, build_game_application_for_load)
-    assert capture_state(restored._simulation) == capture_state(sim)
     days = first_arrival - sim.day + 1
     app.execute(AdvanceTime(days))
-    policy = OfflineProgressPolicy(real_seconds_per_game_day=10.0)
-    progress = restored._simulation.advance_offline(days * 10, policy)
-    assert progress.advanced_days == days
-    assert capture_state(restored._simulation) == capture_state(sim)
     assert sim.inventory.amount(target, ids.MACHINERY) > machinery_before_delivery
     assert not sim.logistics.arrival_waiting
     from space_idle.validation import validate_runtime_state

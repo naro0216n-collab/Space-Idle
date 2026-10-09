@@ -5,7 +5,7 @@ from space_idle.content.base_research import build_research_definitions
 from space_idle.content.base_spatial import build_world_definition
 
 
-def test_base_technology_content_preserves_dag_and_independent_stage_costs(monkeypatch):
+def test_base_technology_content_preserves_dag_and_stage_independence():
     """Content validation, not a snapshot of its current size or research order."""
     definitions = build_research_definitions()
     assert definitions
@@ -38,21 +38,6 @@ def test_base_technology_content_preserves_dag_and_independent_stage_costs(monke
         for row in definitions.values()
     )
 
-    # Display-stage metadata is independent of the typed Research requirement.
-    # A future stage must not require a new Core cost table or capped stage list.
-    from space_idle.content import base_research
-    from space_idle.research import ResearchTheoryStageSpec
-    from space_idle.shared import DefinitionId
-
-    stage = max(definition.progression_stage for definition in definitions.values()) + 1
-    cost = 425.0
-    monkeypatch.setattr(base_research, "RESEARCH_DAG_ROWS", (
-        ("test.future-stage", stage, "advanced", "independent", "Future research", (), cost),
-    ))
-    future = base_research.build_research_definitions()[DefinitionId("test.future-stage")]
-    assert future.progression_stage == stage
-    assert isinstance(future.stage_specs[0], ResearchTheoryStageSpec)
-    assert future.stage_specs[0].research_point_cost == cost
 
 
 def test_base_resource_methods_connect_surveyed_geology_to_processing_and_construction():

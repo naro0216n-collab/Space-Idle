@@ -95,3 +95,22 @@ def write_source_snapshot(
         "refs/heads/develop", "refs/space-idle/publish-base",
     )
     return directory
+
+
+def read_content_tree_plan(packet_paths, base_tree: str) -> tuple[str, list[dict]]:
+    """Verify the shared ordered GitHub tree protocol once for every publish path.
+
+    Each maintenance/transport test then checks only its own packet payload and
+    branch-specific semantics rather than reproducing the protocol assertions.
+    """
+    import json
+
+    previous_tree = base_tree
+    packets = []
+    for path in packet_paths:
+        packet = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_tree"
+        assert packet["action_args"]["base_tree_sha"] == previous_tree
+        packets.append(packet)
+        previous_tree = packet["expected_tree"]
+    return previous_tree, packets
