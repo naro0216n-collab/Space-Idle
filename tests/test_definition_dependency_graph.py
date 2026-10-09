@@ -348,3 +348,39 @@ def test_comparison_accepts_distinct_validated_scenario_definitions_without_muta
     assert change["variant_initial"] - change["baseline_initial"] == 10.0
     assert change["final_difference"] is not None
     assert build_standard_scenario_definition() == initial
+
+
+def test_definition_coverage_distinguishes_missing_supply_from_terminal_technology():
+    from space_idle.analysis_coverage import inspect_definition_coverage
+
+    app = build_game_application()
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    findings = inspect_definition_coverage(graph)
+    assert not any(row.code == "required_capability_without_definition_supplier" for row in findings)
+    terminal = tuple(row for row in findings if row.code == "technology_without_declared_downstream_outlet")
+    assert terminal
+    assert all(row.significance == "informational" and row.evidence for row in terminal)
+    assert all(row.subject.kind == "technology" for row in terminal)
+    assert inspect_definition_coverage(graph) == findings
+
+    # A known capability node is not proof that any physical Definition
+    # supplies it. Only a supply edge is evidence of an authored provider.
+    from space_idle.analysis_graph import DependencyDefinitionGraph, DependencyNode, DependencyRelation
+    capability = DependencyNode("capability", "test.unavailable")
+    consumer = DependencyNode("process", "test.process")
+    missing = DependencyDefinitionGraph((capability, consumer), (
+        DependencyRelation("requires_capability", capability, consumer,
+                           "process:test.process:required_capabilities"),
+    ), ())
+    gaps = inspect_definition_coverage(missing)
+    assert len(gaps) == 1
+    assert gaps[0].code == "required_capability_without_definition_supplier"
+    assert gaps[0].evidence == ("process:test.process:required_capabilities",)
+    assert gaps[0].to_json_data()["subject"]["id"] == "test.unavailable"
+
+    connected = DependencyDefinitionGraph((capability, consumer, DependencyNode("facility", "supplier")), (
+        *missing.relations,
+        DependencyRelation("supplies_capability", DependencyNode("facility", "supplier"),
+                           capability, "facility:supplier:capability_supplies"),
+    ), ())
+    assert not inspect_definition_coverage(connected)
