@@ -336,6 +336,8 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                     if not params.get("movement_plan_id")
                     else tuple(params["movement_plan_id"])
                 ),
+                carrier_vehicle_definition_id=_one(params, "carrier_vehicle_definition_id"),
+                carrier_units=int(_one(params, "carrier_units") or 1),
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":

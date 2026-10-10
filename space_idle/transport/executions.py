@@ -62,6 +62,7 @@ class MovementExecutionMixin:
         *,
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
+        payload_fleet_commitment_id: EntityId | None = None,
         day: int = 0,
         physical_departure_supply_node_id: SpatialNodeId | None = None,
     ) -> MovementExecution:
@@ -152,6 +153,7 @@ class MovementExecutionMixin:
             started_day=day,
             completion_day=day + max(1, latency_days),
             payload_resources=payload_resources,
+            payload_fleet_commitment_id=payload_fleet_commitment_id,
             passenger_accommodation=(vehicle.passengers if kind is MovementExecutionKind.PASSENGER_TRANSFER else None),
         )
         self.movement_executions[execution_id] = execution
@@ -167,6 +169,7 @@ class MovementExecutionMixin:
         *,
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
+        payload_fleet_commitment_id: EntityId | None = None,
         day: int = 0,
     ) -> MovementExecution:
         plans = tuple(self.require_movement_plan(plan_id) for plan_id in path)
@@ -178,6 +181,7 @@ class MovementExecutionMixin:
             plans,
             payload_t_per_unit=payload_t_per_unit,
             payload_resources=payload_resources,
+            payload_fleet_commitment_id=payload_fleet_commitment_id,
             day=day,
         )
 

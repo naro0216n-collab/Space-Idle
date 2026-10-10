@@ -108,6 +108,9 @@ class TransportCommandHandlerMixin:
                     if command.movement_hard_constraint is None
                     else tuple(MovementPlanId(value) for value in command.movement_hard_constraint)
                 ),
+                carrier_vehicle_definition_id=(None if command.carrier_vehicle_definition_id is None
+                    else DefinitionId(command.carrier_vehicle_definition_id)),
+                carrier_units=command.carrier_units,
                 day=sim.day,
             )
             return CommandResult(str(relocation_id))

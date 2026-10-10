@@ -850,3 +850,118 @@ def test_available_transport_capacity_reflects_execution_constraints_without_cha
     assert any("research_lab" in blocker for blocker in blocked_plan.blockers)
     assert blocked_snapshot.nominal.forward_t_per_day > 0
     assert blocked_snapshot.available == DirectionalCapacity()
+
+
+def test_carried_fleet_uses_physical_payload_and_exclusive_owner_through_save_load(tmp_path):
+    """A Vehicle with no ascent capability can travel as actual Carrier payload."""
+    from datetime import datetime, timezone
+    from space_idle import AdvanceTime, GetFleetRelocationPreview, RelocateFleet
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import capture_state, load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    fleet = sim.transport
+    cargo_vehicle = ids.ORBITAL_OBSERVATION_SPACECRAFT
+    carrier_vehicle = ids.REUSABLE_LAUNCH_VEHICLE
+    fleet.add_fleet_units(cargo_vehicle, 1, ids.EARTH, day=sim.day)
+    fleet.add_fleet_units(carrier_vehicle, 1, ids.EARTH, day=sim.day)
+    original_owned = fleet.fleet_owned_units()
+    original_payload_at_destination = fleet.fleet_pool_snapshot(cargo_vehicle, ids.LEO).total_units
+    original_carrier_at_origin = fleet.fleet_pool_snapshot(carrier_vehicle, ids.EARTH).total_units
+
+    autonomous = app.query(GetFleetRelocationPreview(
+        str(cargo_vehicle), 1, str(ids.EARTH), str(ids.LEO),
+    ))
+    assert not autonomous.feasible and autonomous.path == ()
+    carried = app.query(GetFleetRelocationPreview(
+        str(cargo_vehicle), 1, str(ids.EARTH), str(ids.LEO),
+        carrier_vehicle_definition_id=str(carrier_vehicle),
+    ))
+    assert carried.feasible
+    assert carried.payload_mass_t == fleet.vehicle_defs[cargo_vehicle].dry_mass_t
+    assert carried.carrier_vehicle_definition_id == str(carrier_vehicle)
+    assert carried.arrival_day is not None
+
+    app.execute(RelocateFleet(
+        str(cargo_vehicle), 1, str(ids.EARTH), str(ids.LEO),
+        carrier_vehicle_definition_id=str(carrier_vehicle),
+    ))
+    validate_runtime_state(sim)
+    assert fleet.fleet_owned_units() == original_owned
+    assert not app.query(GetFleetRelocationPreview(
+        str(cargo_vehicle), 1, str(ids.EARTH), str(ids.LEO),
+        carrier_vehicle_definition_id=str(carrier_vehicle),
+    )).feasible
+
+    app.execute(AdvanceTime(1))
+    validate_runtime_state(sim)
+    assert fleet.fleet_owned_units() == original_owned
+    assert fleet.fleet_pool_snapshot(cargo_vehicle, ids.LEO).total_units == original_payload_at_destination
+    relocation = next(iter(fleet.fleet_relocations.values()))
+    assert relocation.movement_execution_id is not None
+    assert relocation.carrier_fleet_commitment_id is not None
+    movement = fleet.movement_executions[relocation.movement_execution_id]
+    assert movement.payload_fleet_commitment_id == relocation.fleet_commitment_id
+    assert movement.fleet_commitment_id == relocation.carrier_fleet_commitment_id
+
+    path = tmp_path / 'carrier.json'
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    restored, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    remaining = movement.completion_day - sim.day
+    app.execute(AdvanceTime(remaining + 1))
+    restored.execute(AdvanceTime(remaining + 1))
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert fleet.fleet_owned_units() == original_owned
+    assert fleet.fleet_pool_snapshot(cargo_vehicle, ids.LEO).total_units == original_payload_at_destination + 1
+    assert fleet.fleet_pool_snapshot(carrier_vehicle, ids.EARTH).total_units == original_carrier_at_origin
+    assert not fleet.fleet_relocations
+    validate_runtime_state(sim)
+
+    # Offline catch-up uses the same canonical Movement and Fleet settlement.
+    from datetime import timedelta
+    from space_idle.simulation import OfflineProgressPolicy
+    offline, result = load_game(
+        path, build_game_application_for_load,
+        now=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=remaining + 1),
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0,
+                                            max_game_days_per_resume=max(30, remaining + 1)),
+    )
+    assert result is not None and result.advanced_days == remaining + 1
+    assert capture_state(offline._simulation) == capture_state(sim)
+
+
+def test_carrier_relocation_feasibility_rejects_overload_and_exclusive_fleet_shortage():
+    """Payload and carrier units are finite independent commitments, even for the same type."""
+    from space_idle import GetFleetRelocationPreview, RelocateFleet
+    from space_idle.persistence import capture_state
+    from space_idle.app_contracts.common import ApplicationError
+
+    app = build_game_application()
+    sim = app._simulation
+    fleet = sim.transport
+    payload = ids.ORBITAL_OBSERVATION_SPACECRAFT
+    carrier = ids.REUSABLE_LAUNCH_VEHICLE
+    fleet.add_fleet_units(payload, 15, ids.EARTH, day=sim.day)
+    fleet.add_fleet_units(carrier, 1, ids.EARTH, day=sim.day)
+    original = capture_state(sim)
+
+    cases = (
+        (payload, 1, carrier, fleet.fleet_free_units(carrier, ids.EARTH) + 1),  # more Carrier units than exist
+        (payload, 15, carrier, 1),  # available Fleet, but greater than actual payload capacity
+        (carrier, 1, carrier, 1),  # the same free unit cannot be both cargo and Carrier
+    )
+    for vehicle_id, units, carrier_id, carrier_units in cases:
+        preview = app.query(GetFleetRelocationPreview(
+            str(vehicle_id), units, str(ids.EARTH), str(ids.LEO),
+            carrier_vehicle_definition_id=str(carrier_id), carrier_units=carrier_units,
+        ))
+        assert not preview.feasible and preview.blockers
+        with pytest.raises(ApplicationError):
+            app.execute(RelocateFleet(
+                str(vehicle_id), units, str(ids.EARTH), str(ids.LEO),
+                carrier_vehicle_definition_id=str(carrier_id), carrier_units=carrier_units,
+            ))
+        assert capture_state(sim) == original
+    validate_runtime_state(sim)

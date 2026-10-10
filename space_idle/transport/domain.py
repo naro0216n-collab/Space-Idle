@@ -138,6 +138,7 @@ def _capture_movement_execution(row: MovementExecution) -> dict[str, Any]:
         "owner_id": str(row.owner_id),
         "kind": row.kind.value,
         "fleet_commitment_id": str(row.fleet_commitment_id),
+        "payload_fleet_commitment_id": None if row.payload_fleet_commitment_id is None else str(row.payload_fleet_commitment_id),
         "payload_t_per_unit": row.payload_t_per_unit,
         "started_day": row.started_day,
         "completion_day": row.completion_day,
@@ -177,7 +178,7 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
     data = require_fields(
         value,
         {
-            "id", "owner_id", "kind", "fleet_commitment_id", "payload_t_per_unit",
+            "id", "owner_id", "kind", "fleet_commitment_id", "payload_fleet_commitment_id", "payload_t_per_unit",
             "started_day", "completion_day", "payload_resources", "legs", "passenger_accommodation",
         },
         field,
@@ -275,6 +276,8 @@ def _restore_movement_execution(value: Any, field: str) -> MovementExecution:
         fleet_commitment_id=EntityId(
             decode_str(data["fleet_commitment_id"], f"{field} fleet_commitment_id")
         ),
+        payload_fleet_commitment_id=(None if data["payload_fleet_commitment_id"] is None
+            else EntityId(decode_str(data["payload_fleet_commitment_id"], f"{field} payload_fleet_commitment_id"))),
         legs=tuple(legs),
         payload_t_per_unit=decode_float(
             data["payload_t_per_unit"], f"{field} payload_t_per_unit"
@@ -344,6 +347,9 @@ def capture_transport(sim: Any) -> dict[str, Any]:
                 "vehicle_definition_id": str(row.vehicle_definition_id),
                 "requested_units": row.requested_units,
                 "fleet_commitment_id": str(row.fleet_commitment_id),
+                "carrier_vehicle_definition_id": None if row.carrier_vehicle_definition_id is None else str(row.carrier_vehicle_definition_id),
+                "carrier_units": row.carrier_units,
+                "carrier_fleet_commitment_id": None if row.carrier_fleet_commitment_id is None else str(row.carrier_fleet_commitment_id),
                 "source_id": str(row.source_id),
                 "destination_id": str(row.destination_id),
                 "requested_day": row.requested_day,
@@ -576,6 +582,7 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
     tr.fleet_relocations = {}
     relocation_fields = {
         "id", "vehicle_definition_id", "requested_units", "fleet_commitment_id",
+        "carrier_vehicle_definition_id", "carrier_units", "carrier_fleet_commitment_id",
         "source_id", "destination_id", "requested_day", "path", "priority",
         "movement_execution_id", "resource_needs",
     }
@@ -626,6 +633,11 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
             ),
             resource_needs=tuple(resource_needs),
             priority=decode_int(row["priority"], "transport priority"),
+            carrier_vehicle_definition_id=(None if row["carrier_vehicle_definition_id"] is None
+                else DefinitionId(decode_str(row["carrier_vehicle_definition_id"], "fleet carrier vehicle"))),
+            carrier_units=decode_int(row["carrier_units"], "fleet carrier units"),
+            carrier_fleet_commitment_id=(None if row["carrier_fleet_commitment_id"] is None
+                else EntityId(decode_str(row["carrier_fleet_commitment_id"], "fleet carrier commitment"))),
             movement_execution_id=(
                 None if row["movement_execution_id"] is None
                 else EntityId(
@@ -1026,7 +1038,7 @@ def validate_transport_runtime(sim: Any) -> None:
         _require(pool.total_units >= 0, f"negative fleet total: {vehicle_definition_id}/{location_id}")
         _require(tr.fleet_free_units(vehicle_definition_id, location_id) >= 0, f"fleet pool overcommitted: {vehicle_definition_id}/{location_id}")
 
-    movement_commitments: dict[EntityId, EntityId] = {}
+    movement_commitments: dict[EntityId, set[EntityId]] = {}
     for commitment_id, commitment in tr.fleet_commitments.items():
         _require(commitment_id == commitment.id, f"fleet commitment key mismatch: {commitment_id}")
         _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"fleet commitment references unknown vehicle definition: {commitment_id}")
@@ -1053,8 +1065,10 @@ def validate_transport_runtime(sim: Any) -> None:
             _require(sim.graph.has_operational_node(commitment.operational_node_id), f"fleet commitment references unknown location: {commitment_id}")
         if commitment.movement_execution_id is not None:
             _require(commitment.movement_execution_id in tr.movement_executions, f"moving Fleet commitment references missing MovementExecution: {commitment_id}")
-            _require(commitment.movement_execution_id not in movement_commitments, f"MovementExecution is owned by multiple Fleet commitments: {commitment.movement_execution_id}")
-            movement_commitments[commitment.movement_execution_id] = commitment_id
+            execution = tr.movement_executions[commitment.movement_execution_id]
+            _require(commitment_id in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id),
+                     f"Fleet commitment has no ownership in MovementExecution: {commitment_id}")
+            movement_commitments.setdefault(commitment.movement_execution_id, set()).add(commitment_id)
 
         owner = commitment.owner_activity_ref
         _require(
@@ -1077,7 +1091,7 @@ def validate_transport_runtime(sim: Any) -> None:
             relocation = tr.fleet_relocations.get(owner.activity_id)
             _require(relocation is not None, f"relocation Fleet commitment references unknown relocation: {commitment_id}/{owner.activity_id}")
             if relocation is not None:
-                _require(commitment_id == relocation.fleet_commitment_id, f"relocation Fleet commitment id mismatch: {commitment_id}/{relocation.id}")
+                _require(commitment_id in (relocation.fleet_commitment_id, relocation.carrier_fleet_commitment_id), f"relocation Fleet commitment id mismatch: {commitment_id}/{relocation.id}")
         elif owner.activity_type == "fleet_release":
             release = tr.fleet_releases.get(owner.activity_id)
             _require(release is not None, f"release Fleet commitment references unknown release: {commitment_id}/{owner.activity_id}")
@@ -1120,13 +1134,31 @@ def validate_transport_runtime(sim: Any) -> None:
                 _require(commitment.movement_execution_id is None, f"pending fleet relocation commitment is moving: {relocation_id}")
             else:
                 _require(commitment.movement_execution_id == relocation.movement_execution_id, f"moving fleet relocation commitment execution mismatch: {relocation_id}")
+        _require((relocation.carrier_vehicle_definition_id is None) == (relocation.carrier_fleet_commitment_id is None),
+                 f"fleet relocation carrier ownership incomplete: {relocation_id}")
+        if relocation.carrier_fleet_commitment_id is not None:
+            carrier = tr.fleet_commitments.get(relocation.carrier_fleet_commitment_id)
+            _require(carrier is not None, f"fleet relocation missing carrier commitment: {relocation_id}")
+            if carrier is not None:
+                _require(carrier.owner_activity_ref == FleetActivityRef("fleet_relocation", relocation_id), f"fleet relocation carrier owner mismatch: {relocation_id}")
+                _require(carrier.vehicle_definition_id == relocation.carrier_vehicle_definition_id, f"fleet relocation carrier vehicle mismatch: {relocation_id}")
+                _require(carrier.quantity == relocation.carrier_units, f"fleet relocation carrier unit mismatch: {relocation_id}")
+                if relocation.movement_execution_id is None:
+                    _require(carrier.operational_node_id == relocation.source_id, f"fleet relocation carrier source mismatch: {relocation_id}")
+                else:
+                    _require(carrier.movement_execution_id == relocation.movement_execution_id, f"fleet relocation carrier Movement mismatch: {relocation_id}")
         if relocation.movement_execution_id is not None:
             execution = tr.movement_executions.get(relocation.movement_execution_id)
             _require(execution is not None, f"fleet relocation missing MovementExecution: {relocation_id}")
             if execution is not None:
                 _require(execution.owner_id == relocation.id, f"fleet relocation MovementExecution owner mismatch: {relocation_id}")
                 _require(execution.kind is MovementExecutionKind.FLEET_RELOCATION, f"fleet relocation MovementExecution kind mismatch: {relocation_id}")
-                _require(execution.fleet_commitment_id == relocation.fleet_commitment_id, f"fleet relocation MovementExecution commitment mismatch: {relocation_id}")
+                _require(execution.fleet_commitment_id == (relocation.carrier_fleet_commitment_id or relocation.fleet_commitment_id), f"fleet relocation MovementExecution commitment mismatch: {relocation_id}")
+                _require(execution.payload_fleet_commitment_id == (relocation.fleet_commitment_id if relocation.carrier_fleet_commitment_id else None), f"fleet relocation MovementExecution payload mismatch: {relocation_id}")
+                if relocation.carrier_fleet_commitment_id is not None:
+                    _require(abs(execution.payload_t_per_unit * relocation.carrier_units -
+                        tr.vehicle_defs[relocation.vehicle_definition_id].dry_mass_t * relocation.requested_units) <= 1e-7,
+                        f"fleet relocation carrier cargo mass mismatch: {relocation_id}")
                 _require(execution.origin.operational_node_id == relocation.source_id, f"fleet relocation MovementExecution origin mismatch: {relocation_id}")
                 _require(execution.destination.operational_node_id == relocation.destination_id, f"fleet relocation MovementExecution destination mismatch: {relocation_id}")
 
@@ -1138,6 +1170,9 @@ def validate_transport_runtime(sim: Any) -> None:
         if commitment is not None:
             _require(commitment.movement_execution_id == execution_id, f"movement execution is not owned by its Fleet commitment: {execution_id}")
             _require(commitment.vehicle_definition_id in tr.vehicle_defs, f"movement Fleet commitment references unknown vehicle definition: {execution_id}")
+        _require(movement_commitments.get(execution_id, set()) == {
+            row for row in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id) if row is not None
+        }, f"movement execution commitment ownership mismatch: {execution_id}")
         _require(execution.started_day < execution.completion_day, f"movement execution has invalid timing: {execution_id}")
         _require(bool(execution.legs), f"movement execution has no legs: {execution_id}")
         _require(execution.latency_days == execution.completion_day - execution.started_day, f"movement execution latency mismatch: {execution_id}")

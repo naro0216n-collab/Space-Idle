@@ -100,3 +100,5 @@ class RelocateFleet:
     source_id: str
     destination_id: str
     movement_hard_constraint: tuple[str, ...] | None = None
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 1

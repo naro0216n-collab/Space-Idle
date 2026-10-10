@@ -149,6 +149,8 @@ class FleetRelocationRow:
     destination_id: str
     departure_day: int | None
     arrival_day: int | None
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 0
 
 
 @dataclass(frozen=True)

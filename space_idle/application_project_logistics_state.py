@@ -203,6 +203,8 @@ class LogisticsStateProjectorMixin:
                     if row.movement_execution_id is None
                     else sim.transport.movement_execution_snapshot(row.movement_execution_id).completion_day
                 ),
+                None if row.carrier_vehicle_definition_id is None else str(row.carrier_vehicle_definition_id),
+                row.carrier_units,
             )
             for row in sim.transport.fleet_relocation_snapshots()
             if (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
@@ -545,6 +547,9 @@ class LogisticsStateProjectorMixin:
                 if query.movement_hard_constraint is None
                 else tuple(query.movement_hard_constraint)
             ),
+            carrier_vehicle_definition_id=(None if query.carrier_vehicle_definition_id is None
+                else DefinitionId(query.carrier_vehicle_definition_id)),
+            carrier_units=query.carrier_units,
             day=sim.day,
         )
         definition = self._vehicle_definition(plan.vehicle_definition_id)
@@ -570,6 +575,10 @@ class LogisticsStateProjectorMixin:
             ),
             infrastructure_requirements=infrastructure_requirement_rows(plan),
             feasible=plan.feasible,
+            carrier_vehicle_definition_id=(None if plan.carrier_vehicle_definition_id is None
+                else str(plan.carrier_vehicle_definition_id)),
+            carrier_units=plan.carrier_units,
+            payload_mass_t=plan.payload_mass_t,
             blockers=constraints_from_codes(
                 plan.blockers,
                 affected_action="relocate_fleet",

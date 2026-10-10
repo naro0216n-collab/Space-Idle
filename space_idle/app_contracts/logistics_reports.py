@@ -54,6 +54,9 @@ class FleetRelocationPreviewView:
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     feasible: bool
     blockers: tuple[DecisionConstraintRow, ...]
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 0
+    payload_mass_t: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -160,8 +160,17 @@ class FleetRelocation:
     resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     movement_execution_id: EntityId | None = None
+    carrier_vehicle_definition_id: DefinitionId | None = None
+    carrier_units: int = 0
+    carrier_fleet_commitment_id: EntityId | None = None
 
     def __post_init__(self) -> None:
+        if (self.carrier_vehicle_definition_id is None) != (self.carrier_fleet_commitment_id is None):
+            raise ValueError("carrier Vehicle and commitment must be specified together")
+        if self.carrier_units < 0 or (self.carrier_vehicle_definition_id is not None and self.carrier_units <= 0):
+            raise ValueError("carrier unit count must be positive when carrying Fleet")
+        if self.carrier_vehicle_definition_id is None and self.carrier_units:
+            raise ValueError("carrier units without a carrier Vehicle")
         self.priority = ActivityPriority(self.priority)
         if self.requested_units <= 0:
             raise ValueError("fleet relocation requested units must be positive")
@@ -196,6 +205,9 @@ class FleetRelocationPlan:
     resource_requirements: tuple[FleetRelocationResourceRequirement, ...] = ()
     infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
+    carrier_vehicle_definition_id: DefinitionId | None = None
+    carrier_units: int = 0
+    payload_mass_t: float = 0.0
 
     @property
     def feasible(self) -> bool:
@@ -668,8 +680,13 @@ class MovementExecution:
     completion_day: int
     payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
     passenger_accommodation: PassengerAccommodation | None = None
+    payload_fleet_commitment_id: EntityId | None = None
 
     def __post_init__(self) -> None:
+        if self.payload_fleet_commitment_id == self.fleet_commitment_id:
+            raise ValueError("a Carrier cannot carry its own Fleet commitment")
+        if self.payload_fleet_commitment_id is not None and self.kind is not MovementExecutionKind.FLEET_RELOCATION:
+            raise ValueError("carried Fleet payload requires Fleet relocation")
         if not self.legs:
             raise ValueError("movement execution requires at least one leg")
         if self.payload_t_per_unit < -1e-9:
