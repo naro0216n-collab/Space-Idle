@@ -302,7 +302,8 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     a running game or inventing a second supply / tech eligibility evaluator.
     """
     from space_idle.application_commands import (GetCatalog, GetOperationalNode,
-        GetResearch, SetFacilityProcess, AdvanceTime, ApplicationError)
+        GetResearch, StartResearch, SetResearchPrototypeSite,
+        SetFacilityProcess, AdvanceTime, ApplicationError)
     from space_idle.persistence import save_game, load_game
     from space_idle.bootstrap import build_game_application_for_load
     from space_idle.validation_support import ConfigurationError
@@ -318,8 +319,13 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
              {"stage_type": "theory", "stage_id": "concept", "research_point_cost": 1.0},
              {"stage_type": "prototype", "stage_id": "bench", "required_work": 1.0,
               "resources": {resource_id: 0.5},
-              "site_requirements": {"capabilities": ["basic_structural_material"],
-                                    "spatial_classifications": ["SURFACE"]}},
+              "site_requirements": {"capabilities": [
+                  {"capability_id": "basic_structural_material", "required_state": "ACTIVE"}],
+                  "spatial_classifications": [
+                  {"classification": "SURFACE", "code": "prototype:surface",
+                   "description": "試作には地表の作業場所が必要"}]},
+              "execution_requirements": [{"service_type": "research_execution",
+                                          "amount_per_execution": 1.0, "scope": "ORGANIZATION"}]},
          ]}},
         {"operation": "add", "kind": "process", "id": process_id,
          "definition": {"display_name": "実験用代替製法",
@@ -348,7 +354,22 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     added_stages = app._simulation.research.definitions[DefinitionId(research_id)].stage_specs
     assert len(added_stages) == 2
     site_requirement = added_stages[1].site_requirements.spatial_classification_requirements[0]
-    assert site_requirement.code == "site:spatial_classification:SURFACE"
+    assert site_requirement.code == "prototype:surface"
+    assert site_requirement.description == "試作には地表の作業場所が必要"
+    assert added_stages[1].execution_requirements[0].service_type == "research_execution"
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    assert not graph.diagnostics
+    stage_node = DependencyNode("research_stage", research_id + "/bench")
+    assert any(row.kind == "requires_site_capability" and row.target == stage_node
+               and row.condition == "required_state:ACTIVE" for row in graph.relations)
+    assert any(row.kind == "requires_site_classification" and row.target == stage_node
+               and row.provenance.endswith("prototype:surface") for row in graph.relations)
+    assert any(row.kind == "requires_execution_capacity" and row.target == stage_node
+               and row.source == DependencyNode("service_capacity", "research_execution")
+               and row.condition == "scope:ORGANIZATION" for row in graph.relations)
+    assert any(row.kind == "consumes_resource" and row.target == stage_node
+               and row.source == DependencyNode("resource", resource_id) for row in graph.relations)
     industry = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
                     if any(option.process_id == process_id for option in row.process_options))
     locked = next(option for option in industry.process_options if option.process_id == process_id)
@@ -356,6 +377,45 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     with pytest.raises(ApplicationError):
         app.execute(SetFacilityProcess(industry.facility_id, process_id))
     assert app._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id)) == 20.0
+
+    # The new authored Technology must also be obtainable through the actual
+    # Research Stage lifecycle, rather than only a pre-completed Scenario flag.
+    # Its typed Site and finite Service constraints are evaluated by Research,
+    # not by an experiment-specific approximation.
+    researched = factory()
+    researched.execute(StartResearch(research_id))
+    for _ in range(8):
+        research_row = next(item for item in researched.query(GetResearch()).items if item.id == research_id)
+        if research_row.current_stage_id == "bench":
+            break
+        researched.execute(AdvanceTime(1))
+    assert research_row.current_stage_id == "bench"
+    earth_site = next(site for site in research_row.execution_context_options
+                      if site.operational_node_id == str(ids.EARTH))
+    assert earth_site.can_select
+    orbital_site = next(site for site in research_row.execution_context_options
+                        if site.operational_node_id == str(ids.LEO))
+    assert not orbital_site.can_select
+    assert any(blocker.code == "prototype:surface" for blocker in orbital_site.blockers)
+    with pytest.raises(ApplicationError):
+        researched.execute(SetResearchPrototypeSite(research_id, "bench", str(ids.LEO)))
+    researched.execute(SetResearchPrototypeSite(research_id, "bench", str(ids.EARTH)))
+    researched.execute(AdvanceTime(1))
+    stage_save = tmp_path / "research-prototype-variant.json"
+    save_game(researched, stage_save)
+    resumed, _ = load_game(stage_save, lambda: build_game_application_for_load(
+        scenario=scenario, definition_transform=lambda sim, cat: apply_content_variant(sim, cat, changes),
+    ))
+    assert capture_state(resumed._simulation) == capture_state(researched._simulation)
+    for _ in range(8):
+        if DefinitionId(research_id) in resumed._simulation.technology.completed:
+            break
+        resumed.execute(AdvanceTime(1))
+    assert DefinitionId(research_id) in resumed._simulation.technology.completed
+    assert next(option for row in resumed.query(GetOperationalNode(str(ids.EARTH))).industry
+                for option in row.process_options if option.process_id == process_id).can_select
+    assert next(option for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
+                for option in row.process_options if option.process_id == process_id).can_select is False
 
     # Acquisition and existing equipment use different criteria: this research
     # enables an explicit Process choice, not an automatic asset modification.

@@ -134,14 +134,66 @@ def _resource_amounts(raw: object, label: str) -> dict[DefinitionId, float]:
     return {DefinitionId(key): _finite_nonnegative(amount) for key, amount in raw.items()}
 
 
+def _authored_research_site(raw: object):
+    """Decode authored typed Site conditions; never infer them from Stage names."""
+    from space_idle.site import (
+        CapabilityRequirement, CapabilityRequirementState, SiteRequirements,
+        SpatialClassification, SpatialClassificationRequirement,
+    )
+
+    site = _definition_fields(raw, set(), {"capabilities", "spatial_classifications"}, "site requirements")
+    capabilities = site.get("capabilities", [])
+    classifications = site.get("spatial_classifications", [])
+    if not isinstance(capabilities, list) or not isinstance(classifications, list):
+        raise ValueError("site requirements must contain typed lists")
+    required_capabilities = []
+    for capability in capabilities:
+        item = _definition_fields(capability, {"capability_id", "required_state"}, set(), "capability")
+        if not isinstance(item["capability_id"], str) or not item["capability_id"]:
+            raise ValueError("site capability must identify a nonempty capability")
+        required_capabilities.append(CapabilityRequirement(
+            item["capability_id"], CapabilityRequirementState(item["required_state"]),
+        ))
+    required_classifications = []
+    for classification in classifications:
+        item = _definition_fields(
+            classification, {"classification", "code", "description"}, set(), "spatial classification",
+        )
+        if not isinstance(item["code"], str) or not item["code"] or not isinstance(item["description"], str) or not item["description"]:
+            raise ValueError("spatial classification requires authored blocker code and description")
+        required_classifications.append(SpatialClassificationRequirement(
+            SpatialClassification(item["classification"]), item["code"], item["description"],
+        ))
+    return SiteRequirements(
+        capability_requirements=tuple(required_capabilities),
+        spatial_classification_requirements=tuple(required_classifications),
+    )
+
+
+def _authored_research_execution(raw: object):
+    """Retain real finite Service scope when a Research Stage requests it."""
+    from space_idle.execution_requirements import ServiceCapacityRequirement
+    from space_idle.service_capacity import ServiceCapacityScope
+
+    if not isinstance(raw, list):
+        raise ValueError("research execution requirements must be a typed list")
+    requirements = []
+    for requirement in raw:
+        item = _definition_fields(
+            requirement, {"service_type", "amount_per_execution", "scope"}, set(),
+            "research service requirement",
+        )
+        requirements.append(ServiceCapacityRequirement(
+            item["service_type"], _finite_nonnegative(item["amount_per_execution"]),
+            scope=ServiceCapacityScope(item["scope"]),
+        ))
+    return tuple(requirements)
+
+
 def _new_research_stages(raw: object) -> tuple:
     from space_idle.research_models import (
         ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
         ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
-    )
-    from space_idle.site import (
-        CapabilityRequirement, CapabilityRequirementState, SiteRequirements,
-        SpatialClassification, SpatialClassificationRequirement,
     )
     if not isinstance(raw, list) or not raw:
         raise ValueError("research stage_specs must be a nonempty list")
@@ -160,30 +212,17 @@ def _new_research_stages(raw: object) -> tuple:
             required = {"stage_id", "stage_type", "required_work", "site_requirements"}
             if stage_type == "prototype":
                 required.add("resources")
-            _definition_fields(stage, required, set(), stage_type + " stage")
-            site = _definition_fields(stage["site_requirements"], set(),
-                                      {"capabilities", "spatial_classifications"}, "site requirements")
-            capabilities = site.get("capabilities", [])
-            classifications = site.get("spatial_classifications", [])
-            if not isinstance(capabilities, list) or any(not isinstance(cap, str) or not cap for cap in capabilities):
-                raise ValueError("site capabilities must be a list of IDs")
-            if not isinstance(classifications, list):
-                raise ValueError("site classifications must be a list")
-            site_requirements = SiteRequirements(
-                capability_requirements=tuple(CapabilityRequirement(cap, CapabilityRequirementState.ACTIVE)
-                                              for cap in capabilities),
-                spatial_classification_requirements=tuple(SpatialClassificationRequirement(
-                    SpatialClassification(value), "site:spatial_classification:" + value, "requires " + value + " context",
-                ) for value in classifications),
-            )
+            _definition_fields(stage, required, {"execution_requirements"}, stage_type + " stage")
+            site_requirements = _authored_research_site(stage["site_requirements"])
             work = _finite_nonnegative(stage["required_work"])
+            execution = _authored_research_execution(stage.get("execution_requirements", []))
             if stage_type == "prototype":
                 stages.append(ResearchPrototypeStageSpec(
                     stage_id, _resource_amounts(stage["resources"], "prototype resources"),
-                    site_requirements, required_work=work,
+                    site_requirements, execution, required_work=work,
                 ))
             else:
-                stages.append(ResearchDemonstrationStageSpec(stage_id, work, site_requirements))
+                stages.append(ResearchDemonstrationStageSpec(stage_id, work, site_requirements, execution))
         elif stage_type == "operational_experience":
             _definition_fields(stage, {"stage_id", "stage_type", "requirements"}, set(), "Experience stage")
             requirements = stage["requirements"]
