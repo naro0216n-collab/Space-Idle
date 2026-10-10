@@ -263,3 +263,4 @@ class ExtractionSnapshot:
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[str, ...]
+    method_id: DefinitionId

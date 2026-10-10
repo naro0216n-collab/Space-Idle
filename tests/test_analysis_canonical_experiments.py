@@ -346,6 +346,30 @@ def test_initial_facility_scenario_variants_use_regular_site_and_power_contracts
 
     original = build_game_application_for_scenario(scenario)
     variant = build_game_application_for_scenario(without_grid)
+    # The variant omitted the Grid asset, but initial Facility levels still go
+    # through normal installed Capacity and later Save/Load semantics.
+    leveled = build_game_application_for_scenario(scenario_variant(scenario, {
+        'facilities': [{
+            'definition_id': str(row.definition_id),
+            'operational_node_id': str(row.operational_node_id),
+            'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
+            'invested_resources': [[str(resource), amount] for resource, amount in row.invested_resources],
+            'level': 2 if row.definition_id == ids.METAL_ORE_MINE else 1,
+        } for row in scenario.facilities],
+    }))
+    normal_mine = next(row for row in original._simulation.facilities.facilities.values()
+                       if row.definition_id == ids.METAL_ORE_MINE)
+    leveled_mine = next(row for row in leveled._simulation.facilities.facilities.values()
+                        if row.definition_id == ids.METAL_ORE_MINE)
+    assert leveled_mine.level == 2
+    assert leveled._simulation.extraction.nominal_capacity(leveled_mine) == pytest.approx(
+        2 * original._simulation.extraction.nominal_capacity(normal_mine)
+    )
+    with pytest.raises(ValueError, match='level'):
+        scenario_variant(scenario, {'facilities': [{
+            'definition_id': str(ids.METAL_ORE_MINE),
+            'operational_node_id': str(ids.EARTH), 'level': 0,
+        }]})
     node = ids.EARTH
     original_power = original._simulation.power.snapshot(node, original._simulation.facilities, 0)
     variant_power = variant._simulation.power.snapshot(node, variant._simulation.facilities, 0)
@@ -576,6 +600,30 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     option = next(option for option in chosen.process_options if option.process_id == process_id)
     assert option.can_select
     enabled.execute(SetFacilityProcess(chosen.facility_id, process_id))
+    # A predeployed Facility's authored Process choice must use exactly the
+    # same physical interface and completed-Technology gate as SetFacilityProcess.
+    authored_process_rows = [{
+        'definition_id': str(row.definition_id),
+        'operational_node_id': str(row.operational_node_id),
+        'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
+        'invested_resources': [[str(resource), amount]
+                               for resource, amount in row.invested_resources],
+        'selected_process_id': (
+            process_id if row.definition_id == enabled._simulation.facilities.facilities[
+                EntityId(chosen.facility_id)
+            ].definition_id else None
+        ),
+    } for row in scenario.facilities]
+    initially_configured = scenario_variant(scenario, {'facilities': authored_process_rows})
+    with pytest.raises(ValueError, match='technology'):
+        factory(initially_configured)
+    initially_unlocked = scenario_variant(with_technology, {'facilities': authored_process_rows})
+    initial_process_app = factory(initially_unlocked)
+    assert any(facility.selected_process_id == DefinitionId(process_id)
+               for facility in initial_process_app._simulation.facilities.facilities.values())
+    assert any(row.process_id == process_id
+               for row in initial_process_app.query(GetOperationalNode(str(ids.EARTH))).industry)
+
     first = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
     enabled.execute(AdvanceTime(1))
     last = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
@@ -676,7 +724,7 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     assert not extraction_runs[1].rejected_commands
     assert extraction_runs[0].content_definitions_sha256 == extraction_runs[1].content_definitions_sha256
     assert extraction_runs[0].initial_state_sha256 != extraction_runs[1].initial_state_sha256
-    assert any(flow.activity_id.endswith(f':{ids.MINERAL_FEEDSTOCK}')
+    assert any(flow.activity_id.endswith(f':{ids.MINERAL_FEEDSTOCK}:{extraction_id}')
                for trace in extraction_runs[1].canonical_traces
                for flow in trace.activity_flows())
     assert all(abs(row['unattributed_delta_t']) < 1e-7

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from .domain import (
     DomainExtension, StateCodec, decode_bool, decode_dict, decode_float, decode_int,
@@ -125,7 +126,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(facility.definition_id in facility_defs, f"facility references unknown definition: {facility.id}")
         _require(facility.operational_node_id in nodes, f"facility references unknown operational node: {facility.id}")
         _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility has invalid placement: {facility.id}")
-        _require(facility.level >= 1, f"facility has invalid level: {facility.id}")
+        _require(type(facility.level) is int and facility.level >= 1,
+                 f"facility has invalid level: {facility.id}")
         _require(isinstance(facility.lifecycle, FacilityLifecycle), f"facility has invalid lifecycle: {facility.id}")
     for definition_id, spec in sim.power.specs.items():
         _require(definition_id in facility_defs, f"power spec references unknown facility: {definition_id}")
@@ -150,10 +152,13 @@ def validate_runtime(sim: Any) -> None:
         _require(facility.definition_id in sim.facilities.definitions, f"facility state has unknown definition: {facility_id}")
         _require(sim.graph.has_operational_node(facility.operational_node_id), f"facility state has unknown operational node: {facility_id}")
         _require(not sim.facilities.placement_failures(facility.definition_id, facility.operational_node_id, facility.site_cell_id), f"facility state has invalid placement: {facility_id}")
-        _require(facility.level >= 1, f"facility state has invalid level: {facility_id}")
+        _require(type(facility.level) is int and facility.level >= 1,
+                 f"facility state has invalid level: {facility_id}")
         _require(1 <= int(facility.activity_priority) <= 5, f"facility activity priority must be 1..5: {facility_id}")
         _require(1 <= int(facility.maintenance_priority) <= 5, f"facility maintenance priority must be 1..5: {facility_id}")
-        _require(all(amount >= -1e-9 for amount in facility.invested_resources.values()), f"facility has negative invested resource: {facility_id}")
+        _require(all(math.isfinite(amount) and amount >= 0
+                     for amount in facility.invested_resources.values()),
+                 f"facility has nonfinite or negative invested resource: {facility_id}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

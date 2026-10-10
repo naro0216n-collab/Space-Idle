@@ -354,9 +354,9 @@ def test_multi_method_extraction_is_a_physical_choice_from_application_to_save_a
     assert sim.extraction.method_for_facility(facility).id == source_id
     with observe_canonical_day(sim) as baseline_trace:
         app.execute(AdvanceTime(1))
-    assert any(row.activity_id == f'extraction:{facility_id}:{ids.METAL_ORE}'
+    assert any(row.activity_id == f'extraction:{facility_id}:{ids.METAL_ORE}:{source_id}'
                for row in baseline_trace.activity_flows())
-    assert not any(row.activity_id == f'extraction:{facility_id}:{ids.MINERAL_FEEDSTOCK}'
+    assert not any(row.activity_id == f'extraction:{facility_id}:{ids.MINERAL_FEEDSTOCK}:{alternative_id}'
                    for row in baseline_trace.activity_flows())
 
     sim.technology.unlock(tech_id)
@@ -373,9 +373,9 @@ def test_multi_method_extraction_is_a_physical_choice_from_application_to_save_a
 
     with observe_canonical_day(sim) as alternative_trace:
         app.execute(AdvanceTime(1))
-    assert any(row.activity_id == f'extraction:{facility_id}:{ids.MINERAL_FEEDSTOCK}'
+    assert any(row.activity_id == f'extraction:{facility_id}:{ids.MINERAL_FEEDSTOCK}:{alternative_id}'
                for row in alternative_trace.activity_flows())
-    assert not any(row.activity_id == f'extraction:{facility_id}:{ids.METAL_ORE}'
+    assert not any(row.activity_id == f'extraction:{facility_id}:{ids.METAL_ORE}:{source_id}'
                    for row in alternative_trace.activity_flows())
 
     saved_at = datetime(2026, 10, 11, tzinfo=timezone.utc)
@@ -440,7 +440,7 @@ def test_multi_method_extraction_is_a_physical_choice_from_application_to_save_a
     mine_flows = [flow for flow in paired_trace.activity_flows()
                   if flow.activity_id.startswith('extraction:')
                   and flow.resource_id in (str(ids.METAL_ORE), str(ids.MINERAL_FEEDSTOCK))]
-    assert {flow.activity_id.rsplit(':', 1)[-1] for flow in mine_flows} >= {
+    assert {flow.activity_id.split(':')[-2] for flow in mine_flows} >= {
         str(ids.METAL_ORE), str(ids.MINERAL_FEEDSTOCK),
     }
 

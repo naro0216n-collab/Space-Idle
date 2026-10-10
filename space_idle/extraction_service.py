@@ -333,14 +333,18 @@ class ExtractionService:
         provider_factors: dict[EntityId, float] | None = None,
     ) -> tuple[float, float]:
         if power is None:
-            nominal = sum(
-                self.nominal_capacity(facility)
+            compatible = [
+                (facility, spec)
                 for facility in facilities.active_compatible_at(location_id, day)
                 for spec in (self.method_for_facility(facility),)
                 if spec is not None and self.service_type(spec.resource_id) == service_type
-                and not self.missing_method_technologies(spec)
-            )
-            return (nominal, nominal)
+            ]
+            nominal = math.fsum(self.nominal_capacity(facility)
+                                for facility, _method in compatible)
+            available = math.fsum(self.nominal_capacity(facility)
+                                  for facility, method in compatible
+                                  if not self.missing_method_technologies(method))
+            return nominal, available
         nominal, enabled = self.service_supply(
             location_id, facilities, power, day, provider_factors=provider_factors
         )
@@ -570,6 +574,7 @@ class ExtractionService:
                 scale,
                 full_output.get(facility.id, 0.0) * scale,
                 tuple(dict.fromkeys(reasons)),
+                spec.id,
             ))
         return tuple(rows)
 
@@ -592,7 +597,7 @@ class ExtractionService:
                 admission = inventory.admit(
                     location_id, snapshot.output_resource_id, snapshot.output_t_per_day,
                     source_owner=f"extraction_facility:{snapshot.facility_id}",
-                    activity_id=f"extraction:{snapshot.facility_id}:{snapshot.resource_id}",
+                    activity_id=f"extraction:{snapshot.facility_id}:{snapshot.resource_id}:{snapshot.method_id}",
                 )
                 if not admission.fully_admitted:
                     raise RuntimeError("allocated extraction output exceeded Inventory Admission")

@@ -78,7 +78,7 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
         for raw in raw_rows:
             if not isinstance(raw, Mapping) or set(raw) - {
                 "definition_id", "operational_node_id", "site_cell_id", "invested_resources",
-                "selected_extraction_method_id"
+                "selected_extraction_method_id", "selected_process_id", "level"
             } or not {"definition_id", "operational_node_id"} <= set(raw):
                 raise ValueError("invalid facilities row fields")
             site = raw.get("site_cell_id")
@@ -97,12 +97,20 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
             selected_method = raw.get("selected_extraction_method_id")
             if selected_method is not None and (not isinstance(selected_method, str) or not selected_method):
                 raise ValueError("selected_extraction_method_id must be a Definition ID or null")
+            level = raw.get("level", 1)
+            if type(level) is not int or level < 1:
+                raise ValueError("facility initial level must be a positive integer")
+            selected_process = raw.get("selected_process_id")
+            if selected_process is not None and (not isinstance(selected_process, str) or not selected_process):
+                raise ValueError("selected_process_id must be a Definition ID or null")
             facilities.append(ScenarioFacility(
                 DefinitionId(str(raw["definition_id"])),
                 SpatialNodeId(str(raw["operational_node_id"])),
                 None if site is None else SurfaceCellId(site),
                 tuple(invested),
                 None if selected_method is None else DefinitionId(selected_method),
+                None if selected_process is None else DefinitionId(selected_process),
+                level,
             ))
         updated["facilities"] = tuple(facilities)
     if "funds_balance_musd" in changes:

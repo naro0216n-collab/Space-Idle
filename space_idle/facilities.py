@@ -231,11 +231,12 @@ class FacilityBook:
             if placement_failures[0][0] == "unknown_site_cell":
                 raise KeyError(site_cell_id)
             raise ValueError("; ".join(detail for _code, detail in placement_failures))
-        if level < 1:
-            raise ValueError("facility level must be positive")
+        if type(level) is not int or level < 1:
+            raise ValueError("facility level must be a positive integer")
         investment = dict(invested_resources or {})
-        if any(amount < 0 for amount in investment.values()):
-            raise ValueError("facility invested resources must be non-negative")
+        if any(type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
+               for amount in investment.values()):
+            raise ValueError("facility invested resources must be finite and non-negative")
         self._counter += 1
         entity_id = EntityId(f"facility.{self._counter}")
         self.facilities[entity_id] = FacilityState(
@@ -260,14 +261,21 @@ class FacilityBook:
     ) -> None:
         """Apply one completed level transition and retain physical investment history."""
         facility = self.facilities[facility_id]
-        if target_level != facility.level + 1:
+        if type(target_level) is not int or target_level != facility.level + 1:
             raise ValueError(
                 f"facility level transition must be sequential: {facility.level} -> {target_level}"
             )
-        for resource_id, amount in (invested_resources or {}).items():
-            if amount < 0:
-                raise ValueError("facility invested resources must be non-negative")
-            facility.invested_resources[resource_id] = facility.invested_resources.get(resource_id, 0.0) + amount
+        investment = dict(invested_resources or {})
+        if any(type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
+               for amount in investment.values()):
+            raise ValueError("facility invested resources must be finite and non-negative")
+        updated = dict(facility.invested_resources)
+        for resource_id, amount in investment.items():
+            total = updated.get(resource_id, 0.0) + amount
+            if not math.isfinite(total):
+                raise ValueError("facility invested resources must remain finite")
+            updated[resource_id] = total
+        facility.invested_resources = updated
         facility.level = target_level
 
     def pause(self, facility_id: EntityId) -> None:

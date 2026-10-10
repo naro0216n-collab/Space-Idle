@@ -456,6 +456,26 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
     next_provider_spec = provider.level_spec(facility.level + 1)
     assert before_provider_spec != next_provider_spec
     investment_before = dict(facility.invested_resources)
+    # An invalid investment must not partially modify the Facility's physical
+    # investment history or level before the real Project settlement runs.
+    with pytest.raises(ValueError, match="finite"):
+        app._simulation.facilities.upgrade_to(
+            facility.id, 2, invested_resources={
+                ids.STRUCTURAL_COMPONENTS: 1.0,
+                ids.MACHINERY: float("nan"),
+            },
+        )
+    assert facility.level == 1
+    assert facility.invested_resources == investment_before
+    with pytest.raises(ValueError, match="sequential"):
+        app._simulation.facilities.upgrade_to(facility.id, True)
+    assert facility.invested_resources == investment_before
+    from space_idle.facilities_domain import validate_runtime as validate_facility_runtime
+    from space_idle.validation_support import ConfigurationError
+    facility.invested_resources[ids.MACHINERY] = float("nan")
+    with pytest.raises(ConfigurationError, match="nonfinite"):
+        validate_facility_runtime(app._simulation)
+    facility.invested_resources = dict(investment_before)
 
     result = app.execute(
         PlanFacilityUpgrade(before_row.id, priority=5, procurement_policy="extended_wait")
