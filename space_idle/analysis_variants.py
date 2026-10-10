@@ -10,8 +10,8 @@ from math import isfinite
 from typing import Mapping, Sequence
 
 from .catalog import GameCatalog
-from .scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation
-from .shared import DefinitionId, SpatialNodeId
+from .scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility
+from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
 from .simulation import Simulation
 
 
@@ -25,7 +25,7 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
     """Override or append typed initial assets; no mutations of running Game State."""
     if not changes:
         return base
-    allowed = {"inventory_stock", "fleet", "storage_infrastructure", "initial_population",
+    allowed = {"inventory_stock", "fleet", "storage_infrastructure", "initial_population", "facilities",
                "completed_technologies", "funds_balance_musd", "operational_node_ids"}
     if set(changes) - allowed:
         raise ValueError(f"unknown Scenario variant fields: {sorted(set(changes) - allowed)}")
@@ -64,6 +64,39 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
                     != tuple(getattr(replacement, key) for key in key_fields)]
             rows.append(replacement)
         updated[name] = tuple(sorted(rows, key=lambda row: tuple(str(getattr(row, key)) for key in key_fields)))
+    if "facilities" in changes:
+        # Facilities have no authored per-instance key: two identical installed
+        # assets may coexist at one Site. Replace the complete starting set
+        # rather than ambiguously upserting by Definition or assigning IDs.
+        raw_rows = changes["facilities"]
+        if not isinstance(raw_rows, list):
+            raise ValueError("facilities must be a complete list of initial assets")
+        facilities = []
+        for raw in raw_rows:
+            if not isinstance(raw, Mapping) or set(raw) - {
+                "definition_id", "operational_node_id", "site_cell_id", "invested_resources"
+            } or not {"definition_id", "operational_node_id"} <= set(raw):
+                raise ValueError("invalid facilities row fields")
+            site = raw.get("site_cell_id")
+            if site is not None and not isinstance(site, str):
+                raise ValueError("site_cell_id must be a surface Cell ID or null")
+            investments = raw.get("invested_resources", [])
+            if not isinstance(investments, list):
+                raise ValueError("invested_resources must be a list")
+            invested = []
+            for investment in investments:
+                if not isinstance(investment, list) or len(investment) != 2 or not isinstance(investment[0], str):
+                    raise ValueError("invested_resources must contain [resource ID, quantity] pairs")
+                invested.append((DefinitionId(investment[0]), _finite_nonnegative(investment[1])))
+            if len({resource for resource, _ in invested}) != len(invested):
+                raise ValueError("duplicate investment resource")
+            facilities.append(ScenarioFacility(
+                DefinitionId(str(raw["definition_id"])),
+                SpatialNodeId(str(raw["operational_node_id"])),
+                None if site is None else SurfaceCellId(site),
+                tuple(invested),
+            ))
+        updated["facilities"] = tuple(facilities)
     if "funds_balance_musd" in changes:
         updated["funds_balance_musd"] = _finite_nonnegative(changes["funds_balance_musd"])
     if "operational_node_ids" in changes:

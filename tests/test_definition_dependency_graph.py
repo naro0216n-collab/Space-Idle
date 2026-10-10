@@ -384,3 +384,45 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
                            capability, "facility:supplier:capability_supplies"),
     ), ())
     assert not inspect_definition_coverage(connected)
+
+
+def test_technology_outlet_classification_follows_declared_research_edges_only():
+    from space_idle.analysis_technology_outlets import classify_technology_outlets
+    from space_idle.analysis_graph import DependencyDefinitionGraph, DependencyNode, DependencyRelation
+
+    def technology(name):
+        return DependencyNode("technology", name)
+
+    a, b, c, d, e, f = tuple(technology(name) for name in "abcdef")
+    method = DependencyNode("process", "production_method")
+    no_effect = DependencyNode("research_stage", "research_stage_a")
+    relations = (
+        DependencyRelation("technology_prerequisite", a, b, "b:prerequisites"),
+        DependencyRelation("technology_prerequisite", a, c, "c:prerequisites"),
+        DependencyRelation("technology_prerequisite", b, d, "d:prerequisites"),
+        DependencyRelation("technology_prerequisite", c, d, "d:prerequisites"),
+        DependencyRelation("technology_prerequisite", e, f, "f:prerequisites"),
+        DependencyRelation("unlocks_method", d, method, "production:prerequisite"),
+        DependencyRelation("research_stage", no_effect, e, "e:stage"),
+    )
+    nodes = (a, b, c, d, e, f, method, no_effect)
+    graph = DependencyDefinitionGraph(nodes, relations, ())
+    rows = classify_technology_outlets(graph)
+    classified = {row.technology.id: row for row in rows}
+    assert classified["a"].classification == "via_research"
+    assert classified["a"].reachable_method_count == 1
+    assert classified["a"].downstream_technology_count == 3  # diamond is not double counted
+    assert classified["d"].classification == "direct_method"
+    assert classified["e"].classification == "research_only_no_method"
+    assert classified["f"].classification == "no_downstream_outlet"
+    assert classify_technology_outlets(DependencyDefinitionGraph(tuple(reversed(nodes)),
+                                                                tuple(reversed(relations)), ())) == rows
+
+    # Real Content is classified through registered graph contributors, not by
+    # hard-coded branch counts, names, or a fixed future gameplay progression.
+    app = build_game_application()
+    full = build_definition_dependency_graph(app._simulation, app._catalog)
+    report = classify_technology_outlets(full)
+    assert {row.technology for row in report} == {node for node in full.nodes if node.kind == "technology"}
+    assert all(row.reachable_method_count >= row.direct_method_count for row in report)
+    assert all(row.direct_method_count > 0 for row in report if row.classification == "direct_method")

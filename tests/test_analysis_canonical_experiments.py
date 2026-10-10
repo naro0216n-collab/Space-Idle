@@ -186,3 +186,35 @@ def test_graph_reports_registered_definition_omissions_duplicate_relations_and_t
     diagnostic = {row.code for row in registry.build().diagnostics}
     assert {'duplicate_relation', 'quantitative_relation_without_time_basis',
             'unrepresented_registered_definition'} <= diagnostic
+
+
+def test_initial_facility_scenario_variants_use_regular_site_and_power_contracts():
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+
+    scenario = build_standard_scenario_definition()
+    # A complete typed asset list retains multiplicity and actual investment.
+    replacement = [
+        {
+            "definition_id": str(row.definition_id),
+            "operational_node_id": str(row.operational_node_id),
+            "site_cell_id": None if row.site_cell_id is None else str(row.site_cell_id),
+            "invested_resources": [[str(resource), amount] for resource, amount in row.invested_resources],
+        }
+        for row in scenario.facilities
+        if row.definition_id != ids.GRID_POWER_SUPPLY
+    ]
+    without_grid = scenario_variant(scenario, {"facilities": replacement})
+    assert len(without_grid.facilities) == len(scenario.facilities) - 1
+    assert len(scenario.facilities) == len(build_standard_scenario_definition().facilities)
+
+    original = build_game_application_for_scenario(scenario)
+    variant = build_game_application_for_scenario(without_grid)
+    node = ids.EARTH
+    original_power = original._simulation.power.snapshot(node, original._simulation.facilities, 0)
+    variant_power = variant._simulation.power.snapshot(node, variant._simulation.facilities, 0)
+    assert original_power.generation_mw > variant_power.generation_mw
+    assert all(row.definition_id != ids.GRID_POWER_SUPPLY for row in variant._simulation.facilities.all_at(node))
+    assert variant._simulation.projects.recipes[ids.GRID_POWER_SUPPLY] == original._simulation.projects.recipes[ids.GRID_POWER_SUPPLY]
+    with pytest.raises(ValueError, match="nonnegative"):
+        scenario_variant(scenario, {"facilities": [{"definition_id": str(ids.FOOD_FARM),
+            "operational_node_id": str(node), "invested_resources": [[str(ids.WATER), -1.0]]}]})

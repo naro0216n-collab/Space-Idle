@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from space_idle import build_game_application
 from space_idle.analysis_graph import DependencyNode
 from space_idle.analysis_coverage import inspect_definition_coverage
+from space_idle.analysis_technology_outlets import classify_technology_outlets
 from space_idle.composition.analysis_graph import build_definition_dependency_graph
 from space_idle.analysis_observation import observe_state
 from space_idle.shared import DefinitionId, SpatialNodeId
@@ -26,6 +27,7 @@ def main() -> None:
     parser.add_argument("--reverse", action="store_true", help="Follow upstream dependencies of root")
     parser.add_argument("--state", action="store_true", help="Add a separate snapshot of domain-owned stocks and capacities")
     parser.add_argument("--coverage", action="store_true", help="Include informational authoring-coverage findings")
+    parser.add_argument("--technology-outlets", action="store_true", help="Report direct and prerequisite-only technology paths to declared usable methods")
     parser.add_argument("--node", action="append", help="Restrict state observation to this operational node; repeatable")
     parser.add_argument("--resource", action="append", help="Restrict state observation to this Resource Definition; repeatable")
     args = parser.parse_args()
@@ -48,13 +50,21 @@ def main() -> None:
             row.to_json_data() for row in inspect_definition_coverage(full_graph)
             if row.subject in graph.nodes
         ]}
+    if args.technology_outlets:
+        report = [
+            row.to_json_data() for row in classify_technology_outlets(full_graph)
+            if row.technology in graph.nodes
+        ]
+        if "definition_graph" not in result:
+            result = {"definition_graph": result}
+        result["technology_outlets"] = report
     if args.state:
         state = observe_state(
             app._simulation,
             operational_node_ids=(None if not args.node else frozenset(SpatialNodeId(value) for value in args.node)),
             resource_ids=(None if not args.resource else frozenset(DefinitionId(value) for value in args.resource)),
         )
-        if args.coverage:
+        if args.coverage or args.technology_outlets:
             result["state_observation"] = state.to_json_data()
         else:
             result = {"definition_graph": result, "state_observation": state.to_json_data()}
