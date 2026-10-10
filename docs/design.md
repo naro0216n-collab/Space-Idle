@@ -857,13 +857,13 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 静的な宇宙・天体・Surface Cell topology、Resource Potential、基準Physical Environment等を `World Definition` とし、ゲーム開始時のPlayer所有・運用状態を `Scenario Definition` として分離する。
 
-Scenario Definitionは少なくとも、開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface等のPlayer Stateを構成する。戦略的なsource / via固定がScenario自体の意味として必要な場合だけ初期routing hard constraintを持てる。開始時の具体的数量・価格・Facility数はContent balanceであり、Core仕様として固定しない。
+Scenario Definitionは少なくとも、開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface等のPlayer Stateを構成する。戦略的なsource / via固定がScenario自体の意味として必要な場合だけ初期routing hard constraintを持てる。開始時の具体的数量・価格・Facility数はContent balanceであり、Core仕様として固定しない。**初期配置は保有・所在・投入済み資源を記述するだけで、Facility DefinitionやConstruction/Operationの特別な種別を生まない。** 同種設備を後から取得するときも、別Scenarioや別の適格な天体・Cellに配置するときも、同じ物理的なSite/Capability/Resource/Technology/建設契約を用いる。初期配備のみを理由に建設不能な設備や初期状態だけ有効な運転経路を設けない。
 
 標準Scenarioでは、地球側に基礎産業・研究・打上げ・Vehicle建造を開始できる運用基盤、Resource売買に利用できる地球側Market Interface、成立済みTransport Network内で初期の反復物流を自動進行できる能力、地球周辺から月をRemote Surveyして候補を比較し、通常のResource / Fleet / Founding契約だけで最初の月面Locationを設立できる軌道・Fleet能力を持たせる。一方、開始時からプレイヤー所有の月面Surface Locationや完全な月面Resource Knowledgeは与えない。これらは開始時Facility数、Fleet数、Funds額等の固定値ではなく、標準Scenarioが成立させるゲームループ上の能力として扱う。月面進出はRemote Survey → 候補比較 → Founding Deploymentという通常ゲームループを使う。
 
-初期Content候補：
+Facility・VehicleのContent候補（以下の配置先は想定用途・初期Scenarioの例であり、使用可能Locationを定義しない）：
 
-### 地球初期Location
+### 地表産業・打上げ・研究
 
 - General Research Laboratory
 - Surface Aggregate Quarry
@@ -879,7 +879,7 @@ Scenario Definitionは少なくとも、開始時Operational Node / Surface Loca
 - Satellite Factory
 - Mission Control
 
-### 軌道・近接領域
+### 軌道・近接領域用設備・機材
 
 - Earth Observation Satellite
 - Microgravity Experiment Platform
@@ -890,7 +890,7 @@ Scenario Definitionは少なくとも、開始時Operational Node / Surface Loca
 - Maintenance Dock
 - Cargo Terminal
 
-### 月周回・深宇宙
+### 周回・深宇宙用設備・機材
 
 - Multispectral Survey Orbiter
 - Neutron Spectrometry Orbiter
@@ -898,7 +898,7 @@ Scenario Definitionは少なくとも、開始時Operational Node / Surface Loca
 - Sample Return Vehicle
 - Deep-Space Experiment Platform
 
-### 月面
+### 地表開発・資源処理
 
 - Robotic Geology Station
 - Cargo Depot
@@ -915,14 +915,14 @@ Scenario Definitionは少なくとも、開始時Operational Node / Surface Loca
 - Sample Analysis Laboratory
 - Vacuum Regolith Process Laboratory
 
-### 初期Vehicle候補
+### Vehicle候補
 
 - Reusable Launch Vehicle
 - Reusable Orbital Cargo Tug
 - Reusable Surface Cargo Lander
 - Survey / Experiment Spacecraft
 
-名称は用途を説明するために利用できるが、Operation可否を名称だけで固定しない。
+名称は用途を説明するために利用できるが、Operation可否を名称だけで固定しない。 初期Scenarioの設備と通常建設した同種設備で、同じ条件・資源会計・Power/Service供給・維持/撤去を適用する。外部電力網への接続設備は発電設備とは供給源が異なるため、Worldが当該Cellに外部接続を定義した地点だけで設置・運用でき、接続のない地点へ名称や初期配備を理由に電力供給を移植しない。
 
 ## 21. 横断的なデザイン原則
 

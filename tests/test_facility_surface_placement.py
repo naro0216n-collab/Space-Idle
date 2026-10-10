@@ -279,3 +279,67 @@ def test_process_interface_can_be_shared_by_a_differently_named_higher_throughpu
     )
     app.execute(AdvanceTime(1))
     assert sim.day > 0
+
+
+def test_scenario_facilities_have_the_same_normal_construction_contract_as_later_assets(tmp_path):
+    """Scenario ownership cannot create a class of otherwise unobtainable facilities."""
+    from datetime import datetime, timezone
+
+    from space_idle import PlanBuild, GetProjects
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.facilities import FacilityPlacementScope
+    from space_idle.persistence import load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    initial = build_standard_scenario_definition().facilities
+    assert {row.definition_id for row in initial} <= set(sim.projects.recipes)
+    assert set(sim.facilities.definitions) == set(sim.projects.recipes)
+
+    node_options = {
+        row.facility_definition_id for row in app.query(GetBuildOptions(str(ids.EARTH))).items
+    }
+    surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    core = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL))
+    cell_options = {row.facility_definition_id for row in core.facility_placement_options}
+
+    for asset in initial:
+        definition = sim.facilities.definitions[asset.definition_id]
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
+            assert str(asset.definition_id) in node_options
+        elif asset.operational_node_id == ids.EARTH:
+            assert str(asset.definition_id) in cell_options
+
+    # A new instance follows the same public Project command/persistence path.
+    project_id = app.execute(PlanBuild(str(ids.EARTH), str(ids.EARTH_RESEARCH_LAB))).created_id
+    assert project_id is not None
+    assert any(row.id == project_id for row in app.query(GetProjects(str(ids.EARTH))).items)
+    path = tmp_path / 'construction.json'
+    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    save_game(app, path, saved_at=now)
+    restored, _ = load_game(path, build_game_application_for_load, now=now)
+    assert any(row.id == project_id for row in restored.query(GetProjects(str(ids.EARTH))).items)
+
+
+def test_external_power_uses_world_site_eligibility_not_initial_asset_identity():
+    from space_idle.spatial import ExternalGridConnectionField
+
+    app = build_game_application()
+    sim = app._simulation
+    grid = ids.GRID_POWER_SUPPLY
+    initial = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == grid)
+    assert initial.site_cell_id == ids.EARTH_CELL_INDUSTRIAL
+    assert sim.power.snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw >= 20.0
+
+    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    blocked = sim.projects.site_failures(grid, ids.EARTH, sim.day, site_cell_id=ids.EARTH_CELL_COASTAL)
+    assert any(row.code == 'world:external_grid_connection' for row in blocked)
+
+    # With the same World-side connection, another developed Cell can use the
+    # same Facility Definition and the same installation/operation evaluator.
+    sim.facilities.environment.static.set(ids.EARTH_CELL_COASTAL, ExternalGridConnectionField())
+    assert not sim.projects.site_failures(grid, ids.EARTH, sim.day, site_cell_id=ids.EARTH_CELL_COASTAL)
+    second = sim.facilities.install(grid, ids.EARTH, site_cell_id=ids.EARTH_CELL_COASTAL)
+    assert sim.facilities.is_environmentally_compatible(sim.facilities.facilities[second], sim.day)
+    assert sim.power.snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw >= 40.0

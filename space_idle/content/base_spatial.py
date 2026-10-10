@@ -6,6 +6,7 @@ from ..spatial import (
     CelestialBodyDef,
     CharacteristicTransportGeometry,
     CommunicationField,
+    ExternalGridConnectionField,
     EnvironmentResolver,
     GravityField,
     IlluminationField,
@@ -269,6 +270,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     facets.set_body(ids.EARTH_BODY, ThermalField(288.0))
     facets.set_body(ids.EARTH_BODY, RadiationField(0.003))
     facets.set_body(ids.EARTH_BODY, CommunicationField(0.02, 1.0))
+    facets.set(ids.EARTH_CELL_INDUSTRIAL, ExternalGridConnectionField())
     for cell_id in (
         ids.EARTH_CELL_INDUSTRIAL,
         ids.EARTH_CELL_COASTAL,

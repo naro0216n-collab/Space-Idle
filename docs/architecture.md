@@ -230,7 +230,7 @@ Vehicle Definitionは性能と製造・整備要件を持つ。通常運用す�
 
 Technology UnlockはResearch DefinitionやFacility Stateへ複製せず、一つのTechnology Stateをauthoritative stateとする。Operational ExperienceもResearch Project個別の経過時間として重複保持せず、experience categoryごとのKnowledge Stateを正本とする。
 
-`WorldDefinition` はStar System、Celestial Body、Surface Cell topology、static geology / Resource Potential、基準Physical Environment等の静的世界を構成する。`ScenarioDefinition` は開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface、Scenario固有の戦略固定が必要な場合だけrouting hard constraint等の初期Stateを構成する。World Definitionの構築自体がPlayer-owned Operational Stateを生成しない。Scenarioはnew game生成時だけ適用し、Save Load時に再適用しない。
+`WorldDefinition` はStar System、Celestial Body、Surface Cell topology、static geology / Resource Potential、基準Physical Environment等の静的世界を構成する。`ScenarioDefinition` は開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface、Scenario固有の戦略固定が必要な場合だけrouting hard constraint等の初期Stateを構成する。World Definitionの構築自体がPlayer-owned Operational Stateを生成しない。Scenarioはnew game生成時だけ適用し、Save Load時に再適用しない。 Scenarioで初期保有させたFacilityも通常のFacility Definition・Site/Eligibility・Power・Maintenance・Decommissionと単一の契約で扱い、初期配備という理由だけで建設Recipeを欠落させたり、運転を免除したりしない。Scenarioは設置済みAssetの投入資源・所在を明示し、対応する通常Constructionは資材・Service・Technologyを要求する。
 
 Movement Plan候補、Transport Service Plan、Transport Capacity、Projected Material Readiness、ロケーション産業自立・外部依存分析等は、保存済みStateとDefinitionから導出する派生状態とし、Save上の独立した正本にしない。
 
@@ -380,6 +380,8 @@ Location内部で個別ResourceをCellごとにroutingしない。ただし共�
 ### 6.1 設置と運転
 
 Installation EligibilityとOperating Eligibilityを分離する。Spatial classification、Physical Environment、Capability等の非消費条件をSiteRequirements / Eligibilityとして表し、建設work、Power、Process Service等の有限flowはexecution時のAllocation Requirementとして扱う。
+
+外部ネットワークの実在接続など、設備自体の保有だけでは成立しない地点依存条件はWorldの型付きSite Environmentとして保持し、通常のInstallation/Operating Eligibilityが参照する。初期保有と後からの建設、Construction候補と実際の運転に別の専用分岐を設けない。接続のない地点で固定出力を無償に生成せず、物理的に適格な別Siteでは同じDefinitionで稼働可能とする。
 
 Facilityは同一Domainのまま配置種別を持つ。
 

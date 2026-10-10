@@ -154,6 +154,18 @@ class CommunicationField(SpatialFacet):
             raise ValueError("invalid communication values")
 
 
+@dataclass(frozen=True)
+class ExternalGridConnectionField(SpatialFacet):
+    """World-owned external electrical-grid access at a specific surface Cell.
+
+    Absence means no external supply contract; it is not equivalent to a
+    player-owned generator and never provides generation on its own.
+    """
+
+    facet_key: ClassVar[str] = "external_grid_connection"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.SURFACE_CELL_LOCAL
+
+
 class SpatialNodeKind(str, Enum):
     GENERIC = "generic"
     # Kept as a projection value for player-operated surface Locations. Static

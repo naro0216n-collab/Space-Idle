@@ -5,10 +5,10 @@ from ..service_capacity import ServiceCapacityScope
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import (
-    AtmosphericPartialPressureRange, CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
+    AtmosphericPartialPressureRange, CapabilityRequirement, CapabilityRequirementState, FacetValueRange, RequiresFacet, SiteRequirements,
     SpatialClassification, SpatialClassificationRequirement,
 )
-from ..spatial import AtmosphereField, RadiationField, ThermalField
+from ..spatial import AtmosphereField, RadiationField, ThermalField, ExternalGridConnectionField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
 SURFACE_CLASSIFICATION = (
@@ -41,6 +41,14 @@ LOW_RADIATION_ENV = (
 )
 SURFACE_SITE = SiteRequirements(spatial_classification_requirements=SURFACE_CLASSIFICATION)
 ORBIT_SITE = SiteRequirements(spatial_classification_requirements=ORBIT_CLASSIFICATION)
+EXTERNAL_GRID_SITE = SiteRequirements(
+    environment=(RequiresFacet(
+        ExternalGridConnectionField, "world:external_grid_connection",
+        "外部電力網との実在接続が必要",
+    ),),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+
 ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
     environment=(
         FacetValueRange(
