@@ -10,6 +10,7 @@ from ..analysis_graph import (
     DependencyRelation, DefinitionGraphRegistry,
 )
 from ..catalog import GameCatalog
+from ..construction.models import CONSTRUCTION_SERVICE_TYPE
 from ..research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
     ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
@@ -58,7 +59,14 @@ def build_definition_dependency_graph(
                             requirement.capability_id
                             for requirement in stage.site_requirements.capability_requirements
                         )
-        services = {"power", "life_support", "onboard_life_support"}
+        for recipe in (
+            *sim.projects.recipes.values(), *sim.projects.upgrade_recipes.values(),
+            *sim.projects.decommission_recipes.values(), *sim.projects.spatial_recipes.values(),
+        ):
+            all_capabilities.update(
+                requirement.capability_id for requirement in recipe.site_requirements.capability_requirements
+            )
+        services = {"power", "life_support", "onboard_life_support", CONSTRUCTION_SERVICE_TYPE}
         services.update(supply.service_type
                         for facility in sim.facilities.definitions.values()
                         for supply in facility.service_capacity_supplies)
@@ -454,31 +462,95 @@ def build_definition_dependency_graph(
     })
 
     def construction() -> DependencyFragment:
-        nodes = []
-        relations = []
-        for recipe in sim.projects.recipes.values():
-            owner = _node("construction_method", recipe.facility_def_id)
+        nodes: list[DependencyNode] = []
+        relations: list[DependencyRelation] = []
+
+        def add_method(kind: str, identity: str, recipe, *, scope: str) -> DependencyNode:
+            """Observe the typed Project Recipe, not a particular Facility or Scenario."""
+            owner = _node(kind, identity)
             nodes.append(owner)
+            provenance = f"{kind}:{identity}"
+            for requirement in recipe.resources:
+                relations.append(DependencyRelation(
+                    "consumes_resource", _node("resource", requirement.resource_id), owner,
+                    f"{provenance}:resources:{requirement.resource_id}",
+                    requirement.amount_t, "t", "per_project",
+                ))
+            for technology in sorted(recipe.prerequisite_technologies):
+                relations.append(DependencyRelation(
+                    "unlocks_method", _node("technology", technology), owner,
+                    f"{provenance}:prerequisite_technologies",
+                    condition="acquisition_eligibility_not_retroactive_asset_modification",
+                ))
+            if recipe.construction_work > 0 and not recipe.self_deploying:
+                relations.append(DependencyRelation(
+                    "requires_construction_work", _node("service_capacity", CONSTRUCTION_SERVICE_TYPE), owner,
+                    f"{provenance}:construction_work", recipe.construction_work,
+                    "work_units", "per_project",
+                    condition="shared_finite_construction_work;requires_real_site_and_provider",
+                ))
+            context_contributors.contribute_site_requirements(
+                owner, scope, recipe.site_requirements, nodes, relations,
+            )
+            return owner
+
+        for recipe in sim.projects.recipes.values():
+            owner = add_method("construction_method", str(recipe.facility_def_id), recipe, scope="construction")
             relations.append(DependencyRelation(
                 "constructs_facility", owner, _node("facility", recipe.facility_def_id),
                 f"construction:{recipe.facility_def_id}:facility_def_id",
             ))
-            for requirement in recipe.resources:
+        for recipe in sim.projects.upgrade_recipes.values():
+            identity = f"{recipe.facility_def_id}/level:{recipe.target_level}"
+            owner = add_method("facility_upgrade_method", identity, recipe, scope="upgrade")
+            relations.append(DependencyRelation(
+                "upgrades_facility", _node("facility", recipe.facility_def_id), owner,
+                f"upgrade:{identity}:facility_def_id",
+                condition=f"from_level:{recipe.target_level - 1};to_level:{recipe.target_level}",
+            ))
+        for recipe in sim.projects.decommission_recipes.values():
+            owner = add_method("facility_decommission_method", str(recipe.facility_def_id), recipe, scope="decommission")
+            relations.append(DependencyRelation(
+                "decommissions_facility", _node("facility", recipe.facility_def_id), owner,
+                f"decommission:{recipe.facility_def_id}:facility_def_id",
+                condition="irreversible_commitment_and_recovery_admission_required",
+            ))
+        for recipe in sim.projects.spatial_recipes.values():
+            owner = add_method("spatial_development_method", str(recipe.id), recipe, scope="spatial_development")
+            for requirement in recipe.knowledge_requirements:
                 relations.append(DependencyRelation(
-                    "consumes_resource", _node("resource", requirement.resource_id), owner,
-                    f"construction:{recipe.facility_def_id}:resources", requirement.amount_t, "t", "per_facility",
+                    "requires_knowledge", _node("resource", requirement.subject_resource_id), owner,
+                    f"spatial_development:{recipe.id}:knowledge:{requirement.subject_resource_id}",
+                    condition=f"minimum_level:{requirement.minimum_level.value};target_cell_required",
                 ))
-            for technology in recipe.prerequisite_technologies:
-                relations.append(DependencyRelation(
-                    "unlocks_method", _node("technology", technology), owner,
-                    f"construction:{recipe.facility_def_id}:prerequisite_technologies",
-                ))
+        for provider in sim.projects.construction_providers.values():
+            relations.append(DependencyRelation(
+                "nominal_construction_service_supply", _node("facility", provider.facility_def_id),
+                _node("service_capacity", CONSTRUCTION_SERVICE_TYPE),
+                f"construction_provider:{provider.facility_def_id}:work_per_day",
+                provider.work_per_day, "work_units/day", "per_active_facility_level",
+                condition="actual_power_maintenance_site_allocation_required",
+            ))
+        for provider in sim.projects.construction_resource_providers.values():
+            relations.append(DependencyRelation(
+                "nominal_resource_construction_supply", _node("resource", provider.resource_id),
+                _node("service_capacity", CONSTRUCTION_SERVICE_TYPE),
+                f"construction_resource_provider:{provider.resource_id}:work_per_t_per_day",
+                provider.work_per_t_per_day, "work_units/t/day", "per_available_stock",
+                condition="non_consuming_available_unreserved_stock",
+            ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("construction", construction, expected_definitions=lambda: (
-        _node("construction_method", key) for key in sim.projects.recipes
+        *(_node("construction_method", key) for key in sim.projects.recipes),
+        *(_node("facility_upgrade_method", f"{key[0]}/level:{key[1]}") for key in sim.projects.upgrade_recipes),
+        *(_node("facility_decommission_method", key) for key in sim.projects.decommission_recipes),
+        *(_node("spatial_development_method", key) for key in sim.projects.spatial_recipes),
     ), relation_kinds={
-        "constructs_facility", "consumes_resource", "unlocks_method",
+        "constructs_facility", "upgrades_facility", "decommissions_facility",
+        "consumes_resource", "unlocks_method", "requires_construction_work",
+        "requires_site_capability", "requires_site_classification", "requires_site_environment",
+        "requires_knowledge", "nominal_construction_service_supply", "nominal_resource_construction_supply",
     })
 
     def vehicle_production() -> DependencyFragment:

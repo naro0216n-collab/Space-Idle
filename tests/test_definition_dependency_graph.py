@@ -487,3 +487,63 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
     assert {row.technology for row in report} == {node for node in full.nodes if node.kind == "technology"}
     assert all(row.reachable_method_count >= row.direct_method_count for row in report)
     assert all(row.direct_method_count > 0 for row in report if row.classification == "direct_method")
+
+
+def test_every_registered_project_method_participates_in_analysis_including_upgrade_and_retirement():
+    """Construction owns all four physical Project kinds; a new Recipe needs no analyzer switch."""
+    from dataclasses import replace
+    from space_idle.content import base_ids as ids
+    from space_idle.construction import BuildResourceRequirement, FacilityUpgradeRecipe
+    from space_idle.analysis_technology_outlets import classify_technology_outlets
+
+    app = build_game_application()
+    sim = app._simulation
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+
+    for recipe in sim.projects.recipes.values():
+        method = DependencyNode("construction_method", str(recipe.facility_def_id))
+        assert method in graph.nodes
+    for (definition_id, level), recipe in sim.projects.upgrade_recipes.items():
+        method = DependencyNode("facility_upgrade_method", f"{definition_id}/level:{level}")
+        assert method in graph.nodes
+        assert any(row.kind == "upgrades_facility" and row.target == method for row in graph.relations)
+        assert any(row.kind == "requires_construction_work" and row.target == method
+                   and row.quantity == recipe.construction_work for row in graph.relations)
+        assert any(row.kind == "consumes_resource" and row.target == method
+                   for row in graph.relations)
+    for definition_id in sim.projects.decommission_recipes:
+        method = DependencyNode("facility_decommission_method", str(definition_id))
+        assert method in graph.nodes
+        assert any(row.kind == "decommissions_facility" and row.target == method for row in graph.relations)
+    for definition_id in sim.projects.spatial_recipes:
+        method = DependencyNode("spatial_development_method", str(definition_id))
+        assert method in graph.nodes
+        assert any(row.kind == "requires_construction_work" and row.target == method
+                   for row in graph.relations)
+
+    # A research-gated second generation is a normal typed Content addition:
+    # detect it and its finite inputs without modifying Domain/Core analysis.
+    new_facility = ids.METALLURGY
+    new_level = 2
+    recipe = FacilityUpgradeRecipe(
+        new_facility, new_level, (BuildResourceRequirement(ids.MACHINERY, 1.25),),
+        4.0, prerequisite_technologies=frozenset({ids.RP_RESOURCE_CHAIN_14}),
+    )
+    sim.projects.upgrade_recipes[(new_facility, new_level)] = recipe
+    expanded = build_definition_dependency_graph(sim, app._catalog)
+    assert not expanded.diagnostics
+    method = DependencyNode("facility_upgrade_method", f"{new_facility}/level:{new_level}")
+    subgraph = expanded.subset((method,))
+    assert any(edge.kind == "consumes_resource" and edge.target == method
+               and edge.source == DependencyNode("resource", str(ids.MACHINERY))
+               for edge in subgraph.relations)
+    assert any(edge.kind == "requires_construction_work" and edge.target == method
+               for edge in subgraph.relations)
+    assert any(edge.kind == "unlocks_method" and edge.target == method
+               and edge.source == DependencyNode("technology", str(ids.RP_RESOURCE_CHAIN_14))
+               for edge in subgraph.relations)
+    outlet = next(row for row in classify_technology_outlets(expanded)
+                  if row.technology.id == str(ids.RP_RESOURCE_CHAIN_14))
+    assert outlet.classification == "direct_method"
+    assert outlet.direct_method_count >= 2

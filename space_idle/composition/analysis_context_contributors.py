@@ -32,7 +32,7 @@ def _field_data(value: object) -> object:
     return value
 
 
-def _site(owner: DependencyNode, scope: str, req: SiteRequirements,
+def contribute_site_requirements(owner: DependencyNode, scope: str, req: SiteRequirements,
           nodes: list[DependencyNode], relations: list[DependencyRelation]) -> None:
     """Keep AND requirements and physical parameter types without executing eligibility."""
     for capacity in req.capability_requirements:
@@ -150,7 +150,7 @@ def movement(sim: Simulation) -> DependencyFragment:
                     condition=f'operation_scope:{scope};delta_v_km_s:{op.delta_v_km_s}',
                 ))
         for scope, requirement in (('surface', rule.surface_requirements), ('space', rule.space_requirements)):
-            _site(method, scope, requirement, nodes, relations)
+            contribute_site_requirements(method, scope, requirement, nodes, relations)
         relations.append(DependencyRelation('minimum_transit_duration', method,
                                             _node('movement_parameter', 'duration_floor'),
                                             f'movement:{rule.id}:transit_days', rule.transit_days,
@@ -172,7 +172,7 @@ def movement(sim: Simulation) -> DependencyFragment:
                                'days', 'per_operation_profile'),
         ))
         for scope, requirement in (('origin', rule.origin_requirements), ('destination', rule.destination_requirements)):
-            _site(method, scope, requirement, nodes, relations)
+            contribute_site_requirements(method, scope, requirement, nodes, relations)
     nodes.extend(_node('transport_operation', name) for name in sorted(operations))
     nodes.extend((_node('movement_parameter', 'speed'), _node('movement_parameter', 'duration_floor')))
     return DependencyFragment(tuple(nodes), tuple(relations))
@@ -227,7 +227,7 @@ def founding(sim: Simulation) -> DependencyFragment:
                                                 f'founding:{recipe.id}:knowledge:{requirement.subject_resource_id}',
                                                 condition=f'minimum_level:{requirement.minimum_level.value};target_cell_required'))
         for scope, requirement in (('staging', recipe.staging_requirements), ('target', recipe.target_requirements)):
-            _site(method, scope, requirement, nodes, relations)
+            contribute_site_requirements(method, scope, requirement, nodes, relations)
     nodes.append(_node('founding_parameter', 'work'))
     return DependencyFragment(tuple(nodes), tuple(relations))
 

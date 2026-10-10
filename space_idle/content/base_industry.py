@@ -17,6 +17,24 @@ def build_process_specs() -> dict:
         ids.PROCESS_VOLATILE_WATER_RECOVERY: ProcessSpec(ids.PROCESS_VOLATILE_WATER_RECOVERY, "揮発性成分回収", frozenset({"volatile_processing"}), {ids.VOLATILE_BEARING_MATERIAL: 1.0}, {ids.WATER: 0.35}),
         ids.PROCESS_ORE_PROCESS: ProcessSpec(ids.PROCESS_ORE_PROCESS, "鉱石処理", frozenset({"ore_processing"}), {ids.METAL_ORE: 2.5}, {ids.METAL_FEEDSTOCK: 1.0}),
         ids.PROCESS_METALLURGY: ProcessSpec(ids.PROCESS_METALLURGY, "金属精錬", frozenset({"metallurgy"}), {ids.METAL_FEEDSTOCK: 2.0}, {ids.BULK_STRUCTURE: 1.8}),
+        # Explicit alternative operations on the same physical metallurgical
+        # interface: recovered gas costs finite water, while variable-feed
+        # operation substitutes common mineral stock for metal feedstock.
+        # Completing Research never silently changes an existing plant's recipe.
+        ids.PROCESS_METALLURGY_BYPRODUCT_RECOVERY: ProcessSpec(
+            ids.PROCESS_METALLURGY_BYPRODUCT_RECOVERY, "精錬副生成ガス回収",
+            frozenset({"metallurgy"}),
+            {ids.METAL_FEEDSTOCK: 2.0, ids.WATER: 0.20},
+            {ids.BULK_STRUCTURE: 1.8, ids.OXYGEN: 0.10},
+            frozenset({ids.RP_RESOURCE_CHAIN_14}),
+        ),
+        ids.PROCESS_METALLURGY_VARIABLE_FEED: ProcessSpec(
+            ids.PROCESS_METALLURGY_VARIABLE_FEED, "組成変動対応複合原料精錬",
+            frozenset({"metallurgy"}),
+            {ids.METAL_FEEDSTOCK: 1.5, ids.MINERAL_FEEDSTOCK: 0.8},
+            {ids.BULK_STRUCTURE: 1.6},
+            frozenset({ids.RP_RESOURCE_CHAIN_15}),
+        ),
         ids.PROCESS_STRUCTURAL_FABRICATION: ProcessSpec(ids.PROCESS_STRUCTURAL_FABRICATION, "構造部材加工", frozenset({"structural_fabrication"}), {ids.BULK_STRUCTURE: 0.65}, {ids.FABRICATED_STRUCTURE: 0.55}),
         ids.PROCESS_BASIC_MACHINING: ProcessSpec(ids.PROCESS_BASIC_MACHINING, "基礎機械加工", frozenset({"basic_machine_shop"}), {ids.BULK_STRUCTURE: 0.4}, {ids.BASIC_MACHINE_PARTS: 0.25}),
         ids.PROCESS_PRECISION_COMPONENTS: ProcessSpec(ids.PROCESS_PRECISION_COMPONENTS, "精密部品加工", frozenset({"basic_machine_shop", "precision_machining"}), {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.PRECISION_COMPONENTS: 0.22}),
