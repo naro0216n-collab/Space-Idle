@@ -214,6 +214,9 @@ def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     for allocation in tuple(sim.transport.transport_allocations.values()):
         if allocation.paused:
             original.execute(ResumeTransportAllocation(str(allocation.id)))
+    sim.technology.completed.update(
+        sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.prerequisite_technologies
+    )
     original.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
@@ -307,8 +310,11 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
 
 def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path):
     app = build_game_application()
-    app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
+    sim.technology.completed.update(
+        sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.prerequisite_technologies
+    )
+    app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     dormant = SpatialNodeId("test.node.context_only")
     sim.graph.add(

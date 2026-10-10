@@ -260,6 +260,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=10.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
+                prerequisite_technologies=frozenset({ids.research_id("CH-COMBUSTION-01"), ids.research_id("GN-NAVIGATION-01")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=5.0,
@@ -287,6 +288,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=4.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+                prerequisite_technologies=frozenset({ids.research_id("CH-COMBUSTION-06"), ids.research_id("GN-NAVIGATION-04")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=2.0,
@@ -317,6 +319,7 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=18.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 12.0),
                            (ids.MACHINERY, 5.0), (ids.PRECISION_ELECTRONICS, 4.0)),
+                prerequisite_technologies=frozenset({ids.research_id("GN-NAVIGATION-06"), ids.research_id("CO-RF-COMMUNICATIONS-04")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=8.0,
@@ -353,6 +356,7 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=12.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 8.0),
                            (ids.MACHINERY, 3.0), (ids.PRECISION_ELECTRONICS, 3.0)),
+                prerequisite_technologies=frozenset({ids.research_id("EDL-EDL-08")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=6.0,
@@ -384,7 +388,7 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.5),
                            (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 1.0)),
-                prerequisite_technologies=frozenset({ids.SS_SENSING_01}),
+                prerequisite_technologies=frozenset({ids.research_id("GN-NAVIGATION-01"), ids.SS_SENSING_01}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=1.5,
@@ -408,7 +412,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.2), (ids.MACHINERY, 0.8), (ids.PRECISION_ELECTRONICS, 1.5)),
-                prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-01")}),
+                prerequisite_technologies=frozenset({ids.research_id("GN-NAVIGATION-02"), DefinitionId("SS-SENSING-01")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=1.5,
@@ -434,6 +438,7 @@ def build_vehicle_definitions() -> dict:
                 service_type="vehicle_assembly", days=14.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 7.0), (ids.MACHINERY, 3.0),
                            (ids.PRECISION_ELECTRONICS, 5.0)),
+                prerequisite_technologies=frozenset({ids.research_id("GN-NAVIGATION-06"), ids.research_id("SS-SENSING-01"), ids.research_id("CO-RF-COMMUNICATIONS-04")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=5.0,
@@ -453,6 +458,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=2.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
+                prerequisite_technologies=frozenset({ids.research_id("SM-SURFACE-MOBILITY-01")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=1.0,
@@ -475,6 +481,7 @@ def build_vehicle_definitions() -> dict:
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=3.0,
                 resources=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 0.8)),
+                prerequisite_technologies=frozenset({ids.research_id("CH-COMBUSTION-01"), ids.research_id("EDL-EDL-06")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=1.5,

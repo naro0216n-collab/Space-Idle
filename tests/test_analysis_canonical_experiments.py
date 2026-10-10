@@ -568,12 +568,18 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
     # Select by the actual Application acquisition contract, not registration order.
     from space_idle.application_commands import GetLogistics
     from space_idle.shared import DefinitionId
-    source_vehicle = sim.transport.vehicle_defs[DefinitionId(next(
-        row.vehicle_definition_id for row in base.query(GetLogistics()).vehicle_production_options
-        if row.operational_node_id == str(ids.EARTH) and row.can_plan
-        and not any(blocker.kind == "technology" for blocker in row.blockers)
-        and sim.transport.vehicle_defs[DefinitionId(row.vehicle_definition_id)].production.days > 0
-    ))]
+    # An independent Scenario explicitly supplies the researched acquisition
+    # prerequisite. Both comparison variants start from the identical owner State.
+    source_vehicle = min(
+        (sim.transport.vehicle_defs[DefinitionId(row.vehicle_definition_id)]
+         for row in base.query(GetLogistics()).vehicle_production_options
+         if row.operational_node_id == str(ids.EARTH)
+         and sim.transport.vehicle_defs[DefinitionId(row.vehicle_definition_id)].production.days > 0
+         and not any(blocker.kind == "site" for blocker in row.blockers)),
+        key=lambda row: (len(row.production.prerequisite_technologies), str(row.id)),
+    )
+    scenario = replace(build_standard_scenario_definition(),
+                       completed_technologies=tuple(sorted(source_vehicle.production.prerequisite_technologies)))
     new_facility = 'experiment.facility.research'
     new_provider = 'experiment.provider.research'
     new_vehicle = 'experiment.vehicle.production'
@@ -601,7 +607,7 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
 
     def factory(additions=additions):
         return build_game_application_for_scenario(
-            build_standard_scenario_definition(),
+            scenario,
             definition_transform=lambda runtime, catalog: apply_content_variant(
                 runtime, catalog, additions + edits),
         )
@@ -626,7 +632,7 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
         return (PlanBuild(str(ids.EARTH), new_facility),
                 ProduceVehicle(new_vehicle, str(ids.EARTH))) if day == 0 else ()
 
-    runs = run_experiments((ExperimentCase('base', build_game_application, policy),
+    runs = run_experiments((ExperimentCase('base', lambda: build_game_application_for_scenario(scenario), policy),
                             ExperimentCase('variant', factory, policy)), days=2)
     assert len(runs[0].rejected_commands) == 2
     assert not runs[1].rejected_commands

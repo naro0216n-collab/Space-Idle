@@ -24,6 +24,16 @@ from space_idle.site import CapabilityRequirement, CapabilityRequirementState, S
 
 def test_vehicle_production_application_contract_exposes_planning_blockers_and_priority_lifecycle():
     app = build_game_application()
+    required = app._simulation.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].production.prerequisite_technologies
+    assert required
+    app._simulation.technology.completed.difference_update(required)
+    unavailable = next(row for row in app.query(GetLogistics()).vehicle_production_options
+                       if row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
+                       and row.operational_node_id == str(LEO))
+    assert not unavailable.can_plan and any(blocker.kind == "technology" for blocker in unavailable.blockers)
+    with pytest.raises(ApplicationError):
+        app.execute(ProduceVehicle(str(ids.REUSABLE_ORBITAL_CARGO_TUG), str(LEO)))
+    app._simulation.technology.completed.update(required)
     option = next(
         row
         for row in app.query(GetLogistics()).vehicle_production_options
@@ -88,6 +98,7 @@ def test_vehicle_production_progress_uses_same_runtime_site_blockers_as_query():
     sim = app._simulation
     vehicle_id = REUSABLE_ORBITAL_CARGO_TUG
     definition = sim.transport.vehicle_defs[vehicle_id]
+    sim.technology.completed.update(definition.production.prerequisite_technologies)
     sim.transport.vehicle_defs[vehicle_id] = replace(
         definition,
         production=replace(
@@ -130,6 +141,7 @@ def test_save_load_preserves_vehicle_production_staging_and_future_completion(tm
     app = build_game_application()
     sim = app._simulation
     definition = sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG]
+    sim.technology.completed.update(definition.production.prerequisite_technologies)
     for resource_id, _required_t in definition.production.resources:
         sim.inventory.stock[(EARTH, resource_id)] = 0.0
     partial_resource, required_t = next(
