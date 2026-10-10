@@ -93,75 +93,45 @@ Publish Gateway、publish helper、CI/E2E harnessなど開発環境そのもの�
 
 ## Publish procedure
 
-GitHub反映の入口は差分種別で決める。
+GitHub反映は変更内容に応じて次のhelperを使用する。`publish` branchはPublish Gatewayのtransport専用とする。
 
-- `.github/workflows/**` を含まない通常変更は `scripts/publish_request.py` を使用する。
-- `.github/workflows/**` だけを変更する場合は後述の Workflow maintenance procedure を使用する。
-- `.github/workflows/publish-gateway.yml` は、先に Publish control maintenance で固定 `publish` branchへ同一blobを反映済みの場合に限り、通常publishへ同梱できる。Gatewayがcontrol blobとの一致を機械検証する。
-- 上記以外のworkflowと通常変更が混在する場合は、責務ごとにcommitを分け、通常変更を先にpublishする。
+- 通常のゲーム・開発基盤変更：`scripts/publish_request.py`
+- `.github/workflows/**` だけの変更：`scripts/workflow_maintenance.py`
+- Publish Gateway control planeの変更：`scripts/publish_control_maintenance.py`
 
-`publish` branchはPublish Gateway専用のtransport branchであり、通常開発や統合には使用しない。
+`.github/workflows/publish-gateway.yml` を通常publishに含める場合は、Publish control maintenanceで固定`publish`側を先に更新する。それ以外のworkflow変更と通常変更は、責務ごとにcommitを分けて通常変更から反映する。
 
 ### Normal develop publish
 
-通常publishは以下の操作を記載順で実行する。記載されていないGitHub書込みを追加しない。helper生成packetは唯一のGitHub書込入力とし、JSONの内容、構造、順序を変更しない。Connectorへの引数受渡しにはtransactionの規模に関係なく、下記の一時ファイル参照方式だけを用いる。成立しない場合はGitHub書込みを行わず、原因を解決して同じtransactionを継続する。
-
-1. 変更を責務としてまとまったlocal commitにする。
-2. `prepare`で現在の `HEAD` をpublish対象として固定する。
-3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
-4. `connector-plan` は16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満に分割して生成する。各packetにlocal Gitで事前計算した `expected_tree` を記録する。これらの原本packetだけがGitHub書込みの入力となる。packet本文を転記・改変・再packしない。
-5. `connector-plan` が生成した `execution_index`（原本packetのファイル名・サイズ・fingerprintだけを含む）を入力に、固定 `scripts/publish_connector_launch.js` を **1回の `functions.exec`** で実行する。LauncherはGitHubの承認済み共有 `develop` からexecutorを直接取得して呼び出すため、ローカルsourceの一時登録・目視照合・hash値の手入力を行わない。`INDEX_PATH`（`connector-plan` の出力値）だけを渡す。実行は原本packetの一時Library登録、全文読取・照合、全一時登録の削除確認を先に済ませ、GitHubの全tree作成・SHA照合・commit作成・non-force ref更新を順次実行する。handoffの再分割・再結合やtransactionごとのsource生成は行わない。Library削除はゴミ箱移動であり即時完全消去ではない。読取・照合・削除の失敗時はGitHub書込み前に停止する。
-6. 全tree batch成立後、生成済みの `GitHub.create_commit` packetをそのまま実行する（固定実行処理で続行する）。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
-7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める（固定実行処理内で続行する）。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。
-8. 当該transport commitのPublish Gateway runの結果を取得する。`completed / success` のrun ID・conclusion・transport commitを直ちに `record` へ渡す。runが未完了ならtransactionを保持してローカル実装を進める。次の通常publishの `prepare` より前に当該run結果を再取得し、成功した時点で `record` を実行する。
-9. 次のpublishの前に直前Fast CIの結果を確認する。失敗していれば原因を修正してから次のpublishを実行する。
+1. ローカルで責務単位の変更を検証し、commitする。
+2. `prepare`を実行する。GitHubのheads一覧から`develop`と`publish`のHEADを同時に取得し、`connector-plan`へ渡す。
+3. 出力された`execution_index`のパスを`INDEX_PATH`に指定し、固定`scripts/publish_connector_launch.js`を1回の`functions.exec`で実行する。Launcherは共有`develop`の`scripts/publish_connector_executor.js`を取得する。
+4. Executorは原本packetを一時Libraryへ登録・取得し、内容とtransactionの整合性を自動検証する。全登録の削除確認後、packet順に`create_tree`、期待SHA照合、`create_commit`、non-forceの`publish` `update_ref`を実行する。ファイル数・transaction規模にかかわらず同じ入口を使用する。Libraryでの削除はゴミ箱移動である。
+5. 該当transport commitのPublish Gatewayが`completed / success`になったら、返却されたtransport SHA・run ID・conclusionを`record`へ渡す。run未完了の間はtransactionを保持し、ほかのローカル開発を進めてよい。
+6. 次のpublishの前に直前Fast CIの結果を確認する。失敗した場合は原因に応じた修正を先に行う。
 
 ```bash
 python scripts/publish_request.py prepare
 python scripts/publish_request.py connector-plan \
   --develop-head <current-develop-head> \
   --publish-head <current-publish-head>
-# 全transaction共通: connector-plan の execution_index を INDEX_PATH に指定し、
-# scripts/publish_connector_launch.js の固定sourceを1回 functions.exec で実行。
-# transaction固有の実行source生成やBase64本文の転記は行わない。
+# connector-plan が返した execution_index を INDEX_PATH に指定し、
+# scripts/publish_connector_launch.js を functions.exec で実行する。
 python scripts/publish_request.py record \
-  --gateway-transport-commit <publish-transport-commit> \
-  --gateway-run-id <publish-gateway-run-id> \
+  --gateway-transport-commit <transport-commit> \
+  --gateway-run-id <gateway-run-id> \
   --gateway-conclusion success
 ```
 
-transportは `.publish/transport/<target>/0000.b64` から始まる固定slotを使用する。bundleのBase64表現を16 KiB固定logical chunkへ分割するが、chunkごとの `create_blob` は行わない。`connector-plan` は各chunk本文を `create_tree` entryの `content` として直接指定し、Connectorの1 call上限144 KiB未満に収まるよう複数tree batchへpackする。transport全体は最大256 partまで扱い、144 KiBはtransport全体の上限ではなく単一Connector callの上限とする。
+`connector-plan`はsource-snapshot由来の`publish` base treeとローカルcommitから正規packetを構築する。transportは`.publish/transport/<target>/`の連番固定slotを使用し、各`create_tree` callはConnectorの入力上限内に収める。packet内容・入力整合性・期待treeはhelperとExecutorが検証する。Gatewayはbundle内のexact commitを正規のnon-force経路で`develop`へ反映し、Fast CIを起動する。
 
-helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除対象pathから各batch後の期待root tree SHAをlocal Gitで事前計算する。第2batch以降は直前batchの期待treeをbaseとする。返却SHAが期待値と異なる場合は、そのcallに使用した転記情報を正しい入力の候補として保持せず、次batchへ進まない。返却SHAの一致が成立したpacketについてのみ次のpacketを実行する。tree write間に追加のhelper callやGitHub readを挟まない。
+### Transaction continuation
 
-初回移行時に旧 `.publish` transport artifactが残っている場合も、固定slot以外の旧artifactを同じunreferenced tree組立の中で削除し、部分的なremote状態を作らない。
+- **ref更新前**：保持されているtransactionの`execution_index`から固定Launcherを実行する。原本packetの検証・期待tree照合が成立しない場合は、そのtransactionを保持して原因を解決する。
+- **ref更新後**：transport commitに紐づくGateway結果を取得し、成功なら`record`する。一時的なGateway障害には同じrunの再実行を使う。
+- **record済み**：次のpublishに進める。直前Fast CIの結果は次のpublish判断時に確認する。
 
-Gatewayはtransport commitをcheckoutした後、そのworking treeにある固定slotだけを読む。GitHub Contents / Blob APIでpayloadを再取得せず、連番partを連結してbundleを検証し、bundleからpublish commit、base、target treeを導出する。checkout済み `origin/<target>` がbundle parentと一致することをローカル確認した後、exact publish commitをnon-force pushする。成功したpush後の `ls-remote` /再fetch、receipt書込み、Fast CI pending status書込みは行わない。Fast CIの明示dispatchは `GITHUB_TOKEN` pushから別workflowが自動起動しないため維持する。
-
-#### Tool-call argument handoff and resumption
-
-`connector-plan` が生成した JSON packet の **`action_args` 全体**が GitHub Connector の入力である。ローカルファイルpath、ZIP、packetの要約、logical chunkの一部はtool call引数の代わりにならない。`expected_tree` は結果照合用であり、GitHubの `create_tree` 引数に混入させない。
-
-ツール実行環境とlocal repoのファイルシステムは分離している。`connector-plan` は正規 `tree-batch-NNN.json` / `create-transport-commit.json` を検証したうえで、同じdirectoryへ小さな `execution-index.json` を生成する。Indexは原本packetの**名前・サイズ・fingerprintとtransaction identity**のみを保持し、packet本文をコピーしない。ファイル数にかかわらず次の固定経路を使う。
-
-1. `connector-plan` の出力にある `execution_index` を `INDEX_PATH` に指定し、固定 `scripts/publish_connector_launch.js` を実行する。Launcherは `GitHub.fetch_file` で共有 `develop` の `scripts/publish_connector_executor.js` を直接取得する。取得したsourceを手動転記・ハッシュ確認せず、同じ呼出し内で実行する。INDEX_PATH以外のtransaction固有入力は追加しない。
-2. 固定処理はまずIndexを `files.manage_library` へ `container_path` で一時登録し、返却file IDを `files.read` で取得する。反映遅延には上限付き再読取を使う。Indexを読取後は必ずLibraryから削除確認する。
-3. Index記載の全原本packetを最大20件ずつ一時登録し、最大5件ずつ全文を読取る。ファイル長、fingerprint、連番、tree chain、commit parent、target repository、transaction identityをチェックする。各登録groupは読取成否にかかわらず削除確認し、**すべての入力の検証・削除を完了してから**GitHub操作を開始する。Library削除はゴミ箱移動であり完全消去ではない。
-4. 原本packetの `action_args` だけを使用し、`create_tree` → 返却SHA照合 → `create_commit` → `publish` non-force `update_ref` を同一呼出しで順番に実行する。必要な原本packetの枚数が異なっても、転記する処理と操作手順は同一。GitHubで拒否された場合は迂回しない。
-
-固定executorの全文を毎回生成・編集・提示・手動検査する必要はない。SHA・fingerprint・source長の手動照合も行わない。これらはhelper・executorが自動で検証し、期待SHA不一致や読取不能はGitHub書込み前または該当tree batchで停止する。`INDEX_PATH` の1値のみがtransactionごとに変わる。共有 `develop` にあるexecutorはpublish済みの正本なので、未publishのローカルexecutor変更を先に実行させない。executorの変更時は既存の共有executorが理解するpacket契約を維持してpublishする。受渡し不成立時にBase64全文転記や別transport方式へ戻さず、transactionを保持して原因を解決する。
-再開時は、次の4状態を区別して作業位置を記録する。通常は追加のhelper round-tripを挟まず、一括呼出しの結果をそのまま確認する。
-
-1. `execution-plan-ready`：packet生成済み、GitHubへのtree書込みは未確認。`summary.json` とpacket自身の `tree_batch_index`、`expected_tree` が再開基点となる。
-2. `tree batch N established`：そのbatchの `create_tree` 返却SHAと `expected_tree` の一致を**実際に確認済み**。未確認batchを成功扱いせず、次のbatchだけ実行する。
-3. `transport ref updated`：最終tree成立、生成済みcommit packetでのcommit作成、返却SHAを渡したnon-force `publish` ref更新まで成立済み。Gatewayのrun ID・conclusion待ち。
-4. `recorded`：同じtransport SHAのGateway runが `completed/success`、`record`成功済み。
-
-会話やツール実行が中断しても、確認済みの境界より先に進まない。`create_tree` 呼出しの成否を確定できない場合、packetの `expected_tree` が一致する返却値を観測していない限り成立済みと宣言しない。ref更新前の転記失敗には `Pre-ref packet retry` を適用する。再開のためにpacketを再生成、再分割、別転送経路へupload、既存local commitをrebase/resetしない。`DEVELOPMENT.md`のこの節は手順を明示するものであり、既存transactionのpacketやGateway書込経路を変更する許可ではない。
-
-#### Transaction continuation and cancellation
-
-active transactionが存在する場合は、その記録済みexecution planから続行する。prepared targetを `publish` refへ出す前に取り消す場合だけ、heads一覧を1回観測し、`develop` と`publish` の両HEADがtransaction開始時から不変であることをhelperへ渡して `cancel` する。tree/commit objectの作成だけでrefが未更新なら、生成済みobjectはunreferenced objectとして扱いcancel可能である。transaction directoryを手動削除しない。
+ref更新前のtransactionを取り消す場合は、現在の`develop` / `publish` HEADを取得し、helperの`cancel`へ渡す。helperが両HEADとtransactionの一致を検証する。
 
 ```bash
 python scripts/publish_request.py cancel \
@@ -169,30 +139,18 @@ python scripts/publish_request.py cancel \
   --publish-head <current-publish-head>
 ```
 
-#### Pre-ref packet retry
-
-`create_tree` が返したSHAとpacketの `expected_tree` が不一致なら、そのcallに使った引数投影を破棄して進行を停止する。元のactive transactionにあるpacketは変更せず、原本packetと実行Indexを再照合し、固定実行処理で同一packetから**最初から**再実行する。途中だけの編集、差分再パック、違うtransport方式への置換、remote treeの追加readによる代用はしない。正規sourceで再試行しても一致しない場合はConnector/helper障害としてtransactionを保持する。
-
-`connector-blob` / `connector-tree` / `connector-commit` のような返却SHA中継stageを作らない。返却tree SHAとの比較は生成済みpacketの `expected_tree` で完結し、commit返却SHAはそのままnon-force ref updateへ渡す。
-
-ref更新後の一時的なGateway障害では、同じtransport commitのworkflow rerunを用いる。target移動やcontrol不一致など意味のあるGateway failureは原因を解消してから次のpublish判断を行う。
-
 ### Workflow maintenance procedure
 
-`.github/workflows/**` だけを変更したcommitは `scripts/workflow_maintenance.py` で `develop` へ反映する。
+`.github/workflows/**`だけを変更したcommitは`scripts/workflow_maintenance.py`で`develop`へ反映する。
 
-1. workflow-only commitを現在の `HEAD` として `prepare` する。
-2. remote `develop` HEADを1回取得し、そのSHAを `connector-plan` に渡す。
-3. helperが変更本文を `content` として持つ `create_tree` packet群、最終 `create_commit` packet、non-force ref updateの実行条件を一度に生成する。144 KiBを超える変更は複数tree batchへ分割する。
-4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。不一致時は `Pre-ref packet retry` に従って保持中の転記情報を破棄し、generated packetから新規転記する。成立後に生成済みcommit packetを実行し、その返却SHAを直接non-force `develop` ref updateへ渡す。中間helper round-tripやcommit再fetchは行わない。
-5. ref update成功後、同じcommit SHAを `record-update --result success` へ渡す。追加のremote HEAD/tree再取得は行わない。
-6. 成功後は新しい `develop` のFast CIが生成した `source-snapshot` からrepoを復元し、`publish_request.py init` で通常開発へ戻る。
+1. `prepare`し、取得したremote`develop` HEADを`connector-plan`へ渡す。
+2. helper生成の`create_tree` packetを順番に実行して期待tree SHAを照合し、最終`create_commit`の返却SHAで`develop`をnon-force更新する。
+3. 更新に用いたcommit SHAを`record-update`へ渡す。成功後は最新Fast CIの`source-snapshot`からローカルrepoを復元し、`publish_request.py init`する。
 
 ```bash
 python scripts/workflow_maintenance.py prepare
 python scripts/workflow_maintenance.py connector-plan \
   --develop-head <current-develop-head>
-# generated tree packet群 → create_commit → non-force develop ref update を順番に実行
 python scripts/workflow_maintenance.py record-update \
   --commit-sha <create-commit-result-sha> \
   --result success
@@ -200,33 +158,22 @@ python scripts/workflow_maintenance.py record-update \
 
 ### Publish control maintenance procedure
 
-Publish Gateway control plane (`.github/workflows/publish-gateway.yml` とvalidator) は `scripts/publish_control_maintenance.py` で固定 `publish` branchへ反映する。通常game/source publishとは混在させない。
+Publish Gatewayのcontrol planeは`scripts/publish_control_maintenance.py`で固定`publish`へ反映する。
 
-1. control plane変更をcommitし、clean worktreeで `prepare` する。
-2. remote `publish` HEADを1回観測して `connector-plan` へ渡す。base treeはsource-snapshot由来のlocal publish stateを使うため再取得しない。
-3. helperがcontrol file本文を `content` として持つ `create_tree` packet群と最終 `create_commit` packetを一度に生成する。各batchの期待tree SHAはlocal Gitで事前計算する。
-4. tree packet群を順番に実行し、各返却SHAをpacketの `expected_tree` と比較する。不一致時は `Pre-ref packet retry` に従って保持中の転記情報を破棄し、generated packetから新規転記する。成立後にcommit packetを実行し、返却commit SHAを直接non-force `publish` ref updateへ渡す。中間helper round-tripやcommit object再fetchは行わない。
-5. `update_ref` 成功後は同じcommit SHAを `record-update --result success` へ渡す。追加のremote HEAD/tree再取得は行わず、helperがnormal publish stateの `publish` baseを更新する。
+1. control plane変更をcommitして`prepare`し、取得したremote`publish` HEADを`connector-plan`へ渡す。
+2. helper生成の`create_tree` packetを順番に実行して期待tree SHAを照合し、最終`create_commit`の返却SHAで`publish`をnon-force更新する。
+3. 更新に用いたcommit SHAを`record-update`へ渡す。helperが次の通常publishに使うcontrol baseを更新する。
 
 ```bash
 python scripts/publish_control_maintenance.py prepare
 python scripts/publish_control_maintenance.py connector-plan \
   --publish-head <current-publish-head>
-# generated tree packet群 → create_commit → non-force publish ref update を順番に実行
 python scripts/publish_control_maintenance.py record-update \
   --commit-sha <create-commit-result-sha> \
   --result success
 ```
 
-control planeでも正常系のための個別 `create_blob` と返却OID中継stageを設けない。content-addressed tree identityで転送内容を検証し、廃止したcontrol componentは同じcontrol treeから削除して新旧control経路を併存させない。
-
-### Publish recovery
-
-pre-refの `create_tree` 期待SHA不一致は `Pre-ref packet retry` に従い、失敗した転記情報を破棄してgenerated packetから新規転記する。pre-ref recoveryの入力は正本packetと返却SHAの一致判定に限定し、正本packetの新規転記を繰り返しても成立しない場合だけConnector / helper経路の開発基盤障害として扱う。ref更新後にGateway runが一時的理由で失敗した場合は、同じtransport commitのGitHub Actions rerunを使用する。別のrequest/generationを書き足して復旧しない。
-
-Gatewayがtarget branch移動、trusted workflow不一致、bundle不整合等の意味のある条件で停止した場合は、active transactionと該当runを証拠として原因を調査する。remote target状態やpublish対象そのものが変わった場合はtransport recoveryではなく、新しいsource stateから次のpublishを判断する。
-
-Workflow maintenanceで問題が発生した場合も、helper stageが生成したpacketと検証結果を正本として処理する。
+Workflow / control maintenanceでpacket照合が成立しない場合は、保持中の正規packetと返却値を確認して該当transactionを再実行する。意味のあるref競合・Gateway検証失敗は原因を解消してから次の更新を判断する。
 
 ## CI
 
