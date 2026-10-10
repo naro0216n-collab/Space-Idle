@@ -18,14 +18,22 @@ from space_idle.analysis_coverage import inspect_definition_coverage
 from space_idle.analysis_technology_outlets import classify_technology_outlets
 from space_idle.composition.analysis_graph import build_definition_dependency_graph
 from space_idle.analysis_observation import observe_state
+from scripts.analysis_decision_projection import observe_application_decisions
 from space_idle.shared import DefinitionId, SpatialNodeId
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", help="Definition node as kind:id; omit for complete static graph")
+    parser.add_argument("--root", help="Static Definition node as kind:id; does not filter current Application decisions")
     parser.add_argument("--reverse", action="store_true", help="Follow upstream dependencies of root")
     parser.add_argument("--state", action="store_true", help="Add a separate snapshot of domain-owned stocks and capacities")
+    parser.add_argument("--decisions", action="store_true", help="Read current candidate eligibility and blockers from Application Queries")
+    parser.add_argument("--founding-target", action="append", metavar="BODY:CONTEXT",
+                        help="Only with --decisions: evaluate one non-surface Founding Context")
+    parser.add_argument("--surface-cell", action="append", metavar="BODY:CELL",
+                        help="Only with --decisions: evaluate one Surface founding/development Cell")
+    parser.add_argument("--transport-pair", action="append", metavar="ORIGIN:DESTINATION",
+                        help="Only with --decisions: evaluate one Transport OD pair")
     parser.add_argument("--coverage", action="store_true", help="Include informational authoring-coverage findings")
     parser.add_argument("--technology-outlets", action="store_true", help="Report direct and prerequisite-only technology paths to declared usable methods")
     parser.add_argument("--node", action="append", help="Restrict state observation to this operational node; repeatable")
@@ -42,8 +50,23 @@ def main() -> None:
         if root not in graph.nodes:
             parser.error(f"unknown Definition node: {args.root}")
         graph = graph.subset((root,), downstream=not args.reverse)
-    if (args.node or args.resource) and not args.state:
-        parser.error("--node and --resource require --state")
+    if args.node and not (args.state or args.decisions):
+        parser.error("--node requires --state or --decisions")
+    if (args.founding_target or args.surface_cell or args.transport_pair) and not args.decisions:
+        parser.error("--founding-target, --surface-cell and --transport-pair require --decisions")
+    def pairs(values, option_name):
+        parsed = []
+        for value in values or ():
+            first, delimiter, second = value.partition(":")
+            if not delimiter or not first or not second:
+                parser.error(f"{option_name} requires two IDs separated by :")
+            parsed.append((first, second))
+        return tuple(parsed)
+    founding_targets = pairs(args.founding_target, "--founding-target")
+    surface_cells = pairs(args.surface_cell, "--surface-cell")
+    transport_pairs = pairs(args.transport_pair, "--transport-pair")
+    if args.resource and not args.state:
+        parser.error("--resource requires --state")
     result = graph.to_json_data()
     if args.coverage:
         result = {"definition_graph": result, "coverage_findings": [
@@ -75,13 +98,22 @@ def main() -> None:
         if "definition_graph" not in result:
             result = {"definition_graph": result}
         result["technology_outlets"] = report
+    if args.decisions:
+        decisions = observe_application_decisions(
+            app, operational_node_ids=(None if not args.node else frozenset(SpatialNodeId(value) for value in args.node)),
+            founding_targets=founding_targets, surface_cells=surface_cells,
+            transport_pairs=transport_pairs,
+        )
+        if "definition_graph" not in result:
+            result = {"definition_graph": result}
+        result["current_eligibility"] = decisions
     if args.state:
         state = observe_state(
             app._simulation,
             operational_node_ids=(None if not args.node else frozenset(SpatialNodeId(value) for value in args.node)),
             resource_ids=(None if not args.resource else frozenset(DefinitionId(value) for value in args.resource)),
         )
-        if args.coverage or args.technology_outlets:
+        if args.coverage or args.technology_outlets or args.decisions:
             result["state_observation"] = state.to_json_data()
         else:
             result = {"definition_graph": result, "state_observation": state.to_json_data()}

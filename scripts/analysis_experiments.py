@@ -85,9 +85,10 @@ class ExperimentRun:
     attempted_commands: tuple[dict, ...]
     canonical_traces: tuple[CanonicalDayTrace, ...]
     flow_reconciliation: tuple[dict, ...]
+    decision_observations: tuple[dict, ...] = ()
 
     def to_json_data(self) -> dict:
-        return {
+        result = {
             "name": self.name, "content_id": self.content_id,
             "world_definition_id": self.world_definition_id,
             "scenario_id": self.scenario_id,
@@ -103,6 +104,9 @@ class ExperimentRun:
             "attempted_commands": list(self.attempted_commands),
             "rejected_commands": [vars(row) for row in self.rejected_commands],
         }
+        if self.decision_observations:
+            result["decision_observations"] = list(self.decision_observations)
+        return result
 
 
 def _content_definitions_sha(app: GameApplication, graph_data: dict) -> str:
@@ -170,6 +174,10 @@ def run_experiments(
     cases: Sequence[ExperimentCase], *, days: int,
     operational_node_ids: frozenset[SpatialNodeId] | None = None,
     resource_ids: frozenset[DefinitionId] | None = None,
+    observe_decisions: bool = False,
+    founding_targets: tuple[tuple[str, str], ...] = (),
+    surface_cells: tuple[tuple[str, str], ...] = (),
+    transport_pairs: tuple[tuple[str, str], ...] = (),
 ) -> tuple[ExperimentRun, ...]:
     """Run independent cases with real Commands and canonical one-day steps.
 
@@ -196,6 +204,17 @@ def run_experiments(
         start_state_sha = _digest(capture_state(sim))
         observations = [observe_state(sim, operational_node_ids=operational_node_ids,
                                       resource_ids=resource_ids)]
+        if observe_decisions:
+            from scripts.analysis_decision_projection import observe_application_decisions
+            def snapshot():
+                return observe_application_decisions(
+                    app, operational_node_ids=operational_node_ids,
+                    founding_targets=founding_targets, surface_cells=surface_cells,
+                    transport_pairs=transport_pairs,
+                )
+            decision_observations = [snapshot()]
+        else:
+            decision_observations = []
         failures: list[RejectedExperimentCommand] = []
         attempted: list[dict] = []
         traces: list[CanonicalDayTrace] = []
@@ -219,10 +238,13 @@ def run_experiments(
                                    for row in trace.reconcile(before, _stocks(sim, operational_node_ids, resource_ids)))
             observations.append(observe_state(sim, operational_node_ids=operational_node_ids,
                                               resource_ids=resource_ids))
+            if observe_decisions:
+                decision_observations.append(snapshot())
         runs.append(ExperimentRun(
             case.name, app.content_id, app.world_definition_id, app.scenario_id,
             _digest(graph.to_json_data()), start_state_sha, content_sha, tuple(observations),
             tuple(failures), tuple(attempted), tuple(traces), tuple(reconciliations),
+            tuple(decision_observations),
         ))
     return tuple(runs)
 
@@ -320,6 +342,45 @@ def _compare_allocations(baseline: ExperimentRun, variant: ExperimentRun, *, com
     return rows
 
 
+def _decision_changes(baseline: ExperimentRun, variant: ExperimentRun) -> list[dict] | None:
+    """Differences between public Query results, not evaluations of strategy.
+
+    A missing candidate remains null, never "blocked". Qualitative blocker and
+    numeric preview changes both matter; choices with different Content are
+    compared as differently authored identities, not equated by display name.
+    """
+    if not baseline.decision_observations or not variant.decision_observations:
+        return None
+    b, v = baseline.decision_observations, variant.decision_observations
+    if len(b) != len(v) or [x["day"] for x in b] != [x["day"] for x in v]:
+        raise ValueError("decision observation days differ")
+    for left, right in zip(b, v):
+        if any(left[field] != right[field] for field in (
+            "operational_node_scope", "on_demand_founding_targets",
+            "on_demand_surface_cells", "on_demand_transport_pairs",
+        )):
+            return None
+
+    def rows(snapshot):
+        return {(item["kind"], item["context"], item["id"]): item
+                for item in snapshot["entries"]}
+    old_initial, old_final, new_initial, new_final = map(rows, (b[0], b[-1], v[0], v[-1]))
+    output = []
+    for kind, context, identity in sorted(old_initial.keys() | old_final.keys()
+                                          | new_initial.keys() | new_final.keys()):
+        key = kind, context, identity
+        initial_b, final_b = old_initial.get(key), old_final.get(key)
+        initial_v, final_v = new_initial.get(key), new_final.get(key)
+        if initial_b == initial_v and final_b == final_v:
+            continue
+        output.append({
+            "kind": kind, "context": context, "id": identity,
+            "baseline_initial": initial_b, "variant_initial": initial_v,
+            "baseline_final": final_b, "variant_final": final_v,
+        })
+    return output
+
+
 def compare_experiments(runs: Sequence[ExperimentRun]) -> dict:
     """Compare observed final stocks/capacities, without inferring gross Flow.
 
@@ -373,6 +434,7 @@ def compare_experiments(runs: Sequence[ExperimentRun]) -> dict:
             "allocation_differences": _compare_allocations(baseline, variant, comparable=same_observation_scope),
             "same_observation_scope": same_observation_scope,
             "rejected_commands": [vars(row) for row in variant.rejected_commands],
+            "decision_differences": _decision_changes(baseline, variant),
             "same_comparison_conditions": (
                 baseline.content_definitions_sha256 == variant.content_definitions_sha256
                 and baseline.initial_state_sha256 == variant.initial_state_sha256

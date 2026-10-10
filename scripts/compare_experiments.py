@@ -86,13 +86,35 @@ def main() -> None:
     parser.add_argument("plan", type=Path, help="JSON experiment plan")
     parser.add_argument("--node", action="append", help="Only observe a specified Operational Node")
     parser.add_argument("--resource", action="append", help="Only observe a specified Resource")
+    parser.add_argument("--decisions", action="store_true",
+                        help="Opt-in snapshots of Application eligibility at each observed day")
+    parser.add_argument("--founding-target", action="append", metavar="BODY:CONTEXT",
+                        help="With --decisions: query a specific non-surface Founding context")
+    parser.add_argument("--surface-cell", action="append", metavar="BODY:CELL",
+                        help="With --decisions: query a specific Surface founding/development Cell")
+    parser.add_argument("--transport-pair", action="append", metavar="ORIGIN:DESTINATION",
+                        help="With --decisions: query a Transport Allocation OD")
     args = parser.parse_args()
+    if not args.decisions and (args.founding_target or args.surface_cell or args.transport_pair):
+        parser.error("--founding-target, --surface-cell and --transport-pair require --decisions")
+    def pairs(values, flag):
+        rows = []
+        for value in values or ():
+            lhs, delimiter, rhs = value.partition(":")
+            if not delimiter or not lhs or not rhs:
+                parser.error(f"{flag} needs two IDs separated by :")
+            rows.append((lhs, rhs))
+        return tuple(rows)
     payload = json.loads(args.plan.read_text(encoding="utf-8"))
     days, cases = parse_cases(payload)
     runs = run_experiments(
         cases, days=days,
         operational_node_ids=(None if args.node is None else frozenset(map(SpatialNodeId, args.node))),
         resource_ids=(None if args.resource is None else frozenset(map(DefinitionId, args.resource))),
+        observe_decisions=args.decisions,
+        founding_targets=pairs(args.founding_target, "--founding-target"),
+        surface_cells=pairs(args.surface_cell, "--surface-cell"),
+        transport_pairs=pairs(args.transport_pair, "--transport-pair"),
     )
     result = {"runs": [run.to_json_data() for run in runs],
               "comparison": compare_experiments(runs)}

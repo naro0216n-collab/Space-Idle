@@ -143,6 +143,143 @@ def test_registered_definition_alternatives_require_shared_inputs_and_physical_c
     assert capture_state(app._simulation) == before
 
 
+def test_current_decision_projection_uses_live_queries_and_does_not_change_owner_state(monkeypatch, capsys):
+    """Static relations, present eligibility and actual settlements never share a solver.
+
+    The explicit Founder/Transport scopes are ordinary Domain Queries and
+    their blockers are not inferred from Content names or the static Graph.
+    """
+    from dataclasses import asdict
+
+    from scripts.analysis_decision_projection import observe_application_decisions
+    from space_idle.app_contracts.queries import (
+        GetBuildOptions, GetCatalog, GetLogistics, GetMarket, GetNonSurfaceFoundingOptions,
+        GetOperationalNode, GetResearch, GetSurfaceMap, GetTransportAllocationOptions, GetWorld,
+    )
+
+    app, ordinary = build_game_application(), build_game_application()
+    before = capture_state(app._simulation)
+    world = app.query(GetWorld())
+    selected = world.operational_nodes[0].id
+    scope = frozenset((SpatialNodeId(selected),))
+    founding_target = next((body.id, context.spatial_node_id)
+                          for body in app.query(GetCatalog()).celestial_bodies
+                          for context in app.query(GetNonSurfaceFoundingOptions(body.id)).contexts
+                          if not context.operational)
+    transport_pair = (world.operational_nodes[0].id, world.operational_nodes[1].id)
+    surface = next(body for body in app.query(GetCatalog()).celestial_bodies
+                   if body.id == "base.body.earth")
+    surface_cell = (surface.id, app.query(GetSurfaceMap(surface.id)).cells[0].id)
+    observed = observe_application_decisions(
+        app, operational_node_ids=scope,
+        founding_targets=(founding_target,), surface_cells=(surface_cell,),
+        transport_pairs=(transport_pair,),
+    )
+    assert observed["day"] == world.day
+    assert observed["operational_node_scope"] == [selected]
+    assert observed["layer"] == "application_current_eligibility"
+    assert capture_state(app._simulation) == before
+    assert observed == observe_application_decisions(
+        app, operational_node_ids=scope,
+        founding_targets=(founding_target,), surface_cells=(surface_cell,),
+        transport_pairs=(transport_pair,),
+    )
+    rows = observed["entries"]
+    assert rows == sorted(rows, key=lambda row: (row["kind"], row["context"], row["id"]))
+    assert all(isinstance(row["blockers"], list) for row in rows)
+    assert len({(row["kind"], row["context"], row["id"]) for row in rows}) == len(rows)
+    by_kind = {}
+    for row in rows:
+        by_kind.setdefault(row["kind"], []).append(row)
+    local = app.query(GetOperationalNode(selected))
+    for facility in local.facilities:
+        value = next(row for row in by_kind["facility_decommission"] if row["id"] == facility.id)
+        assert (value["allowed"], value["blockers"]) == (
+            facility.can_decommission, [asdict(item) for item in facility.decommission_blockers])
+    for industry in local.industry:
+        for option in industry.process_options:
+            row = next(value for value in by_kind["process_selection"]
+                       if value["id"] == f"{industry.facility_id}:{option.process_id}")
+            assert row["allowed"] == option.can_select
+            assert row["blockers"] == [asdict(item) for item in option.blockers]
+    for extraction in local.extraction:
+        for option in extraction.method_options:
+            row = next(value for value in by_kind["extraction_selection"]
+                       if value["id"] == f"{extraction.facility_id}:{option.method_id}")
+            assert row["allowed"] == option.can_select
+            assert row["blockers"] == [asdict(item) for item in option.blockers]
+    for option in app.query(GetBuildOptions(selected)).items:
+        row = next(value for value in by_kind["facility_construction"]
+                   if value["id"] == option.facility_definition_id)
+        assert row["allowed"] == option.can_plan
+        assert row["blockers"] == [asdict(item) for item in option.blockers]
+    by_research = {row["id"]: row for row in by_kind["research_start"]}
+    for research in app.query(GetResearch()).items:
+        assert by_research[research.id]["allowed"] == research.can_start
+        assert by_research[research.id]["blockers"] == [asdict(value) for value in research.start_blockers]
+    assert any(not row["allowed"] and row["blockers"] for row in by_research.values())
+    for candidate in app.query(GetLogistics()).vehicle_production_options:
+        if candidate.operational_node_id != selected:
+            continue
+        row = next(value for value in by_kind["vehicle_production"]
+                   if value["id"] == candidate.vehicle_definition_id)
+        assert row["allowed"] == candidate.can_plan
+        assert row["blockers"] == [asdict(value) for value in candidate.blockers]
+    for option in app.query(GetNonSurfaceFoundingOptions(*founding_target)).contexts:
+        if option.spatial_node_id != founding_target[1]:
+            continue
+        for founding in option.foundation_options:
+            row = next(value for value in by_kind["non_surface_founding"]
+                       if value["id"] == founding.comparison_key)
+            assert row["allowed"] == founding.can_plan
+            assert row["blockers"] == [asdict(value) for value in founding.blockers]
+    map_view = app.query(GetSurfaceMap(surface_cell[0], founding_cell_ids=(surface_cell[1],)))
+    selected_cell = next(item for item in map_view.cells if item.id == surface_cell[1])
+    for found in selected_cell.foundation_options:
+        row = next(value for value in by_kind["surface_founding"]
+                   if value["id"] == found.comparison_key)
+        assert row["allowed"] == found.can_plan
+        assert row["blockers"] == [asdict(value) for value in found.blockers]
+    for development in selected_cell.development_options:
+        row = next(value for value in by_kind["surface_development"]
+                   if value["id"] == development.location_id)
+        assert row["allowed"] == development.can_plan
+        assert row["blockers"] == [asdict(value) for value in development.blockers]
+    for option in app.query(GetTransportAllocationOptions(*transport_pair)).options:
+        row = next(value for value in by_kind["transport_allocation_option"]
+                   if value["observed"]["vehicle_definition_id"] == option.vehicle_definition_id)
+        assert row["allowed"] is None  # Query deliberately does not expose can_plan.
+        assert row["blockers"] == [asdict(value) for value in option.blockers]
+    interfaces = {item.id: item.operational_node_id for item in app.query(GetMarket()).interfaces}
+    assert all(interfaces[row["observed"]["market_interface_id"]] == selected
+               for row in by_kind.get("market_order", ()))
+    with pytest.raises(ValueError, match="unknown Operational Node"):
+        observe_application_decisions(app, operational_node_ids=frozenset((SpatialNodeId("invalid.node"),)))
+    # The executable dev export keeps static graph, current eligibility and
+    # inventory/capacity observation as separate layers with the same node ID.
+    import sys
+    from scripts.analyze_definition_graph import main as export_graph
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "argv", ["analyze_definition_graph.py", "--state", "--decisions",
+                                    "--coverage", "--technology-outlets",
+                                    "--node", selected, "--founding-target",
+                                    ":".join(founding_target), "--surface-cell",
+                                    ":".join(surface_cell), "--transport-pair",
+                                    ":".join(transport_pair)])
+        export_graph()
+    exported = json.loads(capsys.readouterr().out)
+    assert exported["current_eligibility"] == observed
+    assert exported["state_observation"]
+    assert exported["definition_graph"]
+    assert len(exported["technology_outlets"]) == len(app.query(GetResearch()).items)
+    assert isinstance(exported["coverage_findings"], list)
+    assert exported["current_eligibility"]["layer"] != exported["state_observation"].get("layer")
+    assert capture_state(app._simulation) == before
+    for instance in (app, ordinary):
+        instance.execute(AdvanceTime(2))
+    assert capture_state(app._simulation) == capture_state(ordinary._simulation)
+
+
 def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save_and_gameplay():
     ordinary = build_game_application()
     observed = build_game_application()
@@ -406,6 +543,50 @@ def test_case_execution_reproducibility_projection_and_missing_observation_paret
     assert all(row['difference'] is not None for row in report['allocation_differences'])
     assert runs[0].content_definitions_sha256 == runs[1].content_definitions_sha256
     assert runs[0].initial_state_sha256 != runs[1].initial_state_sha256
+    # Optional experiments consume exactly the same canonical Simulation and
+    # preserve rejection semantics; they merely add read-only Query snapshots.
+    decision_runs = run_experiments(cases, days=days, observe_decisions=True,
+                                    operational_node_ids=frozenset((SpatialNodeId(node),)))
+    repeated = run_experiments(cases, days=days, observe_decisions=True,
+                               operational_node_ids=frozenset((SpatialNodeId(node),)))
+    assert [item.to_json_data() for item in decision_runs] == [item.to_json_data() for item in repeated]
+    assert all(len(item.decision_observations) == days + 1 for item in decision_runs)
+    scoped_runs = run_experiments(cases, days=days,
+                                  operational_node_ids=frozenset((SpatialNodeId(node),)))
+    assert all(item.observations == run.observations
+               and item.rejected_commands == run.rejected_commands
+               and item.canonical_traces == run.canonical_traces
+               for item, run in zip(decision_runs, scoped_runs))
+    decision_diff = compare_experiments(decision_runs)['comparisons'][0]['decision_differences']
+    assert isinstance(decision_diff, list)
+    assert all(row['baseline_initial'] is None or row['baseline_initial']['kind'] == row['kind']
+               for row in decision_diff)
+    assert report['decision_differences'] is None
+    # Independent Definition additions change *candidate membership*, not
+    # the canonical eligibility rule. Missing alternatives are null, not false.
+    from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    added = DefinitionId("experiment.alternative.food_process")
+    def alternative_factory():
+        def insert(sim, _catalog):
+            sim.industry.processes[added] = replace(
+                sim.industry.processes[PROCESS_FOOD_PRODUCTION], id=added,
+                display_name="Alternate food processing",
+            )
+        return build_game_application_for_scenario(
+            build_standard_scenario_definition(), definition_transform=insert,
+        )
+    alternate = run_experiments((ExperimentCase("standard", build_game_application, _idle),
+                                 ExperimentCase("added-method", alternative_factory, _idle)),
+                                days=0, observe_decisions=True)
+    changed = compare_experiments(alternate)['comparisons'][0]
+    assert not changed['same_content_definitions']
+    assert any(item['kind'] == 'process_selection'
+               and item['id'].endswith(f":{added}")
+               and item['baseline_initial'] is None
+               and item['variant_initial'] is not None
+               for item in changed['decision_differences'])
+    assert alternate[0].initial_state_sha256 == alternate[1].initial_state_sha256
     assert all(abs(row['unattributed_delta_t']) < 1e-7 for run in runs for row in run.flow_reconciliation)
     payload = {'runs': [run.to_json_data() for run in runs]}
     assert 'inventory_in' in to_csv(payload, 'inventory_movements')
