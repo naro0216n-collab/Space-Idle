@@ -232,6 +232,91 @@ def _metrics(observation: StateObservation) -> dict[MetricKey, StateMetric]:
             for m in observation.metrics}
 
 
+def _settlement_totals(run: ExperimentRun) -> dict[tuple[str, str, str, str, str, str], float]:
+    """Observe independent physical settlement boundaries, never graph-implied Flow.
+
+    An Inventory admission and a later Cargo dispatch remain separate physical
+    handoffs. They are not summed into fictitious production or net transferred
+    tonnage. Custody is a third distinct layer, not gross production.
+    """
+    from collections import defaultdict
+
+    totals = defaultdict(float)
+    for trace in run.canonical_traces:
+        for row in trace.activity_flows():
+            key = ("activity", row.resource_id, row.source_owner,
+                   row.activity_id, row.destination_owner, row.operation)
+            totals[key] += row.quantity_t
+        for row in trace.custody_transfers():
+            key = ("custody", row.resource_id, row.source_owner,
+                   "", row.destination_owner, row.operation)
+            totals[key] += row.quantity_t
+        for row in trace.unattributed_movements():
+            inventory = f"inventory:{row.node_id}"
+            source = "unknown" if row.direction == "inventory_in" else inventory
+            target = inventory if row.direction == "inventory_in" else "unknown"
+            key = ("unknown", row.resource_id, source, "", target, row.operation)
+            totals[key] += row.quantity_t
+    return dict(totals)
+
+
+def _allocation_totals(run: ExperimentRun) -> dict[tuple[str, str, str, str, str], tuple[float, float, float]]:
+    """Time-integrated observed demand and fulfillment, with original typed units."""
+    totals = {}
+    for trace in run.canonical_traces:
+        for metric in trace.allocations:
+            if metric.kind == "finite_constraint":
+                continue  # Capacity is a stock/rate bound, not requested work.
+            # The observed allocation is a rate for one canonical day. One
+            # tick integrates exactly one day: t/day -> t, executions/day ->
+            # executions, without creating another allocation or stock owner.
+            integrated_unit = (metric.unit[:-4] if metric.unit.endswith("/day")
+                               else metric.unit)
+            key = (metric.kind, metric.subject_id, metric.context_id,
+                   integrated_unit, metric.provenance)
+            old = totals.get(key, (0.0, 0.0, 0.0))
+            totals[key] = tuple(a + (0.0 if b is None else b) for a, b in zip(
+                old, (metric.requested, metric.allocated, metric.unmet)
+            ))
+    return totals
+
+
+def _compare_settlements(baseline: ExperimentRun, variant: ExperimentRun, *, comparable: bool) -> list[dict]:
+    source, target = _settlement_totals(baseline), _settlement_totals(variant)
+    rows = []
+    for key in sorted(source.keys() | target.keys()):
+        old, new = source.get(key, 0.0), target.get(key, 0.0)
+        if abs(old - new) <= 1e-9:
+            continue
+        rows.append({
+            "layer": key[0], "resource_id": key[1], "source_owner": key[2],
+            "activity_id": key[3] or None, "destination_owner": key[4],
+            "operation": key[5], "unit": "t",
+            "baseline_settled_t": old, "variant_settled_t": new,
+            "difference_t": new - old if comparable else None,
+        })
+    return rows
+
+
+def _compare_allocations(baseline: ExperimentRun, variant: ExperimentRun, *, comparable: bool) -> list[dict]:
+    source, target = _allocation_totals(baseline), _allocation_totals(variant)
+    rows = []
+    for key in sorted(source.keys() | target.keys()):
+        old, new = source.get(key, (0.0, 0.0, 0.0)), target.get(key, (0.0, 0.0, 0.0))
+        if all(abs(a - b) <= 1e-9 for a, b in zip(old, new)):
+            continue
+        rows.append({
+            "kind": key[0], "subject_id": key[1], "context_id": key[2],
+            "unit": key[3], "time_basis": "cumulative_canonical_days",
+            "provenance": key[4],
+            "baseline": {"requested": old[0], "allocated": old[1], "unmet": old[2]},
+            "variant": {"requested": new[0], "allocated": new[1], "unmet": new[2]},
+            "difference": ({"requested": new[0] - old[0], "allocated": new[1] - old[1],
+                            "unmet": new[2] - old[2]} if comparable else None),
+        })
+    return rows
+
+
 def compare_experiments(runs: Sequence[ExperimentRun]) -> dict:
     """Compare observed final stocks/capacities, without inferring gross Flow.
 
@@ -268,6 +353,10 @@ def compare_experiments(runs: Sequence[ExperimentRun]) -> dict:
                 "baseline_net_change": (b1.quantity - b0.quantity) if b0 is not None and b1 is not None else None,
                 "variant_net_change": (v1.quantity - v0.quantity) if v0 is not None and v1 is not None else None,
             })
+        same_observation_scope = (
+            baseline.observations[0].operational_node_ids == variant.observations[0].operational_node_ids
+            and baseline.observations[0].resource_ids == variant.observations[0].resource_ids
+        )
         rows.append({
             "variant": variant.name,
             "same_definition_graph": baseline.definition_graph_sha256 == variant.definition_graph_sha256,
@@ -277,15 +366,17 @@ def compare_experiments(runs: Sequence[ExperimentRun]) -> dict:
             "same_world_definition": baseline.world_definition_id == variant.world_definition_id,
             "same_scenario": baseline.scenario_id == variant.scenario_id,
             "metric_differences": differences,
+            "settlement_differences": _compare_settlements(baseline, variant, comparable=same_observation_scope),
+            "allocation_differences": _compare_allocations(baseline, variant, comparable=same_observation_scope),
+            "same_observation_scope": same_observation_scope,
             "rejected_commands": [vars(row) for row in variant.rejected_commands],
             "same_comparison_conditions": (
                 baseline.content_definitions_sha256 == variant.content_definitions_sha256
                 and baseline.initial_state_sha256 == variant.initial_state_sha256
-                and baseline.observations[0].operational_node_ids == variant.observations[0].operational_node_ids
-                and baseline.observations[0].resource_ids == variant.observations[0].resource_ids
+                and same_observation_scope
             ),
         })
-    return {"baseline": baseline.name, "comparisons": rows, "interpretation": "typed observed stock/capacity differences; net stock change is not settled gross flow"}
+    return {"baseline": baseline.name, "comparisons": rows, "interpretation": "typed stocks, gross Owner settlements, and finite demand are distinct; dispatch and arrival are not production, comparison deltas require equal observation scopes"}
 
 
 @dataclass(frozen=True)

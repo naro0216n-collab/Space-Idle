@@ -59,7 +59,13 @@ def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save
     assert all(row.capacity is None and row.used is None and row.remaining is None
                for row in trace.allocations if row.kind != "finite_constraint")
     final = {(str(node), str(rid)): value for (node, rid), value in sim.inventory.stock.items()}
-    assert all(abs(item['unattributed_delta_t']) < 1e-7 for item in trace.reconcile(stock, final))
+    reconciled = trace.reconcile(stock, final)
+    assert all(abs(item['unattributed_delta_t']) < 1e-7 for item in reconciled)
+    assert all(item['settled_net_t'] == pytest.approx(
+        item['attributed_activity_delta_t'] + item['custody_delta_t']
+        + item['unknown_cause_delta_t']) for item in reconciled)
+    assert any(abs(item['attributed_activity_delta_t']) > 1e-7 for item in reconciled)
+    assert all(abs(item['unknown_cause_delta_t']) < 1e-7 for item in reconciled)
     assert any(row.direction == 'inventory_in' for row in trace.movements)
     assert any(row.direction == 'inventory_out' for row in trace.movements)
     # These are actual Owner settlements, not static output rate forecasts.
@@ -146,6 +152,15 @@ def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource
     payload = {'runs': [{'name': 'custody', 'canonical_traces': [trace.to_json_data()]}]}
     assert 'staging:' in to_csv(payload, 'custody_transfers')
     assert trace.activity_flows() == ()  # custody reclassification is not new production
+    assert trace.unattributed_movements() == ()  # not an unknown source/sink either
+    assert trace.to_json_data()['unattributed_movements'] == []
+    assert to_csv(payload, 'unattributed_movements') == ''
+    html = project_html({**payload, 'runs': [{**payload['runs'][0],
+        'observations': [{'day': 0}, {'day': 1}],
+        'content_definitions_sha256': 'known', 'flow_reconciliation': []}]})
+    assert '確定した拠点Inventory' in html
+    assert '供給元未確定' in html  # diagram headings, but no fabricated lanes
+    assert 'staging:' in html
 
 
 def test_typed_independent_scenario_and_content_variants_do_not_mutate_base_or_initialization():
@@ -193,7 +208,13 @@ def test_case_execution_reproducibility_projection_and_missing_observation_paret
     runs = run_experiments(cases, days=days)
     again = run_experiments(cases, days=days)
     assert [row.to_json_data() for row in runs] == [row.to_json_data() for row in again]
-    assert not compare_experiments(runs)['comparisons'][0]['same_comparison_conditions']
+    report = compare_experiments(runs)['comparisons'][0]
+    assert not report['same_comparison_conditions']
+    assert report['same_observation_scope']
+    assert all(row['difference_t'] == pytest.approx(
+        row['variant_settled_t'] - row['baseline_settled_t'])
+        for row in report['settlement_differences'])
+    assert all(row['difference'] is not None for row in report['allocation_differences'])
     assert runs[0].content_definitions_sha256 == runs[1].content_definitions_sha256
     assert runs[0].initial_state_sha256 != runs[1].initial_state_sha256
     assert all(abs(row['unattributed_delta_t']) < 1e-7 for run in runs for row in run.flow_reconciliation)
@@ -322,6 +343,17 @@ def test_comparative_canonical_policy_connects_market_construction_power_and_mul
     assert runs[0].initial_state_sha256 != runs[2].initial_state_sha256
     comparison = compare_experiments(runs)
     assert len(comparison['comparisons']) == 2
+    assert all(row['same_observation_scope'] for row in comparison['comparisons'])
+    # Comparison comes from measured settlements and the actual finite
+    # allocation, not final Stock inferred as gross output or a second Solver.
+    assert all('settlement_differences' in row and 'allocation_differences' in row
+               for row in comparison['comparisons'])
+    for row in comparison['comparisons']:
+        assert all(delta['unit'] == 't' and delta['layer'] in {'activity', 'unknown', 'custody'}
+                   for delta in row['settlement_differences'])
+        assert all(delta['difference']['unmet'] == pytest.approx(
+            delta['variant']['unmet'] - delta['baseline']['unmet'])
+            for delta in row['allocation_differences'])
     assert all(not row['same_comparison_conditions'] for row in comparison['comparisons'])
     assert all((metric.context_id in (str(ids.EARTH), str(ids.LEO), 'organization')
                 or metric.kind.startswith('external_market_'))
@@ -692,3 +724,46 @@ def test_independent_survey_definition_requires_a_real_compatible_vehicle(tmp_pa
     assert candidate(loaded).committed_units == 1
     with pytest.raises(ValueError):
         factory(edits[2:])  # No compatible physical source for the new provider.
+
+
+def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_without_stock_inference():
+    """Independent Content changes alter actual settlement, not chart predictions."""
+    from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION, FOOD, EARTH
+
+    base = build_game_application()
+    process = base._simulation.industry.processes[PROCESS_FOOD_PRODUCTION]
+    output = process.outputs_per_day[FOOD]
+
+    def with_output(sim, catalog):
+        apply_content_variant(sim, catalog, ({
+            "kind": "process", "id": str(PROCESS_FOOD_PRODUCTION),
+            "field": "outputs_per_day", "resource_id": str(FOOD),
+            "value": output * 0.6,
+        },))
+
+    cases = (
+        ExperimentCase("original", build_game_application, _idle),
+        ExperimentCase("lower-output", lambda: build_game_application_for_scenario(
+            build_standard_scenario_definition(), definition_transform=with_output,
+        ), _idle),
+    )
+    runs = run_experiments(cases, days=2, operational_node_ids=frozenset((EARTH,)))
+    report = compare_experiments(runs)["comparisons"][0]
+    assert report["same_observation_scope"] and not report["same_content_definitions"]
+    production = [row for row in report["settlement_differences"]
+                  if row["resource_id"] == str(FOOD)
+                  and row["source_owner"].startswith("process:")
+                  and row["destination_owner"] == f"inventory:{EARTH}"
+                  and row["layer"] == "activity"]
+    assert production and sum(row["difference_t"] for row in production) < 0
+    assert all(row["baseline_settled_t"] > row["variant_settled_t"] for row in production)
+    assert all(row["time_basis"] == "cumulative_canonical_days"
+               and not row["unit"].endswith("/day")
+               for row in report["allocation_differences"])
+    assert all(abs(row["unattributed_delta_t"]) <= 1e-7
+               for run in runs for row in run.flow_reconciliation)
+    # Independent canonical games are reproducible, not mutated running States.
+    assert [run.to_json_data() for run in runs] == [
+        run.to_json_data() for run in run_experiments(cases, days=2,
+            operational_node_ids=frozenset((EARTH,)))
+    ]

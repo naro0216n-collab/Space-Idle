@@ -14,10 +14,10 @@ import sys
 
 
 def csv_rows(payload: dict, table: str):
-    if table not in {"inventory_movements", "custody_transfers", "activity_flows", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
+    if table not in {"inventory_movements", "custody_transfers", "activity_flows", "unattributed_movements", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
         raise ValueError(f"unknown typed projection: {table}")
     for run in payload["runs"]:
-        if table in {"inventory_movements", "custody_transfers", "activity_flows", "allocations"}:
+        if table in {"inventory_movements", "custody_transfers", "activity_flows", "unattributed_movements", "allocations"}:
             for trace in run["canonical_traces"]:
                 for item in trace[table]:
                     yield {"case": run["name"], "day": trace["day"], **item}
@@ -106,7 +106,7 @@ def _fulfillment_heatmap(traces: list[dict]) -> str:
         for row in trace['allocations']:
             if row['kind'] not in {'activity_execution', 'resource_request', 'service_request'}:
                 continue
-            key = (row['kind'], row['context_id'], row['subject_id'], row['unit'])
+            key = (row['kind'], row['context_id'], row['subject_id'], row['unit'], row['provenance'])
             amounts = by_key.setdefault(key, {})
             requested, allocated = amounts.get(trace['day'], (0.0, 0.0))
             amounts[trace['day']] = requested+row['requested'], allocated+row['allocated']
@@ -208,15 +208,11 @@ def project_html(payload: dict) -> str:
              '<h1>Space Idle Canonical Experiment</h1>',
              '<p>確定入出庫と要求・割当を区別。既知のActivity Flowと原因未特定のInventory移動は別に表示し、拠点間転送を推定しない。</p>']
     for run in payload["runs"]:
-        movements = [r for day in run["canonical_traces"] for r in day["inventory_movements"]]
         flows: dict[tuple, float] = {}
-        for move in movements:
-            # Proven activity movements have their own explicit diagram below;
-            # otherwise the unknown arrows would falsely discard known causes.
-            if move["direction"] not in {"inventory_in", "inventory_out"} or move.get('counterparty_id'):
-                continue
-            key = (move["node_id"], move["resource_id"], move["direction"])
-            flows[key] = flows.get(key, 0) + move["quantity_t"]
+        for trace in run["canonical_traces"]:
+            for move in trace.get("unattributed_movements", ()):
+                key = (move["node_id"], move["resource_id"], move["direction"])
+                flows[key] = flows.get(key, 0) + move["quantity_t"]
         parts.extend([f'<section><h2>{escape(run["name"])}</h2>',
             f'<small>期間 {run["observations"][0]["day"]}–{run["observations"][-1]["day"]}日、定義hash {escape(run["content_definitions_sha256"][:14])}</small>',
             '<h3>実決済に基づくSource・Activity・Destination [t]</h3>',
@@ -241,7 +237,7 @@ def main() -> None:
     parser.add_argument("result", type=Path, help="compare_experiments.py のJSON結果")
     parser.add_argument("--format", choices=("html", "csv"), default="html")
     parser.add_argument("--table", default="inventory_movements",
-                        choices=("inventory_movements", "custody_transfers", "activity_flows", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
+                        choices=("inventory_movements", "custody_transfers", "activity_flows", "unattributed_movements", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
     args = parser.parse_args()
     payload = json.loads(args.result.read_text(encoding="utf-8"))
     sys.stdout.write(to_csv(payload, args.table) if args.format == "csv" else project_html(payload))

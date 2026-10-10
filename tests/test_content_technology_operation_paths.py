@@ -100,3 +100,40 @@ def test_research_outlet_eligibility_and_real_alternative_resource_flow_roundtri
     assert final[ids.METAL_FEEDSTOCK] > unchanged_method[ids.METAL_FEEDSTOCK]
     assert final[ids.BULK_STRUCTURE] < unchanged_method[ids.BULK_STRUCTURE]
     assert _refinery_row(loaded).process_id == str(ids.PROCESS_METALLURGY_VARIABLE_FEED)
+
+
+def test_authored_technology_prerequisites_are_nonredundant_and_reach_application_research():
+    """An inferred ancestor is not an independent second eligibility demand.
+
+    Direct Research prerequisites represent necessary authored choices; the
+    Application exposes that same direct DAG instead of reconstructing a
+    differently expanded one from category or progression-stage metadata.
+    """
+    from space_idle import build_game_application
+
+    app = build_game_application()
+    definitions = app._simulation.research.definitions
+    ancestors_by_id = {}
+
+    def ancestors(research_id):
+        if research_id not in ancestors_by_id:
+            parents = set(definitions[research_id].prerequisites)
+            for parent in tuple(parents):
+                parents.update(ancestors(parent))
+            ancestors_by_id[research_id] = parents
+        return ancestors_by_id[research_id]
+
+    view = app.query(GetResearch())
+    rows = {row.id: row for row in view.items}
+    assert set(rows) == set(map(str, definitions))
+    for research_id, definition in definitions.items():
+        required = definition.prerequisites
+        assert not any(
+            parent in ancestors(other)
+            for parent in required for other in required if other != parent
+        ), f"transitively duplicated Research prerequisite: {research_id}"
+        assert set(rows[str(research_id)].prerequisites) == set(map(str, required))
+        for parent in required:
+            unlocks = rows[str(parent)].unlocks
+            assert any(unlock.kind == 'research' and unlock.id == str(research_id)
+                       for unlock in unlocks)

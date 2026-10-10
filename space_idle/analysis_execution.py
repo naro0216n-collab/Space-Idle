@@ -94,6 +94,7 @@ class CanonicalDayTrace:
                 "inventory_movements": [asdict(row) for row in self.movements],
                 "custody_transfers": [asdict(row) for row in self.custody_transfers()],
                 "activity_flows": [asdict(row) for row in self.activity_flows()],
+                "unattributed_movements": [asdict(row) for row in self.unattributed_movements()],
                 "allocations": [asdict(row) for row in self.allocations]}
 
     def activity_flows(self) -> tuple[ActivityFlow, ...]:
@@ -115,15 +116,14 @@ class CanonicalDayTrace:
                                      source, target, movement.activity_id, movement.operation))
         return tuple(rows)
 
-    def custody_transfers(self) -> tuple[CustodyTransfer, ...]:
-        """Pair only adjacent atomic ledger entries with the same known owner.
+    def _paired_custody(self) -> tuple[tuple[int, int, CustodyTransfer], ...]:
+        """Recover actual atomic handoffs and the two ledger rows they own.
 
-        stage_allocated/stage_reserved each make one Inventory-out followed by
-        one staging-in; unstage_to_stock does the reverse. The two ledger rows
-        represent one change of custody, never two Resource production flows.
+        No other Inventory movement is paired on mere equal quantity or time.
+        The observer sees owner-staging mutations synchronously and in order.
         """
-        transfers = []
-        for first, second in zip(self.movements, self.movements[1:]):
+        pairs = []
+        for index, (first, second) in enumerate(zip(self.movements, self.movements[1:])):
             same = (first.day == second.day and first.node_id == second.node_id
                     and first.resource_id == second.resource_id
                     and abs(first.quantity_t - second.quantity_t) <= 1e-9
@@ -145,31 +145,74 @@ class CanonicalDayTrace:
                 operation = second.operation
             else:
                 continue
-            transfers.append(CustodyTransfer(first.day, first.node_id, first.resource_id,
-                                             first.quantity_t, source, destination, operation))
-        return tuple(transfers)
+            pairs.append((index, index + 1, CustodyTransfer(
+                first.day, first.node_id, first.resource_id,
+                first.quantity_t, source, destination, operation,
+            )))
+        return tuple(pairs)
+
+    def custody_transfers(self) -> tuple[CustodyTransfer, ...]:
+        """Paired Inventory/staging custody handoffs, never production."""
+        return tuple(row for _, _, row in self._paired_custody())
+
+    def unattributed_movements(self) -> tuple[InventoryMovement, ...]:
+        """Ordinary stock movements whose cause is unknown, excluding custody.
+
+        The raw gross ledger continues to include both sides of a handoff for
+        stock reconciliation; the *unknown* Flow projection must not represent
+        that handoff a second time as unexplained production/consumption.
+        """
+        custody_rows = {index for left, right, _ in self._paired_custody()
+                        for index in (left, right)}
+        return tuple(row for index, row in enumerate(self.movements)
+                     if index not in custody_rows
+                     and row.direction in ("inventory_in", "inventory_out")
+                     and (row.counterparty_id is None or row.activity_id is None))
 
     def reconcile(self, before: dict, after: dict) -> list[dict]:
-        """Match measured gross movements to actual ordinary Inventory stock change.
+        """Reconcile actual Inventory Stock against one classified settlement ledger.
 
-        Staging is an independent owned store and is never counted as ordinary
-        Inventory. Nonzero residuals remain explicit rather than being assigned
-        to imaginary production or loss.
+        This makes physical custody, observed Activity and truly unknown causes
+        separately inspectable. Each ordinary Inventory row has exactly one
+        class; staging's second ledger entry is never double-counted as Stock.
         """
-        keys = set(before) | set(after) | {
-            (row.node_id, row.resource_id) for row in self.movements
-            if row.direction in ("inventory_in", "inventory_out")
-        }
-        return [
-            {"node_id": node, "resource_id": resource,
-             "stock_delta_t": after.get((node, resource), 0.0) - before.get((node, resource), 0.0),
-             "settled_net_t": self.inventory_balance(node_id=node, resource_id=resource),
-             "unattributed_delta_t": (after.get((node, resource), 0.0) - before.get((node, resource), 0.0)
-                                        - self.inventory_balance(node_id=node, resource_id=resource))}
-            for node, resource in sorted(keys)
-            if abs(after.get((node, resource), 0.0) - before.get((node, resource), 0.0)) > 1e-9
-            or abs(self.inventory_balance(node_id=node, resource_id=resource)) > 1e-9
-        ]
+        from collections import defaultdict
+
+        net = defaultdict(float)
+        activity = defaultdict(float)
+        custody = defaultdict(float)
+        unknown = defaultdict(float)
+        custody_rows = {index for left, right, _ in self._paired_custody()
+                        for index in (left, right)}
+        for index, row in enumerate(self.movements):
+            if row.direction not in ("inventory_in", "inventory_out"):
+                continue
+            key = row.node_id, row.resource_id
+            signed = row.quantity_t if row.direction == "inventory_in" else -row.quantity_t
+            net[key] += signed
+            if index in custody_rows:
+                custody[key] += signed
+            elif row.counterparty_id is not None and row.activity_id is not None:
+                activity[key] += signed
+            else:
+                unknown[key] += signed
+        keys = set(before) | set(after) | set(net)
+        rows = []
+        for node, resource in sorted(keys):
+            key = node, resource
+            delta = after.get(key, 0.0) - before.get(key, 0.0)
+            settled = net[key]
+            if abs(delta) <= 1e-9 and abs(settled) <= 1e-9:
+                continue
+            rows.append({
+                "node_id": node, "resource_id": resource,
+                "stock_delta_t": delta, "settled_net_t": settled,
+                "attributed_activity_delta_t": activity[key],
+                "custody_delta_t": custody[key],
+                "unknown_cause_delta_t": unknown[key],
+                "unattributed_delta_t": delta - settled,
+            })
+        return rows
 
     def inventory_balance(self, *, node_id: str, resource_id: str) -> float:
         """Change in ordinary Inventory stock, excluding external storage custody."""
