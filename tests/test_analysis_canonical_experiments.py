@@ -49,6 +49,15 @@ def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save
     assert sim._analysis_decision_observer is None
     assert trace.allocations
     assert trace.movements
+    # Capacity headroom is unused supply, never an unmet Activity request.
+    capacities = [row for row in trace.allocations if row.kind == "finite_constraint"]
+    assert capacities
+    assert all(row.requested is None and row.allocated is None and row.unmet is None
+               and row.capacity is not None and row.used is not None and row.remaining is not None
+               and row.capacity >= row.used - 1e-9 for row in capacities)
+    assert any(row.remaining > 0 for row in capacities)
+    assert all(row.capacity is None and row.used is None and row.remaining is None
+               for row in trace.allocations if row.kind != "finite_constraint")
     final = {(str(node), str(rid)): value for (node, rid), value in sim.inventory.stock.items()}
     assert all(abs(item['unattributed_delta_t']) < 1e-7 for item in trace.reconcile(stock, final))
     assert any(row.direction == 'inventory_in' for row in trace.movements)
@@ -59,6 +68,26 @@ def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save
             with observe_canonical_day(sim):
                 pass
     assert capture_state(sim) == capture_state(ordinary._simulation)
+
+
+def test_scoped_canonical_allocation_preserves_node_constraint_and_resource_identity():
+    app = build_game_application()
+    sim = app._simulation
+    node, resource = next((node, resource) for (node, resource), stock in sim.inventory.stock.items()
+                          if stock > 0)
+    with observe_canonical_day(sim, operational_node_ids=frozenset((node,)),
+                               resource_ids=frozenset((resource,))) as trace:
+        app.execute(AdvanceTime(1))
+    constraints = [row for row in trace.allocations if row.kind == "finite_constraint"]
+    assert any(row.provenance == "allocation:resource" and row.subject_id == str(resource)
+               and row.context_id == f"node:{node}" for row in constraints)
+    assert all(row.subject_id == str(resource) for row in constraints
+               if row.provenance == "allocation:resource")
+    assert all(row.context_id in (str(node), f"node:{node}", "organization")
+               for row in trace.allocations)
+    assert all(row.subject_id == str(resource) for row in trace.allocations
+               if row.kind == "resource_request")
+    assert all(row.unmet is None and row.remaining is not None for row in constraints)
 
 
 def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource_creation():

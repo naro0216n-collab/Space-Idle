@@ -38,12 +38,17 @@ class AllocationMetric:
     kind: str
     subject_id: str
     context_id: str
-    requested: float
-    allocated: float
-    unmet: float
+    requested: float | None
+    allocated: float | None
+    unmet: float | None
     unit: str
     provenance: str
     limiting_factors: tuple[str, ...] = ()
+    # A finite constraint's unused headroom is not an unmet request. Keeping
+    # distinct typed fields prevents false bottleneck readings in consumers.
+    capacity: float | None = None
+    used: float | None = None
+    remaining: float | None = None
 
 
 @dataclass
@@ -116,10 +121,14 @@ def _read_allocation(trace: CanonicalDayTrace, decision: TickDecisionProjection)
         ))
     for key, capacity in sorted(execution.capacity_by_constraint.items()):
         used = execution.used_by_constraint.get(key, 0.0)
+        # Resource and stock-admission constraints are measured in physical
+        # tonnes; other pool capacities retain their native constraint units.
+        # In particular, housing stock capacity is not a daily flow rate.
+        unit = "t" if key.kind in ("resource", "admission") else "constraint_units"
         trace.allocations.append(AllocationMetric(
-            trace.day, "finite_constraint", key.name, key.scope_id, capacity, used,
-            max(0.0, capacity - used), ( "t/day" if key.kind == "resource" else "capacity_units/day" ),
-            f"allocation:{key.kind}",
+            trace.day, "finite_constraint", key.name, key.scope_id,
+            None, None, None, unit, f"allocation:{key.kind}",
+            capacity=capacity, used=used, remaining=max(0.0, capacity - used),
         ))
 
 
@@ -145,14 +154,33 @@ def observe_canonical_day(
                 sim.day, direction, str(node_id), str(resource_id), amount, operation, owner,
             ))
 
+    # The canonical allocator names physical scopes as ``node:<id>`` while
+    # Activity and request projections carry bare Operational Node IDs.
+    # Both must participate in the same selective observation contract.
+    node_ids = None if operational_node_ids is None else {str(node) for node in operational_node_ids}
+    resource_keys = None if resource_ids is None else {str(resource) for resource in resource_ids}
+
+    def in_scope(row: AllocationMetric) -> bool:
+        if node_ids is not None:
+            context = row.context_id
+            if context != "organization" and context not in node_ids and not (
+                context.startswith("node:") and context[5:] in node_ids
+            ):
+                # Owner-local pools are not Operational Node capacity and must
+                # not be attributed to a selected Node just by asset location.
+                return False
+        if resource_keys is not None:
+            if row.kind == "resource_request" and row.subject_id not in resource_keys:
+                return False
+            if (row.kind == "finite_constraint" and row.provenance == "allocation:resource"
+                    and row.subject_id not in resource_keys):
+                return False
+        return True
+
     def decision_sink(decision):
         _read_allocation(trace, decision)
-        if operational_node_ids is not None or resource_ids is not None:
-            trace.allocations[:] = [row for row in trace.allocations
-                if (operational_node_ids is None or row.context_id == "organization"
-                    or row.context_id in {str(node) for node in operational_node_ids})
-                and (resource_ids is None or row.kind != "resource_request"
-                    or row.subject_id in {str(resource) for resource in resource_ids})]
+        if node_ids is not None or resource_keys is not None:
+            trace.allocations[:] = [row for row in trace.allocations if in_scope(row)]
 
     sim._analysis_decision_observer = decision_sink
     sim.inventory._settlement_observer = inventory_sink
