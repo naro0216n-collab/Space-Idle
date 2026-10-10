@@ -24,7 +24,7 @@ from space_idle.analysis_observation import observe_state
 from space_idle.bootstrap import build_game_application_for_scenario
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.content import base_ids as ids
-from space_idle.analysis_variants import apply_content_variant, scenario_variant
+from scripts.analysis_variants import apply_content_variant, scenario_variant
 from space_idle.application_commands import AdvanceTime
 from space_idle.persistence import capture_state
 from space_idle.shared import DefinitionId, EntityId
@@ -293,3 +293,135 @@ def test_comparative_canonical_policy_connects_market_construction_power_and_mul
     again = run_experiments((make_case('baseline', original),), days=4,
                             operational_node_ids=frozenset((ids.EARTH, ids.LEO)))
     assert again[0].to_json_data() == runs[0].to_json_data()
+
+
+def test_typed_content_add_remove_recompose_application_and_preserve_accounting(tmp_path):
+    """New research/method/resource and deletion share Composition and UI contracts.
+
+    Experiment cases recompose Definitions before Scenario instead of modifying
+    a running game or inventing a second supply / tech eligibility evaluator.
+    """
+    from space_idle.application_commands import (GetCatalog, GetOperationalNode,
+        GetResearch, SetFacilityProcess, AdvanceTime, ApplicationError)
+    from space_idle.persistence import save_game, load_game
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.validation_support import ConfigurationError
+
+    resource_id = "experiment.resource.raw_mineral"
+    research_id = "experiment.research.refining_method"
+    process_id = "experiment.process.refining_method"
+    changes = (
+        {"operation": "add", "kind": "resource", "id": resource_id,
+         "definition": {"display_name": "実験原料", "unit": "t", "category": "bulk"}},
+        {"operation": "add", "kind": "research", "id": research_id,
+         "definition": {"display_name": "代替資源加工", "prerequisites": [], "stage_specs": [
+             {"stage_type": "theory", "stage_id": "concept", "research_point_cost": 1.0},
+             {"stage_type": "prototype", "stage_id": "bench", "required_work": 1.0,
+              "resources": {resource_id: 0.5},
+              "site_requirements": {"capabilities": ["basic_structural_material"],
+                                    "spatial_classifications": ["SURFACE"]}},
+         ]}},
+        {"operation": "add", "kind": "process", "id": process_id,
+         "definition": {"display_name": "実験用代替製法",
+                        "required_capabilities": ["basic_structural_material"],
+                        "inputs_per_day": {resource_id: 0.5},
+                        "outputs_per_day": {str(ids.STRUCTURAL_COMPONENTS): 0.25},
+                        "prerequisite_technologies": [research_id]}},
+    )
+    base = build_standard_scenario_definition()
+    scenario = scenario_variant(base, {"inventory_stock": [{
+        "operational_node_id": str(ids.EARTH), "resource_id": resource_id,
+        "amount_t": 20.0,
+    }]})
+
+    def factory(scenario=scenario, changes=changes):
+        return build_game_application_for_scenario(
+            scenario, definition_transform=lambda sim, cat: apply_content_variant(sim, cat, changes),
+        )
+
+    app = factory()
+    catalog = app.query(GetCatalog())
+    assert any(str(row.id) == resource_id for row in catalog.resources)
+    assert any(row.id == process_id for row in catalog.processes)
+    assert any(row.id == research_id for row in catalog.research)
+    assert any(row.id == research_id for row in app.query(GetResearch()).items)
+    added_stages = app._simulation.research.definitions[DefinitionId(research_id)].stage_specs
+    assert len(added_stages) == 2
+    site_requirement = added_stages[1].site_requirements.spatial_classification_requirements[0]
+    assert site_requirement.code == "site:spatial_classification:SURFACE"
+    industry = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
+                    if any(option.process_id == process_id for option in row.process_options))
+    locked = next(option for option in industry.process_options if option.process_id == process_id)
+    assert any(f"technology:{research_id}" in constraint.code for constraint in locked.blockers)
+    with pytest.raises(ApplicationError):
+        app.execute(SetFacilityProcess(industry.facility_id, process_id))
+    assert app._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id)) == 20.0
+
+    # Acquisition and existing equipment use different criteria: this research
+    # enables an explicit Process choice, not an automatic asset modification.
+    with_technology = scenario_variant(scenario, {"completed_technologies": [
+        *map(str, base.completed_technologies), research_id,
+    ]})
+    enabled = factory(with_technology)
+    chosen = next(row for row in enabled.query(GetOperationalNode(str(ids.EARTH))).industry
+                  if any(option.process_id == process_id for option in row.process_options))
+    option = next(option for option in chosen.process_options if option.process_id == process_id)
+    assert option.can_select
+    enabled.execute(SetFacilityProcess(chosen.facility_id, process_id))
+    first = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
+    enabled.execute(AdvanceTime(1))
+    last = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
+    assert last < first
+    assert enabled._simulation.facilities.facilities[EntityId(chosen.facility_id)].selected_process_id == DefinitionId(process_id)
+    path = tmp_path / "content-variant-state.json"
+    save_game(enabled, path)
+    restored, _ = load_game(path, lambda: build_game_application_for_load(
+        scenario=with_technology,
+        definition_transform=lambda sim, cat: apply_content_variant(sim, cat, changes),
+    ))
+    assert capture_state(restored._simulation) == capture_state(enabled._simulation)
+
+    def policy(app, day):
+        if day > 0:
+            return ()
+        rows = app.query(GetOperationalNode(str(ids.EARTH))).industry
+        matches = (row for row in rows if any(option.process_id == process_id for option in row.process_options))
+        row = next(matches, None)
+        return () if row is None else (SetFacilityProcess(row.facility_id, process_id),)
+
+    cases = (
+        ExperimentCase("original", lambda: build_game_application_for_scenario(base), policy),
+        ExperimentCase("new-method-locked", factory, policy),
+        ExperimentCase("new-method-enabled", lambda: factory(with_technology), policy),
+    )
+    runs = run_experiments(cases, days=2)
+    repeat = run_experiments(cases, days=2)
+    assert [run.to_json_data() for run in runs] == [run.to_json_data() for run in repeat]
+    assert runs[0].content_definitions_sha256 != runs[1].content_definitions_sha256
+    assert runs[1].content_definitions_sha256 == runs[2].content_definitions_sha256
+    assert runs[1].initial_state_sha256 != runs[2].initial_state_sha256
+    assert runs[0].definition_graph_sha256 != runs[1].definition_graph_sha256
+    assert len(runs[1].rejected_commands) == 1
+    assert not runs[2].rejected_commands
+    assert all(abs(row["unattributed_delta_t"]) < 1e-7
+               for run in runs for row in run.flow_reconciliation)
+
+    # Removing a method changes the actual candidates/Definition Graph; nothing
+    # rewrites the Scenario or dependent Technology requirements to conceal it.
+    removed_method = changes + ({"operation": "remove", "kind": "process", "id": process_id},)
+    no_method = factory(scenario, removed_method)
+    assert all(row.id != process_id for row in no_method.query(GetCatalog()).processes)
+    assert all(option.process_id != process_id
+               for row in no_method.query(GetOperationalNode(str(ids.EARTH))).industry
+               for option in row.process_options)
+
+    # Removing referenced definitions must fail closed during Composition;
+    # removing an unreferenced Resource still fails when Scenario retains stock.
+    with pytest.raises((ConfigurationError, ValueError), match="Resource|catalog|unknown"):
+        factory(scenario, changes + ({"operation": "remove", "kind": "resource", "id": resource_id},))
+    with pytest.raises((ConfigurationError, ValueError), match="unknown research|technology|prerequisite"):
+        factory(scenario, changes + ({"operation": "remove", "kind": "research", "id": research_id},))
+    with pytest.raises((ConfigurationError, ValueError), match="Resource|resource definitions"):
+        factory(scenario, removed_method + ({"operation": "remove", "kind": "resource", "id": resource_id},))
+    # Definitions are isolated from the standard factory and other experiment cases.
+    assert all(row.id != process_id for row in build_game_application().query(GetCatalog()).processes)

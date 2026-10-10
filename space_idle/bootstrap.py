@@ -19,8 +19,8 @@ def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinit
     )
     simulation.scenario_id = scenario.id
     if definition_transform is not None:
-        # Experiment definitions are edited before the Scenario is instantiated
-        # and go through the same configuration / reference validation.
+        # Definitions are configured before Scenario State is instantiated, then
+        # validated through the normal Composition and reference contracts.
         definition_transform(simulation, catalog)
 
     # Static World / Content definitions must be valid independently of any
@@ -50,15 +50,24 @@ def build_game_application_for_scenario(
 ) -> GameApplication:
     """Compose and validate a fresh game from the supplied new-game Scenario.
 
-    Used by explicit development experiments without editing a running game's
-    authoritative State. Uses the same Scenario application and day-0 boundary
-    as a normal new game; never re-applies Scenario values on Save Load.
+    This is the same composition, validation, and day-0 boundary used by the
+    default game. Authored Definitions are configured before runtime State.
     """
     return _compose_base_application(
         apply_scenario=True, scenario=scenario, definition_transform=definition_transform,
     )
 
 
-def build_game_application_for_load() -> GameApplication:
-    """Compose the base definitions with empty runtime State for Persistence restore."""
-    return _compose_base_application(apply_scenario=False, scenario=build_standard_scenario_definition())
+def build_game_application_for_load(
+    *, scenario: ScenarioDefinition | None = None, definition_transform: Callable | None = None,
+) -> GameApplication:
+    """Compose validated Definitions without initial State for Persistence restore.
+
+    Rebuild the authored Content/Scenario definition set used by a Snapshot,
+    without reapplying Scenario-owned assets or changing live runtime State.
+    """
+    return _compose_base_application(
+        apply_scenario=False,
+        scenario=scenario if scenario is not None else build_standard_scenario_definition(),
+        definition_transform=definition_transform,
+    )

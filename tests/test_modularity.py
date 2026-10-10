@@ -115,6 +115,12 @@ def test_layer_dependency_direction_is_enforced():
         rel = path.relative_to(PACKAGE)
         if path.name == "__init__.py":
             continue
+        # Development experiment and publish tooling must not become runtime
+        # dependencies of Game/Content/Composition/Application code.
+        assert not any(target == "scripts" or target.startswith("scripts.")
+                       for target in _module_import_targets(path)), (
+            f"{rel} imports development-only scripts"
+        )
         parts = rel.parts
         name = rel.name
 

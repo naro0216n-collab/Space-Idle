@@ -12,6 +12,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
+from space_idle.catalog import ResourceDef
 from space_idle.app_contracts.construction import CancelBuild, PlanFacilityDecommission
 from space_idle.application_commands import ApplicationError
 from space_idle.content import base_ids as ids
@@ -42,6 +43,7 @@ SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 def _build_decommission_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    app._catalog.resources[SALVAGE_RESOURCE] = ResourceDef(SALVAGE_RESOURCE, "Recoverable components")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
     )
@@ -296,6 +298,8 @@ UPGRADE_RESOURCE_B = DefinitionId("test.resource.upgrade_b")
 def _build_upgrade_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    for resource_id in (UPGRADE_RESOURCE_A, UPGRADE_RESOURCE_B):
+        app._catalog.resources[resource_id] = ResourceDef(resource_id, str(resource_id))
 
     sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
         UPGRADE_FACILITY,

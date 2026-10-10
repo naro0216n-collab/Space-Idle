@@ -9,10 +9,10 @@ from dataclasses import replace
 from math import isfinite
 from typing import Mapping, Sequence
 
-from .catalog import GameCatalog
-from .scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility
-from .shared import DefinitionId, SpatialNodeId, SurfaceCellId
-from .simulation import Simulation
+from space_idle.catalog import GameCatalog
+from space_idle.scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility
+from space_idle.shared import DefinitionId, SpatialNodeId, SurfaceCellId
+from space_idle.simulation import Simulation
 
 
 def _finite_nonnegative(value: object) -> float:
@@ -114,14 +114,164 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
     return replace(base, **updated)
 
 
+def _definition_fields(value: object, required: set[str], optional: set[str], label: str) -> Mapping:
+    if not isinstance(value, Mapping) or not required <= set(value) or set(value) - required - optional:
+        raise ValueError(f"invalid {label} definition fields")
+    return value
+
+
+def _definition_ids(raw: object, label: str) -> frozenset[DefinitionId]:
+    if not isinstance(raw, list) or any(not isinstance(value, str) or not value for value in raw):
+        raise ValueError(f"{label} must be a list of Definition IDs")
+    if len(set(raw)) != len(raw):
+        raise ValueError(f"duplicate {label}")
+    return frozenset(DefinitionId(value) for value in raw)
+
+
+def _resource_amounts(raw: object, label: str) -> dict[DefinitionId, float]:
+    if not isinstance(raw, Mapping) or any(not isinstance(key, str) or not key for key in raw):
+        raise ValueError(f"{label} must map Resource IDs to quantities")
+    return {DefinitionId(key): _finite_nonnegative(amount) for key, amount in raw.items()}
+
+
+def _new_research_stages(raw: object) -> tuple:
+    from space_idle.research_models import (
+        ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+        ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
+    )
+    from space_idle.site import (
+        CapabilityRequirement, CapabilityRequirementState, SiteRequirements,
+        SpatialClassification, SpatialClassificationRequirement,
+    )
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("research stage_specs must be a nonempty list")
+    stages = []
+    for stage in raw:
+        if not isinstance(stage, Mapping):
+            raise ValueError("research stage must be a typed object")
+        stage_type = stage.get("stage_type")
+        stage_id = stage.get("stage_id")
+        if not isinstance(stage_id, str) or not stage_id:
+            raise ValueError("research stage requires a nonempty stage_id")
+        if stage_type == "theory":
+            _definition_fields(stage, {"stage_id", "stage_type", "research_point_cost"}, set(), "Theory stage")
+            stages.append(ResearchTheoryStageSpec(stage_id, _finite_nonnegative(stage["research_point_cost"])))
+        elif stage_type in ("prototype", "demonstration"):
+            required = {"stage_id", "stage_type", "required_work", "site_requirements"}
+            if stage_type == "prototype":
+                required.add("resources")
+            _definition_fields(stage, required, set(), stage_type + " stage")
+            site = _definition_fields(stage["site_requirements"], set(),
+                                      {"capabilities", "spatial_classifications"}, "site requirements")
+            capabilities = site.get("capabilities", [])
+            classifications = site.get("spatial_classifications", [])
+            if not isinstance(capabilities, list) or any(not isinstance(cap, str) or not cap for cap in capabilities):
+                raise ValueError("site capabilities must be a list of IDs")
+            if not isinstance(classifications, list):
+                raise ValueError("site classifications must be a list")
+            site_requirements = SiteRequirements(
+                capability_requirements=tuple(CapabilityRequirement(cap, CapabilityRequirementState.ACTIVE)
+                                              for cap in capabilities),
+                spatial_classification_requirements=tuple(SpatialClassificationRequirement(
+                    SpatialClassification(value), "site:spatial_classification:" + value, "requires " + value + " context",
+                ) for value in classifications),
+            )
+            work = _finite_nonnegative(stage["required_work"])
+            if stage_type == "prototype":
+                stages.append(ResearchPrototypeStageSpec(
+                    stage_id, _resource_amounts(stage["resources"], "prototype resources"),
+                    site_requirements, required_work=work,
+                ))
+            else:
+                stages.append(ResearchDemonstrationStageSpec(stage_id, work, site_requirements))
+        elif stage_type == "operational_experience":
+            _definition_fields(stage, {"stage_id", "stage_type", "requirements"}, set(), "Experience stage")
+            requirements = stage["requirements"]
+            if not isinstance(requirements, Mapping) or any(not isinstance(key, str) or not key for key in requirements):
+                raise ValueError("experience requirements must be keyed by category")
+            stages.append(ResearchOperationalExperienceStageSpec(
+                stage_id, {key: _finite_nonnegative(value) for key, value in requirements.items()},
+            ))
+        else:
+            raise ValueError(f"unknown Research Stage type: {stage_type}")
+    return tuple(stages)
+
+
+def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
+    """Author typed Content additions/deletions in a fresh pre-Scenario composition.
+
+    No live State is migrated. The normal Composition, graph, and Scenario
+    validators determine whether a removed Definition still has dependents.
+    """
+    from space_idle.catalog import ResourceDef
+    from space_idle.production.models import ProcessSpec
+    from space_idle.research_models import ResearchDefinition
+
+    action = change.get("operation")
+    kind = change.get("kind")
+    if kind == "resource":
+        definitions = catalog.resources
+    elif kind == "process":
+        definitions = sim.industry.processes
+    elif kind == "research" and sim.research is not None:
+        definitions = sim.research.definitions
+    else:
+        raise ValueError(f"unsupported Content Definition kind: {kind}")
+    definition_id_raw = change.get("id")
+    if not isinstance(definition_id_raw, str) or not definition_id_raw:
+        raise ValueError("Content Definition requires a nonempty ID")
+    definition_id = DefinitionId(definition_id_raw)
+    if action == "remove":
+        if set(change) != {"operation", "kind", "id"}:
+            raise ValueError("Definition removal accepts only operation, kind and id")
+        if definition_id not in definitions:
+            raise ValueError(f"cannot remove unknown {kind} Definition: {definition_id}")
+        del definitions[definition_id]
+        return
+    if action != "add" or set(change) != {"operation", "kind", "id", "definition"}:
+        raise ValueError("Definition addition requires operation, kind, id and definition")
+    if definition_id in definitions:
+        raise ValueError(f"duplicate {kind} Definition ID: {definition_id}")
+    data = change["definition"]
+    if kind == "resource":
+        data = _definition_fields(data, {"display_name"}, {"unit", "category", "storage_pool_key"}, "Resource")
+        definition = ResourceDef(definition_id, data["display_name"], data.get("unit", "t"),
+                                 data.get("category", "material"), data.get("storage_pool_key"))
+    elif kind == "process":
+        data = _definition_fields(data, {"display_name", "required_capabilities", "inputs_per_day",
+                                         "outputs_per_day"}, {"prerequisite_technologies"}, "Process")
+        capabilities = data["required_capabilities"]
+        if not isinstance(capabilities, list) or any(not isinstance(cap, str) or not cap for cap in capabilities):
+            raise ValueError("process capabilities must be a list of identifiers")
+        definition = ProcessSpec(
+            definition_id, data["display_name"], frozenset(capabilities),
+            _resource_amounts(data["inputs_per_day"], "process inputs"),
+            _resource_amounts(data["outputs_per_day"], "process outputs"),
+            _definition_ids(data.get("prerequisite_technologies", []), "process prerequisites"),
+        )
+    else:
+        data = _definition_fields(data, {"display_name", "stage_specs"},
+                                  {"prerequisites", "progression_stage", "category", "series"}, "Research")
+        definition = ResearchDefinition(
+            definition_id, data["display_name"], _new_research_stages(data["stage_specs"]),
+            _definition_ids(data.get("prerequisites", []), "research prerequisites"),
+            data.get("progression_stage"), data.get("category"), data.get("series"),
+        )
+    definitions[definition_id] = definition
+
+
 def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequence[Mapping]) -> None:
     """Edit typed method attributes before validation, without Core ID branching.
 
     Content IDs are runtime data used as lookup keys. The enum-like kind field
     identifies the owning Definition collection rather than a special asset.
     """
-    del catalog
     for change in changes:
+        if change.get("operation") in ("add", "remove"):
+            _change_definition_membership(sim, catalog, change)
+            continue
+        if change.get("operation", "edit") != "edit":
+            raise ValueError(f"unknown Content variant operation: {change.get('operation')}")
         kind = change.get("kind")
         definition_id = DefinitionId(str(change["id"]))
         field_name = change.get("field")
@@ -147,7 +297,7 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             spec = sim.power.specs[definition_id]
             amount = _finite_nonnegative(value)
             if field_name == "generation_mw":
-                from .power import FixedGeneration, SolarGeneration
+                from space_idle.power import FixedGeneration, SolarGeneration
                 model = spec.generation
                 if isinstance(model, FixedGeneration):
                     spec = replace(spec, generation=replace(model, mw=amount))
@@ -165,7 +315,7 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             amounts[key] = _finite_nonnegative(value)
             sim.storage.providers[definition_id] = replace(spec, capacity_t_by_pool=amounts)
         elif kind == "research_theory_stage" and field_name == "research_point_cost":
-            from .research_models import ResearchTheoryStageSpec
+            from space_idle.research_models import ResearchTheoryStageSpec
             if sim.research is None:
                 raise ValueError("Research Domain not available")
             definition = sim.research.definitions[definition_id]
@@ -183,9 +333,10 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             if not found:
                 raise ValueError("unrecognized Research stage ID")
             sim.research.definitions[definition_id] = replace(definition, stage_specs=tuple(stages))
-        elif kind in ("process", "research", "construction") and field_name == "prerequisite_technologies":
+        elif ((kind in ("process", "construction") and field_name == "prerequisite_technologies")
+              or (kind == "research" and field_name == "prerequisites")):
             if not isinstance(value, list) or any(not isinstance(row, str) for row in value):
-                raise ValueError("prerequisite_technologies must be a list of Definition IDs")
+                raise ValueError(f"{field_name} must be a list of Definition IDs")
             prerequisites = frozenset(DefinitionId(row) for row in value)
             if len(prerequisites) != len(value):
                 raise ValueError("duplicate prerequisite technologies")

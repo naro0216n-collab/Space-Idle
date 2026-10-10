@@ -9,6 +9,8 @@ Example plan:
   ]}
 ]}
 
+Use ``content_variant`` operations (edit/add/remove) to compare independent
+authored Definition sets. Broken references fail during normal Composition.
 Commands with primitive JSON parameters work directly. For dynamically adapting
 Player policies or advanced typed Command arguments, use the Python experiment
 API rather than introducing a separate script-side eligibility engine.
@@ -25,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from space_idle.bootstrap import build_game_application_for_scenario
 from space_idle.content.base_scenario import build_standard_scenario_definition
-from space_idle.analysis_variants import scenario_variant, apply_content_variant
+from scripts.analysis_variants import scenario_variant, apply_content_variant
 from scripts.analysis_experiments import (
     ExperimentCase, ParetoObjective, compare_pareto, compare_experiments, run_experiments,
 )

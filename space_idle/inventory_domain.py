@@ -93,15 +93,21 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 def validate_runtime(sim: Any) -> None:
     for (operational_node_id, resource_id), amount in sim.inventory.stock.items():
+        _require(resource_id in sim.inventory.resource_definitions,
+                 f"inventory stock references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"inventory references unknown location: {operational_node_id}")
         _require(amount >= -1e-9, f"negative inventory: {operational_node_id}/{resource_id}")
         reserved = sim.inventory.reserved_total(operational_node_id, resource_id)
         _require(reserved >= -1e-9, f"negative reservation: {operational_node_id}/{resource_id}")
         _require(reserved <= amount + 1e-8, f"reservations exceed stock: {operational_node_id}/{resource_id}")
     for (_owner, operational_node_id, resource_id), amount in sim.inventory.reserved.items():
+        _require(resource_id in sim.inventory.resource_definitions,
+                 f"inventory reservation references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"reservation references unknown location: {operational_node_id}/{resource_id}")
         _require(amount >= -1e-9, f"negative reservation row: {operational_node_id}/{resource_id}")
     for (_owner, operational_node_id, resource_id), amount in sim.inventory.external_occupancy.items():
+        _require(resource_id in sim.inventory.resource_definitions,
+                 f"storage occupancy references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"external storage occupancy references unknown operational node: {operational_node_id}/{resource_id}")
         _require(amount >= -1e-9, f"negative external storage occupancy: {operational_node_id}/{resource_id}")
     for (operational_node_id, pool_key), capacity in sim.inventory.physical_storage_capacity_t.items():
