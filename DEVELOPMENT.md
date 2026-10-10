@@ -106,7 +106,7 @@ GitHub反映は変更内容に応じて次のhelperを使用する。`publish` b
 1. ローカルで責務単位の変更を検証し、commitする。
 2. `prepare`を実行する。GitHubのheads一覧から`develop`と`publish`のHEADを同時に取得し、`connector-plan`へ渡す。
 3. 出力された`execution_index`のパスを`INDEX_PATH`に指定し、固定`scripts/publish_connector_launch.js`を1回の`functions.exec`で実行する。Launcherは共有`develop`の`scripts/publish_connector_executor.js`を取得する。
-4. Executorは原本packetを一時Libraryへ登録・取得し、内容とtransactionの整合性を自動検証する。全登録の削除確認後、packet順に`create_tree`、期待SHA照合、`create_commit`、non-forceの`publish` `update_ref`を実行する。ファイル数・transaction規模にかかわらず同じ入口を使用する。Libraryでの削除はゴミ箱移動である。
+4. Executorは原本packetをLibraryの`/temp`配下へ一時登録・取得し、内容とtransactionの整合性を自動検証する。全登録の削除確認後、packet順に`create_tree`、期待SHA照合、`create_commit`、non-forceの`publish` `update_ref`を実行する。ファイル数・transaction規模にかかわらず同じ入口を使用する。Libraryでの削除はゴミ箱移動である。
 5. 該当transport commitのPublish Gatewayが`completed / success`になったら、返却されたtransport SHA・run ID・conclusionを`record`へ渡す。run未完了の間はtransactionを保持し、ほかのローカル開発を進めてよい。
 6. 次のpublishの前に直前Fast CIの結果を確認する。失敗した場合は原因に応じた修正を先に行う。
 

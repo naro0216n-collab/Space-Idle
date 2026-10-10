@@ -12,24 +12,30 @@ const fingerprint = value => {
 };
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
-async function loadAndTrash(files, requestId) {
+async function loadAndTrash(files, requestId, ensureTempFolder = false) {
   const contents = Array(files.length);
   for (let start = 0; start < files.length; start += 20) {
     const group = files.slice(start, start + 20);
     const registered = [];
     let cleanupFailure = false;
     try {
-      const result = await tools.files__manage_library({operations:group.map((file, index) => ({
+      const createFolder = ensureTempFolder && start === 0;
+      const operations = group.map((file, index) => ({
         operation: 'upload', container_path: file.path,
-        destination_path: '/space-idle-publish-' + requestId + '-' + (start + index) + '.json',
+        destination_path: '/temp/space-idle-publish-' + requestId + '-' + (start + index) + '.json',
         overwrite: false,
-      }))});
-      if (result.results?.length !== group.length) throw Error('Incomplete temporary registration');
+      }));
+      if (createFolder) operations.unshift({operation:'create_folder',path:'/temp',parents:true});
+      const result = await tools.files__manage_library({operations});
+      if (result.results?.length !== operations.length ||
+          (createFolder && result.results[0]?.status !== 'succeeded'))
+        throw Error('Temporary folder or registration failed');
+      const rows = createFolder ? result.results.slice(1) : result.results;
       for (let i = 0; i < group.length; i++) {
-        const row = result.results[i];
+        const row = rows[i];
         if (row?.library_file_id) registered.push({fileId:row.file_id, libraryId:row.library_file_id, index:start+i});
       }
-      if (registered.length !== group.length || result.results.some(r => r.status !== 'succeeded' || !r.file_id))
+      if (registered.length !== group.length || rows.some(r => r.status !== 'succeeded' || !r.file_id))
         throw Error('Temporary registration failed');
       for (let first = 0; first < registered.length; first += 5) {
         let pending = registered.slice(first, first + 5);
@@ -78,7 +84,7 @@ async function loadAndTrash(files, requestId) {
 }
 
 // One small index locates exact original packets; it does not contain copies of their contents.
-const indexText = (await loadAndTrash([{path:INDEX_PATH}], 'index'))[0];
+const indexText = (await loadAndTrash([{path:INDEX_PATH}], 'index', true))[0];
 const index = JSON.parse(indexText);
 if (index.version !== 1 || !/^[a-f0-9]{32}$/.test(index.request_id) ||
     index.repository !== 'naro0216n-collab/Space-Idle' ||

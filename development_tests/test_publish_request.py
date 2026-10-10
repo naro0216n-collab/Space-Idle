@@ -364,7 +364,7 @@ const indexPath = process.argv[1], mode = process.argv[2], approvedExecutor = pr
 const index = JSON.parse(fs.readFileSync(indexPath,'utf8'));
 const packets = index.packets.map(e => JSON.parse(fs.readFileSync(indexPath.replace(/execution-index\.json$/,e.name),'utf8')));
 const events = [], registered=new Map(), reads=new Map();
-let treeIndex=0;
+let treeIndex=0, tempExists=false;
 const tools = {
  mcp__GitHub__fetch_file: async ({repository_full_name,path,ref}) => {
    events.push({type:'fetch-source'});
@@ -377,7 +377,15 @@ const tools = {
  files__manage_library: async ({operations}) => {
    events.push({type:operations[0].operation,count:operations.length});
    return {results:operations.map((op,i) => {
+     if(op.operation==='create_folder') {
+       if(op.path!=='/temp'||op.parents!==true) throw Error('unexpected temporary folder');
+       if(mode==='folder-fails') return {status:'failed'};
+       tempExists=true;
+       return {status:'succeeded',path:'/temp'};
+     }
      if(op.operation==='upload') {
+       if(!tempExists || !op.destination_path.startsWith('/temp/space-idle-publish-'))
+         throw Error('upload outside temporary folder');
        if(mode==='upload-fails' && i===operations.length-1) return {status:'failed'};
        const id='file-'+registered.size;
        registered.set(id,op.container_path);
@@ -448,11 +456,13 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
     assert actions[0] == "fetch-source"
+    assert actions[1] == "create_folder"
+    assert actions.count("create_folder") == 1
     assert actions[-3:] == ["tree", "commit", "ref"]
     assert actions.count("tree") == summary["tree_call_count"]
     assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
 
-    for mode in ("source-unavailable", "upload-fails", "delete-fails", "unreadable", "tampered"):
+    for mode in ("source-unavailable", "folder-fails", "upload-fails", "delete-fails", "unreadable", "tampered"):
         rejected = _execute_original_packets(index_path, mode)
         assert rejected.returncode != 0, (mode, rejected.stderr)
         assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
