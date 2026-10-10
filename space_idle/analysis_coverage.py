@@ -268,7 +268,146 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             for req in method_inputs.get(method, ()):
                 adjacency[asset].update(physical_suppliers.get(req, set()) & unresolved)
 
-    # Tarjan SCC over definition dependencies, not an alternative Game Solver.
+    # A single read-only SCC projection serves both capability-only and
+    # Resource-assisted authoring diagnostics; neither is a Game Solver.
+    components = _strongly_connected_components(unresolved, adjacency)
+    for component in components:
+        if len(component) < 2:
+            continue  # Single-asset cases are covered by the self-bootstrap check.
+        evidence = [
+            "scope:registered_definition_acquisition_only;initial_assets_and_external_sources_unknown",
+            *(f"member:{asset.kind}:{asset.id}" for asset in component),
+        ]
+        members = set(component)
+        for asset in component:
+            for method in sorted(acquisitions[asset]):
+                for req in sorted(method_inputs.get(method, ())):
+                    for supplier in sorted(physical_suppliers.get(req, set()) & members):
+                        evidence.append(
+                            f"method:{method.kind}:{method.id}:requires:"
+                            f"{req.kind}:{req.id}:supplied_by:{supplier.kind}:{supplier.id}"
+                        )
+        findings.append(DefinitionCoverageFinding(
+            "potential_asset_acquisition_dependency_cycle", component[0],
+            tuple(sorted(set(evidence))),
+        ))
+    # Resource stock may be a prerequisite for its own first production
+    # facility. A cycle across Resource production and Asset acquisition is
+    # invisible to the service-only acquisition SCC above. This is still a
+    # Definition diagnostic: it does not determine initial inventories,
+    # actual Market eligibility, available sites, or technology progress.
+    findings.extend(_resource_acquisition_cycles(
+        graph, owned_assets, acquisitions, physical_suppliers, method_inputs,
+    ))
+    findings.extend(bootstrap_risks)
+    return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
+
+
+def _resource_acquisition_cycles(
+    graph: DependencyDefinitionGraph,
+    owned_assets: set[DependencyNode],
+    acquisitions: dict[DependencyNode, set[DependencyNode]],
+    physical_suppliers: dict[DependencyNode, set[DependencyNode]],
+    method_inputs: dict[DependencyNode, set[DependencyNode]],
+) -> tuple[DefinitionCoverageFinding, ...]:
+    """Find closed, *authored* Resource/Asset acquisition supply cycles.
+
+    Each acquisition/production method is an alternative (OR). Its physical
+    input Resource/Capability/Service requirements must all have a possible
+    source (AND). A Market buy offer is a conditional alternative; missing
+    Definition sources remain unknown, not proof of initial impossibility.
+    No Simulation eligibility, stock or allocation is computed here.
+    """
+    resource_nodes = {node for node in graph.nodes if node.kind == "resource"}
+    relevant = owned_assets | resource_nodes
+    producers: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    external_offers: set[DependencyNode] = set()
+    inputs: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    extraction_assets: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    for relation in graph.relations:
+        if relation.kind in ("produces_resource", "extracts_resource") and relation.target in resource_nodes:
+            producers[relation.target].add(relation.source)
+        elif relation.kind == "external_buy_offer" and relation.target in resource_nodes:
+            external_offers.add(relation.target)
+        elif relation.kind in ("consumes_resource", "invests_resource") and relation.source in resource_nodes:
+            inputs[relation.target].add(relation.source)
+        elif relation.kind == "nominal_extraction_capacity" and relation.source in owned_assets:
+            extraction_assets[relation.target].add(relation.source)
+
+    # An unregistered acquisition or replenishment route may have a Scenario
+    # endowment or an external source, so its absence cannot close a cycle.
+    independent = {asset for asset in owned_assets if not acquisitions.get(asset)}
+    independent.update(resource for resource in resource_nodes
+                       if resource in external_offers or not producers.get(resource))
+
+    def alternatives(requirement: DependencyNode) -> set[DependencyNode]:
+        if requirement.kind == "resource":
+            return {requirement}
+        return physical_suppliers.get(requirement, set())
+
+    def method_requirements(method: DependencyNode) -> tuple[set[DependencyNode], ...]:
+        groups = [alternatives(req) for req in method_inputs.get(method, ())]
+        groups.extend({resource} for resource in inputs.get(method, ()))
+        if method in extraction_assets:
+            groups.append(extraction_assets[method])
+        return tuple(groups)
+
+    def method_has_source(method: DependencyNode) -> bool:
+        return all(not group or any(
+            candidate not in relevant or candidate in independent
+            for candidate in group
+        ) for group in method_requirements(method))
+
+    changed = True
+    while changed:
+        changed = False
+        for asset in sorted(owned_assets - independent):
+            if any(method_has_source(method) for method in acquisitions[asset]):
+                independent.add(asset)
+                changed = True
+        for resource in sorted(resource_nodes - independent):
+            if any(method_has_source(method) for method in producers[resource]):
+                independent.add(resource)
+                changed = True
+
+    unresolved = relevant - independent
+    adjacency: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    evidence_by_edge: dict[tuple[DependencyNode, DependencyNode], set[str]] = defaultdict(set)
+    for node in unresolved:
+        for method in sorted(acquisitions.get(node, set()) | producers.get(node, set())):
+            for group in method_requirements(method):
+                for supplier in group & unresolved:
+                    adjacency[node].add(supplier)
+                    evidence_by_edge[(node, supplier)].add(
+                        f"method:{method.kind}:{method.id}:needs:{supplier.kind}:{supplier.id}"
+                    )
+
+    components = _strongly_connected_components(unresolved, adjacency)
+    findings = []
+    for component in components:
+        members = set(component)
+        if (not any(node.kind == "resource" for node in component)
+                or len(component) == 1 and component[0] not in adjacency[component[0]]):
+            continue
+        evidence = {
+            "scope:registered_definition_acquisition_and_production_only;"
+            "initial_stock_assets_and_external_conditions_unknown",
+            *(f"member:{node.kind}:{node.id}" for node in component),
+        }
+        for node in component:
+            for supplier in adjacency[node] & members:
+                evidence.update(evidence_by_edge[(node, supplier)])
+        findings.append(DefinitionCoverageFinding(
+            "potential_resource_acquisition_dependency_cycle", component[0],
+            tuple(sorted(evidence)),
+        ))
+    return tuple(findings)
+
+
+def _strongly_connected_components(
+    nodes: set[DependencyNode], adjacency: dict[DependencyNode, set[DependencyNode]],
+) -> tuple[tuple[DependencyNode, ...], ...]:
+    """Deterministic SCCs for conditional, read-only Definition diagnostics."""
     sequence = 0
     indices: dict[DependencyNode, int] = {}
     lowlink: dict[DependencyNode, int] = {}
@@ -298,28 +437,7 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                     break
             components.append(tuple(sorted(component)))
 
-    for asset in sorted(unresolved):
-        if asset not in indices:
-            visit(asset)
-    for component in components:
-        if len(component) < 2:
-            continue  # Single-asset cases are covered by the self-bootstrap check.
-        evidence = [
-            "scope:registered_definition_acquisition_only;initial_assets_and_external_sources_unknown",
-            *(f"member:{asset.kind}:{asset.id}" for asset in component),
-        ]
-        members = set(component)
-        for asset in component:
-            for method in sorted(acquisitions[asset]):
-                for req in sorted(method_inputs.get(method, ())):
-                    for supplier in sorted(physical_suppliers.get(req, set()) & members):
-                        evidence.append(
-                            f"method:{method.kind}:{method.id}:requires:"
-                            f"{req.kind}:{req.id}:supplied_by:{supplier.kind}:{supplier.id}"
-                        )
-        findings.append(DefinitionCoverageFinding(
-            "potential_asset_acquisition_dependency_cycle", component[0],
-            tuple(sorted(set(evidence))),
-        ))
-    findings.extend(bootstrap_risks)
-    return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
+    for node in sorted(nodes):
+        if node not in indices:
+            visit(node)
+    return tuple(components)

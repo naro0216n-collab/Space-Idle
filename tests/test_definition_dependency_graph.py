@@ -285,6 +285,92 @@ def test_definition_acquisition_cycles_keep_alternative_methods_and_unknown_sour
     assert any(r.code == "potential_asset_acquisition_dependency_cycle" for r in unknown)
 
 
+def test_definition_resource_acquisition_cycles_preserve_alternative_sources_and_physical_inputs():
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.analysis_graph import DependencyDefinitionGraph
+
+    def node(kind, key):
+        return DependencyNode(kind, f"test.{key}")
+
+    facility = node("facility", "smelter")
+    capability = node("capability", "smelt")
+    ore = node("resource", "ore")
+    metal = node("resource", "metal")
+    construction = node("construction_method", "smelter.build")
+    process = node("process", "metal.from.ore")
+    extraction = node("extraction_method", "ore.extract")
+    source_facility = node("facility", "mine")
+    mine_build = node("construction_method", "mine.build")
+    graph_nodes = (facility, capability, ore, metal, construction, process,
+                   extraction, source_facility, mine_build)
+    relations = (
+        DependencyRelation("constructs_facility", construction, facility, "test:build"),
+        DependencyRelation("consumes_resource", metal, construction, "test:build:metal"),
+        DependencyRelation("supplies_capability", facility, capability, "test:smelt"),
+        DependencyRelation("requires_capability", capability, process, "test:process:smelt"),
+        DependencyRelation("consumes_resource", ore, process, "test:process:ore"),
+        DependencyRelation("produces_resource", process, metal, "test:process:metal"),
+        DependencyRelation("constructs_facility", mine_build, source_facility, "test:build:mine"),
+        DependencyRelation("nominal_extraction_capacity", source_facility, extraction,
+                           "test:extraction:installed_capacity"),
+        DependencyRelation("extracts_resource", extraction, ore, "test:extraction:ore"),
+    )
+
+    def risks(edges, nodes=graph_nodes):
+        return [finding for finding in inspect_definition_coverage(
+            DependencyDefinitionGraph(nodes, edges, ())
+        ) if finding.code == "potential_resource_acquisition_dependency_cycle"]
+
+    circular = risks(relations)
+    assert len(circular) == 1
+    assert {"member:facility:test.smelter", "member:resource:test.metal"} <= set(circular[0].evidence)
+    assert "member:resource:test.ore" not in circular[0].evidence
+    assert "initial_stock_assets_and_external_conditions_unknown" in " ".join(circular[0].evidence)
+    assert "method:construction_method:test.smelter.build:needs:resource:test.metal" in circular[0].evidence
+    assert "method:process:test.metal.from.ore:needs:facility:test.smelter" in circular[0].evidence
+    assert all(finding.significance == "informational" for finding in circular)
+
+    # A Market import is an alternative *definition* supply path. It says
+    # nothing about the current Market interface, Funds or provider stock.
+    provider = node("market_provider", "imports")
+    market = DependencyRelation("external_buy_offer", provider, metal, "test:market:metal")
+    assert not risks(relations + (market,), graph_nodes + (provider,))
+
+    # A different producing process attached to an independently acquired
+    # facility is another OR path; the original AND inputs are retained.
+    alternate_facility = node("facility", "independent.smelter")
+    alternate_capability = node("capability", "independent.smelt")
+    alternate_process = node("process", "metal.alternative")
+    alternate_build = node("construction_method", "independent.build")
+    alternates = (
+        DependencyRelation("constructs_facility", alternate_build, alternate_facility,
+                           "test:alternative:build"),
+        DependencyRelation("supplies_capability", alternate_facility, alternate_capability,
+                           "test:alternative:capability"),
+        DependencyRelation("requires_capability", alternate_capability, alternate_process,
+                           "test:alternative:requires"),
+        DependencyRelation("consumes_resource", ore, alternate_process,
+                           "test:alternative:ore"),
+        DependencyRelation("produces_resource", alternate_process, metal,
+                           "test:alternative:output"),
+    )
+    assert not risks(relations + alternates, graph_nodes + (
+        alternate_facility, alternate_capability, alternate_process, alternate_build,
+    ))
+    # A purely Resource-to-Resource feedback loop is also a conditional
+    # authoring risk, without asserting anything about initial inventories.
+    feedstock = node("resource", "seed")
+    recycle = node("process", "seed.recycle")
+    cyclic_recycle = (
+        DependencyRelation("consumes_resource", feedstock, recycle, "test:feedstock"),
+        DependencyRelation("produces_resource", recycle, feedstock, "test:recycled"),
+    )
+    assert len(risks(cyclic_recycle, (feedstock, recycle))) == 1
+    assert risks(cyclic_recycle + (
+        DependencyRelation("external_buy_offer", provider, feedstock, "test:seed:supply"),
+    ), (feedstock, recycle, provider)) == []
+
+
 def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():
     from dataclasses import replace
     from space_idle.power import FixedGeneration, SolarGeneration
