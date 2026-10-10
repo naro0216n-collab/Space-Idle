@@ -16,7 +16,7 @@ from scripts.analysis_experiments import (
 from scripts.analysis_projection import project_html, to_csv
 from scripts.compare_experiments import parse_cases
 from space_idle import build_game_application
-from space_idle.analysis_execution import observe_canonical_day
+from space_idle.analysis_execution import ActivityFlow, observe_canonical_day
 from space_idle.analysis_graph import (
     DependencyFragment, DependencyNode, DependencyRelation, DefinitionGraphRegistry,
 )
@@ -27,7 +27,7 @@ from space_idle.content import base_ids as ids
 from scripts.analysis_variants import apply_content_variant, scenario_variant
 from space_idle.application_commands import AdvanceTime
 from space_idle.persistence import capture_state
-from space_idle.shared import DefinitionId, EntityId
+from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
 
 
 def _idle(_app, _day):
@@ -135,6 +135,14 @@ def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource
         sim.inventory.stage_allocated(owner, node, resource, quantity)
         assert sim.inventory.amount(node, resource) == pytest.approx(before - quantity)
         assert sim.inventory.staged_for(owner, node, resource) == pytest.approx(quantity)
+        staged = [row for row in observe_state(sim, operational_node_ids=frozenset((node,)),
+                                               resource_ids=frozenset((resource,))).metrics
+                  if row.kind == 'staged_resource']
+        assert len(staged) == 1
+        assert staged[0].quantity == pytest.approx(quantity)
+        assert staged[0].context_id == str(node)
+        assert staged[0].provenance == f'inventory.external_occupancy:{owner}'
+        assert sim.inventory.amount(node, resource) == pytest.approx(before - quantity)
         sim.inventory.unstage_to_stock(owner, node, resource, quantity)
     assert sim.inventory.amount(node, resource) == pytest.approx(before)
     assert sim.inventory.staged_for(owner, node, resource) == pytest.approx(0)
@@ -161,6 +169,78 @@ def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource
     assert '確定した拠点Inventory' in html
     assert '供給元未確定' in html  # diagram headings, but no fabricated lanes
     assert 'staging:' in html
+    # A later transfer from staging to a known real activity is a single
+    # additional causal flow, not another Inventory production/consumption.
+    with observe_canonical_day(sim, operational_node_ids=frozenset((node,)),
+                               resource_ids=frozenset((resource,))) as transferred:
+        sim.inventory.stage_allocated(owner, node, resource, quantity)
+        sim.inventory.release_storage_occupancy(
+            owner, node, resource, quantity,
+            destination_owner='vehicle_production:test', activity_id='vehicle_production_inputs:test',
+        )
+    assert len(transferred.custody_transfers()) == 1
+    assert transferred.activity_flows() == (ActivityFlow(
+        sim.day, str(resource), quantity, f'staging:{owner}',
+        'vehicle_production:test', 'vehicle_production_inputs:test',
+        'inventory.release_storage_occupancy',
+    ),)
+    assert transferred.unattributed_movements() == ()
+    assert transferred.inventory_balance(node_id=str(node), resource_id=str(resource)) == pytest.approx(-quantity)
+    with observe_canonical_day(sim, operational_node_ids=frozenset((node,)),
+                               resource_ids=frozenset((resource,))) as unknown:
+        sim.inventory.occupy_storage(owner, node, resource, quantity)
+        sim.inventory.release_storage_occupancy(owner, node, resource, quantity)
+    assert unknown.activity_flows() == ()
+    assert {row.direction for row in unknown.unattributed_movements()} == {
+        'external_storage_in', 'external_storage_out',
+    }
+
+
+def test_external_market_commitment_observation_distinguishes_provider_stock_and_pending_admission():
+    from space_idle.application_commands import CreateTradeOrder, AdvanceTime, GetMarket
+    from space_idle.persistence import capture_state
+
+    app = build_game_application()
+    sim = app._simulation
+    interface = next(row for row in app.query(GetMarket()).interfaces
+                     if row.enabled and any(offer.buy_price_musd_per_t is not None
+                                            for offer in row.offers))
+    offer = next(offer for offer in interface.offers if offer.buy_price_musd_per_t is not None)
+    result = app.execute(CreateTradeOrder('buy', offer.resource_id, interface.id,
+                                          quantity_target_t=0.2))
+    assert result.created_id
+    app.execute(AdvanceTime(1))
+    commitments = tuple(row for row in sim.market.buy_commitments.values()
+                        if str(row.order_id) == result.created_id)
+    assert commitments  # Market acquisition reserves before the boundary delivery.
+    resource = DefinitionId(offer.resource_id)
+    provider = DefinitionId(interface.provider_id)
+    node = SpatialNodeId(interface.operational_node_id)
+    before = capture_state(sim)
+    scoped = observe_state(sim, operational_node_ids=frozenset((node,)),
+                           resource_ids=frozenset((resource,)))
+    assert capture_state(sim) == before
+    committed = [row for row in scoped.metrics if row.kind == 'external_market_supply_committed']
+    assert sum(row.quantity for row in committed) == pytest.approx(
+        sim.market.reserved_provider_supply_t(provider, resource))
+    assert all(row.context_id == str(provider) and row.provenance.startswith('market.buy_commitment:')
+               for row in committed)
+    # Commitment is a claim on existing external supply, not an extra physical
+    # stock at the operational Node or a completed Inventory arrival.
+    supply = {row.kind: row.quantity for row in observe_state(sim).metrics
+              if row.context_id == str(provider) and row.subject_id == str(resource)}
+    assert supply['external_market_supply_remaining'] == pytest.approx(
+        supply['external_market_supply_available'] + sum(row.quantity for row in committed))
+    assert not [row for row in observe_state(sim, operational_node_ids=frozenset((node,)),
+                                             resource_ids=frozenset((DefinitionId('unrelated'),))).metrics
+                if row.kind == 'external_market_supply_committed']
+    # Disable the interface without cancelling an existing physical obligation.
+    market_interface = sim.market.interfaces[EntityId(interface.id)]
+    sim.market.interfaces[market_interface.id] = replace(market_interface, enabled=False)
+    held = observe_state(sim, operational_node_ids=frozenset((node,)),
+                         resource_ids=frozenset((resource,)))
+    assert sum(row.quantity for row in held.metrics if row.kind == 'external_market_supply_committed') == pytest.approx(
+        sum(commitment.remaining_quantity_t for commitment in commitments))
 
 
 def test_typed_independent_scenario_and_content_variants_do_not_mutate_base_or_initialization():

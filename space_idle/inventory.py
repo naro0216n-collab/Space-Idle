@@ -129,7 +129,8 @@ class InventoryBook:
                                 "inventory.occupy_storage", owner_id)
         return accepted
 
-    def release_storage_occupancy(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
+    def release_storage_occupancy(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float, *,
+                                  destination_owner: str | None = None, activity_id: str | None = None) -> None:
         if amount < -1e-9:
             raise ValueError("negative storage occupancy release")
         key = (owner_id, operational_node_id, resource_id)
@@ -142,7 +143,8 @@ class InventoryBook:
         else:
             self.external_occupancy[key] = left
         self._record_settlement("external_storage_out", operational_node_id, resource_id, amount,
-                                "inventory.release_storage_occupancy", owner_id)
+                                "inventory.release_storage_occupancy", owner_id,
+                                counterparty=destination_owner, activity=activity_id)
 
     def admission_state_for_pool(
         self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey

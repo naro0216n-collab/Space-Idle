@@ -233,7 +233,9 @@ class VehicleProductionMixin:
                 )
             if staged > 1e-12:
                 self.inventory.release_storage_occupancy(
-                    staging_owner, state.operational_node_id, resource_id, staged
+                    staging_owner, state.operational_node_id, resource_id, staged,
+                    destination_owner=f"vehicle_production:{state.id}",
+                    activity_id=f"vehicle_production_inputs:{state.id}",
                 )
 
     def vehicle_production_supplys(

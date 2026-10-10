@@ -95,6 +95,15 @@ def observe_state(
              inventory.reserved_total(node_id, resource_id), "t", "inventory.reserved")
         emit("inventory_available", resource_id, node_id,
              inventory.available(node_id, resource_id), "t", "inventory.available")
+    # Construction/Vehicle/Founding material may leave ordinary stock and
+    # occupy finite Storage in an owner-specific staging commitment. Inventory
+    # owns this custody quantity; it is not new production or local available
+    # stock. Keep each owner visible instead of collapsing it into pool totals.
+    for (owner_id, node_id, resource_id), amount in sorted(inventory.external_occupancy.items()):
+        if in_scope(node_id, resource_id):
+            emit("staged_resource", resource_id, node_id, amount, "t",
+                 f"inventory.external_occupancy:{owner_id}")
+
     if resource_ids is None:
         # Pool utilization is not reducible to an individual Resource. Include
         # occupied pools even when no Storage provider has installed capacity.
@@ -210,6 +219,20 @@ def observe_state(
                 emit("external_market_demand_available", resource_id, provider_id,
                      sim.market.available_provider_demand_t(provider_id, resource_id),
                      "t", "market.available_provider_demand_t")
+
+    # Pending purchases reserve a portion of the external provider's existing
+    # stock, not additional local Stock or an already-settled transfer. Their
+    # amounts remain physically at the provider until finite node admission
+    # actually succeeds. A disabled interface can still hold an outstanding
+    # commitment, so scope these obligations by their real receiving Node,
+    # independently of current interface eligibility.
+    for commitment in sorted(sim.market.buy_commitments.values(), key=lambda row: str(row.id)):
+        order = sim.market.orders[commitment.order_id]
+        interface = sim.market.interfaces[order.market_interface_id]
+        if in_scope(interface.operational_node_id, commitment.resource_id):
+            emit("external_market_supply_committed", commitment.resource_id,
+                 interface.provider_id, commitment.remaining_quantity_t, "t",
+                 f"market.buy_commitment:{commitment.id}:reserved_provider_supply")
 
     if operational_node_ids is None and resource_ids is None:
         emit("funds_balance", "funds", "organization", sim.market.funds.balance,

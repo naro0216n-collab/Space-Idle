@@ -624,14 +624,16 @@ class OperationalNodeFoundingService:
         project.inputs_consumed = all_committed
         return all_committed
 
-    def _release_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
+    def _release_prepared_payload(self, project: OperationalNodeFoundingProject, movement_execution_id: EntityId) -> None:
         payload_owner = self.payload_owner_id(project.id)
         for requirement in self.project_resource_requirements(project.id):
             resource_id = requirement.resource_id
             staged = self.staged_payload_t(project.id, resource_id)
             if staged > 1e-12:
                 self.inventory.release_storage_occupancy(
-                    payload_owner, project.staging_node_id, resource_id, staged
+                    payload_owner, project.staging_node_id, resource_id, staged,
+                    destination_owner=f"movement:{movement_execution_id}",
+                    activity_id=f"founding_dispatch:{project.id}",
                 )
 
     def _restore_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
@@ -797,7 +799,7 @@ class OperationalNodeFoundingService:
                     except Exception:
                         self.transport.finish_movement_execution(execution.id)
                         raise
-                    self._release_prepared_payload(project)
+                    self._release_prepared_payload(project, execution.id)
                     project.status = FoundingStatus.DEPLOYING
                     project.movement_execution_id = execution.id
 

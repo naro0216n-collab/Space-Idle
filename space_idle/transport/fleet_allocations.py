@@ -1504,7 +1504,9 @@ class FleetAllocationMixin:
                 continue
             for need in relocation.resource_needs:
                 self.inventory.release_storage_occupancy(
-                    relocation.id, need.operational_node_id, need.resource_id, need.required_t
+                    relocation.id, need.operational_node_id, need.resource_id, need.required_t,
+                    destination_owner=f"fleet_relocation:{relocation.id}",
+                    activity_id=f"fleet_relocation_dispatch:{relocation.id}",
                 )
             execution_id = EntityId(f"movement.fleet_relocation:{relocation.id}")
             carrier_id = relocation.carrier_fleet_commitment_id

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     AdvanceTime,
     ApplicationError,
@@ -80,7 +81,24 @@ def test_vehicle_production_application_contract_exposes_planning_blockers_and_p
     )
     assert updated.priority == 5
 
-    app.execute(AdvanceTime(1))
+    with observe_canonical_day(app._simulation) as trace:
+        app.execute(AdvanceTime(1))
+    # The same authoritative manufacturing transition stages inputs and then
+    # consumes them. Custody and actual manufacture must be distinct flows.
+    staging = [row for row in trace.custody_transfers()
+               if row.destination_owner.startswith('staging:vehicle.production.')]
+    manufacturing = [row for row in trace.activity_flows()
+                     if row.activity_id == f'vehicle_production_inputs:{production_id}']
+    assert manufacturing
+    assert all(row.source_owner.startswith('staging:')
+               and row.destination_owner == f'vehicle_production:{production_id}'
+               for row in manufacturing)
+    assert staging or any(row.direction == 'external_storage_in' for row in trace.movements)
+    assert sum(row.quantity_t for row in manufacturing) == pytest.approx(
+        sum(row.quantity_t for row in trace.movements
+            if row.direction == 'external_storage_out'
+            and row.activity_id == f'vehicle_production_inputs:{production_id}')
+    )
     building = next(
         item for item in app.query(GetLogistics()).vehicle_production
         if item.id == production_id

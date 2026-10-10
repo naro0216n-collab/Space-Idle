@@ -53,7 +53,7 @@ class CustodyTransfer:
 
 @dataclass(frozen=True)
 class ActivityFlow:
-    """One settled Inventory movement with a proven external activity endpoint."""
+    """One settled physical Resource movement with proven activity endpoints."""
     day: int
     resource_id: str
     quantity_t: float
@@ -98,20 +98,26 @@ class CanonicalDayTrace:
                 "allocations": [asdict(row) for row in self.allocations]}
 
     def activity_flows(self) -> tuple[ActivityFlow, ...]:
-        """Project known settlement endpoints, without inventing other Flow.
+        """Project proven Owner handoffs, without inventing or double-counting Flow.
 
-        Transfers into staging are reclassifications, separately represented
-        by custody_transfers; they are not Resource production or consumption.
+        Inventory↔staging reclassifications have two paired ledger movements
+        and belong only to custody_transfers(). A later release of staged
+        material to a known Activity is a separate physical settlement from
+        the staging Owner, never a second consumption of Inventory stock.
         """
         rows = []
         for movement in self.movements:
-            if (movement.direction not in ("inventory_in", "inventory_out")
-                    or movement.counterparty_id is None or movement.activity_id is None):
+            if movement.counterparty_id is None or movement.activity_id is None:
                 continue
             inventory_owner = f"inventory:{movement.node_id}"
-            source, target = ((movement.counterparty_id, inventory_owner)
-                              if movement.direction == "inventory_in"
-                              else (inventory_owner, movement.counterparty_id))
+            if movement.direction == "inventory_in":
+                source, target = movement.counterparty_id, inventory_owner
+            elif movement.direction == "inventory_out":
+                source, target = inventory_owner, movement.counterparty_id
+            elif movement.direction == "external_storage_out" and movement.staging_owner_id is not None:
+                source, target = f"staging:{movement.staging_owner_id}", movement.counterparty_id
+            else:
+                continue
             rows.append(ActivityFlow(movement.day, movement.resource_id, movement.quantity_t,
                                      source, target, movement.activity_id, movement.operation))
         return tuple(rows)
@@ -156,17 +162,17 @@ class CanonicalDayTrace:
         return tuple(row for _, _, row in self._paired_custody())
 
     def unattributed_movements(self) -> tuple[InventoryMovement, ...]:
-        """Ordinary stock movements whose cause is unknown, excluding custody.
+        """Owner stock movements without known causal endpoints, excluding custody.
 
-        The raw gross ledger continues to include both sides of a handoff for
-        stock reconciliation; the *unknown* Flow projection must not represent
-        that handoff a second time as unexplained production/consumption.
+        An unmatched staging release is not a change in Inventory Stock, but it
+        still moves physical Resource out of an Owner's custody. Keep it
+        visible as unknown rather than silently treating it as consumption.
+        Paired Inventory↔staging reclassifications are reported separately.
         """
         custody_rows = {index for left, right, _ in self._paired_custody()
                         for index in (left, right)}
         return tuple(row for index, row in enumerate(self.movements)
                      if index not in custody_rows
-                     and row.direction in ("inventory_in", "inventory_out")
                      and (row.counterparty_id is None or row.activity_id is None))
 
     def reconcile(self, before: dict, after: dict) -> list[dict]:
