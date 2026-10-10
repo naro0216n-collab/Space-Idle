@@ -236,6 +236,55 @@ def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_
                        (facility, work, recipe, self_deploy_method), self_only + (method_alternative,), ())))
 
 
+def test_definition_acquisition_cycles_keep_alternative_methods_and_unknown_sources_distinct():
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.analysis_graph import DependencyDefinitionGraph
+
+    a = DependencyNode("facility", "test.asset.a")
+    b = DependencyNode("vehicle", "test.asset.b")
+    c = DependencyNode("facility", "test.asset.c")
+    service_a = DependencyNode("service_capacity", "test.service.a")
+    service_b = DependencyNode("service_capacity", "test.service.b")
+    method_a = DependencyNode("construction_method", "test.acquire.a")
+    method_b = DependencyNode("vehicle_production_method", "test.acquire.b")
+    method_c = DependencyNode("construction_method", "test.acquire.c")
+    nodes = (a, b, c, service_a, service_b, method_a, method_b, method_c)
+    circular = (
+        DependencyRelation("constructs_facility", method_a, a, "test:acquire:a"),
+        DependencyRelation("produces_vehicle", method_b, b, "test:acquire:b"),
+        DependencyRelation("constructs_facility", method_c, c, "test:acquire:c"),
+        DependencyRelation("nominal_service_supply", a, service_a, "test:service:a"),
+        DependencyRelation("nominal_service_supply", b, service_b, "test:service:b"),
+        DependencyRelation("requires_service_capacity", service_b, method_a, "test:need:b"),
+        DependencyRelation("requires_service_capacity", service_a, method_b, "test:need:a"),
+        DependencyRelation("requires_service_capacity", service_a, method_c, "test:need:a:other"),
+    )
+    risks = [r for r in inspect_definition_coverage(DependencyDefinitionGraph(nodes, circular, ()))
+             if r.code == "potential_asset_acquisition_dependency_cycle"]
+    assert len(risks) == 1
+    assert risks[0].subject == a
+    assert {f"member:{node.kind}:{node.id}" for node in (a, b)} <= set(risks[0].evidence)
+    assert f"member:{c.kind}:{c.id}" not in risks[0].evidence
+
+    independent_method = DependencyNode("construction_method", "test.acquire.b.alternative")
+    independent = (
+        DependencyRelation("produces_vehicle", independent_method, b, "test:alternative"),
+    )
+    # Any physically independent method breaks the OR dependency loop.
+    resolved = inspect_definition_coverage(DependencyDefinitionGraph(
+        nodes + (independent_method,), circular + independent, ()))
+    assert not any(r.code == "potential_asset_acquisition_dependency_cycle" for r in resolved)
+
+    # Missing definition providers are a separate coverage gap. They do not
+    # magically make an unknown initial Scenario physically impossible.
+    external = DependencyNode("service_capacity", "test.unknown.service")
+    missing_input = DependencyRelation("requires_service_capacity", external, method_b, "test:unknown")
+    unknown = inspect_definition_coverage(DependencyDefinitionGraph(
+        nodes + (external,), circular + (missing_input,), ()))
+    assert any(r.code == "service_demand_without_registered_capacity_supplier" for r in unknown)
+    assert any(r.code == "potential_asset_acquisition_dependency_cycle" for r in unknown)
+
+
 def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():
     from dataclasses import replace
     from space_idle.power import FixedGeneration, SolarGeneration
@@ -405,6 +454,21 @@ def test_live_state_observation_uses_owned_state_and_is_distinct_from_definition
             "external_market_supply_available", "funds_balance", "fleet_total"} <= kinds
     assert any(metric.provenance.startswith("inventory.") for metric in complete.metrics)
     assert observe_state(sim) == complete  # no implicit tick / mutable analysis state
+
+    # A physical Fleet Commitment parked at an Operational Node is visible
+    # under that Node's scope; a geographically unrelated Node cannot inherit
+    # its units. In-transit and unestablished targets have no Node Inventory.
+    for commitment in sim.transport.fleet_commitment_snapshots():
+        if commitment.operational_node_id is None:
+            continue
+        scoped = observe_state(sim, operational_node_ids=frozenset({commitment.operational_node_id}))
+        matches = [row for row in scoped.metrics if row.kind == 'fleet_committed'
+                   and row.provenance == f'transport.fleet_commitment:{commitment.id}']
+        assert len(matches) == 1
+        assert matches[0].context_id == str(commitment.operational_node_id)
+        assert matches[0].quantity == commitment.quantity
+        outside = observe_state(sim, operational_node_ids=frozenset())
+        assert all(row.provenance != matches[0].provenance for row in outside.metrics)
 
     for (pool_node, pool_key), _physical in sim.inventory.physical_storage_capacity_t.items():
         admission = sim.inventory.admission_state_for_pool(pool_node, pool_key)
@@ -631,6 +695,17 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
     assert classified["d"].classification == "direct_method"
     assert classified["e"].classification == "research_only_no_method"
     assert classified["f"].classification == "no_downstream_outlet"
+    # Coverage must distinguish a terminal orphan from an entire descendant
+    # research chain that never reaches an executable registered method.
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    coverage = inspect_definition_coverage(graph)
+    assert any(row.code == "technology_research_chain_without_registered_method"
+               and row.subject == e
+               and f"downstream_technology:{f.id}" in row.evidence for row in coverage)
+    assert any(row.code == "technology_without_declared_downstream_outlet"
+               and row.subject == f for row in coverage)
+    assert all(row.subject not in (a, b, c, d) for row in coverage
+               if row.code.startswith("technology_"))
     assert classify_technology_outlets(DependencyDefinitionGraph(tuple(reversed(nodes)),
                                                                 tuple(reversed(relations)), ())) == rows
 

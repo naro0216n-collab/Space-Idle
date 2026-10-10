@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 from .analysis_graph import DependencyDefinitionGraph, DependencyNode
+from .analysis_technology_outlets import classify_technology_outlets
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     }
     supplied: set[DependencyNode] = set()
     demands: dict[DependencyNode, set[str]] = defaultdict(set)
-    outlets: dict[DependencyNode, set[str]] = defaultdict(set)
     retirement: set[DependencyNode] = set()
     for relation in graph.relations:
         for kind, relation_kinds in supplier_relations.items():
@@ -79,8 +79,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                 evidence = (relation.provenance if kind == "capability"
                             else f"{relation.kind}:{relation.provenance}")
                 demands[relation.source].add(evidence)
-        if relation.kind in ("unlocks_method", "technology_prerequisite") and relation.source.kind == "technology":
-            outlets[relation.source].add(relation.provenance)
         if relation.kind == "decommissions_facility" and relation.source.kind == "facility":
             retirement.add(relation.source)
         if relation.kind == "retires_vehicle" and relation.source.kind == "vehicle":
@@ -157,12 +155,22 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             findings.append(DefinitionCoverageFinding(
                 missing_supply_codes[node.kind], node, tuple(sorted(evidence)),
             ))
+    # A Research prerequisite edge by itself is not a usable outlet. Reuse the
+    # full typed Technology reachability projection, distinguishing a terminal
+    # definition from a chain whose registered descendants also lack methods.
+    # These are Content-scope gaps, never claims about technical importance.
+    for outlet in classify_technology_outlets(graph):
+        if outlet.classification not in ("no_downstream_outlet", "research_only_no_method"):
+            continue
+        code = ("technology_without_declared_downstream_outlet"
+                if outlet.classification == "no_downstream_outlet"
+                else "technology_research_chain_without_registered_method")
+        findings.append(DefinitionCoverageFinding(code, outlet.technology, (
+            "scope:registered_definition_methods_only;future_content_unknown",
+            f"technology:{outlet.technology.id}:reachable_method_count:0",
+            *(f"downstream_technology:{row.id}" for row in outlet.downstream_technologies),
+        )))
     for node in sorted(graph.nodes):
-        if node.kind == "technology" and node not in outlets:
-            findings.append(DefinitionCoverageFinding(
-                "technology_without_declared_downstream_outlet", node,
-                (f"technology:{node.id}:no_unlocked_method_or_downstream_prerequisite",),
-            ))
         if node.kind not in ("facility", "vehicle"):
             continue
         if node not in supplied:
@@ -223,5 +231,95 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                       for method, requirements in bottlenecks.items() for requirement in requirements),
                 ))),
             ))
+    # The self-bootstrap test above is a useful local explanation, but a
+    # closed acquisition dependency may span several assets: A requires a
+    # Service from B, whose acquisition in turn requires A. Evaluate *methods*
+    # as OR choices and their requirements as AND inputs. No authored source is
+    # assumed to be an installed or active real-world provider here.
+    #
+    # Missing registered acquisition methods and unknown suppliers are treated
+    # as possible external/Scenario starting conditions, not proof of a loop.
+    # They already have distinct coverage findings when appropriate.
+    independent = {asset for asset in owned_assets if not acquisitions.get(asset)}
+
+    def requirement_has_source(requirement: DependencyNode) -> bool:
+        suppliers = physical_suppliers.get(requirement)
+        return not suppliers or any(
+            supplier not in owned_assets or supplier in independent
+            for supplier in suppliers
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for asset in sorted(owned_assets - independent):
+            if any(all(requirement_has_source(req)
+                       for req in method_inputs.get(method, ()))
+                   for method in acquisitions[asset]):
+                independent.add(asset)
+                changed = True
+
+    unresolved = owned_assets - independent
+    # An unresolved asset may merely *depend on* a cycle; only the members of
+    # the actual strongly connected group are cycle candidates.
+    adjacency: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    for asset in unresolved:
+        for method in acquisitions[asset]:
+            for req in method_inputs.get(method, ()):
+                adjacency[asset].update(physical_suppliers.get(req, set()) & unresolved)
+
+    # Tarjan SCC over definition dependencies, not an alternative Game Solver.
+    sequence = 0
+    indices: dict[DependencyNode, int] = {}
+    lowlink: dict[DependencyNode, int] = {}
+    stack: list[DependencyNode] = []
+    on_stack: set[DependencyNode] = set()
+    components: list[tuple[DependencyNode, ...]] = []
+
+    def visit(node: DependencyNode) -> None:
+        nonlocal sequence
+        indices[node] = lowlink[node] = sequence
+        sequence += 1
+        stack.append(node)
+        on_stack.add(node)
+        for next_node in sorted(adjacency[node]):
+            if next_node not in indices:
+                visit(next_node)
+                lowlink[node] = min(lowlink[node], lowlink[next_node])
+            elif next_node in on_stack:
+                lowlink[node] = min(lowlink[node], indices[next_node])
+        if lowlink[node] == indices[node]:
+            component = []
+            while True:
+                popped = stack.pop()
+                on_stack.remove(popped)
+                component.append(popped)
+                if popped == node:
+                    break
+            components.append(tuple(sorted(component)))
+
+    for asset in sorted(unresolved):
+        if asset not in indices:
+            visit(asset)
+    for component in components:
+        if len(component) < 2:
+            continue  # Single-asset cases are covered by the self-bootstrap check.
+        evidence = [
+            "scope:registered_definition_acquisition_only;initial_assets_and_external_sources_unknown",
+            *(f"member:{asset.kind}:{asset.id}" for asset in component),
+        ]
+        members = set(component)
+        for asset in component:
+            for method in sorted(acquisitions[asset]):
+                for req in sorted(method_inputs.get(method, ())):
+                    for supplier in sorted(physical_suppliers.get(req, set()) & members):
+                        evidence.append(
+                            f"method:{method.kind}:{method.id}:requires:"
+                            f"{req.kind}:{req.id}:supplied_by:{supplier.kind}:{supplier.id}"
+                        )
+        findings.append(DefinitionCoverageFinding(
+            "potential_asset_acquisition_dependency_cycle", component[0],
+            tuple(sorted(set(evidence))),
+        ))
     findings.extend(bootstrap_risks)
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))

@@ -899,6 +899,12 @@ def run(browser) -> dict[str, object]:
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
             choose_priority(page, '#explorationPriorityInput', 4)
             exploration_lifecycle.click()
+            # The command refreshes authoritative Application state asynchronously.
+            # Observe the started lifecycle before asserting its action options.
+            page.wait_for_function(
+                "() => document.querySelector('#inspectorContent [data-lifecycle-control=exploration]')?.dataset.explorationAction === 'pause'",
+                timeout=10000,
+            )
 
             _assert(
                 page.locator('#inspectorContent [data-exploration-return]').count() == 1
