@@ -110,7 +110,7 @@ GitHub反映の入口は差分種別で決める。
 2. `prepare`で現在の `HEAD` をpublish対象として固定する。
 3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
 4. `connector-plan` は16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満に分割して生成する。各packetにlocal Gitで事前計算した `expected_tree` を記録する。これらの原本packetだけがGitHub書込みの入力となる。packet本文を転記・改変・再packしない。
-5. `connector-plan` が生成した `execution_index`（原本packetのファイル名・サイズ・fingerprintだけを含む）を入力に、repo内の固定 `scripts/publish_connector_executor.js` を **1回の `functions.exec`** で実行する。固定sourceへ渡す変数は `INDEX_PATH`（`connector-plan` の出力値）だけ。実行は原本packetの一時Library登録、全文読取・照合、全一時登録の削除確認を先に済ませ、GitHubの全tree作成・SHA照合・commit作成・non-force ref更新を順次実行する。handoffの再分割・再結合やtransactionごとのsource生成は行わない。Library削除はゴミ箱移動であり即時完全消去ではない。読取・照合・削除の失敗時はGitHub書込み前に停止する。
+5. `connector-plan` が生成した `execution_index`（原本packetのファイル名・サイズ・fingerprintだけを含む）を入力に、固定 `scripts/publish_connector_launch.js` を **1回の `functions.exec`** で実行する。LauncherはGitHubの承認済み共有 `develop` からexecutorを直接取得して呼び出すため、ローカルsourceの一時登録・目視照合・hash値の手入力を行わない。`INDEX_PATH`（`connector-plan` の出力値）だけを渡す。実行は原本packetの一時Library登録、全文読取・照合、全一時登録の削除確認を先に済ませ、GitHubの全tree作成・SHA照合・commit作成・non-force ref更新を順次実行する。handoffの再分割・再結合やtransactionごとのsource生成は行わない。Library削除はゴミ箱移動であり即時完全消去ではない。読取・照合・削除の失敗時はGitHub書込み前に停止する。
 6. 全tree batch成立後、生成済みの `GitHub.create_commit` packetをそのまま実行する（固定実行処理で続行する）。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
 7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める（固定実行処理内で続行する）。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。
 8. 当該transport commitのPublish Gateway runの結果を取得する。`completed / success` のrun ID・conclusion・transport commitを直ちに `record` へ渡す。runが未完了ならtransactionを保持してローカル実装を進める。次の通常publishの `prepare` より前に当該run結果を再取得し、成功した時点で `record` を実行する。
@@ -122,7 +122,7 @@ python scripts/publish_request.py connector-plan \
   --develop-head <current-develop-head> \
   --publish-head <current-publish-head>
 # 全transaction共通: connector-plan の execution_index を INDEX_PATH に指定し、
-# scripts/publish_connector_executor.js の固定sourceを1回 functions.exec で実行。
+# scripts/publish_connector_launch.js の固定sourceを1回 functions.exec で実行。
 # transaction固有の実行source生成やBase64本文の転記は行わない。
 python scripts/publish_request.py record \
   --gateway-transport-commit <publish-transport-commit> \
@@ -144,12 +144,12 @@ Gatewayはtransport commitをcheckoutした後、そのworking treeにある固�
 
 ツール実行環境とlocal repoのファイルシステムは分離している。`connector-plan` は正規 `tree-batch-NNN.json` / `create-transport-commit.json` を検証したうえで、同じdirectoryへ小さな `execution-index.json` を生成する。Indexは原本packetの**名前・サイズ・fingerprintとtransaction identity**のみを保持し、packet本文をコピーしない。ファイル数にかかわらず次の固定経路を使う。
 
-1. `connector-plan` の出力にある `execution_index` を `INDEX_PATH` に指定し、`scripts/publish_connector_executor.js` に記載された**固定の** `functions.exec` sourceを実行する。毎回sourceやpayloadをhelperで生成しない。INDEX_PATH以外の入力・処理順を変更しない。
+1. `connector-plan` の出力にある `execution_index` を `INDEX_PATH` に指定し、固定 `scripts/publish_connector_launch.js` を実行する。Launcherは `GitHub.fetch_file` で共有 `develop` の `scripts/publish_connector_executor.js` を直接取得する。取得したsourceを手動転記・ハッシュ確認せず、同じ呼出し内で実行する。INDEX_PATH以外のtransaction固有入力は追加しない。
 2. 固定処理はまずIndexを `files.manage_library` へ `container_path` で一時登録し、返却file IDを `files.read` で取得する。反映遅延には上限付き再読取を使う。Indexを読取後は必ずLibraryから削除確認する。
 3. Index記載の全原本packetを最大20件ずつ一時登録し、最大5件ずつ全文を読取る。ファイル長、fingerprint、連番、tree chain、commit parent、target repository、transaction identityをチェックする。各登録groupは読取成否にかかわらず削除確認し、**すべての入力の検証・削除を完了してから**GitHub操作を開始する。Library削除はゴミ箱移動であり完全消去ではない。
 4. 原本packetの `action_args` だけを使用し、`create_tree` → 返却SHA照合 → `create_commit` → `publish` non-force `update_ref` を同一呼出しで順番に実行する。必要な原本packetの枚数が異なっても、転記する処理と操作手順は同一。GitHubで拒否された場合は迂回しない。
 
-固定sourceの全文を毎回生成・編集・提示する必要はない。`INDEX_PATH` の1値のみがtransactionごとに変わる。受渡し不成立時にBase64全文転記や別transport方式へ戻さず、transactionを保持して原因を解決する。
+固定executorの全文を毎回生成・編集・提示・手動検査する必要はない。SHA・fingerprint・source長の手動照合も行わない。これらはhelper・executorが自動で検証し、期待SHA不一致や読取不能はGitHub書込み前または該当tree batchで停止する。`INDEX_PATH` の1値のみがtransactionごとに変わる。共有 `develop` にあるexecutorはpublish済みの正本なので、未publishのローカルexecutor変更を先に実行させない。executorの変更時は既存の共有executorが理解するpacket契約を維持してpublishする。受渡し不成立時にBase64全文転記や別transport方式へ戻さず、transactionを保持して原因を解決する。
 再開時は、次の4状態を区別して作業位置を記録する。通常は追加のhelper round-tripを挟まず、一括呼出しの結果をそのまま確認する。
 
 1. `execution-plan-ready`：packet生成済み、GitHubへのtree書込みは未確認。`summary.json` とpacket自身の `tree_batch_index`、`expected_tree` が再開基点となる。

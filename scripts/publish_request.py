@@ -877,7 +877,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             "force": False,
         },
         "next": (
-            "Run the fixed scripts/publish_connector_executor.js in functions.exec using execution_index. "
+            "Run the fixed scripts/publish_connector_launch.js in functions.exec using execution_index. "
             "It reads the exact packets by temporary Library registration, verifies and trashes all before "
             "GitHub writes, checks each returned tree SHA, then commits and non-force updates publish. "
             "After Gateway success call record with the run evidence."

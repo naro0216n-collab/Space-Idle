@@ -360,12 +360,20 @@ def _execute_original_packets(index_path: Path, mode: str = "normal") -> subproc
 const fs = require('node:fs');
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 const source = fs.readFileSync(0, 'utf8');
-const indexPath = process.argv[1], mode = process.argv[2];
+const indexPath = process.argv[1], mode = process.argv[2], approvedExecutor = process.argv[3];
 const index = JSON.parse(fs.readFileSync(indexPath,'utf8'));
 const packets = index.packets.map(e => JSON.parse(fs.readFileSync(indexPath.replace(/execution-index\.json$/,e.name),'utf8')));
 const events = [], registered=new Map(), reads=new Map();
 let treeIndex=0;
 const tools = {
+ mcp__GitHub__fetch_file: async ({repository_full_name,path,ref}) => {
+   events.push({type:'fetch-source'});
+   if(repository_full_name!=='naro0216n-collab/Space-Idle' ||
+      path!=='scripts/publish_connector_executor.js' || ref!=='develop')
+     throw Error('invalid published executor lookup');
+   if(mode==='source-unavailable') return {result:{content:null}};
+   return {result:{content:fs.readFileSync(approvedExecutor,'utf8')}};
+ },
  files__manage_library: async ({operations}) => {
    events.push({type:operations[0].operation,count:operations.length});
    return {results:operations.map((op,i) => {
@@ -416,8 +424,8 @@ new AsyncFunction('tools','text','INDEX_PATH',source)(tools,()=>{},indexPath)
  .catch(e=>{process.stdout.write(JSON.stringify(events));console.error(e.message);process.exitCode=1});
 """
     return subprocess.run(
-        ["node", "-e", js, str(index_path), mode],
-        input=(ROOT / "scripts" / "publish_connector_executor.js").read_text(encoding="utf-8"),
+        ["node", "-e", js, str(index_path), mode, str(ROOT / "scripts" / "publish_connector_executor.js")],
+        input=(ROOT / "scripts" / "publish_connector_launch.js").read_text(encoding="utf-8"),
         text=True, capture_output=True,
     )
 
@@ -439,11 +447,12 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     trimmed = _execute_original_packets(index_path, "trim-newline")
     assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
+    assert actions[0] == "fetch-source"
     assert actions[-3:] == ["tree", "commit", "ref"]
     assert actions.count("tree") == summary["tree_call_count"]
     assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
 
-    for mode in ("upload-fails", "delete-fails", "unreadable", "tampered"):
+    for mode in ("source-unavailable", "upload-fails", "delete-fails", "unreadable", "tampered"):
         rejected = _execute_original_packets(index_path, mode)
         assert rejected.returncode != 0, (mode, rejected.stderr)
         assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
