@@ -354,158 +354,127 @@ def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> 
     assert '-f ref="${TARGET_BRANCH}"' in workflow
 
 
-def _execute_file_handoff_call(source: str, meta: dict[str, object], directory: Path,
-                               mode: str = "normal") -> subprocess.CompletedProcess[str]:
-    """Execute the size-independent handoff end-to-end with simulated Files and GitHub."""
+def _execute_original_packets(index_path: Path, mode: str = "normal") -> subprocess.CompletedProcess[str]:
+    """Execute the fixed Connector source with Files/GitHub mock boundaries."""
     js = r"""
 const fs = require('node:fs');
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-const source = fs.readFileSync(0,'utf8');
-const meta = JSON.parse(process.argv[1]);
-const directory = process.argv[2];
-const mode = process.argv[3];
-const observed = [];
-const registered = new Map();
-const reads = new Map();
-const fragments = [];
-for (let i=0; i<meta.shard_count;i++) {
-  const data = JSON.parse(fs.readFileSync(directory+'/handoff-'+String(i).padStart(4,'0')+'.json','utf8'));
-  if (data.index!==i) throw Error('fixture index mismatch');
-  fragments.push(data.fragment);
-}
-const canonical = JSON.parse(fragments.join(''));
+const source = fs.readFileSync(0, 'utf8');
+const indexPath = process.argv[1], mode = process.argv[2];
+const index = JSON.parse(fs.readFileSync(indexPath,'utf8'));
+const packets = index.packets.map(e => JSON.parse(fs.readFileSync(indexPath.replace(/execution-index\.json$/,e.name),'utf8')));
+const events = [], registered=new Map(), reads=new Map();
 let treeIndex=0;
 const tools = {
-  files__manage_library: async ({operations}) => {
-    observed.push({type:operations[0].operation,count:operations.length});
-    return {results:operations.map((op,i) => {
-      if (op.operation==='upload') {
-        if (mode==='upload-fails' && i===operations.length-1)
-          return {status:'failed'};
-        const fileId='file-'+registered.size;
-        registered.set(fileId,op.container_path);
-        return {status:'succeeded',file_id:fileId,library_file_id:fileId};
-      }
-      if (op.operation==='delete') {
-        if (mode==='delete-fails') return {status:'failed'};
-        return {status:'succeeded',message:'File moved to trash.'};
-      }
-      throw Error('unexpected operation');
-    })};
-  },
-  files__read: async ({read}) => {
-    observed.push({type:'read',count:read.length});
-    return {results:read.map(({ref_id}) => {
-      const n=(reads.get(ref_id)||0)+1;
-      reads.set(ref_id,n);
-      if (mode==='unreadable' || n===1)
-        return {warnings:['not yet visible'],content:['not yet visible']};
-      let content=fs.readFileSync(registered.get(ref_id),'utf8');
-      if (mode==='tampered' && ref_id==='file-1')
-        content=content.replace(/a/g,'b');
-      return {warnings:[],content:[content],has_more:false};
-    })};
-  },
-  mcp__GitHub__create_tree: async (args) => {
-    observed.push({type:'tree'});
-    const expected = canonical.packets[treeIndex++];
-    if (JSON.stringify(expected.action_args)!==JSON.stringify(args))
-      throw Error('changed Connector arguments');
-    return {result:{sha:mode==='tree-mismatch'?'0'.repeat(40):expected.expected_tree}};
-  },
-  mcp__GitHub__create_commit: async (args) => {
-    observed.push({type:'commit'});
-    if (JSON.stringify(args)!==JSON.stringify(canonical.packets.at(-1).action_args))
-      throw Error('changed commit arguments');
-    return {result:{sha:'a'.repeat(40)}};
-  },
-  mcp__GitHub__update_ref: async ({sha,force,branch_name}) => {
-    observed.push({type:'ref'});
-    if (sha!=='a'.repeat(40) || force!==false || branch_name!=='publish')
-      throw Error('unsafe ref update');
-    return {result:{success:true}};
-  },
+ files__manage_library: async ({operations}) => {
+   events.push({type:operations[0].operation,count:operations.length});
+   return {results:operations.map((op,i) => {
+     if(op.operation==='upload') {
+       if(mode==='upload-fails' && i===operations.length-1) return {status:'failed'};
+       const id='file-'+registered.size;
+       registered.set(id,op.container_path);
+       return {status:'succeeded',file_id:id,library_file_id:id};
+     }
+     if(op.operation==='delete') return {status:mode==='delete-fails'?'failed':'succeeded'};
+     throw Error('unexpected operation');
+   })};
+ },
+ files__read: async ({read}) => {
+   events.push({type:'read',count:read.length});
+   return {results:read.map(({ref_id}) => {
+     const attempt=(reads.get(ref_id)||0)+1;
+     reads.set(ref_id,attempt);
+     if(mode==='unreadable'||attempt===1) return {warnings:['not yet visible'],content:['not visible'],has_more:false};
+     let value=fs.readFileSync(registered.get(ref_id),'utf8');
+     if(mode==='trim-newline') value=value.replace(/\n$/, '');
+     if(mode==='tampered' && registered.get(ref_id).endsWith('tree-batch-000.json')) {
+       const suffix=value.slice(-50), pos=value.indexOf('content');
+       value=value.slice(0,pos+12) + 'x' + value.slice(pos+13);
+     }
+     return {content:[value],has_more:false,warnings:[]};
+   })};
+ },
+ mcp__GitHub__create_tree: async args => {
+   events.push({type:'tree'});
+   const expected=packets[treeIndex++];
+   if (JSON.stringify(expected.action_args)!==JSON.stringify(args)) throw Error('modified tree args');
+   return {result:{sha:mode==='tree-mismatch'?'0'.repeat(40):expected.expected_tree}};
+ },
+ mcp__GitHub__create_commit: async args => {
+   events.push({type:'commit'});
+   if(JSON.stringify(args)!==JSON.stringify(packets.at(-1).action_args)) throw Error('modified commit args');
+   return {result:{sha:'a'.repeat(40)}};
+ },
+ mcp__GitHub__update_ref: async ({sha,force,branch_name}) => {
+   events.push({type:'ref'});
+   if(sha!=='a'.repeat(40)||force!==false||branch_name!=='publish') throw Error('unsafe ref');
+   return {result:{success:true}};
+ },
 };
-new AsyncFunction('tools','text',source)(tools,()=>{})
-  .then(()=>process.stdout.write(JSON.stringify(observed)))
-  .catch(e=>{process.stdout.write(JSON.stringify(observed));console.error(e.message);process.exitCode=1});
+new AsyncFunction('tools','text','INDEX_PATH',source)(tools,()=>{},indexPath)
+ .then(()=>process.stdout.write(JSON.stringify(events)))
+ .catch(e=>{process.stdout.write(JSON.stringify(events));console.error(e.message);process.exitCode=1});
 """
     return subprocess.run(
-        ["node", "-e", js, json.dumps(meta), str(directory), mode],
-        input=source, text=True, capture_output=True,
+        ["node", "-e", js, str(index_path), mode],
+        input=(ROOT / "scripts" / "publish_connector_executor.js").read_text(encoding="utf-8"),
+        text=True, capture_output=True,
     )
 
 
-def _handoff_meta_and_source(repo: Path) -> tuple[dict[str, object], str, Path]:
-    meta = json.loads(run_request(repo, "emit-handoff").stdout)
-    source = run_request(repo, "emit-handoff", "--tool-call").stdout
-    directory = transaction(repo) / "connector"
-    fragments = []
-    for i in range(meta["shard_count"]):
-        part = json.loads((directory / f"handoff-{i:04d}.json").read_text(encoding="ascii"))
-        assert part["index"] == i
-        fragments.append(part["fragment"])
-    data = "".join(fragments).encode("ascii")
-    assert len(data) == meta["total_size"]
-    assert __import__("hashlib").sha256(data).hexdigest() == meta["sha256"]
-    return meta, source, directory
-
-
-def test_uniform_file_handoff_checks_all_parts_before_writes(tmp_path: Path) -> None:
+def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     summary = plan(repo, base, publish_head)
-    meta, source, directory = _handoff_meta_and_source(repo)
-    assert meta["shard_count"] >= 1
-    assert len(source) < 8500
-    assert meta == json.loads(run_request(repo, "emit-handoff").stdout)
-    ok = _execute_file_handoff_call(source, meta, directory)
+    index_path = Path(summary["execution_index"])
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert len(index["packets"]) == summary["tree_call_count"] + 1
+    assert not list(index_path.parent.glob("handoff-*.json"))
+    for entry in index["packets"]:
+        original = (index_path.parent / str(entry["name"])).read_bytes()
+        assert len(original) == entry["size"]
+        assert PUBLISH_REQUEST._tool_call_fingerprint(original.decode("ascii")) == entry["fnv32"]
+    ok = _execute_original_packets(index_path)
     assert ok.returncode == 0, ok.stderr
+    trimmed = _execute_original_packets(index_path, "trim-newline")
+    assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
     assert actions[-3:] == ["tree", "commit", "ref"]
-    assert "delete" in actions and actions.index("delete") < actions.index("tree")
     assert actions.count("tree") == summary["tree_call_count"]
+    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
 
-    unreadable = _execute_file_handoff_call(source, meta, directory, "unreadable")
-    assert unreadable.returncode != 0
-    assert "tree" not in [a["type"] for a in json.loads(unreadable.stdout)]
-    assert "delete" in [a["type"] for a in json.loads(unreadable.stdout)]
-    for mode in ("delete-fails", "upload-fails"):
-        rejected = _execute_file_handoff_call(source, meta, directory, mode)
-        assert rejected.returncode != 0
+    for mode in ("upload-fails", "delete-fails", "unreadable", "tampered"):
+        rejected = _execute_original_packets(index_path, mode)
+        assert rejected.returncode != 0, (mode, rejected.stderr)
         assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
+    mismatch = _execute_original_packets(index_path, "tree-mismatch")
+    assert mismatch.returncode != 0
+    assert [a["type"] for a in json.loads(mismatch.stdout)][-1] == "tree"
 
     packet_file = Path(summary["tree_packets"][0])
     packet = json.loads(packet_file.read_text(encoding="utf-8"))
     packet["action_args"]["repository_full_name"] = "different/repository"
     packet_file.write_text(json.dumps(packet), encoding="utf-8")
-    rejected = run_request(repo, "emit-handoff", check=False)
+    rejected = _execute_original_packets(index_path)
     assert rejected.returncode != 0
-    assert "packet no longer matches" in rejected.stderr
+    assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
 
 
-def test_uniform_file_handoff_scales_across_multiple_tree_batches(tmp_path: Path) -> None:
+def test_direct_packet_registration_large_multi_batch(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     (repo / "large.bin").write_bytes(os.urandom(1_200_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
     summary = plan(repo, base, publish_head)
     assert summary["tree_call_count"] > 1
-    meta, source, directory = _handoff_meta_and_source(repo)
-    assert meta["shard_count"] > 20  # exercises multiple upload / cleanup batches
-    assert len(source) < 14000
-    ok = _execute_file_handoff_call(source, meta, directory)
+    index_path = Path(summary["execution_index"])
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert len(index["packets"]) == summary["tree_call_count"] + 1
+    assert not list(index_path.parent.glob("handoff-*.json"))
+    ok = _execute_original_packets(index_path)
     assert ok.returncode == 0, ok.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
     assert actions.count("tree") == summary["tree_call_count"]
-    assert actions.count("upload") >= 2
     assert actions[-2:] == ["commit", "ref"]
-    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k=="delete")
-
-    broken = _execute_file_handoff_call(source, meta, directory, "tampered")
-    assert broken.returncode != 0
-    assert "tree" not in [a["type"] for a in json.loads(broken.stdout)]
-    assert "fingerprint mismatch" in broken.stderr
-    mismatch = _execute_file_handoff_call(source, meta, directory, "tree-mismatch")
-    assert mismatch.returncode != 0
-    assert [a["type"] for a in json.loads(mismatch.stdout)][-1] == "tree"
+    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
+    assert len([a for a in actions if a == "upload"]) >= 1
