@@ -630,3 +630,94 @@ def test_scientific_exploration_dependency_graph_preserves_real_movement_inputs_
     assert any(row.kind == 'campaign_duration' and row.source == method and row.quantity == 7.0
                for row in subset.relations)
     assert not sim.graph.has_operational_node(ids.MARS_ORBIT)
+
+
+def test_survey_and_extraction_dependencies_preserve_physical_methods_and_targets():
+    """Analysis must not reduce acquisition and Survey to names or RP outputs."""
+    from dataclasses import replace
+
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.exploration_models import SurveyObservationModeSpec
+    from space_idle.site import SiteRequirements, CapabilityRequirement
+
+    app = build_game_application()
+    sim = app._simulation
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+
+    for (cell_id, resource_id), target in sim.survey.targets.items():
+        owner = DependencyNode("survey_target", f"{cell_id}/{resource_id}")
+        assert any(r.source == owner and r.kind == "targets_surface_cell"
+                   and r.target == DependencyNode("surface_cell", str(cell_id)) for r in graph.relations)
+        assert any(r.source == owner and r.kind == "observes_resource"
+                   and r.target == DependencyNode("resource", str(resource_id)) for r in graph.relations)
+        thresholds = [r for r in graph.relations
+                      if r.source == owner and r.kind == "survey_knowledge_threshold"]
+        assert len(thresholds) == len(target.thresholds)
+        assert {r.target.id: r.quantity for r in thresholds} == dict(zip(
+            ("PRESENCE_PROBABILITY", "ESTIMATED_RESOURCE_POTENTIAL", "MEASURED_RESOURCE_POTENTIAL"),
+            target.thresholds,
+        ))
+
+    for provider in sim.survey.providers.values():
+        provider_node = DependencyNode("survey_provider", str(provider.id))
+        compatible = sim.survey.compatible_source_definition_ids(provider)
+        assert {r.source.id for r in graph.relations if r.target == provider_node
+                and r.kind == "uses_asset_definition"} == {str(key) for key in compatible}
+        for mode in provider.observation_modes:
+            owner = DependencyNode("survey_mode", f"{provider.id}/{mode.id}")
+            assert any(r.source == owner and r.kind == "nominal_survey_progress"
+                       and r.quantity == mode.survey_rate for r in graph.relations)
+            assert any(r.target == owner and r.kind == "requires_survey_reach"
+                       and r.source.id == mode.reach.scope.value for r in graph.relations)
+            expected_services = {
+                sim.survey.service_type_for_provider(provider.id, source_id)
+                for source_id in sim.survey.compatible_mode_source_definition_ids(provider, mode)
+            }
+            assert {r.source.id for r in graph.relations if r.target == owner
+                    and r.kind == "requires_service_capacity"} == expected_services
+
+    for method in sim.extraction.specs.values():
+        owner = DependencyNode("extraction_method", str(method.id))
+        assert any(r.source == DependencyNode("resource", str(method.resource_id))
+                   and r.target == owner and r.kind == "requires_resource_opportunity"
+                   for r in graph.relations)
+        assert any(r.target == owner and r.kind == "requires_knowledge"
+                   and r.source == DependencyNode("resource", str(method.resource_id))
+                   for r in graph.relations) == (method.minimum_knowledge_level is not None)
+        assert any(r.target == owner and r.kind == "requires_site_classification"
+                   for r in graph.relations) == bool(method.opportunity_requirements.spatial_classification_requirements)
+        for key in (method.geology_accessibility_key, method.terrain_accessibility_attribute):
+            if key is not None:
+                assert any(r.target == owner and r.kind == "requires_opportunity_factor"
+                           and key in r.source.id for r in graph.relations)
+    for facility in sim.facilities.definitions.values():
+        if facility.extraction_capacity_t_per_day > 0:
+            method = sim.extraction.method_for_definition(facility.id)
+            assert method is not None
+            assert any(r.kind == "nominal_extraction_capacity"
+                       and r.source == DependencyNode("facility", str(facility.id))
+                       and r.target == DependencyNode("extraction_method", str(method.id))
+                       and r.quantity == facility.extraction_capacity_t_per_day
+                       for r in graph.relations)
+
+    # Content can add a mode-specific physical requirement and site condition;
+    # the graph must report that requirement without modifying Generic Core.
+    provider = next(iter(sim.survey.providers.values()))
+    original = provider.observation_modes[0]
+    additional = replace(original, id="different_equipment_mode", required_source_capabilities=frozenset({
+        "unprovided_observation_instrument",
+    }), site_requirements=SiteRequirements(capability_requirements=(
+        CapabilityRequirement("unprovided_observation_instrument"),
+    )))
+    sim.survey.providers[provider.id] = replace(provider, observation_modes=(*provider.observation_modes, additional))
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+    mode_node = DependencyNode("survey_mode", f"{provider.id}/{additional.id}")
+    assert any(r.kind == "requires_site_capability" and r.target == mode_node
+               for r in graph.relations)
+    assert not any(r.kind == "requires_service_capacity" and r.target == mode_node
+                   for r in graph.relations)
+    assert any(f.code == "required_capability_without_definition_supplier"
+               and f.subject == DependencyNode("capability", "unprovided_observation_instrument")
+               for f in inspect_definition_coverage(graph))

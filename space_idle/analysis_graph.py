@@ -114,6 +114,8 @@ class DependencyDefinitionGraph:
             "requires_site_classification", "requires_site_environment", "requires_knowledge",
             "invests_resource", "funds_initial_inventory", "requires_fleet_units",
             "requires_population_commitment", "requires_origin_context",
+            "requires_survey_reach", "requires_resource_opportunity", "requires_opportunity_factor",
+            "minimum_source_units", "requires_operation",
         }
         selected.update(
             relation.source for relation in self.relations

@@ -11,6 +11,7 @@ from ..analysis_graph import (
 )
 from ..catalog import GameCatalog
 from ..construction.models import CONSTRUCTION_SERVICE_TYPE
+from ..exploration_models import KnowledgeLevel, SurveyProviderSourceKind, SurveyReachScope
 from ..research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
     ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
@@ -49,8 +50,12 @@ def build_definition_dependency_graph(
                 all_capabilities.update(method.required_capabilities)
         if sim.survey is not None:
             for provider in sim.survey.providers.values():
+                all_capabilities.update(provider.required_source_capabilities)
                 for mode in provider.observation_modes:
                     all_capabilities.update(mode.required_source_capabilities)
+                    all_capabilities.update(
+                        requirement.capability_id for requirement in mode.site_requirements.capability_requirements
+                    )
         if sim.research is not None:
             for technology in sim.research.definitions.values():
                 for stage in technology.stage_specs:
@@ -87,6 +92,8 @@ def build_definition_dependency_graph(
                                           ResearchDemonstrationStageSpec)):
                         services.update(requirement.service_type for requirement in stage.execution_requirements
                                         if isinstance(requirement, ServiceCapacityRequirement))
+        if sim.survey is not None:
+            services.update(sim.survey.service_capacity_types())
         resource_pools = {
             resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY
             for resource in catalog.resources.values()
@@ -444,8 +451,48 @@ def build_definition_dependency_graph(
                 relations.append(DependencyRelation(
                     "extracts_resource", owner, _node("resource", method.output_resource_id),
                     f"extraction:{method.id}:output_resource_id",
-                    condition=f"opportunity:{method.resource_id}",
+                    condition="physical_opportunity_and_finite_installed_capacity_required",
                 ))
+                relations.append(DependencyRelation(
+                    "requires_resource_opportunity", _node("resource", method.resource_id), owner,
+                    f"extraction:{method.id}:resource_id",
+                    condition="developed_cell_static_potential_and_local_distribution_required",
+                ))
+                context_contributors.contribute_site_requirements(
+                    owner, "opportunity", method.opportunity_requirements, nodes, relations,
+                )
+                if method.minimum_knowledge_level is not None:
+                    relations.append(DependencyRelation(
+                        "requires_knowledge", _node("resource", method.resource_id), owner,
+                        f"extraction:{method.id}:minimum_knowledge_level",
+                        condition=f"target_cell_resource_level:{method.minimum_knowledge_level.name}",
+                    ))
+                for field_name in ("geology_accessibility_key", "terrain_accessibility_attribute"):
+                    value = getattr(method, field_name)
+                    if value is not None:
+                        relations.append(DependencyRelation(
+                            "requires_opportunity_factor", _node("opportunity_factor", f"{field_name}:{value}"), owner,
+                            f"extraction:{method.id}:{field_name}",
+                            condition="typed_static_cell_parameter;not_inventory",
+                        ))
+            for facility in sim.facilities.definitions.values():
+                if facility.extraction_capacity_t_per_day <= 0:
+                    continue
+                method = sim.extraction.method_for_definition(facility.id)
+                if method is None:
+                    continue
+                relations.append(DependencyRelation(
+                    "nominal_extraction_capacity", _node("facility", facility.id),
+                    _node("extraction_method", method.id),
+                    f"facility:{facility.id}:extraction_capacity_t_per_day",
+                    facility.extraction_capacity_t_per_day, "t/day", "per_facility_level",
+                    condition="requires_developed_opportunity;actual_site_power_maintenance_and_allocation",
+                ))
+        if sim.extraction is not None:
+            nodes.extend(_node("opportunity_factor", field + ":" + value) for field, values in (
+                ("geology_accessibility_key", {spec.geology_accessibility_key for spec in sim.extraction.specs.values()}),
+                ("terrain_accessibility_attribute", {spec.terrain_accessibility_attribute for spec in sim.extraction.specs.values()}),
+            ) for value in sorted(row for row in values if row is not None))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("production_and_extraction", industry, expected_definitions=lambda: (
@@ -453,7 +500,9 @@ def build_definition_dependency_graph(
         list(_node("extraction_method", key) for key in (() if sim.extraction is None else sim.extraction.specs))
     ), relation_kinds={
         "requires_capability", "consumes_resource", "produces_resource", "unlocks_method",
-        "extracts_resource",
+        "extracts_resource", "requires_resource_opportunity", "requires_knowledge",
+        "requires_opportunity_factor", "requires_site_capability", "requires_site_classification",
+        "requires_site_environment", "nominal_extraction_capacity",
     })
 
     def construction() -> DependencyFragment:
@@ -659,6 +708,30 @@ def build_definition_dependency_graph(
         nodes = []
         relations = []
         if sim.survey is not None:
+            # A target is a physical Cell x Resource pair, not an Operational Node
+            # or an inventory owned by a Provider. Levels are authored thresholds.
+            knowledge_levels = tuple(level for level in KnowledgeLevel if level is not KnowledgeLevel.UNKNOWN)
+            nodes.extend(_node("survey_knowledge_level", level.name) for level in knowledge_levels)
+            nodes.extend(_node("survey_reach_scope", scope.value) for scope in SurveyReachScope)
+            nodes.extend(_node("survey_parameter", key) for key in (
+                "progress", "distance", "delta_v", "uncertainty", "precision",
+            ))
+            for target in sim.survey.targets.values():
+                subject = _node("survey_target", f"{target.cell_id}/{target.resource_id}")
+                nodes.append(subject)
+                relations.extend((
+                    DependencyRelation("targets_surface_cell", subject, _node("surface_cell", target.cell_id),
+                                       f"survey_target:{subject.id}:cell_id"),
+                    DependencyRelation("observes_resource", subject, _node("resource", target.resource_id),
+                                       f"survey_target:{subject.id}:resource_id",
+                                       condition=f"prior_presence_probability:{target.prior_presence_probability:g}"),
+                ))
+                for level, threshold in zip(knowledge_levels, target.thresholds):
+                    relations.append(DependencyRelation(
+                        "survey_knowledge_threshold", subject, _node("survey_knowledge_level", level.name),
+                        f"survey_target:{subject.id}:thresholds:{level.name}",
+                        threshold, "survey_progress", "per_cell_resource_level",
+                    ))
             for provider in sim.survey.providers.values():
                 owner = _node("survey_provider", provider.id)
                 nodes.append(owner)
@@ -667,22 +740,81 @@ def build_definition_dependency_graph(
                         "requires_capability", _node("capability", capability), owner,
                         f"survey_provider:{provider.id}:required_source_capabilities",
                     ))
+                for source_id in sim.survey.compatible_source_definition_ids(provider):
+                    asset_kind = ("facility" if provider.source_kind is SurveyProviderSourceKind.FACILITY else "vehicle")
+                    asset = _node(asset_kind, source_id)
+                    service = _node("service_capacity", sim.survey.service_type_for_provider(provider.id, source_id))
+                    relations.extend((
+                        DependencyRelation("uses_asset_definition", asset, owner,
+                                           f"survey_provider:{provider.id}:source_capabilities",
+                                           condition="definition_compatible;real_installed_or_committed_source_required"),
+                        DependencyRelation("nominal_survey_service_supply", asset, service,
+                                           f"survey_provider:{provider.id}:capacity_units_per_source_per_day:{source_id}",
+                                           provider.capacity_units_per_source_per_day, "survey_capacity_units/day",
+                                           "per_active_source_unit", condition="power_site_commitment_and_shared_allocation_required"),
+                    ))
                 for mode in provider.observation_modes:
                     mode_node = _node("survey_mode", f"{provider.id}/{mode.id}")
                     nodes.append(mode_node)
+                    provenance = f"survey:{provider.id}/{mode.id}"
                     relations.append(DependencyRelation(
                         "provides_mode", owner, mode_node,
                         f"survey:{provider.id}:observation_modes",
                     ))
-                    for capability in mode.required_source_capabilities:
+                    for capability in sorted(mode.required_source_capabilities):
                         relations.append(DependencyRelation(
                             "requires_capability", _node("capability", capability), mode_node,
-                            f"survey:{provider.id}/{mode.id}:required_source_capabilities",
+                            f"{provenance}:required_source_capabilities",
                         ))
-                    for technology in mode.prerequisite_technologies:
+                    context_contributors.contribute_site_requirements(
+                        mode_node, "survey_provider_site", mode.site_requirements, nodes, relations,
+                    )
+                    relations.extend((
+                        DependencyRelation("requires_survey_reach", _node("survey_reach_scope", mode.reach.scope.value),
+                                           mode_node, f"{provenance}:reach.scope",
+                                           condition="physical_context_not_initial_body_id"),
+                        DependencyRelation("nominal_survey_progress", mode_node,
+                                           _node("survey_parameter", "progress"), f"{provenance}:survey_rate",
+                                           mode.survey_rate, "survey_progress/capacity_unit", "per_allocated_survey_unit"),
+                        DependencyRelation("minimum_source_units", owner, mode_node,
+                                           f"{provenance}:minimum_source_units", mode.minimum_source_units,
+                                           "source_units", "per_concurrent_mode", condition="source_definition_specific"),
+                        DependencyRelation("max_survey_knowledge", mode_node,
+                                           _node("survey_knowledge_level", mode.max_knowledge_level.name),
+                                           f"{provenance}:max_knowledge_level"),
+                    ))
+                    for value, name in ((mode.estimate_uncertainty_fraction, "uncertainty"),
+                                        (mode.measurement_precision_fraction, "precision")):
+                        relations.append(DependencyRelation(
+                            "nominal_survey_measurement", mode_node, _node("survey_parameter", name),
+                            f"{provenance}:{name}", value, "fraction", "per_observation_mode",
+                        ))
+                    for value, name, unit in (
+                        (mode.reach.max_characteristic_distance_km, "distance", "km"),
+                        (mode.reach.max_characteristic_delta_v_km_s, "delta_v", "km/s"),
+                    ):
+                        if value is not None:
+                            relations.append(DependencyRelation(
+                                "max_survey_reach", mode_node, _node("survey_parameter", name),
+                                f"{provenance}:reach:{name}", value, unit, "per_observation_mode",
+                            ))
+                    for operation in sorted(mode.reach.required_operation_types):
+                        relations.append(DependencyRelation(
+                            "requires_operation", _node("transport_operation", operation), mode_node,
+                            f"{provenance}:reach.required_operation_types:{operation}",
+                        ))
+                    for source_id in sim.survey.compatible_mode_source_definition_ids(provider, mode):
+                        # The same Asset may support some modes but not all.
+                        relations.append(DependencyRelation(
+                            "requires_service_capacity", _node("service_capacity",
+                                sim.survey.service_type_for_provider(provider.id, source_id)), mode_node,
+                            f"{provenance}:service_capacity:{source_id}",
+                            condition="one_of_compatible_physical_sources;per_execution_unit",
+                        ))
+                    for technology in sorted(mode.prerequisite_technologies):
                         relations.append(DependencyRelation(
                             "unlocks_method", _node("technology", technology), mode_node,
-                            f"survey:{provider.id}/{mode.id}:prerequisite_technologies",
+                            f"{provenance}:prerequisite_technologies",
                         ))
         if sim.scientific_exploration is not None:
             from ..transport.models import MovementEndpoint
@@ -758,6 +890,8 @@ def build_definition_dependency_graph(
 
     registry.register("observation", observations, expected_definitions=lambda: (
         list(_node("survey_provider", key) for key in (() if sim.survey is None else sim.survey.providers)) +
+        list(_node("survey_target", f"{cell_id}/{resource_id}") for cell_id, resource_id in (
+            () if sim.survey is None else sim.survey.targets)) +
         list(_node("scientific_exploration", key) for key in (
             () if sim.scientific_exploration is None else sim.scientific_exploration.definitions))
     ), relation_kinds={
@@ -765,7 +899,11 @@ def build_definition_dependency_graph(
         "finite_research_point_reward", "consumes_resource", "requires_fleet_units",
         "requires_population_commitment", "requires_origin_context", "targets_spatial_context",
         "campaign_duration", "requires_site_capability", "requires_site_classification",
-        "requires_site_environment",
+        "requires_site_environment", "targets_surface_cell", "observes_resource",
+        "survey_knowledge_threshold", "uses_asset_definition", "nominal_survey_service_supply",
+        "requires_survey_reach", "nominal_survey_progress", "minimum_source_units",
+        "max_survey_knowledge", "nominal_survey_measurement", "max_survey_reach",
+        "requires_operation", "requires_service_capacity",
     })
 
     registry.register('world', lambda: context_contributors.world(sim),
