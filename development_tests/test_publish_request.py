@@ -141,7 +141,7 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
 
 def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_budget(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
-    (repo / "large.bin").write_bytes(os.urandom(420_000))
+    (repo / "large.bin").write_bytes(os.urandom(1_200_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
     summary = plan(repo, base, publish_head)
@@ -354,169 +354,75 @@ def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> 
     assert '-f ref="${TARGET_BRANCH}"' in workflow
 
 
-def test_emitted_tool_calls_preserve_active_packets_and_reject_modified_inputs(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    prepare_change(repo)
-    summary = plan(repo, base, publish_head)
-    packet_dir = transaction(repo) / "connector"
-    for stage, packet_name in (("tree", "tree-batch-000.json"), ("commit", "create-transport-commit.json")):
-        packet_path = packet_dir / packet_name
-        packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        generated = run_request(repo, "emit-tool-call", "--stage", stage).stdout
-        args_line = next(line for line in generated.splitlines() if line.startswith("const args = "))
-        args = json.loads(args_line[len("const args = "):-1])
-        assert args == packet["action_args"]
-        compact = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
-        assert f"serialized.length !== {len(compact)}" in generated
-        assert f"0x{PUBLISH_REQUEST._tool_call_fingerprint(compact):08x}" in generated
-        if stage == "tree":
-            assert packet["expected_tree"] == summary["tree_expected_shas"][0]
-            assert f'result.result.sha !== "{packet["expected_tree"]}"' in generated
-            assert "tools.mcp__GitHub__create_tree(args)" in generated
-        else:
-            assert "tools.mcp__GitHub__create_commit(args)" in generated
-            assert "tools.mcp__GitHub__update_ref(" in generated
-            assert "force:false" in generated
-        packet["action_args"]["repository_full_name"] = "untrusted/modified"
-        packet_path.write_text(json.dumps(packet), encoding="utf-8")
-        rejected = run_request(repo, "emit-tool-call", "--stage", stage, check=False)
-        assert rejected.returncode != 0
-        assert "packet no longer matches" in rejected.stderr
-        packet["action_args"]["repository_full_name"] = PUBLISH_REQUEST.GITHUB_REPOSITORY
-        packet_path.write_text(json.dumps(packet), encoding="utf-8")
-
-    rejected = run_request(repo, "emit-tool-call", "--stage", "tree", "--index", "-1", check=False)
-    assert rejected.returncode != 0
-
-
-def _execute_emitted_call(source: str, expected_trees: list[str]) -> subprocess.CompletedProcess[str]:
-    """Execute the printed Connector source with mock tools, never writing to GitHub."""
-    js = """
-const fs = require('node:fs');
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const source = fs.readFileSync(0, 'utf8');
-const expectedTrees = JSON.parse(process.argv[1]);
-const actions = [];
-const tools = {
-  mcp__GitHub__create_tree: async (args) => {
-    actions.push({kind:'tree', args});
-    return {result: {sha: expectedTrees[actions.filter(a => a.kind === 'tree').length - 1]}};
-  },
-  mcp__GitHub__create_commit: async (args) => {
-    actions.push({kind:'commit', args});
-    return {result: {sha:'a'.repeat(40)}};
-  },
-  mcp__GitHub__update_ref: async (args) => {
-    actions.push({kind:'ref', args});
-    return {result: {success:true}};
-  },
-};
-new AsyncFunction('tools', 'text', source)(tools, () => {})
-  .then(() => process.stdout.write(JSON.stringify(actions)))
-  .catch(e => { console.error(e.message); process.exitCode = 1; });
-"""
-    return subprocess.run(
-        ["node", "-e", js, json.dumps(expected_trees)], input=source,
-        capture_output=True, text=True,
-    )
-
-
-def test_complete_tool_call_uses_original_arguments_and_checks_all_before_writes(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    prepare_change(repo)
-    summary = plan(repo, base, publish_head)
-    expected_trees = summary["tree_expected_shas"]
-    original_packets = [json.loads(Path(file).read_text(encoding="utf-8"))
-                        for file in summary["tree_packets"]]
-    original_commit = json.loads(Path(summary["commit_packet"]).read_text(encoding="utf-8"))
-    emitted = run_request(repo, "emit-tool-call").stdout
-    assert emitted == run_request(repo, "emit-tool-call", "--stage", "all").stdout
-    assert emitted.count("mcp__GitHub__create_tree(") == 1
-    assert "mcp__GitHub__create_commit(" in emitted
-    assert "mcp__GitHub__update_ref(" in emitted
-    completed = _execute_emitted_call(emitted, expected_trees)
-    assert completed.returncode == 0, completed.stderr
-    actions = json.loads(completed.stdout)
-    assert [action["kind"] for action in actions] == ["tree"] * len(original_packets) + ["commit", "ref"]
-    assert [action["args"] for action in actions[:-2]] == [p["action_args"] for p in original_packets]
-    assert actions[-2]["args"] == original_commit["action_args"]
-    assert actions[-1]["args"]["sha"] == "a" * 40
-    assert actions[-1]["args"]["force"] is False
-
-    # Mutation in a later packet is caught before the first tree write.
-    additional_tree = dict(original_packets[0])
-    two_tree_source = PUBLISH_REQUEST._render_complete_tool_call([
-        original_packets[0], additional_tree, original_commit
-    ])
-    broken = two_tree_source.replace(
-        '"naro0216n-collab/Space-Idle"', '"naro0216n-collab/Space-Idlf"', 1
-    )
-    failed = _execute_emitted_call(broken, expected_trees * 2)
-    assert failed.returncode != 0
-    assert "transfer mismatch" in failed.stderr
-    assert failed.stdout == ""  # no GitHub write was reached
-
-    # Source-file alteration is rejected independently of transfer checksum.
-    packet_file = Path(summary["commit_packet"])
-    altered = json.loads(packet_file.read_text(encoding="utf-8"))
-    altered["action_args"]["message"] += "modified"
-    packet_file.write_text(json.dumps(altered), encoding="utf-8")
-    rejected = run_request(repo, "emit-tool-call", check=False)
-    assert rejected.returncode != 0
-    assert "packet no longer matches" in rejected.stderr
-
-
-def test_complete_tool_call_rejects_oversized_script_without_partial_output(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    (repo / "large.bin").write_bytes(os.urandom(420_000))
-    commit_all(repo, "large checkpoint")
-    run_request(repo, "prepare")
-    summary = plan(repo, base, publish_head)
-    assert summary["tree_call_count"] > 1
-    rejected = run_request(repo, "emit-tool-call", check=False)
-    assert rejected.returncode != 0
-    assert rejected.stdout == ""
-    assert "single-call budget" in rejected.stderr
-    assert "--stage tree" in rejected.stderr
-    assert "mcp__GitHub__create_tree" in run_request(
-        repo, "emit-tool-call", "--stage", "tree", "--index", "0"
-    ).stdout
-
-
-def _execute_file_handoff_call(source: str, handoff: Path, mode: str = "normal") -> subprocess.CompletedProcess[str]:
-    """Exercise the complete short-source protocol against fake Files and GitHub tools."""
+def _execute_file_handoff_call(source: str, meta: dict[str, object], directory: Path,
+                               mode: str = "normal") -> subprocess.CompletedProcess[str]:
+    """Execute the size-independent handoff end-to-end with simulated Files and GitHub."""
     js = r"""
 const fs = require('node:fs');
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 const source = fs.readFileSync(0,'utf8');
-const canonical = fs.readFileSync(process.argv[1],'utf8');
-const mode = process.argv[2];
-const packet = JSON.parse(canonical);
-let reads = 0;
-let observed = [];
+const meta = JSON.parse(process.argv[1]);
+const directory = process.argv[2];
+const mode = process.argv[3];
+const observed = [];
+const registered = new Map();
+const reads = new Map();
+const fragments = [];
+for (let i=0; i<meta.shard_count;i++) {
+  const data = JSON.parse(fs.readFileSync(directory+'/handoff-'+String(i).padStart(4,'0')+'.json','utf8'));
+  if (data.index!==i) throw Error('fixture index mismatch');
+  fragments.push(data.fragment);
+}
+const canonical = JSON.parse(fragments.join(''));
+let treeIndex=0;
 const tools = {
   files__manage_library: async ({operations}) => {
-    const op=operations[0]; observed.push(op.operation);
-    if (op.operation==='upload') return {results:[{status:'succeeded',file_id:'file-test',library_file_id:'lib-test'}]};
-    if (op.operation==='delete') return {results:[{status:'succeeded',message:'File moved to trash.'}]};
-    throw Error('unexpected Files operation');
+    observed.push({type:operations[0].operation,count:operations.length});
+    return {results:operations.map((op,i) => {
+      if (op.operation==='upload') {
+        if (mode==='upload-fails' && i===operations.length-1)
+          return {status:'failed'};
+        const fileId='file-'+registered.size;
+        registered.set(fileId,op.container_path);
+        return {status:'succeeded',file_id:fileId,library_file_id:fileId};
+      }
+      if (op.operation==='delete') {
+        if (mode==='delete-fails') return {status:'failed'};
+        return {status:'succeeded',message:'File moved to trash.'};
+      }
+      throw Error('unexpected operation');
+    })};
   },
-  files__read: async () => {
-    observed.push('read'); reads++;
-    if (mode==='unreadable' || reads===1) return {results:[{warnings:['not visible'],content:['not visible']}]};
-    const data=mode==='tampered'?canonical.replace('GitHub.create_commit','GitHub.creatf_commit'):canonical;
-    return {results:[{warnings:[],content:[data],has_more:false}]};
+  files__read: async ({read}) => {
+    observed.push({type:'read',count:read.length});
+    return {results:read.map(({ref_id}) => {
+      const n=(reads.get(ref_id)||0)+1;
+      reads.set(ref_id,n);
+      if (mode==='unreadable' || n===1)
+        return {warnings:['not yet visible'],content:['not yet visible']};
+      let content=fs.readFileSync(registered.get(ref_id),'utf8');
+      if (mode==='tampered' && ref_id==='file-1')
+        content=content.replace(/a/g,'b');
+      return {warnings:[],content:[content],has_more:false};
+    })};
   },
   mcp__GitHub__create_tree: async (args) => {
-    observed.push('tree');
-    return {result:{sha:packet.packets[observed.filter(x=>x==='tree').length-1].expected_tree}};
+    observed.push({type:'tree'});
+    const expected = canonical.packets[treeIndex++];
+    if (JSON.stringify(expected.action_args)!==JSON.stringify(args))
+      throw Error('changed Connector arguments');
+    return {result:{sha:mode==='tree-mismatch'?'0'.repeat(40):expected.expected_tree}};
   },
-  mcp__GitHub__create_commit: async () => {
-    observed.push('commit'); return {result:{sha:'a'.repeat(40)}};
+  mcp__GitHub__create_commit: async (args) => {
+    observed.push({type:'commit'});
+    if (JSON.stringify(args)!==JSON.stringify(canonical.packets.at(-1).action_args))
+      throw Error('changed commit arguments');
+    return {result:{sha:'a'.repeat(40)}};
   },
   mcp__GitHub__update_ref: async ({sha,force,branch_name}) => {
-    observed.push('ref');
-    if (sha!=='a'.repeat(40) || force!==false || branch_name!=='publish') throw Error('unsafe ref');
+    observed.push({type:'ref'});
+    if (sha!=='a'.repeat(40) || force!==false || branch_name!=='publish')
+      throw Error('unsafe ref update');
     return {result:{success:true}};
   },
 };
@@ -525,39 +431,49 @@ new AsyncFunction('tools','text',source)(tools,()=>{})
   .catch(e=>{process.stdout.write(JSON.stringify(observed));console.error(e.message);process.exitCode=1});
 """
     return subprocess.run(
-        ["node", "-e", js, str(handoff), mode], input=source, text=True,
-        capture_output=True,
+        ["node", "-e", js, json.dumps(meta), str(directory), mode],
+        input=source, text=True, capture_output=True,
     )
 
 
-def test_temporary_file_handoff_preserves_verified_packets_and_cleans_up_before_writes(tmp_path: Path) -> None:
+def _handoff_meta_and_source(repo: Path) -> tuple[dict[str, object], str, Path]:
+    meta = json.loads(run_request(repo, "emit-handoff").stdout)
+    source = run_request(repo, "emit-handoff", "--tool-call").stdout
+    directory = transaction(repo) / "connector"
+    fragments = []
+    for i in range(meta["shard_count"]):
+        part = json.loads((directory / f"handoff-{i:04d}.json").read_text(encoding="ascii"))
+        assert part["index"] == i
+        fragments.append(part["fragment"])
+    data = "".join(fragments).encode("ascii")
+    assert len(data) == meta["total_size"]
+    assert __import__("hashlib").sha256(data).hexdigest() == meta["sha256"]
+    return meta, source, directory
+
+
+def test_uniform_file_handoff_checks_all_parts_before_writes(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
     summary = plan(repo, base, publish_head)
-    meta = json.loads(run_request(repo, "emit-handoff").stdout)
-    data = Path(meta["handoff"]).read_bytes()
-    assert len(data) == meta["size"]
-    assert json.loads(data)["packets"] == [
-        json.loads(Path(path).read_text(encoding="utf-8"))
-        for path in [*summary["tree_packets"], summary["commit_packet"]]
-    ]
+    meta, source, directory = _handoff_meta_and_source(repo)
+    assert meta["shard_count"] >= 1
+    assert len(source) < 8500
     assert meta == json.loads(run_request(repo, "emit-handoff").stdout)
-    source = run_request(repo, "emit-handoff", "--tool-call").stdout
-    assert len(source) < 6000  # independent of the transported payload size
-    assert "files__manage_library" in source and "files__read" in source
-    assert "mcp__GitHub__create_tree" in source and "mcp__GitHub__update_ref" in source
-    ok = _execute_file_handoff_call(source, Path(meta["handoff"]))
+    ok = _execute_file_handoff_call(source, meta, directory)
     assert ok.returncode == 0, ok.stderr
-    assert json.loads(ok.stdout) == ["upload", "read", "read", "delete", "tree", "commit", "ref"]
+    actions = [a["type"] for a in json.loads(ok.stdout)]
+    assert actions[-3:] == ["tree", "commit", "ref"]
+    assert "delete" in actions and actions.index("delete") < actions.index("tree")
+    assert actions.count("tree") == summary["tree_call_count"]
 
-    broken = _execute_file_handoff_call(source, Path(meta["handoff"]), mode="tampered")
-    assert broken.returncode != 0
-    assert json.loads(broken.stdout) == ["upload", "read", "read", "delete"]
-    assert "content mismatch" in broken.stderr
-    unreadable = _execute_file_handoff_call(source, Path(meta["handoff"]), mode="unreadable")
+    unreadable = _execute_file_handoff_call(source, meta, directory, "unreadable")
     assert unreadable.returncode != 0
-    assert json.loads(unreadable.stdout)[-1] == "delete"
-    assert "unreadable or truncated" in unreadable.stderr
+    assert "tree" not in [a["type"] for a in json.loads(unreadable.stdout)]
+    assert "delete" in [a["type"] for a in json.loads(unreadable.stdout)]
+    for mode in ("delete-fails", "upload-fails"):
+        rejected = _execute_file_handoff_call(source, meta, directory, mode)
+        assert rejected.returncode != 0
+        assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
 
     packet_file = Path(summary["tree_packets"][0])
     packet = json.loads(packet_file.read_text(encoding="utf-8"))
@@ -568,14 +484,28 @@ def test_temporary_file_handoff_preserves_verified_packets_and_cleans_up_before_
     assert "packet no longer matches" in rejected.stderr
 
 
-def test_temporary_file_handoff_rejects_oversized_transfer(tmp_path: Path) -> None:
+def test_uniform_file_handoff_scales_across_multiple_tree_batches(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
-    (repo / "large.bin").write_bytes(os.urandom(420_000))
+    (repo / "large.bin").write_bytes(os.urandom(1_200_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
     summary = plan(repo, base, publish_head)
     assert summary["tree_call_count"] > 1
-    result = run_request(repo, "emit-handoff", check=False)
-    assert result.returncode != 0
-    assert "read-through budget" in result.stderr
-    assert not (transaction(repo) / "connector" / "handoff.json").exists()
+    meta, source, directory = _handoff_meta_and_source(repo)
+    assert meta["shard_count"] > 20  # exercises multiple upload / cleanup batches
+    assert len(source) < 14000
+    ok = _execute_file_handoff_call(source, meta, directory)
+    assert ok.returncode == 0, ok.stderr
+    actions = [a["type"] for a in json.loads(ok.stdout)]
+    assert actions.count("tree") == summary["tree_call_count"]
+    assert actions.count("upload") >= 2
+    assert actions[-2:] == ["commit", "ref"]
+    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k=="delete")
+
+    broken = _execute_file_handoff_call(source, meta, directory, "tampered")
+    assert broken.returncode != 0
+    assert "tree" not in [a["type"] for a in json.loads(broken.stdout)]
+    assert "fingerprint mismatch" in broken.stderr
+    mismatch = _execute_file_handoff_call(source, meta, directory, "tree-mismatch")
+    assert mismatch.returncode != 0
+    assert [a["type"] for a in json.loads(mismatch.stdout)][-1] == "tree"

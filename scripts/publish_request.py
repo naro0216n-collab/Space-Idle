@@ -17,7 +17,7 @@ STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
 CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
-HANDOFF_FILE_BUDGET_BYTES = 136 * 1024  # Verified read-through bound, independent of GitHub call size.
+HANDOFF_FRAGMENT_CHARS = 48 * 1024  # Fixed read-through shard size for every transaction.
 TRANSPORT_CHUNK_BYTES = 16 * 1024
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
@@ -897,52 +897,6 @@ def _tool_call_fingerprint(text: str) -> int:
     return value
 
 
-def _render_tool_call(packet: dict[str, object], *, publish_base_head: str) -> str:
-    action = packet.get("action")
-    action_args = packet.get("action_args")
-    if not isinstance(action_args, dict) or action not in {"GitHub.create_tree", "GitHub.create_commit"}:
-        raise PublishStateError("invalid connector packet action")
-    compact = json.dumps(action_args, ensure_ascii=False, separators=(",", ":"))
-    try:
-        compact.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise PublishStateError("tool-call source requires ASCII packet arguments; use exact source-file handoff") from exc
-    lines = [
-        "// Generated from the unmodified active transaction packet; copy the entire block.",
-        f"const args = {compact};",
-        "const serialized = JSON.stringify(args);",
-        "let fnv = 2166136261;",
-        "for (let i = 0; i < serialized.length; i++) { const c = serialized.charCodeAt(i); "
-        "if (c > 127) throw Error('Non-ASCII packet requires direct source-file handoff'); "
-        "fnv = Math.imul(fnv ^ c, 16777619) >>> 0; }",
-        f"if (serialized.length !== {len(compact)} || fnv !== 0x{_tool_call_fingerprint(compact):08x}) "
-        "throw Error('Connector argument transfer mismatch; do not write');",
-    ]
-    if action == "GitHub.create_tree":
-        expected = str(packet.get("expected_tree", ""))
-        _require_hex_sha(expected, name="packet expected tree")
-        lines.extend([
-            "const result = await tools.mcp__GitHub__create_tree(args);",
-            f"if (result.result.sha !== {json.dumps(expected)}) "
-            "throw Error('GitHub tree SHA mismatch; stop this transaction');",
-            "text(JSON.stringify({stage:'tree-established',sha:result.result.sha}));",
-        ])
-    else:
-        _require_hex_sha(publish_base_head, name="publish base head")
-        lines.extend([
-            "const commit = await tools.mcp__GitHub__create_commit(args);",
-            "const sha = commit.result.sha;",
-            "if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Invalid GitHub commit SHA');",
-            "const updated = await tools.mcp__GitHub__update_ref({"
-            f"repository_full_name:{json.dumps(GITHUB_REPOSITORY)},"
-            f"branch_name:{json.dumps(PUBLISH_BRANCH)},sha,force:false"
-            "});",
-            "if (updated.result.success !== true) throw Error('Publish ref was not updated');",
-            "text(JSON.stringify({stage:'transport-ref-updated',transport_commit:sha}));",
-        ])
-    return "\n".join(lines) + "\n"
-
-
 def _verified_execution_packets(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
     """Read every original packet and validate it against the immutable execution plan."""
     plan = state["plan"]
@@ -981,148 +935,127 @@ def _verified_execution_packets(repo: Path, state: dict[str, object]) -> list[di
     return packets
 
 
-def _render_complete_tool_call(packets: list[dict[str, object]]) -> str:
-    """Emit one atomic preflight followed by the existing ordered Connector writes."""
-    items: list[str] = []
-    for packet in packets:
-        action_args = packet["action_args"]
-        assert isinstance(action_args, dict)
-        compact = json.dumps(action_args, ensure_ascii=False, separators=(",", ":"))
-        try:
-            compact.encode("ascii")
-        except UnicodeEncodeError as exc:
-            raise PublishStateError("tool-call source requires ASCII packet arguments; use exact source-file handoff") from exc
-        expected_tree = packet.get("expected_tree") if packet["action"] == "GitHub.create_tree" else None
-        if expected_tree is not None:
-            _require_hex_sha(str(expected_tree), name="packet expected tree")
-        item = (
-            "{args:" + compact +
-            ",size:" + str(len(compact)) +
-            ",fingerprint:0x" + f"{_tool_call_fingerprint(compact):08x}" +
-            ",expectedTree:" + json.dumps(expected_tree) + "}"
-        )
-        items.append(item)
-    source = "\n".join([
-        "// One verified execution plan; one functions.exec call for tree, commit and ref update.",
-        "const packets = [" + ",\n".join(items) + "];",
-        "// Preflight every argument before any GitHub write, including later batches.",
-        "for (const packet of packets) {",
-        "  const data = JSON.stringify(packet.args);",
-        "  let hash = 2166136261;",
-        "  for (let i = 0; i < data.length; i++) {",
-        "    const c = data.charCodeAt(i);",
-        "    if (c > 127) throw Error('Non-ASCII packet requires direct source-file handoff');",
-        "    hash = Math.imul(hash ^ c, 16777619) >>> 0;",
-        "  }",
-        "  if (data.length !== packet.size || hash !== packet.fingerprint) "
-        "throw Error('Connector argument transfer mismatch; no writes performed');",
-        "}",
-        "for (let i = 0; i < packets.length - 1; i++) {",
-        "  const packet = packets[i];",
-        "  const result = await tools.mcp__GitHub__create_tree(packet.args);",
-        "  if (result.result.sha !== packet.expectedTree) "
-        "throw Error('GitHub tree SHA mismatch; stop this transaction');",
-        "  text(JSON.stringify({stage:'tree-established',index:i,sha:result.result.sha}));",
-        "}",
-        "const commit = await tools.mcp__GitHub__create_commit(packets[packets.length - 1].args);",
-        "const sha = commit.result.sha;",
-        "if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Invalid GitHub commit SHA');",
-        "const updated = await tools.mcp__GitHub__update_ref({"
-        f"repository_full_name:{json.dumps(GITHUB_REPOSITORY)},"
-        f"branch_name:{json.dumps(PUBLISH_BRANCH)},sha,force:false"
-        "});",
-        "if (updated.result.success !== true) throw Error('Publish ref was not updated');",
-        "text(JSON.stringify({stage:'transport-ref-updated',transport_commit:sha}));",
-        "",
-    ])
-    if len(source.encode("utf-8")) >= CONNECTOR_CALL_BUDGET_BYTES:
-        raise PublishStateError(
-            "complete tool call exceeds the single-call budget; "
-            "use the verified --stage tree --index N and --stage commit calls in order"
-        )
+def _render_handoff_execution_call(config: dict[str, object]) -> str:
+    """One size-independent temporary file transfer; Github writes start after complete readback."""
+    config_json = json.dumps(config, ensure_ascii=True, separators=(",", ":"))
+    source = r"""// Uniform verified handoff for small and large publish transactions.
+// Read, validate and trash every temporary Library shard before any GitHub write.
+const cfg = __CONFIG__;
+const hashText = s => {
+  let h=2166136261;
+  for (let i=0;i<s.length;i++) {
+    const code=s.charCodeAt(i);
+    if (code>127) throw Error('Non-ASCII transfer');
+    h=Math.imul(h^code,16777619)>>>0;
+  }
+  return h;
+};
+const parts = [];
+for (let offset=0;offset<cfg.sizes.length;offset+=20) {
+  const end=Math.min(offset+20,cfg.sizes.length);
+  const indices=Array.from({length:end-offset},(_,i)=>offset+i);
+  const path=i=>cfg.directory+'/handoff-'+String(i).padStart(4,'0')+'.json';
+  const registered=[];
+  let cleanupError=null;
+  try {
+    const response=await tools.files__manage_library({operations:indices.map(i=>({
+      operation:'upload',container_path:path(i),
+      destination_path:'/space-idle-publish-handoff-'+cfg.request_id+'-'+String(i).padStart(4,'0')+'.json',
+      overwrite:false
+    }))});
+    const records=response.results||[];
+    for (let k=0;k<records.length;k++) {
+      const item=records[k];
+      if (item?.status==='succeeded' && item.file_id && item.library_file_id)
+        registered.push({index:indices[k],file_id:item.file_id,library_file_id:item.library_file_id});
+    }
+    if (registered.length!==indices.length)
+      throw Error('Temporary shard registration failed; no GitHub write');
+    for (let i=0;i<registered.length;i+=5) {
+      let pending=registered.slice(i,i+5);
+      for (let retry=0;retry<12 && pending.length;retry++) {
+        const response=await tools.files__read({read:pending.map(item=>({ref_id:item.file_id,max_lines:4}))});
+        const next=[];
+        for (let k=0;k<pending.length;k++) {
+          const item=pending[k],result=response.results?.[k];
+          if (!result || result.has_more===true ||
+              !Array.isArray(result.content) ||
+              !result.content.every(s=>typeof s==='string')) {
+            next.push(item);continue;
+          }
+          const raw=result.content.join('');
+          if (raw.length!==cfg.sizes[item.index]) {next.push(item);continue;}
+          if (hashText(raw)!==cfg.hashes[item.index])
+            throw Error('Temporary shard fingerprint mismatch; no GitHub write');
+          const fragment=JSON.parse(raw);
+          if (fragment.index!==item.index || typeof fragment.fragment!=='string')
+            throw Error('Temporary shard index mismatch; no GitHub write');
+          parts[item.index]=fragment.fragment;
+        }
+        pending=next;
+      }
+      if (pending.length) throw Error('Temporary shard unreadable; no GitHub write');
+    }
+  } finally {
+    for (let i=0;i<registered.length;i+=20) {
+      const group=registered.slice(i,i+20);
+      try {
+        const result=await tools.files__manage_library({operations:group.map(item=>({
+          operation:'delete',target:{kind:'file',library_file_id:item.library_file_id}
+        }))});
+        if (result.results?.length!==group.length ||
+            result.results.some(r=>r.status!=='succeeded')) cleanupError='Temporary shard cleanup failed';
+      } catch(e) {cleanupError='Temporary shard cleanup failed';}
+    }
+    if (cleanupError) throw Error(cleanupError+'; no GitHub write');
+  }
+}
+if (parts.length!==cfg.sizes.length || parts.some(p=>typeof p!=='string'))
+  throw Error('Incomplete handoff; no GitHub write');
+const raw=parts.join('');
+if (raw.length!==cfg.total_size || hashText(raw)!==cfg.total_hash)
+  throw Error('Handoff content mismatch; no GitHub write');
+const handoff=JSON.parse(raw);
+if (handoff.version!==1 || handoff.request_id!==cfg.request_id ||
+    handoff.develop_head!==cfg.develop_head ||
+    handoff.publish_base_head!==cfg.publish_base_head ||
+    !Array.isArray(handoff.packets) || handoff.packets.length<2)
+  throw Error('Temporary handoff identity mismatch; no GitHub write');
+const packets=handoff.packets;
+let prior=handoff.publish_base_tree;
+if (!/^[a-f0-9]{40}$/.test(prior)) throw Error('Invalid publish base tree');
+for (let i=0;i<packets.length-1;i++) {
+  const p=packets[i],a=p.action_args;
+  if (p.action!=='GitHub.create_tree' || p.tree_batch_index!==i ||
+      a.repository_full_name!==cfg.repository || a.base_tree_sha!==prior ||
+      !Array.isArray(a.tree_elements) || !/^[a-f0-9]{40}$/.test(p.expected_tree))
+    throw Error('Invalid tree packet; no GitHub write');
+  prior=p.expected_tree;
+}
+const last=packets[packets.length-1],a=last.action_args;
+if (last.action!=='GitHub.create_commit' || a.repository_full_name!==cfg.repository ||
+    a.tree_sha!==prior || a.parent_sha!==cfg.publish_base_head ||
+    a.message!==`Publish transport ${cfg.request_id}`)
+  throw Error('Invalid commit packet; no GitHub write');
+for (let i=0;i<packets.length-1;i++) {
+  const result=await tools.mcp__GitHub__create_tree(packets[i].action_args);
+  if (result.result.sha!==packets[i].expected_tree)
+    throw Error('GitHub tree SHA mismatch; stop this transaction');
+  text(JSON.stringify({stage:'tree-established',index:i,sha:result.result.sha}));
+}
+const commit=await tools.mcp__GitHub__create_commit(last.action_args);
+const sha=commit.result.sha;
+if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Invalid GitHub commit SHA');
+const updated=await tools.mcp__GitHub__update_ref({repository_full_name:cfg.repository,
+  branch_name:'publish',sha,force:false});
+if (updated.result.success!==true) throw Error('Publish ref update failed');
+text(JSON.stringify({stage:'transport-ref-updated',transport_commit:sha}));
+""".replace("__CONFIG__", config_json)
     return source
 
 
-
-def _render_handoff_execution_call(config: dict[str, object]) -> str:
-    """Only a short control program crosses tool-call text; original packets stay in the file."""
-    config_json = json.dumps(config, ensure_ascii=True, separators=(",", ":"))
-    return "\n".join([
-        "// Read the canonical handoff from a temporary private Library registration.",
-        "// No GitHub write occurs until readback, integrity check and deletion succeed.",
-        f"const cfg = {config_json};",
-        "const created = await tools.files__manage_library({operations:[{operation:'upload',",
-        "  container_path:cfg.container_path,destination_path:cfg.destination_path,overwrite:false}]});",
-        "const item = created.results?.[0];",
-        "if (item?.status !== 'succeeded' || !item.file_id || !item.library_file_id)",
-        "  throw Error('Temporary handoff registration failed; no GitHub write');",
-        "let raw = null, cleanup = null;",
-        "try {",
-        "  for (let attempt=0; attempt<12; attempt++) {",
-        "    const read = await tools.files__read({read:[{ref_id:item.file_id,max_lines:4}]});",
-        "    const result = read.results?.[0];",
-        "    if (result && result.has_more !== true &&",
-        "        result.content?.every(s => typeof s === 'string') &&",
-    "        result.content.join('').length===cfg.size) {",
-        "      raw = result.content.join(''); break;",
-        "    }",
-        "  }",
-        "} finally {",
-        "  const removed = await tools.files__manage_library({operations:[{operation:'delete',",
-        "    target:{kind:'file',library_file_id:item.library_file_id}}]});",
-        "  cleanup = removed.results?.[0]?.status;",
-        "}",
-        "if (cleanup !== 'succeeded') throw Error('Temporary handoff cleanup failed; no GitHub write');",
-        "if (typeof raw !== 'string' || raw.length !== cfg.size)",
-        "  throw Error('Temporary handoff unreadable or truncated; no GitHub write');",
-        "let hash=2166136261;",
-        "for (let i=0; i<raw.length; i++) {",
-        "  const c=raw.charCodeAt(i);",
-        "  if (c>127) throw Error('Non-ASCII handoff; no GitHub write');",
-        "  hash=Math.imul(hash ^ c, 16777619)>>>0;",
-        "}",
-        "if (hash !== cfg.fnv32) throw Error('Temporary handoff content mismatch; no GitHub write');",
-        "const handoff=JSON.parse(raw);",
-        "if (handoff.version!==1 || handoff.request_id!==cfg.request_id ||",
-        "    handoff.develop_head!==cfg.develop_head ||",
-        "    handoff.publish_base_head!==cfg.publish_base_head ||",
-        "    !Array.isArray(handoff.packets) || handoff.packets.length<2)",
-        "  throw Error('Temporary handoff identity mismatch; no GitHub write');",
-        "const packets=handoff.packets;",
-        "let prior=handoff.publish_base_tree;",
-        "if (!/^[a-f0-9]{40}$/.test(prior)) throw Error('Invalid publish base tree');",
-        "for (let i=0;i<packets.length-1;i++) {",
-        "  const p=packets[i],a=p.action_args;",
-        "  if (p.action!=='GitHub.create_tree' || p.tree_batch_index!==i ||",
-        "      a.repository_full_name!==cfg.repository || a.base_tree_sha!==prior ||",
-        "      !Array.isArray(a.tree_elements) || !/^[a-f0-9]{40}$/.test(p.expected_tree))",
-        "    throw Error('Invalid tree packet; no GitHub write');",
-        "  prior=p.expected_tree;",
-        "}",
-        "const last=packets[packets.length-1],a=last.action_args;",
-        "if (last.action!=='GitHub.create_commit' || a.repository_full_name!==cfg.repository ||",
-        "    a.tree_sha!==prior || a.parent_sha!==cfg.publish_base_head ||",
-        "    a.message!==`Publish transport ${cfg.request_id}`)",
-        "  throw Error('Invalid commit packet; no GitHub write');",
-        "for (let i=0;i<packets.length-1;i++) {",
-        "  const result=await tools.mcp__GitHub__create_tree(packets[i].action_args);",
-        "  if (result.result.sha!==packets[i].expected_tree)",
-        "    throw Error('GitHub tree SHA mismatch; stop this transaction');",
-        "  text(JSON.stringify({stage:'tree-established',index:i,sha:result.result.sha}));",
-        "}",
-        "const commit=await tools.mcp__GitHub__create_commit(last.action_args);",
-        "const sha=commit.result.sha;",
-        "if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Invalid GitHub commit SHA');",
-        "const updated=await tools.mcp__GitHub__update_ref({repository_full_name:cfg.repository,",
-        "  branch_name:'publish',sha,force:false});",
-        "if (updated.result.success!==true) throw Error('Publish ref update failed');",
-        "text(JSON.stringify({stage:'transport-ref-updated',transport_commit:sha}));",
-        "",
-    ])
-
-
 def cmd_emit_handoff(args: argparse.Namespace) -> int:
-    """Build a read-only exact-packet handoff for short temporary-file tool transport."""
+    """Prepare size-independent, verified file fragments of original Connector packets."""
     repo = _repo_from_cwd()
     state = _read_connector_state(repo)
     _verify_record_identity(repo, _read_prepared_request(_manifest_path(repo)), state)
@@ -1137,24 +1070,31 @@ def cmd_emit_handoff(args: argparse.Namespace) -> int:
         "publish_base_tree": state["publish_base_tree"],
         "packets": packets,
     }
-    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
-    if len(raw) > HANDOFF_FILE_BUDGET_BYTES:
-        raise PublishStateError(
-            "file handoff exceeds the tested read-through budget; "
-            "continue with emit-tool-call in stage order for this transaction"
-        )
-    destination = _connector_dir(repo) / "handoff.json"
-    if destination.exists() and destination.read_bytes() != raw:
-        raise PublishStateError("active handoff differs from verified packets; do not overwrite")
-    if not destination.exists():
-        destination.write_bytes(raw)
-    if destination.read_bytes() != raw:
-        raise PublishStateError("file handoff differs after write")
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    fragments = [raw[i:i + HANDOFF_FRAGMENT_CHARS] for i in range(0, len(raw), HANDOFF_FRAGMENT_CHARS)]
+    directory = _connector_dir(repo)
+    sizes, hashes = [], []
+    for index, fragment in enumerate(fragments):
+        encoded = json.dumps({"index": index, "fragment": fragment}, ensure_ascii=True,
+                             separators=(",", ":")).encode("ascii")
+        path = directory / f"handoff-{index:04d}.json"
+        if path.exists() and path.read_bytes() != encoded:
+            raise PublishStateError(f"active handoff shard differs from verified packets: {index}")
+        if not path.exists():
+            path.write_bytes(encoded)
+        if path.read_bytes() != encoded:
+            raise PublishStateError(f"handoff shard differs after write: {index}")
+        sizes.append(len(encoded))
+        hashes.append(_tool_call_fingerprint(encoded.decode("ascii")))
+    expected_names = {f"handoff-{i:04d}.json" for i in range(len(fragments))}
+    if any(p.name not in expected_names for p in directory.glob("handoff-*.json")):
+        raise PublishStateError("obsolete handoff fragments found in active transaction")
     config = {
-        "container_path": str(destination),
-        "destination_path": f"/space-idle-publish-handoff-{state['request_id']}.json",
-        "size": len(raw),
-        "fnv32": _tool_call_fingerprint(raw.decode("ascii")),
+        "directory": str(directory),
+        "sizes": sizes,
+        "hashes": hashes,
+        "total_size": len(raw),
+        "total_hash": _tool_call_fingerprint(raw),
         "request_id": state["request_id"],
         "develop_head": state["develop_head"],
         "publish_base_head": state["publish_base_head"],
@@ -1164,39 +1104,13 @@ def cmd_emit_handoff(args: argparse.Namespace) -> int:
         print(_render_handoff_execution_call(config), end="")
     else:
         print(json.dumps({
-            "handoff": str(destination),
-            "size": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(),
+            "shard_count": len(fragments),
+            "total_size": len(raw),
+            "sha256": hashlib.sha256(raw.encode("ascii")).hexdigest(),
             "request_id": state["request_id"],
             "tree_call_count": len(packets)-1,
-            "temporary_library_destination": config["destination_path"],
-            "next": "emit-handoff --tool-call (short source; temporary upload, readback, cleanup before existing GitHub calls)",
+            "next": "emit-handoff --tool-call",
         }, indent=2))
-    return 0
-
-
-def cmd_emit_tool_call(args: argparse.Namespace) -> int:
-    """Emit exact verified Connector arguments, in one call where size permits."""
-    repo = _repo_from_cwd()
-    state = _read_connector_state(repo)
-    _verify_record_identity(repo, _read_prepared_request(_manifest_path(repo)), state)
-    if state.get("stage") != "execution-plan-ready":
-        raise PublishStateError("tool-call source requires an active execution plan")
-    packets = _verified_execution_packets(repo, state)
-    if args.stage == "all":
-        if args.index != 0:
-            raise PublishStateError("complete tool-call stage does not accept an index")
-        print(_render_complete_tool_call(packets), end="")
-        return 0
-    if args.stage == "tree":
-        if args.index < 0 or args.index >= len(packets) - 1:
-            raise PublishStateError("tree packet index is outside the generated plan")
-        packet = packets[args.index]
-    else:
-        if args.index != 0:
-            raise PublishStateError("commit stage does not accept a tree batch index")
-        packet = packets[-1]
-    print(_render_tool_call(packet, publish_base_head=str(state["publish_base_head"])), end="")
     return 0
 
 
@@ -1304,13 +1218,6 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--develop-head", required=True)
     plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
-
-    tool_call = sub.add_parser(
-        "emit-tool-call", help="print the shortest verified Connector execution sequence for the active transaction",
-    )
-    tool_call.add_argument("--stage", default="all", choices=("all", "tree", "commit"))
-    tool_call.add_argument("--index", type=int, default=0)
-    tool_call.set_defaults(func=cmd_emit_tool_call)
 
     handoff = sub.add_parser(
         "emit-handoff", help="create verified exact-packet file for temporary registration and readback"
