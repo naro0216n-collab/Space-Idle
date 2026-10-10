@@ -104,13 +104,14 @@ GitHub反映の入口は差分種別で決める。
 
 ### Normal develop publish
 
-通常publishは以下の操作を記載順で実行する。記載されていない操作は実行しない。helper生成packetは唯一のGitHub書込入力とし、JSONの内容、構造、順序を変更しない。実行環境に制約がある場合も、代替転送・中継・検証・再構築を追加せず、末尾の `Publish recovery` に従う。
+通常publishは以下の操作を記載順で実行する。記載されていないGitHub書込みを追加しない。helper生成packetは唯一のGitHub書込入力とし、JSONの内容、構造、順序を変更しない。Connectorへの引数受渡しには下記の検証済み一時ファイル参照を用いる。成立しない場合は元packetに対する既存の検証付きsource投影へ戻し、GitHubへの別transport・再packを行わない。
 
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`で現在の `HEAD` をpublish対象として固定する。
 3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
-4. `connector-plan` が16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満になるよう複数batchへ分割して生成する。各packetにはlocal Gitで事前計算した `expected_tree` が含まれる。生成されたJSON packet fileをそのまま読み、`action_args` 全体を対応するGitHub操作に渡す。ツール呼出し環境がlocal fileへ直接アクセスできない場合は、`emit-tool-call` が一括出力する検証付き実行sourceを優先する。出力全体が単一呼出し上限を超えるときだけ、既存のbatch別呼出しに戻す。packet fileのpathや内容の一部を渡さない。Libraryその他の中継先へのupload、再export、再pack、独自のAPI入力生成をしない。
-5. `python scripts/publish_request.py emit-tool-call` を実行し、出力されたsource全体を**1回の `functions.exec`**へ渡す。このsourceは全packetを先に検証し、tree作成からcommit・non-force ref更新までを順に実行する。容量上限を超えて一括sourceが生成できない場合に限り、`--stage tree --index N` と `--stage commit` を順番どおり実行する。いずれもtree返却SHAをその場で照合し、一致時だけ次へ進む。helperへSHAを戻してpacketを生成し直さない。
+4. `connector-plan` は16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満に分割して生成する。各packetにlocal Gitで事前計算した `expected_tree` を記録する。これらの原本packetだけがGitHub書込みの入力となる。packet本文を転記・改変・再packしない。
+5. 原本packetを検証し、`python scripts/publish_request.py emit-handoff --tool-call` の**短い実行source**を1回の `functions.exec` に渡す。sourceは `.git` 内の検証済みhandoff fileを一時的に個人Libraryへ登録し、原本全量の読取、長さ・fingerprint・transaction同一性・全packet順序の検証、登録の削除確認を**GitHubへの書込み前**に済ませる。その後、全tree作成、返却SHA照合、commit作成、non-force ref更新を既定順で実行する。ローカルファイルpathだけをGitHub引数に渡さない。短いsourceにはpayload本文を含めず、ユーザー向けにJSONを提示しない。Libraryの削除はゴミ箱移動であり即時の完全消去ではない。登録失敗、読取不可、照合不一致、削除失敗ではGitHub書込みを開始しない。
+   - 一時ファイルの読取上限を超える大きなtransaction、またはLibrary登録・読取が利用できない環境だけ、`emit-tool-call` の既存検証付きsourceへ戻す。全量一括sourceが容量上限を超えた場合は `--stage tree --index N` と `--stage commit` を順番どおり実行する。代替は同じ原本packetの投影であり、payload分割・transaction再生成・別branchを加えない。
 6. 全tree batch成立後、生成済みの `GitHub.create_commit` packetをそのまま実行する（一括sourceでは自動で続行する）。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
 7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める（一括sourceでは自動）。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。
 8. 当該transport commitのPublish Gateway runの結果を取得する。`completed / success` のrun ID・conclusion・transport commitを直ちに `record` へ渡す。runが未完了ならtransactionを保持してローカル実装を進める。次の通常publishの `prepare` より前に当該run結果を再取得し、成功した時点で `record` を実行する。
@@ -121,14 +122,14 @@ python scripts/publish_request.py prepare
 python scripts/publish_request.py connector-plan \
   --develop-head <current-develop-head> \
   --publish-head <current-publish-head>
-# local fileをツールから直接参照できない場合は一括実行を優先:
+# 標準: 一時ファイル登録・読取・削除確認とGitHubの全操作を1回の短いsourceで行う:
+python scripts/publish_request.py emit-handoff --tool-call
+# 出力された短いsourceだけを functions.exec に渡す。Base64本文・JSON全体は転記しない。
+# ファイル参照が利用できない場合の既存検証付き転記経路（同じ原本packetを使用）:
 python scripts/publish_request.py emit-tool-call
-# stdout全体を1回の functions.exec 呼出しに渡す（全tree → commit → non-force ref更新）。
-# 一括sourceが容量上限により生成できない場合だけ次の既存経路:
+# 一括sourceが容量上限を超える場合のみ、tree batchごとに:
 python scripts/publish_request.py emit-tool-call --stage tree --index 0
-# 各tree batchを順に実行。最後のbatchが成立したら:
 python scripts/publish_request.py emit-tool-call --stage commit
-# 正規packetを直接参照できる環境では原本packet.action_argsをそのまま使用。
 python scripts/publish_request.py record \
   --gateway-transport-commit <publish-transport-commit> \
   --gateway-run-id <publish-gateway-run-id> \
@@ -147,11 +148,14 @@ Gatewayはtransport commitをcheckoutした後、そのworking treeにある固�
 
 `connector-plan` が生成した JSON packet の **`action_args` 全体**が GitHub Connector の入力である。ローカルファイルpath、ZIP、packetの要約、logical chunkの一部はtool call引数の代わりにならない。`expected_tree` は結果照合用であり、GitHubの `create_tree` 引数に混入させない。
 
-ツール実行環境とlocal repoのファイルシステムが分離している場合、呼出元がpacketの全`action_args`を欠落なく読み、その値を変更せずConnectorへ渡せることを確認してから書込む。実行環境が原本packetの完全なsource-file referenceを提供する場合、そのreferenceの読取結果を解釈して`action_args`を直接渡し、`expected_tree`とのSHA照合を行う。read-only GitHub操作への引数受渡し成功だけを`create_tree`書込成功やGateway成功とみなさない。
+ツール実行環境とlocal repoのファイルシステムが分離する場合、`emit-handoff` が現在のactive transactionの全原本packetを照合して、`.git` 内へ**読取専用handoff**を生成する。`emit-handoff --tool-call` はGitHub payloadを含まない短い `functions.exec` sourceを出力する。実行時は以下を一括して行う。
 
-source-file referenceがない環境では、まず `python scripts/publish_request.py emit-tool-call` を実行する。容量制約で一括sourceを出力できない場合のみ `--stage tree --index N` と `--stage commit` へフォールバックする。helperは**現在のactive transactionに記録された原本packetとplanを照合**し、原本の完全な`action_args`を含む `functions.exec`用実行sourceを標準出力に生成する。一括sourceは全packetを転記後にまとめて照合し、照合成功時だけGitHubへのtree書込みを開始する。このsourceは元packetを変更・再パックしない投影であり、新規transportや追加のGitHub APIを作らない。生成されたstdoutを**全体として一度だけ**呼出しへ複製し、sourceの一部、Base64断片、古い転記結果を再利用しない。source自身が送信前に引数の長さ・fingerprintを照合し、返却tree SHAの一致確認、commit作成後のnon-force `publish` ref更新までを規定順に実行する。fingerprintは転記破損の事前検知用であり、Git SHAの代替ではない。`functions.exec`の成功結果が取得できなければ、そのstageの成功を主張しない。
+1. `files.manage_library` の `container_path` でhandoffを個人Libraryへ**一時登録**する。名称はtransaction ID固有とし、既存Libraryファイルを上書きしない。
+2. 返却された正確なfile IDから `files.read` で全文を取得する。登録と読取の間に可視化遅延があるため、制限付き再読取を許す。原本のbyte数・fingerprint、request ID、develop/publish両基点、tree/commit順序を照合する。解析結果の一部やファイル名だけから成立したと判定しない。
+3. `finally` で一時登録を `files.manage_library` により削除し、成功応答を確認する。現在の削除は**ゴミ箱移動**であり永久消去ではない。Libraryへ一時登録されたデータの残留特性を了承した上で利用する。読取または削除が失敗した場合、`create_tree` 前に停止する。
+4. 上記が成功した場合だけ、original packet の `action_args` で `create_tree` → 返却SHA照合 → `create_commit` → `publish` non-force `update_ref` を実行する。中間にhelper round-tripや新たなtransport再生成を挟まない。
 
-実行環境にローカルファイルの直接読取手段もコードの全体複製手段もない場合は、中途半端な文字列やfile pathを渡さない。active transactionを保持し、Connectorとの接続不能として報告する。JSONをユーザーへ配布する行為や、Library/Drive等へのuploadをConnectorの代替転送経路にしない。安全性チェックが書込みを拒否した場合は拒否内容を記録し、迂回・payload偽装は行わず、正規packetと実行環境の問題を切り分ける。
+この一時登録は**Connector引数の受渡しに限る**。GitHubへのpublish transportを別形式に置き換えたり、Library/Driveに継続保存したり、ゲームrepoへhandoffをcommitしたりしない。登録の拒否、可視化遅延超過、ファイル読取上限等で成立しなければ、既存の `emit-tool-call` sourceへフォールバックする。移行は同じactive transactionの原本packetだけを使い、GitHub書込みが未開始である場合に限る。ローカルsourceのコピーは一括実行が可能な場合に一度だけ行い、Base64本文を分割転記しない。大きなsourceだけ `--stage tree` と `--stage commit` の既存経路を使う。安全性チェックによる書込み拒否では迂回せず停止する。
 
 再開時は、次の4状態を区別して作業位置を記録する。通常は追加のhelper round-tripを挟まず、一括呼出しの結果をそのまま確認する。
 
@@ -174,7 +178,7 @@ python scripts/publish_request.py cancel \
 
 #### Pre-ref packet retry
 
-`create_tree` が返したSHAとpacketの `expected_tree` が不一致なら、そのcallに使った転記結果を破棄して進行を停止する。元のactive transactionにあるpacketは変更せず、source-file referenceによる原本再読込、または `emit-tool-call` でのsource全体の再出力を行い、同一packetから**最初から**再実行する。途中だけの編集、差分再パック、違うtransport方式への置換、remote treeの追加readによる代用はしない。正規sourceで再試行しても一致しない場合はConnector/helper障害としてtransactionを保持する。
+`create_tree` が返したSHAとpacketの `expected_tree` が不一致なら、そのcallに使った引数投影を破棄して進行を停止する。元のactive transactionにあるpacketは変更せず、`emit-handoff` による原本再読込、または `emit-tool-call` でのsource全体の再出力を行い、同一packetから**最初から**再実行する。途中だけの編集、差分再パック、違うtransport方式への置換、remote treeの追加readによる代用はしない。正規sourceで再試行しても一致しない場合はConnector/helper障害としてtransactionを保持する。
 
 `connector-blob` / `connector-tree` / `connector-commit` のような返却SHA中継stageを作らない。返却tree SHAとの比較は生成済みpacketの `expected_tree` で完結し、commit返却SHAはそのままnon-force ref updateへ渡す。
 

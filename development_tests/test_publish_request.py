@@ -481,3 +481,101 @@ def test_complete_tool_call_rejects_oversized_script_without_partial_output(tmp_
     assert "mcp__GitHub__create_tree" in run_request(
         repo, "emit-tool-call", "--stage", "tree", "--index", "0"
     ).stdout
+
+
+def _execute_file_handoff_call(source: str, handoff: Path, mode: str = "normal") -> subprocess.CompletedProcess[str]:
+    """Exercise the complete short-source protocol against fake Files and GitHub tools."""
+    js = r"""
+const fs = require('node:fs');
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+const source = fs.readFileSync(0,'utf8');
+const canonical = fs.readFileSync(process.argv[1],'utf8');
+const mode = process.argv[2];
+const packet = JSON.parse(canonical);
+let reads = 0;
+let observed = [];
+const tools = {
+  files__manage_library: async ({operations}) => {
+    const op=operations[0]; observed.push(op.operation);
+    if (op.operation==='upload') return {results:[{status:'succeeded',file_id:'file-test',library_file_id:'lib-test'}]};
+    if (op.operation==='delete') return {results:[{status:'succeeded',message:'File moved to trash.'}]};
+    throw Error('unexpected Files operation');
+  },
+  files__read: async () => {
+    observed.push('read'); reads++;
+    if (mode==='unreadable' || reads===1) return {results:[{warnings:['not visible'],content:['not visible']}]};
+    const data=mode==='tampered'?canonical.replace('GitHub.create_commit','GitHub.creatf_commit'):canonical;
+    return {results:[{warnings:[],content:[data],has_more:false}]};
+  },
+  mcp__GitHub__create_tree: async (args) => {
+    observed.push('tree');
+    return {result:{sha:packet.packets[observed.filter(x=>x==='tree').length-1].expected_tree}};
+  },
+  mcp__GitHub__create_commit: async () => {
+    observed.push('commit'); return {result:{sha:'a'.repeat(40)}};
+  },
+  mcp__GitHub__update_ref: async ({sha,force,branch_name}) => {
+    observed.push('ref');
+    if (sha!=='a'.repeat(40) || force!==false || branch_name!=='publish') throw Error('unsafe ref');
+    return {result:{success:true}};
+  },
+};
+new AsyncFunction('tools','text',source)(tools,()=>{})
+  .then(()=>process.stdout.write(JSON.stringify(observed)))
+  .catch(e=>{process.stdout.write(JSON.stringify(observed));console.error(e.message);process.exitCode=1});
+"""
+    return subprocess.run(
+        ["node", "-e", js, str(handoff), mode], input=source, text=True,
+        capture_output=True,
+    )
+
+
+def test_temporary_file_handoff_preserves_verified_packets_and_cleans_up_before_writes(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    meta = json.loads(run_request(repo, "emit-handoff").stdout)
+    data = Path(meta["handoff"]).read_bytes()
+    assert len(data) == meta["size"]
+    assert json.loads(data)["packets"] == [
+        json.loads(Path(path).read_text(encoding="utf-8"))
+        for path in [*summary["tree_packets"], summary["commit_packet"]]
+    ]
+    assert meta == json.loads(run_request(repo, "emit-handoff").stdout)
+    source = run_request(repo, "emit-handoff", "--tool-call").stdout
+    assert len(source) < 6000  # independent of the transported payload size
+    assert "files__manage_library" in source and "files__read" in source
+    assert "mcp__GitHub__create_tree" in source and "mcp__GitHub__update_ref" in source
+    ok = _execute_file_handoff_call(source, Path(meta["handoff"]))
+    assert ok.returncode == 0, ok.stderr
+    assert json.loads(ok.stdout) == ["upload", "read", "read", "delete", "tree", "commit", "ref"]
+
+    broken = _execute_file_handoff_call(source, Path(meta["handoff"]), mode="tampered")
+    assert broken.returncode != 0
+    assert json.loads(broken.stdout) == ["upload", "read", "read", "delete"]
+    assert "content mismatch" in broken.stderr
+    unreadable = _execute_file_handoff_call(source, Path(meta["handoff"]), mode="unreadable")
+    assert unreadable.returncode != 0
+    assert json.loads(unreadable.stdout)[-1] == "delete"
+    assert "unreadable or truncated" in unreadable.stderr
+
+    packet_file = Path(summary["tree_packets"][0])
+    packet = json.loads(packet_file.read_text(encoding="utf-8"))
+    packet["action_args"]["repository_full_name"] = "different/repository"
+    packet_file.write_text(json.dumps(packet), encoding="utf-8")
+    rejected = run_request(repo, "emit-handoff", check=False)
+    assert rejected.returncode != 0
+    assert "packet no longer matches" in rejected.stderr
+
+
+def test_temporary_file_handoff_rejects_oversized_transfer(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    (repo / "large.bin").write_bytes(os.urandom(420_000))
+    commit_all(repo, "large checkpoint")
+    run_request(repo, "prepare")
+    summary = plan(repo, base, publish_head)
+    assert summary["tree_call_count"] > 1
+    result = run_request(repo, "emit-handoff", check=False)
+    assert result.returncode != 0
+    assert "read-through budget" in result.stderr
+    assert not (transaction(repo) / "connector" / "handoff.json").exists()
