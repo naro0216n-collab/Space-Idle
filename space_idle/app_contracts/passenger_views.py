@@ -32,6 +32,14 @@ class PassengerTransferPreviewView:
 
 
 @dataclass(frozen=True)
+class PassengerCargoHoldView:
+    owner_ref: str
+    physical_node_id: str | None
+    resources: tuple[tuple[str, float], ...]
+    blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class PassengerTransferRow:
     id: str
     origin_node_id: str
@@ -47,6 +55,7 @@ class PassengerTransferRow:
     capacity_mode: str | None
     priority: int
     blockers: tuple[str, ...]
+    cargo_holds: tuple[PassengerCargoHoldView, ...] = ()
 
 
 @dataclass(frozen=True)

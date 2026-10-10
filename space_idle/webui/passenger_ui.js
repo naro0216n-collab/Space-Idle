@@ -9,7 +9,8 @@
   const statusName={pending:'未出発',active:'輸送中',completed:'輸送終了',cancelled:'取消済み'};
   const blockers={no_passenger_seats:'座席なし',no_source_people:'出発人員不足',seats_or_payload_limit:'座席・質量容量不足',
     operation_or_onboard_resources:'燃料・船内生活Resource不足',destination_life_support_or_housing:'到着先Housing・生命維持不足',
-    transport_service_required:'成立済みTransport Serviceが必要',fleet_recovery_waiting:'前便Fleetの資源荷卸し・回収待ち'};
+    transport_service_required:'成立済みTransport Serviceが必要',fleet_recovery_waiting:'前便Fleetの資源荷卸し・回収待ち',
+    storage_admission_unavailable:'到着先の有限Storage受入不足'};
   const roots=()=>[['location',document.getElementById('passengerLocationMount')],['logistics',document.getElementById('passengerLogisticsMount')]].filter(([,el])=>el);
   const key=(kind)=>`passengers:${kind}`;
   function currentDraft(kind){
@@ -68,6 +69,7 @@
     el.innerHTML=`<h4>有限旅客移送Order</h4><div class="overview-project-list">${relevant.map(row=>`<div class="detail-card"><strong>${esc(locationName(row.origin_node_id))} → ${esc(locationName(row.destination_node_id))}</strong>
       <div class="cell-sub">${esc(statusName[row.status]||row.status)} · 要求 ${fmt(row.requested_count,0)} / 出発待ち ${fmt(row.pending_count,0)} / 輸送中 ${fmt(row.transit_count,0)} / 到着 ${fmt(row.delivered_count,0)} / 取消済み ${fmt(row.cancelled_count,0)} / 航行中死亡 ${fmt(row.deceased_count,0)} 人</div>
       <div class="cell-sub">${(row.blockers||[]).map(code=>esc(blockers[code]||code)).join(' / ')}</div>
+      ${(row.cargo_holds||[]).map(hold=>`<div class="cell-sub">搭載物資 · ${hold.physical_node_id?`受入先 ${esc(locationName(hold.physical_node_id))}`:'輸送中'} · ${(hold.resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount,3)} t`).join(' / ')}${(hold.blockers||[]).length?` · ${hold.blockers.map(code=>esc(blockers[code]||code)).join(' / ')}`:''}</div>`).join('')}
       <button type="button" data-passenger-cancel="${esc(row.id)}" ${row.pending_count===0?'disabled':''}>未発送分を取消</button></div>`).join('')||'<div class="cell-sub">現在の有限旅客Orderなし</div>'}</div>`;
   }
   async function refreshOrders(kind,root){

@@ -385,7 +385,13 @@ class FleetAllocationMixin:
             return False
         for resource, amount in sorted(state.onboard_resources.items(), key=lambda row: str(row[0])):
             if amount > 1e-12:
-                self.inventory.add(node_id, resource, amount)
+                admission = self.inventory.admit(
+                    node_id, resource, amount,
+                    source_owner=f"fleet_commitment:{commitment_id}",
+                    activity_id=f"fleet_provisions_recovery:{commitment_id}",
+                )
+                if not admission.fully_admitted:
+                    raise RuntimeError("fleet provision admission changed after atomic storage check")
         state.onboard_resources.clear()
         state.onboard_accommodation = None
         return True

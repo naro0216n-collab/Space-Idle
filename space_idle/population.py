@@ -1258,7 +1258,13 @@ class PopulationService:
                 continue
             for resource, amount in transit.onboard_resources.items():
                 if amount > 1e-12:
-                    self.inventory.add(destination, resource, amount)
+                    admission = self.inventory.admit(
+                        destination, resource, amount,
+                        source_owner=f"passenger_transit:{transit.id}",
+                        activity_id=f"passenger_service_arrival:{transit.id}",
+                    )
+                    if not admission.fully_admitted:
+                        raise RuntimeError("passenger transit admission changed after atomic storage check")
             del transport.passenger_service_transits[transit_id]
         for order in sorted(self.transfer_orders.values(), key=lambda row: str(row.id)):
             if (order.capacity_source_constraint is None or

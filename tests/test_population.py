@@ -168,6 +168,21 @@ def test_one_shot_passengers_conserve_people_fleet_and_onboard_resource_through_
     movement = next(iter(sim.transport.movement_executions.values()))
     total_loaded = sum(item.amount_t for item in movement.payload_resources)
     assert total_loaded > 0
+    initial_holds = app.query(GetPassengerTransfers()).items[0].cargo_holds
+    assert len(initial_holds) == 1
+    assert initial_holds[0].owner_ref == f'movement:{movement.id}'
+    assert initial_holds[0].physical_node_id is None
+    assert sum(amount for _, amount in initial_holds[0].resources) == pytest.approx(total_loaded)
+    from space_idle.analysis_observation import observe_state
+    measured = observe_state(sim, resource_ids=frozenset((ids.WATER,))).metrics
+    onboard = [row for row in measured if row.kind == 'movement_payload_resource'
+               and row.context_id == f'movement:{movement.id}']
+    assert sum(row.quantity for row in onboard) == pytest.approx(
+        sum(payload.amount_t for payload in movement.payload_resources
+            if payload.resource_id == ids.WATER))
+    assert not any(row.kind == 'movement_payload_resource' for row in observe_state(
+        sim, operational_node_ids=frozenset((ids.LEO,)),
+        resource_ids=frozenset((ids.WATER,))).metrics)
 
     saved = tmp_path / 'passengers.json'
     fixed_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -418,6 +433,15 @@ def test_arrived_passengers_disembark_before_leftover_stock_is_admitted(tmp_path
         )
     else:
         transit.onboard_resources[ids.WATER] += surplus
+        from space_idle.analysis_observation import observe_state
+        onboard = [row for row in observe_state(sim, resource_ids=frozenset((ids.WATER,))).metrics
+                   if row.kind == 'passenger_service_onboard_resource']
+        assert len(onboard) == 1
+        assert onboard[0].context_id == f'passenger_transit:{transit.id}'
+        assert onboard[0].quantity == pytest.approx(transit.onboard_resources[ids.WATER])
+        assert not any(row.kind == 'passenger_service_onboard_resource' for row in observe_state(
+            sim, operational_node_ids=frozenset((ids.LEO,)),
+            resource_ids=frozenset((ids.WATER,))).metrics)
     arrival = transit.completion_day if dedicated else transit.arrival_day
     recovery_node = (ids.EARTH if dedicated else ids.LEO)
     previous_admit = sim.inventory.can_admit_resources
@@ -438,16 +462,47 @@ def test_arrived_passengers_disembark_before_leftover_stock_is_admitted(tmp_path
         assert not still_held.passenger_group_refs
         assert sum(still_held.onboard_resources.values()) > 0
 
+    holds = next(row for row in app.query(GetPassengerTransfers()).items
+                 if row.id == str(order.id)).cargo_holds
+    assert len(holds) == 1
+    assert holds[0].physical_node_id == str(recovery_node)
+    assert 'storage_admission_unavailable' in holds[0].blockers
+    assert sum(amount for _, amount in holds[0].resources) >= surplus - 1e-9
+
     saved = tmp_path / 'unloaded-after-disembark.json'
     stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
     save_game(app, saved, saved_at=stamp)
     restored, _ = load_game(saved, build_game_application_for_load, now=stamp)
     assert capture_state(restored._simulation) == capture_state(sim)
     monkeypatch.setattr(sim.inventory, 'can_admit_resources', previous_admit)
-    sim.advance_days(1)
+    from space_idle.analysis_execution import observe_canonical_day
+    stock_before = {(str(node), str(resource)): quantity
+                    for (node, resource), quantity in sim.inventory.stock.items()}
+    with observe_canonical_day(sim) as trace:
+        sim.advance_days(1)
     restored._simulation.advance_days(1)
     assert capture_state(restored._simulation) == capture_state(sim)
+    # Unloading real onboard Resource is one known custody source, not a
+    # second production event or an unexplained Inventory inflow. Both the
+    # dedicated Fleet and aggregate passenger-service routes use the same
+    # authoritative Inventory settlement and observation contract.
+    activity_prefix = 'fleet_provisions_recovery:' if dedicated else 'passenger_service_arrival:'
+    source_prefix = 'fleet_commitment:' if dedicated else 'passenger_transit:'
+    unloaded = [flow for flow in trace.activity_flows()
+                if flow.activity_id.startswith(activity_prefix)
+                and flow.resource_id == str(ids.WATER)]
+    assert unloaded
+    assert all(flow.source_owner.startswith(source_prefix)
+               and flow.destination_owner == f'inventory:{recovery_node}'
+               for flow in unloaded)
+    assert sum(row.quantity_t for row in unloaded) >= surplus - 1e-9
+    stock_after = {(str(node), str(resource)): quantity
+                   for (node, resource), quantity in sim.inventory.stock.items()}
+    assert all(abs(row['unattributed_delta_t']) < 1e-7
+               for row in trace.reconcile(stock_before, stock_after))
     assert not sim.transport.passenger_service_transits
+    assert not next(row for row in app.query(GetPassengerTransfers()).items
+                    if row.id == str(order.id)).cargo_holds
     assert sim.population._passenger_commitment_id(order.id) not in sim.transport.fleet_commitments
 
 

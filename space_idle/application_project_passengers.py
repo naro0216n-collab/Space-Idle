@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .app_contracts.passenger_views import (
     PassengerDispatchOptionRow, PassengerTransferPreviewView,
-    PassengerTransferRow, PassengerTransfersView,
+    PassengerCargoHoldView, PassengerTransferRow, PassengerTransfersView,
 )
 from .shared import SpatialNodeId
 
@@ -55,7 +55,20 @@ class PassengerProjectorMixin:
         )
 
     def _passenger_transfers_view(self, query):
-        population = self._simulation.population
+        sim = self._simulation
+        population = sim.population
+        transport = sim.transport
+        # Physical stock belongs to Transport; this is a read projection over
+        # its existing immutable snapshots, not an Application-owned manifest.
+        movements = {item.owner_id: item for item in transport.movement_execution_snapshots()
+                     if item.kind.value == 'passenger_transfer'}
+        commitments = {item.owner_activity_ref.activity_id: item
+                       for item in transport.fleet_commitment_snapshots()
+                       if item.owner_activity_ref.activity_type == 'passenger_transfer'}
+        service_transits = {}
+        for transit in transport.passenger_service_transits.values():
+            if transit.order_id is not None:
+                service_transits.setdefault(transit.order_id, []).append(transit)
         if query.operational_node_id is not None:
             self._require_operational_node(query.operational_node_id)
         rows = []
@@ -70,10 +83,44 @@ class PassengerProjectorMixin:
             blockers = ()
             if pending and not transit_count:
                 blockers = population.transfer_order_blockers(order, self._simulation.day)
+            holds = []
+            movement = movements.get(order.id)
+            if movement is not None and movement.payload_resources:
+                holds.append(PassengerCargoHoldView(
+                    f'movement:{movement.id}', None,
+                    tuple((str(row.resource_id), row.amount_t) for row in movement.payload_resources), (),
+                ))
+            commitment = commitments.get(order.id)
+            if commitment is not None and commitment.onboard_resources:
+                recovery_node = commitment.operational_node_id
+                resources = dict(commitment.onboard_resources)
+                holds.append(PassengerCargoHoldView(
+                    f'fleet_commitment:{commitment.id}',
+                    None if recovery_node is None else str(recovery_node),
+                    tuple((str(resource), amount) for resource, amount in commitment.onboard_resources),
+                    ('storage_admission_unavailable',) if recovery_node is not None
+                    and not sim.inventory.can_admit_resources(recovery_node, resources) else (),
+                ))
+            for transit in sorted(service_transits.get(order.id, ()), key=lambda row: str(row.id)):
+                if not transit.onboard_resources:
+                    continue
+                # Arrival waiting remains physically in Transport custody even
+                # if passengers have already disembarked. It is never a local
+                # Inventory quantity until finite storage admission succeeds.
+                recovery_node = transit.legs[-1].destination_id if transit.arrival_day <= sim.day else None
+                holds.append(PassengerCargoHoldView(
+                    f'passenger_transit:{transit.id}',
+                    None if recovery_node is None else str(recovery_node),
+                    tuple((str(resource), amount) for resource, amount in
+                          sorted(transit.onboard_resources.items())),
+                    ('storage_admission_unavailable',) if recovery_node is not None
+                    and not sim.inventory.can_admit_resources(recovery_node, transit.onboard_resources) else (),
+                ))
             rows.append(PassengerTransferRow(
                 str(order.id), str(order.origin_node_id), str(order.destination_node_id),
                 order.requested_count, pending, transit_count, order.delivered_count,
                 order.cancelled_count, order.deceased_count, order.status(population.groups),
                 order.source_external_provider_id, mode, int(order.activity_priority), blockers,
+                tuple(holds),
             ))
         return PassengerTransfersView(tuple(rows))

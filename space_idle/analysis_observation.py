@@ -165,6 +165,26 @@ def observe_state(
                 emit("fleet_onboard_resource", resource_id, context,
                      amount, "t", f"transport.fleet_commitment:{commitment.id}")
 
+    # Movement payloads and aggregate passenger-service provisions remain
+    # Transport-owned physical Stock until a real arrival/admission. Neither
+    # their origin nor intended destination is an Operational Node holding
+    # that Resource in the meantime. A Node-scoped observation therefore
+    # deliberately excludes them rather than inventing local Inventory.
+    if operational_node_ids is None:
+        for execution in sim.transport.movement_execution_snapshots():
+            for payload in execution.payload_resources:
+                if resource_ids is None or payload.resource_id in resource_ids:
+                    emit("movement_payload_resource", payload.resource_id,
+                         f"movement:{execution.id}", payload.amount_t, "t",
+                         f"transport.movement_execution:{execution.id}:payload_resources")
+        for transit in sorted(sim.transport.passenger_service_transits.values(),
+                              key=lambda row: str(row.id)):
+            for resource_id, amount in sorted(transit.onboard_resources.items()):
+                if resource_ids is None or resource_id in resource_ids:
+                    emit("passenger_service_onboard_resource", resource_id,
+                         f"passenger_transit:{transit.id}", amount, "t",
+                         f"transport.passenger_service_transit:{transit.id}:onboard_resources")
+
     # Provider stock belongs to the external Market, not the local Inventory.
     # A scoped observation includes only providers with an enabled Interface
     # at the requested Node. Provider availability is still a shared stock,
