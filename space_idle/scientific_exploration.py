@@ -1257,7 +1257,7 @@ class ScientificExplorationService:
                         continue
                 if physical_target is not None:
                     self.transport.receive_fleet_commitment_at_physical_target(
-                        commitment_id, execution_id=execution_id,
+                        commitment_id, execution_id=execution_id, day=day,
                     )
                 else:
                     self.transport.receive_fleet_commitment(

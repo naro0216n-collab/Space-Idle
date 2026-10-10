@@ -1039,10 +1039,14 @@ class OperationalNodeFoundingService:
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
-        destination_id = execution.destination.operational_node_id
-        if destination_id is not None and destination_id != final_location:
+        destination = execution.destination
+        if isinstance(project.target_spec, SurfaceLocationTargetSpec):
+            target_matches = destination.physical_target_cell_id == project.target_spec.core_cell_id
+        else:
+            target_matches = destination.physical_target_node_id == project.target_spec.spatial_node_id
+        if not target_matches:
             failures.append(FoundingBlocker(
-                "fleet_settlement", "MovementExecution arrival location mismatch"
+                "fleet_settlement", "MovementExecution physical target mismatch"
             ))
         if final_location != target_node_id and not self.facilities.environment.graph.has_operational_node(final_location):
             failures.append(FoundingBlocker(

@@ -677,6 +677,21 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     assert needs and all(node == ids.LEO for node, _, _, _ in needs)
     # The spacecraft has left its origin pool, but it is still Player-owned.
     # Neither the Fleet screen nor analysis may count only parked units.
+    # A physical destination cannot silently turn into an arbitrary FleetPool,
+    # even if a caller asks the Fleet Owner to settle the Movement there.
+    outbound_execution = sim.transport.movement_executions[state.movement_execution_id]
+    before_invalid_settlement = capture_state(sim)["transport"]
+    with pytest.raises(ValueError, match="recovery location mismatch"):
+        sim.transport.receive_fleet_commitment(
+            state.fleet_commitment_id, ids.EARTH,
+            execution_id=outbound_execution.id, day=outbound_execution.completion_day,
+        )
+    with pytest.raises(ValueError, match="before Movement completion"):
+        sim.transport.receive_fleet_commitment_at_physical_target(
+            state.fleet_commitment_id,
+            execution_id=outbound_execution.id, day=sim.day,
+        )
+    assert capture_state(sim)["transport"] == before_invalid_settlement
     in_flight = next(row for row in app.query(GetFleet()).commitments
                      if row.id == str(state.fleet_commitment_id))
     assert in_flight.location_kind == "in_transit"

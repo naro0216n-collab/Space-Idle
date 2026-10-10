@@ -646,6 +646,20 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     assert lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == destination_before
+    # Only the frozen Movement destination may receive the same committed units,
+    # and never before their physically scheduled arrival.
+    with pytest.raises(ValueError, match="before Movement completion"):
+        lg.receive_fleet_commitment(
+            commitment_id, ids.LUNAR_ORBIT,
+            execution_id=execution.id, day=execution.completion_day - 1,
+        )
+    with pytest.raises(ValueError, match="recovery location mismatch"):
+        lg.receive_fleet_commitment(
+            commitment_id, ids.EARTH,
+            execution_id=execution.id, day=execution.completion_day,
+        )
+    assert lg.fleet_owned_units() == all_owned_before
+    assert lg.fleet_commitment_snapshot(commitment_id).movement_execution_id == execution.id
     lg.advance_fleet_state(execution.completion_day - 1)
     assert relocation_id in lg.fleet_relocations
     lg.advance_fleet_state(execution.completion_day)

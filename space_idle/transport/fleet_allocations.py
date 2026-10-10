@@ -460,18 +460,42 @@ class FleetAllocationMixin:
         return snapshot
 
     def receive_fleet_commitment_at_physical_target(
-        self, commitment_id: EntityId, *, execution_id: EntityId,
+        self, commitment_id: EntityId, *, execution_id: EntityId, day: int,
     ) -> None:
         """Keep one-shot Fleet physically present without inventing an Inventory/FleetPool."""
         commitment = self.fleet_commitments[commitment_id]
         if commitment.movement_execution_id != execution_id:
             raise ValueError("Fleet commitment MovementExecution mismatch")
         execution = self.movement_executions[execution_id]
+        if execution.fleet_commitment_id != commitment_id:
+            raise ValueError("MovementExecution Fleet commitment mismatch")
+        if execution.completion_day > day:
+            raise ValueError("Fleet cannot settle before Movement completion")
+        if execution.final_asset_disposition is not OperationAssetDisposition.DESTINATION:
+            raise ValueError("physical settlement requires destination Fleet disposition")
         endpoint = execution.destination
         if endpoint.operational_node_id is not None:
             raise ValueError("physical settlement requires a non-operational destination")
         commitment.movement_execution_id = None
         commitment.physical_target = endpoint
+
+    def _movement_endpoint_owns_node(
+        self, endpoint: MovementEndpoint, location_id: SpatialNodeId,
+    ) -> bool:
+        """Resolve a frozen physical arrival to its *actual* operational owner.
+
+        A previously unoperated physical target can become an Operational Node
+        while a founding payload is settled. The identity must be established
+        by the spatial graph, not by the caller's proposed FleetPool ID.
+        """
+        if endpoint.operational_node_id is not None:
+            return endpoint.operational_node_id == location_id
+        if endpoint.physical_target_node_id is not None:
+            return endpoint.physical_target_node_id == location_id
+        if endpoint.physical_target_cell_id is not None:
+            location = self.facilities.environment.graph.locations.get(location_id)
+            return location is not None and location.core_cell_id == endpoint.physical_target_cell_id
+        return False
 
     def receive_fleet_commitment(
         self,
@@ -493,15 +517,19 @@ class FleetAllocationMixin:
         execution = self.movement_executions.get(active_execution_id)
         if execution is None:
             raise RuntimeError("Fleet commitment references missing MovementExecution")
-        expected_location = (
-            execution.origin.operational_node_id
-            if execution.final_asset_disposition is OperationAssetDisposition.ORIGIN
-            else execution.destination.operational_node_id
-        )
-        if expected_location is not None and expected_location != location_id:
-            raise ValueError("Fleet commitment recovery location mismatch")
+        if execution.fleet_commitment_id != commitment_id:
+            raise ValueError("MovementExecution Fleet commitment mismatch")
+        if execution.completion_day > day:
+            raise ValueError("Fleet cannot settle before Movement completion")
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
+        endpoint = (
+            execution.origin
+            if execution.final_asset_disposition is OperationAssetDisposition.ORIGIN
+            else execution.destination
+        )
+        if not self._movement_endpoint_owns_node(endpoint, location_id):
+            raise ValueError("Fleet commitment recovery location mismatch")
         pool = self.fleet_pool(commitment.vehicle_definition_id, location_id)
         pool.total_units += commitment.quantity
         commitment.operational_node_id = location_id
