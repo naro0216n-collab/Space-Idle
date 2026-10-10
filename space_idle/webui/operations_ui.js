@@ -1023,9 +1023,11 @@
   }
   function researchUnlocksHtml(r){
     const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去',process:'製法',vehicle_production:'機体製造',survey_mode:'観測方式',scientific_exploration:'科学探査'};
+    const outletLabels={direct_method:'直接の登録済み利用手段あり',via_research:'後続研究を経て登録済み利用手段へ接続',research_only_no_method:'後続研究はあるが登録済み利用手段なし',no_downstream_outlet:'登録済みの後続研究・利用手段なし'};
+    const outletNote=`<div class="cell-sub">登録Contentでの接続: ${esc(outletLabels[r.registered_outlet_status]||'未評価')}。現在の取得可否・実行条件とは別です。</div>`;
     const rows=r.unlocks||[];
-    if(!rows.length)return '<div class="empty-state">この研究から直接つながる利用手段はありません。</div>';
-    return rows.map((row)=>{
+    if(!rows.length)return outletNote+'<div class="empty-state">この研究から直接つながる利用手段はありません。</div>';
+    return outletNote+rows.map((row)=>{
       const remaining=row.remaining_prerequisite_ids||[];
       const stateBadge=remaining.length
         ? `<span class="badge">追加前提 ${remaining.length}</span>`

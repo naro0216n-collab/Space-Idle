@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .application_constraints import constraints_from_pairs
+from .analysis_technology_outlets import registered_outlet_reachability
 from .application_comparison import project_comparison_axes
 from .app_contracts.ui_reports import ComparisonValueRow
 from .execution_requirements import ServiceCapacityRequirement
@@ -380,6 +381,23 @@ class ResearchProgressionProjectorMixin:
 
         rows: list[ResearchRow] = []
         unlocks_by_id = self._research_unlock_rows_by_id()
+        # Reuse the existing player-facing unlock projection. This is a
+        # declaration-only Content hint, not another Eligibility evaluator or
+        # a full Definition Graph built during normal UI refreshes.
+        research_successors = {
+            research_id: {row.id for row in rows if row.kind == "research"}
+            for research_id, rows in unlocks_by_id.items()
+        }
+        registered_methods = {
+            research_id: {(row.kind, row.id) for row in rows if row.kind != "research"}
+            for research_id, rows in unlocks_by_id.items()
+        }
+        outlet_status = {
+            research_id: registered_outlet_reachability(
+                research_id, research_successors, registered_methods,
+            )[0]
+            for research_id in unlocks_by_id
+        }
         for definition in sorted(sim.research.definitions.values(), key=lambda row: str(row.id)):
             state = sim.research.active.get(definition.id)
             complete = definition.id in sim.research.completed
@@ -507,6 +525,7 @@ class ResearchProgressionProjectorMixin:
                 category=definition.category,
                 series=definition.series,
                 unlocks=unlocks_by_id.get(definition.id, ()),
+                registered_outlet_status=outlet_status[definition.id],
             ))
         return ResearchView(
             sim.research.stored_points, capacity, generation, admitted_generation,

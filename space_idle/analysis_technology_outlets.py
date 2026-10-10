@@ -7,6 +7,8 @@ This is deliberately a read-only graph projection, not a technology evaluator.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping, Iterable
+from typing import Hashable
 
 from .analysis_graph import DependencyDefinitionGraph, DependencyNode
 
@@ -49,6 +51,35 @@ class TechnologyOutlet:
         }
 
 
+def registered_outlet_reachability(
+    technology: Hashable,
+    successors: Mapping[Hashable, Iterable[Hashable]],
+    direct: Mapping[Hashable, Iterable[Hashable]],
+) -> tuple[str, set[Hashable], set[Hashable]]:
+    """Share declaration-only reachability between diagnostics and UI Query.
+
+    Only the caller's registered method/prerequisite edges are consulted. This
+    neither evaluates physical Eligibility nor constructs a full analysis graph
+    for ordinary Application reads.
+    """
+    reached = {technology}
+    frontier = [technology]
+    while frontier:
+        current = frontier.pop()
+        for downstream in successors.get(current, ()):
+            if downstream not in reached:
+                reached.add(downstream)
+                frontier.append(downstream)
+    methods = {method for item in reached for method in direct.get(item, ())}
+    classification = (
+        "direct_method" if any(direct.get(technology, ())) else
+        "via_research" if methods else
+        "research_only_no_method" if len(reached) > 1 else
+        "no_downstream_outlet"
+    )
+    return classification, methods, reached - {technology}
+
+
 def classify_technology_outlets(graph: DependencyDefinitionGraph) -> tuple[TechnologyOutlet, ...]:
     """Report authored direct, prerequisite-only, and absent outlet paths.
 
@@ -69,25 +100,11 @@ def classify_technology_outlets(graph: DependencyDefinitionGraph) -> tuple[Techn
 
     rows = []
     for technology in technologies:
-        reached = {technology}
-        frontier = [technology]
-        while frontier:
-            current = frontier.pop()
-            for downstream in successors[current]:
-                if downstream not in reached:
-                    reached.add(downstream)
-                    frontier.append(downstream)
-        methods = set().union(*(direct[node] for node in reached))
-        if direct[technology]:
-            classification = "direct_method"
-        elif methods:
-            classification = "via_research"
-        elif len(reached) > 1:
-            classification = "research_only_no_method"
-        else:
-            classification = "no_downstream_outlet"
+        classification, methods, downstream = registered_outlet_reachability(
+            technology, successors, direct,
+        )
         rows.append(TechnologyOutlet(
             technology, classification, tuple(sorted(direct[technology])),
-            tuple(sorted(methods)), tuple(sorted(reached - {technology})),
+            tuple(sorted(methods)), tuple(sorted(downstream)),
         ))
     return tuple(rows)

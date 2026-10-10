@@ -695,6 +695,18 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
     assert classified["d"].classification == "direct_method"
     assert classified["e"].classification == "research_only_no_method"
     assert classified["f"].classification == "no_downstream_outlet"
+    # The normal player Query uses the same declaration-only classification,
+    # without building the global Definition Graph on every UI refresh.
+    from space_idle import GetResearch, build_game_application
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    app = build_game_application()
+    methods_by_id = {
+        row.technology.id: row.classification
+        for row in classify_technology_outlets(
+            build_definition_dependency_graph(app._simulation, app._catalog)
+        )
+    }
+    assert {row.id: row.registered_outlet_status for row in app.query(GetResearch()).items} == methods_by_id
     # Coverage must distinguish a terminal orphan from an entire descendant
     # research chain that never reaches an executable registered method.
     from space_idle.analysis_coverage import inspect_definition_coverage
