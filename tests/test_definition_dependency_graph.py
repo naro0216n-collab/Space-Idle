@@ -792,17 +792,17 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
     )
     all_nodes = (technology, successor, stage, method, supplier, capability)
     risks = inspect_definition_coverage(DependencyDefinitionGraph(all_nodes, relations, ()))
-    gated = tuple(row for row in risks if row.code == "potential_research_acquisition_dependency_cycle")
+    gated = tuple(row for row in risks if row.code == "potential_research_supply_acquisition_cycle")
     assert len(gated) == 1
     assert gated[0].subject == technology
-    assert any("initial_assets_and_sites_unknown" in evidence for evidence in gated[0].evidence)
+    assert any("initial_stock_assets_sites_and_market_conditions_unknown" in evidence for evidence in gated[0].evidence)
     assert any("test.follow_on" in evidence for evidence in gated[0].evidence)
     alternative = DependencyNode("construction_method", "test.lab.alternative")
     alternatives = (
         *relations,
         DependencyRelation("constructs_facility", alternative, supplier, "test:alternative"),
     )
-    assert not any(row.code == "potential_research_acquisition_dependency_cycle"
+    assert not any(row.code == "potential_research_supply_acquisition_cycle"
                    for row in inspect_definition_coverage(
                        DependencyDefinitionGraph((*all_nodes, alternative), alternatives, ())
                    ))
