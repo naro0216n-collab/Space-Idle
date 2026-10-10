@@ -463,7 +463,11 @@
 
   function renderFleet(){
     const pools=state.fleet?.pools||logistics().fleet_pools||[]; const commitments=state.fleet?.commitments||logistics().fleet_commitments||[]; const relocations=state.fleet?.relocations||logistics().relocations||[]; const releases=state.fleet?.releases||logistics().releases||[]; const retirements=state.fleet?.retirements||logistics().retirements||[];
-    $('#vehicleCountBadge').textContent=`${pools.reduce((n,p)=>n+Number(p.total_units||0),0)} 機`;
+    // Units in Movement or at an unowned physical target have left every
+    // Operational Node pool, but remain Player-owned Fleet commitments.
+    const detached=commitments.filter((c)=>c.location_kind!=='operational_node');
+    const totalOwned=Number(state.logisticsSummary?.fleet_units??0);
+    $('#vehicleCountBadge').textContent=`${totalOwned} 機`;
     const poolCards=pools.map((p)=>{
       const free=Number(p.free_units||0);
       const active=Number(p.total_units||0)-free;
@@ -475,8 +479,17 @@
     const relocationCards=relocations.map((r)=>`<article class="fleet-transition-card"><span class="badge">移動中</span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><span>${esc(locationName(r.source_id))} → ${esc(locationName(r.destination_id))}</span><small>到着予定 Day ${fmt(r.arrival_day,0)}</small></article>`).join('');
     const releaseCards=releases.map((r)=>`<article class="fleet-transition-card"><span class="badge">回収中</span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><span>${esc(locationName(r.operational_node_id))}</span><small>解放予定 Day ${fmt(r.release_day,0)} · 残り ${fmt(r.remaining_days,0)} 日</small></article>`).join('');
     const retirementCards=retirements.map((r)=>{const salvage=(r.expected_salvage||[]).map(([rid,amount])=>`${resourceName(rid)} ${fmt(amount,2)} t`).join(' / ')||'なし';const projected=(r.projected_salvage||[]).map(([rid,amount])=>`${resourceName(rid)} ${fmt(amount,2)} t`).join(' / ')||'なし';const blockers=(r.blockers||[]).map(A.constraintSummary);return `<article class="fleet-retirement-card" data-retirement-row="${esc(r.id)}"><div class="decision-card-title"><span><strong>${esc(r.display_name)} · ${fmt(r.units,0)} 機</strong><small>${esc(locationName(r.operational_node_id))}</small></span><span class="badge ${r.phase==='complete'?'ok':blockers.length?'warn':''}">${r.phase==='complete'?'完了':'退役処理中'}</span></div><div class="fleet-retirement-metrics"><span>進捗 <strong>${fmt(r.progress_work,1)} / ${fmt(r.required_work,1)}</strong></span><span>回収見込 <strong>${esc(projected)}</strong></span><span>回収可能性 <strong>${esc(salvage)}</strong></span></div>${blockers.length?`<div class="decision-card-footer has-warning">制約: ${esc(blockers[0])}</div>`:''}<div class="fleet-card-actions">${priorityControl(r.priority??3,`data-retirement-active-priority data-priority-direct="retirement" data-priority-id="${esc(r.id)}"`,'優先度',['complete','cancelled'].includes(r.phase))}<button type="button" class="danger-button" data-retirement-cancel="${esc(r.id)}" ${r.irreversible_started||['complete','cancelled'].includes(r.phase)?'disabled title="不可逆処理開始後は取消不可"':''}>退役取消</button></div></article>`;}).join('');
-    const transitions=relocationCards+releaseCards+retirementCards;
-    A.setHtmlIfChanged($('#vehicleTable'),`<div class="fleet-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">機体配備</span><h3>Fleet</h3><p>所在地ごとに空き機体と用途別の拘束を確認し、移動・退役を判断します。研究・地表調査・科学探査・輸送を同じ配備群で比較できます。</p></div><span class="badge">${pools.length} 配備群</span></div><div class="fleet-pool-grid">${poolCards||'<div class="empty-state">Fleetはありません。</div>'}</div>${transitions?`<section class="fleet-transition-section"><h4>進行中の機体状態変更</h4><div class="fleet-transition-grid">${transitions}</div></section>`:''}</div>`);
+    const detachedCards=detached.map((c)=>{
+      const position=c.location_kind==='physical_target'
+        ? `滞在先: ${locationName(c.physical_target_id)}`
+        : `航行: ${locationName(c.movement_origin_id)} → ${locationName(c.movement_destination_id)}`;
+      const arrival=c.movement_completion_day==null?'':` · 到着予定 Day ${fmt(c.movement_completion_day,0)}`;
+      const aboard=(c.onboard_resources||[]).filter((r)=>Number(r[1])>0).map(([rid,amount])=>`${resourceName(rid)} ${fmt(amount,2)} t`).join(' / ');
+      const seats=c.onboard_seat_capacity==null?'':` · 船内座席 ${fmt(c.onboard_seat_capacity,0)}`;
+      return `<article class="fleet-transition-card" data-fleet-detached-commitment="${esc(c.id)}"><span class="badge">${c.location_kind==='physical_target'?'非運用地点に滞在':'航行中'}</span><strong>${esc(c.display_name)} · ${fmt(c.quantity,0)} 機</strong><span>${esc(fleetCommitmentContext(c))} · ${esc(position)}${esc(arrival)}</span><small>Fleet拘束 ${esc(c.owner_activity_type)}${seats?esc(seats):''}</small>${aboard?`<small>船内保有資源: ${esc(aboard)}（通常拠点在庫には含まない）</small>`:''}</article>`;
+    }).join('');
+    const transitions=detachedCards+relocationCards+releaseCards+retirementCards;
+    A.setHtmlIfChanged($('#vehicleTable'),`<div class="fleet-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">機体配備</span><h3>Fleet</h3><p>実在拠点の保有機体に加え、航行中・非運用地点に滞在する拘束機体も含めて保有量と所在を確認します。帰還や回収が成立するまで別用途には解放されません。</p></div><span class="badge">${totalOwned} 機 · ${pools.length} 配備群</span></div><div class="fleet-pool-grid">${poolCards||'<div class="empty-state">実在拠点に保有するFleetはありません。</div>'}</div>${transitions?`<section class="fleet-transition-section"><h4>移動・物理的拘束・回収</h4><div class="fleet-transition-grid">${transitions}</div></section>`:''}</div>`);
   }
 
   function allocationTarget(a){return `F ${fmt(a.target_capacity?.forward_t_per_day,2)} / R ${fmt(a.target_capacity?.reverse_t_per_day,2)} t/日`;}

@@ -104,6 +104,7 @@ def test_fleet_commitment_ownership_conservation_and_application_projection():
     assert transport_commitment.operational_node_id == allocation.anchor_node_id
     assert lg.transport_active_units(allocation_id) == 2
     assert lg.fleet_free_units(vehicle_id, node_id) == 1
+    assert lg.fleet_owned_units() == sum(pool.total_units for pool in lg.fleet_pools.values())
 
     view = app.query(GetFleet())
     pool = next(
@@ -612,6 +613,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     destination_before = lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units
+    all_owned_before = lg.fleet_owned_units()
     relocation_id = lg.relocate_fleet(
         ids.REUSABLE_ORBITAL_CARGO_TUG,
         2,
@@ -637,6 +639,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     assert moving_commitment.operational_node_id is None
     assert moving_commitment.movement_execution_id == execution.id
     assert execution.fleet_commitment_id == commitment_id
+    assert lg.fleet_owned_units() == all_owned_before
     assert lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
     ).total_units == source_before - 2
@@ -654,6 +657,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     assert lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
     ).total_units == destination_before + 2
+    assert lg.fleet_owned_units() == all_owned_before
 
 
 def test_fleet_query_exposes_and_scopes_transitional_state():

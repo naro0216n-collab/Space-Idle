@@ -79,6 +79,23 @@ class FleetAllocationMixin:
             self.fleet_pools[key] = pool
         return pool
 
+    def fleet_owned_units(self) -> int:
+        """Total physical units, including Movement and unoperated targets.
+
+        A commitment located at an Operational Node is already represented in
+        its FleetPool. During Movement or physical-target residence the same
+        units instead belong exclusively to a detached Fleet commitment.
+        This projection is read-only and is never persisted separately.
+        """
+        return (
+            sum(pool.total_units for pool in self.fleet_pools.values())
+            + sum(
+                commitment.quantity
+                for commitment in self.fleet_commitments.values()
+                if commitment.operational_node_id is None
+            )
+        )
+
     def add_fleet_units(
         self,
         vehicle_definition_id: DefinitionId,

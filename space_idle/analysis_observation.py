@@ -127,9 +127,38 @@ def observe_state(
         for vehicle_id, node_id in sim.transport.fleet_pool_keys():
             if in_scope(node_id):
                 pool = sim.transport.fleet_pool_snapshot(vehicle_id, node_id)
+                # An empty FleetPool key is not owned physical stock and need
+                # not survive Save/Load. Observe only actual units, rather
+                # than making a stale zero-valued key a semantic difference.
+                if pool.total_units == 0:
+                    continue
                 emit("fleet_total", vehicle_id, node_id, pool.total_units, "units", "transport.fleet_pool_snapshot")
                 emit("fleet_free", vehicle_id, node_id,
                      pool.free_units, "units", "transport.fleet_pool_snapshot")
+
+    # Detached Fleet commitments are physical assets, not Operational Node
+    # Inventory or FleetPool stock. Their onboard Resources belong to Transport
+    # while in flight or at a non-operational target. Keep the distinction even
+    # in a partial observation; never label the target as an owned Node.
+    if operational_node_ids is None:
+        for commitment in sim.transport.fleet_commitment_snapshots():
+            if commitment.physical_target is not None:
+                endpoint = commitment.physical_target
+                context = f"physical_target:{endpoint.locator_kind}:{endpoint.locator_id}"
+            elif commitment.movement_execution_id is not None:
+                context = f"movement:{commitment.movement_execution_id}"
+            else:
+                context = str(commitment.operational_node_id)
+            if resource_ids is None:
+                emit("fleet_committed", commitment.vehicle_definition_id, context,
+                     commitment.quantity, "units", f"transport.fleet_commitment:{commitment.id}")
+                if commitment.operational_node_id is None:
+                    emit("fleet_detached", commitment.vehicle_definition_id, context,
+                         commitment.quantity, "units", f"transport.fleet_commitment:{commitment.id}")
+            for resource_id, amount in commitment.onboard_resources:
+                if resource_ids is None or resource_id in resource_ids:
+                    emit("fleet_onboard_resource", resource_id, context,
+                         amount, "t", f"transport.fleet_commitment:{commitment.id}")
 
     # Provider stock belongs to the external Market, not the local Inventory.
     # A scoped observation includes only providers with an enabled Interface

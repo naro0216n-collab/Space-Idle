@@ -15,6 +15,7 @@ from space_idle import (
     SetScientificExplorationCompletionDisposition,
     CreateTransportAllocation,
     GetFleet,
+    GetLogisticsSummary,
     GetResearch,
     GetScientificExplorations,
     GetTransportAllocations,
@@ -25,6 +26,7 @@ from space_idle import (
     UnassignExplorationFleet,
     build_game_application,
 )
+from space_idle.analysis_observation import observe_state
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
@@ -660,17 +662,57 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     before_survey = capture_state(sim)["survey"]
     initial_owned_nodes = set(sim.graph.operational_node_ids())
     assert ids.MARS_ORBIT not in initial_owned_nodes
+    initial_fleet_count = app.query(GetLogisticsSummary()).fleet_units
     state, initial_balances, needs = _start_unoperated_science(app)
     assert needs and all(node == ids.LEO for node, _, _, _ in needs)
+    # The spacecraft has left its origin pool, but it is still Player-owned.
+    # Neither the Fleet screen nor analysis may count only parked units.
+    in_flight = next(row for row in app.query(GetFleet()).commitments
+                     if row.id == str(state.fleet_commitment_id))
+    assert in_flight.location_kind == "in_transit"
+    assert in_flight.movement_origin_id == str(ids.LEO)
+    assert in_flight.movement_destination_id == str(ids.MARS_ORBIT)
+    assert in_flight.movement_completion_day > sim.day
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    in_flight_metrics = observe_state(sim).metrics
+    assert any(m.kind == "fleet_detached" and m.quantity == 1
+               and m.context_id.startswith("movement:") for m in in_flight_metrics)
+    assert not any(m.kind == "inventory_stock" and m.context_id.startswith("movement:")
+                   for m in in_flight_metrics)
     for node, resource, amount, _ in needs:
         # Ordinary facility maintenance can also draw from the same inventory.
         assert initial_balances[node, resource] - sim.inventory.amount(node, resource) + 1e-9 >= amount
     _arrive_unoperated_science(app)
+    remote = next(row for row in app.query(GetFleet()).commitments
+                  if row.id == str(state.fleet_commitment_id))
+    assert remote.location_kind == "physical_target"
+    assert remote.physical_target_kind == "physical_non_surface_target"
+    assert remote.physical_target_id == str(ids.MARS_ORBIT)
+    assert remote.operational_node_id is None
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    observations = observe_state(sim).metrics
+    target_context = f"physical_target:physical_non_surface_target:{ids.MARS_ORBIT}"
+    assert any(row.kind == "fleet_detached" and row.context_id == target_context
+               and row.quantity == 1 for row in observations)
+    assert all(row.context_id != str(ids.MARS_ORBIT) for row in observations
+               if row.kind in ("inventory_stock", "fleet_total"))
+    for resource_id, amount in remote.onboard_resources:
+        assert any(row.kind == "fleet_onboard_resource"
+                   and row.subject_id == resource_id
+                   and row.context_id == target_context and row.quantity == amount
+                   for row in observations)
+    # Scoping to an operational Node cannot materialize a remote Fleet unit.
+    scoped = observe_state(sim, operational_node_ids=frozenset((ids.LEO,)))
+    assert not any(row.kind == "fleet_detached" for row in scoped.metrics)
     path = tmp_path / "unoperated-science.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
     assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    assert loaded.query(GetFleet()).commitments == app.query(GetFleet()).commitments
+    assert observe_state(loaded._simulation).metrics == observe_state(sim).metrics
     for current in (app, loaded):
         current._simulation.research.stored_points = 0.0
         current.execute(AdvanceTime(12))
@@ -691,6 +733,10 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     assert state.research_points_awarded == pytest.approx(definition.research_points_total)
     assert capture_state(sim)["survey"] == before_survey
     assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    assert not any(row.kind == "fleet_detached" and row.context_id == target_context
+                   for row in observe_state(sim).metrics)
     for node, resource, _, _ in needs:
         assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
 

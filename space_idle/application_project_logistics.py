@@ -42,7 +42,7 @@ class LogisticsProjectorMixin(
             resolutions=decision.plan.requirement_resolutions,
         )
         return LogisticsSummaryView(
-            fleet_units=sum(row.total_units for row in pools),
+            fleet_units=sim.transport.fleet_owned_units(),
             free_fleet_units=sum(row.free_units for row in pools),
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),

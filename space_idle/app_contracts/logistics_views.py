@@ -97,6 +97,16 @@ class FleetCommitmentRow:
     quantity: int
     operational_node_id: str | None
     movement_execution_id: str | None
+    movement_origin_id: str | None
+    movement_destination_id: str | None
+    movement_completion_day: int | None
+    # Fleet ownership remains visible when neither endpoint is an owned Node.
+    # These are projections of the Fleet Domain's single authoritative commitment.
+    location_kind: str
+    physical_target_kind: str | None
+    physical_target_id: str | None
+    onboard_resources: tuple[tuple[str, float], ...]
+    onboard_seat_capacity: int | None
 
 
 @dataclass(frozen=True)

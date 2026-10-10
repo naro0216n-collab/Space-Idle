@@ -53,11 +53,14 @@ class LogisticsStateProjectorMixin:
         sim = self._simulation
         commitments = sim.transport.fleet_commitment_snapshots()
         keys = set(sim.transport.fleet_pool_keys())
-        # Allocations/reservations can make a zero-total pool decision-relevant.
-        keys.update(
+        # A zero-unit pool key can remain in runtime memory after departure,
+        # but is not an owned asset and is not persisted. Retain a zero pool
+        # only when an actual allocation makes its provisioning a decision.
+        allocation_keys = {
             (row.vehicle_definition_id, row.anchor_node_id)
             for row in sim.transport.transport_allocation_snapshots()
-        )
+        }
+        keys.update(allocation_keys)
         keys.update(
             (row.vehicle_definition_id, row.operational_node_id)
             for row in commitments
@@ -78,6 +81,8 @@ class LogisticsStateProjectorMixin:
             if vehicle_definition_id is not None and str(definition_id) != vehicle_definition_id:
                 continue
             snapshot = sim.transport.fleet_pool_snapshot(definition_id, node_id)
+            if snapshot.total_units == 0 and (definition_id, node_id) not in allocation_keys:
+                continue
             commitment_units_by_usage = commitment_units_by_pool.get((definition_id, node_id), {})
             research_units = commitment_units_by_usage.get("research", 0)
             survey_units = commitment_units_by_usage.get("survey", 0)
@@ -114,8 +119,13 @@ class LogisticsStateProjectorMixin:
         location_id: str | None = None,
         vehicle_definition_id: str | None = None,
     ) -> tuple[FleetCommitmentRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("fleet_commitment_rows", location_id, vehicle_definition_id)
+        if cache is not None and key in cache:
+            return cache[key]
         rows: list[FleetCommitmentRow] = []
-        for commitment in self._simulation.transport.fleet_commitment_snapshots():
+        sim = self._simulation
+        for commitment in sim.transport.fleet_commitment_snapshots():
             if location_id is not None and (
                 commitment.operational_node_id is None
                 or str(commitment.operational_node_id) != location_id
@@ -123,6 +133,12 @@ class LogisticsStateProjectorMixin:
                 continue
             if vehicle_definition_id is not None and str(commitment.vehicle_definition_id) != vehicle_definition_id:
                 continue
+            movement = (
+                None if commitment.movement_execution_id is None
+                else sim.transport.movement_execution_snapshot(commitment.movement_execution_id)
+            )
+            if commitment.movement_execution_id is not None and movement is None:
+                raise RuntimeError(f"Fleet commitment references missing Movement: {commitment.id}")
             rows.append(FleetCommitmentRow(
                 id=str(commitment.id),
                 owner_activity_type=commitment.owner_activity_ref.activity_type,
@@ -133,8 +149,37 @@ class LogisticsStateProjectorMixin:
                 quantity=commitment.quantity,
                 operational_node_id=None if commitment.operational_node_id is None else str(commitment.operational_node_id),
                 movement_execution_id=None if commitment.movement_execution_id is None else str(commitment.movement_execution_id),
+                movement_origin_id=(
+                    None if movement is None else str(
+                        movement.origin.operational_node_id or movement.origin.locator_id
+                    )
+                ),
+                movement_destination_id=(
+                    None if movement is None else str(
+                        movement.destination.operational_node_id or movement.destination.locator_id
+                    )
+                ),
+                movement_completion_day=None if movement is None else movement.completion_day,
+                location_kind=(
+                    "physical_target" if commitment.physical_target is not None
+                    else "in_transit" if commitment.movement_execution_id is not None
+                    else "operational_node"
+                ),
+                physical_target_kind=(
+                    None if commitment.physical_target is None else commitment.physical_target.locator_kind
+                ),
+                physical_target_id=(
+                    None if commitment.physical_target is None else commitment.physical_target.locator_id
+                ),
+                onboard_resources=tuple((str(resource), amount) for resource, amount in commitment.onboard_resources),
+                onboard_seat_capacity=(
+                    None if commitment.onboard_accommodation is None else commitment.onboard_accommodation.seats
+                ),
             ))
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _fleet_relocation_rows(
         self,
