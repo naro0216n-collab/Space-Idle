@@ -150,6 +150,7 @@ PG_SOLAR_POWER_02 = research_id("PG-SOLAR-POWER-02")
 FP_REACTOR_POWER_02 = research_id("FP-REACTOR-POWER-02")
 CR_CRYOGENIC_STORAGE_TRANSFER_04 = research_id("CR-CRYOGENIC-STORAGE-TRANSFER-04")
 BIO_HUMAN_BIOLOGY_MEDICINE_03 = research_id("BIO-HUMAN-BIOLOGY-MEDICINE-03")
+LS_ATMOSPHERE_WATER_WASTE_01 = research_id("LS-ATMOSPHERE-WATER-WASTE-01")
 
 # Operational Experience categories are Content-defined Knowledge dimensions.
 EXPERIENCE_TRANSPORT_OPERATIONS = "base.experience.transport_operations"

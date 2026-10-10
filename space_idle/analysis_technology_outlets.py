@@ -15,17 +15,37 @@ from .analysis_graph import DependencyDefinitionGraph, DependencyNode
 class TechnologyOutlet:
     technology: DependencyNode
     classification: str
-    direct_method_count: int
-    reachable_method_count: int
-    downstream_technology_count: int
+    direct_methods: tuple[DependencyNode, ...]
+    reachable_methods: tuple[DependencyNode, ...]
+    downstream_technologies: tuple[DependencyNode, ...]
+
+    @property
+    def direct_method_count(self) -> int:
+        return len(self.direct_methods)
+
+    @property
+    def reachable_method_count(self) -> int:
+        return len(self.reachable_methods)
+
+    @property
+    def downstream_technology_count(self) -> int:
+        return len(self.downstream_technologies)
 
     def to_json_data(self) -> dict:
+        # Preserve actual target identity: counts alone cannot support a
+        # per-Technology Content audit, and an outlet is not proof of usability.
+        def reference(node: DependencyNode) -> dict:
+            return {"kind": node.kind, "id": node.id}
+
         return {
             "technology_id": self.technology.id,
             "classification": self.classification,
             "direct_method_count": self.direct_method_count,
             "reachable_method_count": self.reachable_method_count,
             "downstream_technology_count": self.downstream_technology_count,
+            "direct_methods": [reference(node) for node in self.direct_methods],
+            "reachable_methods": [reference(node) for node in self.reachable_methods],
+            "downstream_technologies": [node.id for node in self.downstream_technologies],
         }
 
 
@@ -67,6 +87,7 @@ def classify_technology_outlets(graph: DependencyDefinitionGraph) -> tuple[Techn
         else:
             classification = "no_downstream_outlet"
         rows.append(TechnologyOutlet(
-            technology, classification, len(direct[technology]), len(methods), len(reached) - 1,
+            technology, classification, tuple(sorted(direct[technology])),
+            tuple(sorted(methods)), tuple(sorted(reached - {technology})),
         ))
     return tuple(rows)

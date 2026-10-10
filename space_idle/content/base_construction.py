@@ -40,7 +40,7 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(2.0), req._machinery_resource(1.5), req._electronics_resource(1.5)),
             0.0,
             SiteRequirements(),
-            frozenset({ids.SS_SENSING_01}),
+            frozenset(),
             True,
         ),
         ids.CREWED_ORBITAL_LABORATORY: ConstructionRecipe(
@@ -48,7 +48,7 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(8.0), req._machinery_resource(7.0), req._electronics_resource(5.0)),
             0.0,
             SiteRequirements(),
-            frozenset({ids.BIO_HUMAN_BIOLOGY_MEDICINE_03}),
+            frozenset({ids.LS_ATMOSPHERE_WATER_WASTE_01}),
             True,
         ),
         ids.ROBOTIC_GEOLOGY_STATION: req._surface_recipe(
@@ -169,11 +169,9 @@ def build_construction_recipes() -> dict:
         ),
         ids.FABRICATION_WORKSHOP: req._surface_recipe(
             ids.FABRICATION_WORKSHOP, 8, 8, 4, 65,
-            technologies=frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_05}),
         ),
         ids.MACHINE_SHOP: req._surface_recipe(
             ids.MACHINE_SHOP, 10, 10, 5, 80,
-            technologies=frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_01}),
         ),
         ids.HEAVY_EQUIPMENT_ASSEMBLY: ConstructionRecipe(
             ids.HEAVY_EQUIPMENT_ASSEMBLY,
@@ -216,7 +214,7 @@ def build_facility_upgrade_recipes() -> dict:
             ),
             20.0,
             SiteRequirements(),
-            frozenset({ids.LM_LOGISTICS_MAINTENANCE_01}),
+            frozenset(),
         ),
         FacilityUpgradeRecipe(
             ids.EARTH_RESEARCH_LAB,
@@ -228,7 +226,7 @@ def build_facility_upgrade_recipes() -> dict:
             ),
             35.0,
             SiteRequirements(),
-            frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_03}),
+            frozenset(),
         ),
     )
     return {(recipe.facility_def_id, recipe.target_level): recipe for recipe in recipes}

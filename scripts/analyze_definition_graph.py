@@ -51,10 +51,27 @@ def main() -> None:
             if row.subject in graph.nodes
         ]}
     if args.technology_outlets:
-        report = [
-            row.to_json_data() for row in classify_technology_outlets(full_graph)
-            if row.technology in graph.nodes
-        ]
+        # Attach authored research identity and typed-stage metadata from the
+        # canonical registered Definitions. These are not inferred graph effects.
+        technologies = ({} if app._simulation.research is None else {
+            str(key): definition for key, definition in app._simulation.research.definitions.items()
+        })
+        report = []
+        for row in classify_technology_outlets(full_graph):
+            if row.technology not in graph.nodes:
+                continue
+            data = row.to_json_data()
+            definition = technologies.get(row.technology.id)
+            if definition is not None:
+                data["definition"] = {
+                    "display_name": definition.display_name,
+                    "category": definition.category,
+                    "series": definition.series,
+                    "progression_stage": definition.progression_stage,
+                    "prerequisites": sorted(str(value) for value in definition.prerequisites),
+                    "stage_types": [type(stage).__name__ for stage in definition.stage_specs],
+                }
+            report.append(data)
         if "definition_graph" not in result:
             result = {"definition_graph": result}
         result["technology_outlets"] = report

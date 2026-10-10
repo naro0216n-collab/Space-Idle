@@ -508,6 +508,10 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
     assert classified["a"].classification == "via_research"
     assert classified["a"].reachable_method_count == 1
     assert classified["a"].downstream_technology_count == 3  # diamond is not double counted
+    assert classified["a"].reachable_methods == (method,)
+    assert classified["d"].direct_methods == (method,)
+    assert [row["id"] for row in classified["a"].to_json_data()["reachable_methods"]] == [method.id]
+    assert {row.id for row in classified["a"].downstream_technologies} == {"b", "c", "d"}
     assert classified["d"].classification == "direct_method"
     assert classified["e"].classification == "research_only_no_method"
     assert classified["f"].classification == "no_downstream_outlet"
