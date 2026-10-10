@@ -23,7 +23,7 @@
   const locationMap = () => byId(state.world?.operational_nodes || []);
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
-    state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
+    state.catalog?.operational_nodes, state.catalog?.celestial_bodies, state.catalog?.processes, state.catalog?.research,
     state.catalog?.movement_plans,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
@@ -70,15 +70,22 @@
   const capabilityName=(id)=>capabilityLabels[id]||id||'—';
   const serviceLabels={
     construction_work:'建設施工能力',research_execution:'研究実行能力',surface_distribution:'地表物流能力',
+    life_support:'生命維持能力',crew:'活動可能Crew',
     cargo_transfer:'貨物移送能力',vehicle_assembly:'輸送機組立能力',launch_vehicle_servicing:'打上げ機整備能力',
     spacecraft_servicing:'宇宙船整備能力',
   };
+  let serviceCapacityCatalog=null;
+  let serviceCapacityNames={};
   const serviceName=(id)=>{
     if(!id)return '—';
+    if(serviceCapacityCatalog!==state.catalog){
+      serviceCapacityCatalog=state.catalog;
+      serviceCapacityNames=Object.fromEntries((state.catalog?.service_capacities||[]).map((row)=>[row.id,row.display_name]));
+    }
+    if(serviceCapacityNames[id])return serviceCapacityNames[id];
     if(serviceLabels[id])return serviceLabels[id];
     if(id.startsWith('process:'))return `${definitionName(id.slice('process:'.length))} 工程能力`;
     if(id.startsWith('extraction:'))return `${resourceName(id.slice('extraction:'.length))} 採掘能力`;
-    if(id.startsWith('survey_observation:'))return `${definitionName(id.slice('survey_observation:'.length))} 調査能力`;
     return capabilityName(id);
   };
   const operationName=(id)=>operationLabels[id]||id||'—';

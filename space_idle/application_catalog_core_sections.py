@@ -4,6 +4,7 @@ from .application_catalog_support import site_requirements_definition
 from .application_views import (
     CelestialBodyDefinitionRow, FacilityDefinitionRow, OperationalNodeDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResearchStageDefinitionRow, ResourceDefinitionRow,
+    ServiceCapacityDefinitionRow,
 )
 from .site import SiteRequirements
 
@@ -113,4 +114,23 @@ def project_operational_nodes(projector):
             None if node.body_id is None else str(node.body_id), node.kind.value,
         )
         for node in projector._simulation.graph.operational_nodes()
+    )
+
+
+def project_survey_service_capacities(projector):
+    """Project actual physical Survey source names for finite Service identifiers.
+
+    Provider-owned compatibility and identifiers are authoritative; the UI does
+    not interpret internal provider/source ID composition.
+    """
+    sim = projector._simulation
+    if sim.survey is None:
+        return ()
+    return tuple(
+        ServiceCapacityDefinitionRow(
+            sim.survey.service_type_for_provider(provider.id, source_id),
+            f"{projector._survey_source_display_name(provider.source_kind, source_id)} 調査能力",
+        )
+        for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id))
+        for source_id in sim.survey.compatible_source_definition_ids(provider)
     )

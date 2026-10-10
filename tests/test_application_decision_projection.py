@@ -655,3 +655,37 @@ def test_construction_queries_expose_authoritative_project_controls():
     app.execute(SetProjectProcurementPolicy(project_id, "extended_wait"))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert (updated.priority, updated.procurement_policy) == (5, "extended_wait")
+
+
+def test_survey_service_catalog_uses_physical_source_names_for_new_content():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.survey is not None
+
+    catalog = app.query(GetCatalog())
+    projected = {row.id: row.display_name for row in catalog.service_capacities}
+    assert set(projected) == set(sim.survey.service_capacity_types())
+    assert all("survey_observation:" not in name for name in projected.values())
+    assert all(name.endswith(" 調査能力") for name in projected.values())
+
+    source_id = DefinitionId("test.vehicle.survey_platform")
+    sim.transport.vehicle_defs[source_id] = VehicleDef(
+        id=source_id,
+        display_name="追加観測プラットフォーム",
+        performance=TransportPerformanceProfile(
+            dry_mass_t=2.0, payload_t=0.0,
+            generic_capabilities=("survey_sensor",),
+        ),
+    )
+    expanded = {row.id: row.display_name for row in app.query(GetCatalog()).service_capacities}
+    assert len(expanded) == len(projected) + 1
+    provider = next(row for row in sim.survey.providers.values()
+                    if row.source_kind.value == "fleet")
+    service_id = sim.survey.service_type_for_provider(provider.id, source_id)
+    assert expanded[service_id] == "追加観測プラットフォーム 調査能力"
+    assert all(expanded[key] == name for key, name in projected.items())
+    assert service_id in sim.survey.service_capacity_types()
+
+    payload = to_jsonable(app.query(GetCatalog()))
+    assert any(row == {"id": service_id, "display_name": "追加観測プラットフォーム 調査能力"}
+               for row in payload["service_capacities"])

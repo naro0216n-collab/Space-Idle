@@ -6,7 +6,7 @@ from .app_contracts.catalog_views import (
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResearchStageDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
     CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
-    CatalogView, OperationalNodeSummary, WorldView,
+    ServiceCapacityDefinitionRow, CatalogView, OperationalNodeSummary, WorldView,
 )
 from .app_contracts.project_views import (
     ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption, FacilityUpgradeDifferenceRow,

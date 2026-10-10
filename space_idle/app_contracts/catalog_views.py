@@ -136,6 +136,12 @@ class OperationalNodeDefinitionRow:
 
 
 @dataclass(frozen=True)
+class ServiceCapacityDefinitionRow:
+    id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
 class CatalogView:
     resources: tuple[ResourceDefinitionRow, ...]
     facilities: tuple[FacilityDefinitionRow, ...]
@@ -145,6 +151,7 @@ class CatalogView:
     processes: tuple[ProcessDefinitionRow, ...] = ()
     research: tuple[ResearchDefinitionRow, ...] = ()
     movement_plans: tuple[MovementPlanDefinitionRow, ...] = ()
+    service_capacities: tuple[ServiceCapacityDefinitionRow, ...] = ()
 
 
 @dataclass(frozen=True)
