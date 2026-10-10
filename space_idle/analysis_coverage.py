@@ -193,6 +193,23 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     owned_assets = {node for node in graph.nodes if node.kind in ("facility", "vehicle")}
     physical_suppliers: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
     method_inputs: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    # A Research Provider or Life Support method describes a physical asset's
+    # usable service, not a standalone source. The typed asset→method relation
+    # is an OR of compatible real assets; leaving the intermediate method as
+    # a "free" supplier conceals physical acquisition dependency cycles.
+    service_asset_sources: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    for relation in graph.relations:
+        if (relation.kind == "uses_asset_definition"
+                and relation.source in owned_assets):
+            service_asset_sources[relation.target].add(relation.source)
+    for provider in sorted(node for node in graph.nodes
+                           if node.kind in ("research_provider", "survey_provider")):
+        if provider not in service_asset_sources:
+            findings.append(DefinitionCoverageFinding(
+                "provider_without_registered_compatible_asset", provider,
+                ("scope:registered_definition_source_compatibility_only;"
+                 "initial_assets_and_site_conditions_unknown",),
+            ))
     supply_kinds = {
         "supplies_capability", "nominal_service_supply", "nominal_power_supply",
         "nominal_research_execution", "nominal_construction_service_supply",
@@ -205,7 +222,9 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     }
     for relation in graph.relations:
         if relation.kind in supply_kinds and relation.target.kind in ("capability", "service_capacity"):
-            physical_suppliers[relation.target].add(relation.source)
+            physical_suppliers[relation.target].update(
+                service_asset_sources.get(relation.source, {relation.source})
+            )
         elif (relation.kind in input_kinds and
               relation.source.kind in ("capability", "service_capacity")):
             method_inputs[relation.target].add(relation.source)
@@ -298,6 +317,7 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     # actual Market eligibility, available sites, or technology progress.
     findings.extend(_resource_acquisition_cycles(
         graph, owned_assets, acquisitions, physical_suppliers, method_inputs,
+        method_techs, downstream_technologies, research_stages,
     ))
     findings.extend(bootstrap_risks)
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
@@ -309,8 +329,11 @@ def _resource_acquisition_cycles(
     acquisitions: dict[DependencyNode, set[DependencyNode]],
     physical_suppliers: dict[DependencyNode, set[DependencyNode]],
     method_inputs: dict[DependencyNode, set[DependencyNode]],
+    method_techs: dict[DependencyNode, set[DependencyNode]],
+    downstream_technologies: dict[DependencyNode, set[DependencyNode]],
+    research_stages: dict[DependencyNode, DependencyNode],
 ) -> tuple[DefinitionCoverageFinding, ...]:
-    """Find closed, *authored* Resource/Asset acquisition supply cycles.
+    """Find conditional Resource/Asset and Research supply acquisition cycles.
 
     Each acquisition/production method is an alternative (OR). Its physical
     input Resource/Capability/Service requirements must all have a possible
@@ -336,9 +359,9 @@ def _resource_acquisition_cycles(
 
     # An unregistered acquisition or replenishment route may have a Scenario
     # endowment or an external source, so its absence cannot close a cycle.
-    independent = {asset for asset in owned_assets if not acquisitions.get(asset)}
-    independent.update(resource for resource in resource_nodes
-                       if resource in external_offers or not producers.get(resource))
+    possible_initial_sources = {asset for asset in owned_assets if not acquisitions.get(asset)}
+    possible_initial_sources.update(resource for resource in resource_nodes
+                                    if resource in external_offers or not producers.get(resource))
 
     def alternatives(requirement: DependencyNode) -> set[DependencyNode]:
         if requirement.kind == "resource":
@@ -352,24 +375,32 @@ def _resource_acquisition_cycles(
             groups.append(extraction_assets[method])
         return tuple(groups)
 
-    def method_has_source(method: DependencyNode) -> bool:
-        return all(not group or any(
-            candidate not in relevant or candidate in independent
-            for candidate in group
-        ) for group in method_requirements(method))
+    def possible_supply_without(blocked_methods: set[DependencyNode]) -> set[DependencyNode]:
+        # OR of registered acquisition/production methods, AND of each
+        # method's finite physical prerequisites. This produces an authoring
+        # reachability hint, not a runtime eligibility/stock prediction.
+        independent = set(possible_initial_sources)
 
-    changed = True
-    while changed:
-        changed = False
-        for asset in sorted(owned_assets - independent):
-            if any(method_has_source(method) for method in acquisitions[asset]):
-                independent.add(asset)
-                changed = True
-        for resource in sorted(resource_nodes - independent):
-            if any(method_has_source(method) for method in producers[resource]):
-                independent.add(resource)
-                changed = True
+        def method_has_source(method: DependencyNode) -> bool:
+            return method not in blocked_methods and all(not group or any(
+                candidate not in relevant or candidate in independent
+                for candidate in group
+            ) for group in method_requirements(method))
 
+        changed = True
+        while changed:
+            changed = False
+            for asset in sorted(owned_assets - independent):
+                if any(method_has_source(method) for method in acquisitions[asset]):
+                    independent.add(asset)
+                    changed = True
+            for resource in sorted(resource_nodes - independent):
+                if any(method_has_source(method) for method in producers[resource]):
+                    independent.add(resource)
+                    changed = True
+        return independent
+
+    independent = possible_supply_without(set())
     unresolved = relevant - independent
     adjacency: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
     evidence_by_edge: dict[tuple[DependencyNode, DependencyNode], set[str]] = defaultdict(set)
@@ -401,6 +432,55 @@ def _resource_acquisition_cycles(
             "potential_resource_acquisition_dependency_cycle", component[0],
             tuple(sorted(evidence)),
         ))
+    # A Technology cannot rely on physical inputs whose only registered
+    # production/acquisition methods require that same Technology (or one of
+    # its successors). Check actual typed Research Stage inputs, keeping
+    # optional Market, initial Scenario and unknown real-world availability
+    # separate from a definite deadlock. No method is created or executed.
+    stage_requirements: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    for relation in graph.relations:
+        if (relation.target in research_stages
+                and relation.kind in ("consumes_resource", "requires_execution_capacity")
+                and relation.source.kind in ("resource", "service_capacity", "capability")):
+            stage_requirements[relation.target].add(relation.source)
+
+    def source_possible(requirement: DependencyNode, available: set[DependencyNode]) -> bool | None:
+        if requirement in relevant:
+            return requirement in available
+        suppliers = physical_suppliers.get(requirement)
+        if not suppliers:
+            return None  # Undeclared/Context source, not a circular proof.
+        return any(supplier not in relevant or supplier in available
+                   for supplier in suppliers)
+
+    for stage in sorted(stage_requirements):
+        technology = research_stages[stage]
+        dependent = {technology}
+        pending = [technology]
+        while pending:
+            for later in downstream_technologies.get(pending.pop(), ()):
+                if later not in dependent:
+                    dependent.add(later)
+                    pending.append(later)
+        blocked = {method for method, gates in method_techs.items() if gates & dependent}
+        if not blocked:
+            continue
+        allowed = possible_supply_without(blocked)
+        for requirement in sorted(stage_requirements[stage]):
+            if (source_possible(requirement, independent) is not True
+                    or source_possible(requirement, allowed) is not False):
+                continue
+            findings.append(DefinitionCoverageFinding(
+                "potential_research_supply_acquisition_cycle", technology,
+                tuple(sorted((
+                    "scope:registered_definition_research_and_production_only;"
+                    "initial_stock_assets_sites_and_market_conditions_unknown",
+                    f"stage:{stage.id}:requires:{requirement.kind}:{requirement.id}",
+                    *(f"blocked_method:{method.kind}:{method.id}:requires:"
+                      + ",".join(sorted(gate.id for gate in method_techs[method] & dependent))
+                      for method in blocked),
+                ))),
+            ))
     return tuple(findings)
 
 

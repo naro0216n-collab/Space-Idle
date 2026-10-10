@@ -371,6 +371,66 @@ def test_definition_resource_acquisition_cycles_preserve_alternative_sources_and
     ), (feedstock, recycle, provider)) == []
 
 
+def test_provider_supplied_services_trace_to_real_assets_in_acquisition_diagnostics():
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.analysis_graph import DependencyDefinitionGraph
+
+    facility = DependencyNode("facility", "test.science_lab")
+    alternate = DependencyNode("facility", "test.alternative_lab")
+    provider = DependencyNode("research_provider", "test.research_provider")
+    execution = DependencyNode("service_capacity", "research_execution")
+    method = DependencyNode("construction_method", "test.build_lab")
+    alternate_method = DependencyNode("construction_method", "test.build_alternate_lab")
+    relations = (
+        DependencyRelation("constructs_facility", method, facility, "test:lab:construction"),
+        DependencyRelation("requires_service_capacity", execution, method, "test:lab:work"),
+        DependencyRelation("uses_asset_definition", facility, provider, "test:provider:real_source"),
+        DependencyRelation("nominal_research_execution", provider, execution, "test:provider:execution"),
+    )
+
+    def coverage(rows, nodes):
+        return inspect_definition_coverage(DependencyDefinitionGraph(nodes, rows, ()))
+
+    findings = coverage(relations, (facility, provider, execution, method))
+    assert any(row.code == "potential_asset_self_bootstrap_dependency"
+               and row.subject == facility for row in findings)
+    assert not any(row.code == "provider_without_registered_compatible_asset" for row in findings)
+
+    # A different built asset can provide the same service, and the provider's
+    # ID never appears in the physical asset ledger as an additional unit.
+    alternatives = (
+        DependencyRelation("constructs_facility", alternate_method, alternate, "test:other:construction"),
+        DependencyRelation("uses_asset_definition", alternate, provider, "test:provider:other_source"),
+    )
+    assert not any(row.code == "potential_asset_self_bootstrap_dependency"
+                   for row in coverage(relations + alternatives, (
+                       facility, alternate, provider, execution, method, alternate_method,
+                   )))
+
+    # A typed Provider with no compatible source is a different Content gap;
+    # it does not make fictional capacity available in a Game instance.
+    orphan = coverage(tuple(row for row in relations if row.kind != "uses_asset_definition"),
+                      (facility, provider, execution, method))
+    assert any(row.code == "provider_without_registered_compatible_asset"
+               and row.subject == provider for row in orphan)
+    assert not any(row.code == "potential_asset_self_bootstrap_dependency" for row in orphan)
+
+    life_support = DependencyNode("life_support_method", "test.lab.life_support")
+    habitat_service = DependencyNode("service_capacity", "life_support")
+    habitat_edges = (
+        DependencyRelation("constructs_facility", method, facility, "test:habitat:construction"),
+        DependencyRelation("uses_asset_definition", facility, life_support, "test:life_support:physical_source"),
+        DependencyRelation("nominal_life_support_supply", life_support, habitat_service,
+                           "test:life_support:capacity"),
+        DependencyRelation("requires_service_capacity", habitat_service, method,
+                           "test:habitat:required_support"),
+    )
+    assert any(row.code == "potential_asset_self_bootstrap_dependency" and row.subject == facility
+               for row in coverage(habitat_edges, (
+                   facility, life_support, habitat_service, method,
+               )))
+
+
 def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():
     from dataclasses import replace
     from space_idle.power import FixedGeneration, SolarGeneration
@@ -1014,3 +1074,83 @@ def test_survey_and_extraction_dependencies_preserve_physical_methods_and_target
     assert any(f.code == "required_capability_without_definition_supplier"
                and f.subject == DependencyNode("capability", "unprovided_observation_instrument")
                for f in inspect_definition_coverage(graph))
+
+
+def test_research_stage_supply_dependencies_preserve_alternative_sources_and_technology_gates():
+    """An input to an unfinished technology cannot depend exclusively on its unlocked methods."""
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.analysis_graph import DependencyDefinitionGraph
+
+    def node(kind, suffix):
+        return DependencyNode(kind, f"test.research_supply.{suffix}")
+
+    technology = node("technology", "initial")
+    successor = node("technology", "successor")
+    stage = node("research_stage", "initial.prototype")
+    input_resource = node("resource", "feedstock")
+    method = node("process", "synthesis")
+    provider = node("market_provider", "supplier")
+    facility = node("facility", "lab")
+    construction = node("construction_method", "build_lab")
+    research_provider = node("research_provider", "lab_provider")
+    execution = node("service_capacity", "research_execution")
+
+    base = (
+        DependencyRelation("research_stage", stage, technology, "test:stage"),
+        DependencyRelation("consumes_resource", input_resource, stage, "test:research_cost"),
+        DependencyRelation("produces_resource", method, input_resource, "test:production"),
+        DependencyRelation("unlocks_method", technology, method, "test:gate"),
+        DependencyRelation("technology_prerequisite", technology, successor, "test:research_prerequisite"),
+    )
+
+    def risks(relations):
+        nodes = tuple(sorted({node for relation in relations for node in (relation.source, relation.target)}))
+        graph = DependencyDefinitionGraph(nodes, relations, ())
+        return [row for row in inspect_definition_coverage(graph)
+                if row.code == "potential_research_supply_acquisition_cycle"]
+
+    resource_risks = risks(base)
+    assert len(resource_risks) == 1 and resource_risks[0].subject == technology
+    assert f"stage:{stage.id}:requires:resource:{input_resource.id}" in resource_risks[0].evidence
+    assert any(f"blocked_method:process:{method.id}:requires:{technology.id}" == entry
+               for entry in resource_risks[0].evidence)
+    assert all(row.significance == "informational" for row in resource_risks)
+    downstream_gated = tuple(DependencyRelation(
+        "unlocks_method", successor if row.kind == "unlocks_method" else row.source,
+        row.target, row.provenance,
+    ) if row.kind == "unlocks_method" else row for row in base)
+    assert len(risks(downstream_gated)) == 1
+
+    market = DependencyRelation("external_buy_offer", provider, input_resource, "test:market:alternative")
+    assert risks(base + (market,)) == []
+    alternate_process = node("process", "other_production")
+    assert risks(base + (DependencyRelation(
+        "produces_resource", alternate_process, input_resource, "test:independent_production"
+    ),)) == []
+
+    # A nominal Research Provider capacity is not an independent physical
+    # source; it requires an eligible installed Facility from the same Owner.
+    provider_dependency = (
+        DependencyRelation("research_stage", stage, technology, "test:stage"),
+        DependencyRelation("requires_execution_capacity", execution, stage, "test:stage:service"),
+        DependencyRelation("uses_asset_definition", facility, research_provider, "test:lab:backing_asset"),
+        DependencyRelation("nominal_research_execution", research_provider, execution, "test:lab:service"),
+        DependencyRelation("constructs_facility", construction, facility, "test:lab:build"),
+        DependencyRelation("unlocks_method", technology, construction, "test:lab:locked"),
+    )
+    service_risks = risks(provider_dependency)
+    assert len(service_risks) == 1
+    assert f"stage:{stage.id}:requires:service_capacity:{execution.id}" in service_risks[0].evidence
+    alternative_lab = node("facility", "other_lab")
+    alternative_build = node("construction_method", "other_lab_build")
+    alternative_provider = (
+        DependencyRelation("uses_asset_definition", alternative_lab, research_provider,
+                           "test:other_lab:backing_asset"),
+        DependencyRelation("constructs_facility", alternative_build, alternative_lab,
+                           "test:other_lab:build"),
+    )
+    assert risks(provider_dependency + alternative_provider) == []
+
+    # Missing sources have their own diagnostics and must never be described
+    # as a closed cycle: initial Content/Scenario coverage is unknown.
+    assert risks(tuple(row for row in base if row.kind != "produces_resource")) == []
