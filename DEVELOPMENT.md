@@ -109,10 +109,10 @@ GitHub反映の入口は差分種別で決める。
 1. 変更を責務としてまとまったlocal commitにする。
 2. `prepare`で現在の `HEAD` をpublish対象として固定する。
 3. GitHubのheads一覧を1回取得し、`develop` HEADと`publish` HEADを同じ観測から `connector-plan` へ渡す。`publish` treeはsource-snapshotに保持した正準baseを使うため再取得しない。
-4. `connector-plan` が16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満になるよう複数batchへ分割して生成する。各packetにはlocal Gitで事前計算した `expected_tree` が含まれる。生成されたJSON packet fileをそのまま読み、`action_args` 全体を対応するGitHub操作に渡す。ツール呼出し環境がlocal fileへ直接アクセスできない場合は、下記の `emit-tool-call` による検証付き呼出しsourceを使う。packet fileのpathや内容の一部を渡さない。Libraryその他の中継先へのupload、再export、再pack、独自のAPI入力生成をしない。
-5. tree packetを順番どおり実行する。各返却tree SHAはpacketの `expected_tree` とその場で比較し、一致時だけ次packetへ進む。helperへ返却SHAを戻して次packetを生成し直さない。
-6. 全tree batch成立後、`connector-plan` が同時に生成済みの `GitHub.create_commit` packetを実行する。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
-7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。
+4. `connector-plan` が16 KiB logical chunkを `content` として含む `GitHub.create_tree` packet群を、1 callあたり144 KiB未満になるよう複数batchへ分割して生成する。各packetにはlocal Gitで事前計算した `expected_tree` が含まれる。生成されたJSON packet fileをそのまま読み、`action_args` 全体を対応するGitHub操作に渡す。ツール呼出し環境がlocal fileへ直接アクセスできない場合は、`emit-tool-call` が一括出力する検証付き実行sourceを優先する。出力全体が単一呼出し上限を超えるときだけ、既存のbatch別呼出しに戻す。packet fileのpathや内容の一部を渡さない。Libraryその他の中継先へのupload、再export、再pack、独自のAPI入力生成をしない。
+5. `python scripts/publish_request.py emit-tool-call` を実行し、出力されたsource全体を**1回の `functions.exec`**へ渡す。このsourceは全packetを先に検証し、tree作成からcommit・non-force ref更新までを順に実行する。容量上限を超えて一括sourceが生成できない場合に限り、`--stage tree --index N` と `--stage commit` を順番どおり実行する。いずれもtree返却SHAをその場で照合し、一致時だけ次へ進む。helperへSHAを戻してpacketを生成し直さない。
+6. 全tree batch成立後、生成済みの `GitHub.create_commit` packetをそのまま実行する（一括sourceでは自動で続行する）。commitは最終 `expected_tree` と観測済み `publish` HEADを親に持つ。
+7. `GitHub.create_commit` の返却commit SHAをそのまま1回のnon-force `GitHub.update_ref` に渡して固定 `publish` branchを進める（一括sourceでは自動）。commit SHAをhelperへ戻す中間stageは置かない。これがGatewayを起動する唯一のbranch更新である。
 8. 当該transport commitのPublish Gateway runの結果を取得する。`completed / success` のrun ID・conclusion・transport commitを直ちに `record` へ渡す。runが未完了ならtransactionを保持してローカル実装を進める。次の通常publishの `prepare` より前に当該run結果を再取得し、成功した時点で `record` を実行する。
 9. 次のpublishの前に直前Fast CIの結果を確認する。失敗していれば原因を修正してから次のpublishを実行する。
 
@@ -121,12 +121,14 @@ python scripts/publish_request.py prepare
 python scripts/publish_request.py connector-plan \
   --develop-head <current-develop-head> \
   --publish-head <current-publish-head>
-# local fileをツールから直接参照できない場合のみ、各batchについて:
+# local fileをツールから直接参照できない場合は一括実行を優先:
+python scripts/publish_request.py emit-tool-call
+# stdout全体を1回の functions.exec 呼出しに渡す（全tree → commit → non-force ref更新）。
+# 一括sourceが容量上限により生成できない場合だけ次の既存経路:
 python scripts/publish_request.py emit-tool-call --stage tree --index 0
-# 上記のstdout全体を1つの functions.exec 呼出しとして実行する。次batchでも同様。
+# 各tree batchを順に実行。最後のbatchが成立したら:
 python scripts/publish_request.py emit-tool-call --stage commit
-# 上記stdoutを実行して create_commit → non-force update_ref を完了する。
-# 正規packetそのものへ直接アクセスできる環境ではpacket.action_argsをそのまま使用。
+# 正規packetを直接参照できる環境では原本packet.action_argsをそのまま使用。
 python scripts/publish_request.py record \
   --gateway-transport-commit <publish-transport-commit> \
   --gateway-run-id <publish-gateway-run-id> \
@@ -147,11 +149,11 @@ Gatewayはtransport commitをcheckoutした後、そのworking treeにある固�
 
 ツール実行環境とlocal repoのファイルシステムが分離している場合、呼出元がpacketの全`action_args`を欠落なく読み、その値を変更せずConnectorへ渡せることを確認してから書込む。実行環境が原本packetの完全なsource-file referenceを提供する場合、そのreferenceの読取結果を解釈して`action_args`を直接渡し、`expected_tree`とのSHA照合を行う。read-only GitHub操作への引数受渡し成功だけを`create_tree`書込成功やGateway成功とみなさない。
 
-source-file referenceがない環境では、ローカルで `python scripts/publish_request.py emit-tool-call --stage tree --index N` または `--stage commit` を実行する。helperは**現在のactive transactionに記録された原本packetとplanを照合**し、完全な`action_args`を1行で含む `functions.exec`用の実行sourceを標準出力に生成する。このsourceは元packetを変更・再パックしない投影であり、新規transportや追加のGitHub APIを作らない。生成されたstdoutを**全体として一度だけ**呼出しへ複製し、sourceの一部、Base64断片、古い転記結果を再利用しない。source自身が送信前に引数の長さ・fingerprintを照合し、返却tree SHAの一致確認、またはcommit作成後のnon-force `publish` ref更新までを規定順に実行する。fingerprintは転記破損の事前検知用であり、Git SHAの代替ではない。`functions.exec`の成功結果が取得できなければ、そのstageの成功を主張しない。
+source-file referenceがない環境では、まず `python scripts/publish_request.py emit-tool-call` を実行する。容量制約で一括sourceを出力できない場合のみ `--stage tree --index N` と `--stage commit` へフォールバックする。helperは**現在のactive transactionに記録された原本packetとplanを照合**し、原本の完全な`action_args`を含む `functions.exec`用実行sourceを標準出力に生成する。一括sourceは全packetを転記後にまとめて照合し、照合成功時だけGitHubへのtree書込みを開始する。このsourceは元packetを変更・再パックしない投影であり、新規transportや追加のGitHub APIを作らない。生成されたstdoutを**全体として一度だけ**呼出しへ複製し、sourceの一部、Base64断片、古い転記結果を再利用しない。source自身が送信前に引数の長さ・fingerprintを照合し、返却tree SHAの一致確認、commit作成後のnon-force `publish` ref更新までを規定順に実行する。fingerprintは転記破損の事前検知用であり、Git SHAの代替ではない。`functions.exec`の成功結果が取得できなければ、そのstageの成功を主張しない。
 
 実行環境にローカルファイルの直接読取手段もコードの全体複製手段もない場合は、中途半端な文字列やfile pathを渡さない。active transactionを保持し、Connectorとの接続不能として報告する。JSONをユーザーへ配布する行為や、Library/Drive等へのuploadをConnectorの代替転送経路にしない。安全性チェックが書込みを拒否した場合は拒否内容を記録し、迂回・payload偽装は行わず、正規packetと実行環境の問題を切り分ける。
 
-再開時は、次の4状態を区別して作業位置を記録する。
+再開時は、次の4状態を区別して作業位置を記録する。通常は追加のhelper round-tripを挟まず、一括呼出しの結果をそのまま確認する。
 
 1. `execution-plan-ready`：packet生成済み、GitHubへのtree書込みは未確認。`summary.json` とpacket自身の `tree_batch_index`、`expected_tree` が再開基点となる。
 2. `tree batch N established`：そのbatchの `create_tree` 返却SHAと `expected_tree` の一致を**実際に確認済み**。未確認batchを成功扱いせず、次のbatchだけ実行する。

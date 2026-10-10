@@ -387,3 +387,97 @@ def test_emitted_tool_calls_preserve_active_packets_and_reject_modified_inputs(t
 
     rejected = run_request(repo, "emit-tool-call", "--stage", "tree", "--index", "-1", check=False)
     assert rejected.returncode != 0
+
+
+def _execute_emitted_call(source: str, expected_trees: list[str]) -> subprocess.CompletedProcess[str]:
+    """Execute the printed Connector source with mock tools, never writing to GitHub."""
+    js = """
+const fs = require('node:fs');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const source = fs.readFileSync(0, 'utf8');
+const expectedTrees = JSON.parse(process.argv[1]);
+const actions = [];
+const tools = {
+  mcp__GitHub__create_tree: async (args) => {
+    actions.push({kind:'tree', args});
+    return {result: {sha: expectedTrees[actions.filter(a => a.kind === 'tree').length - 1]}};
+  },
+  mcp__GitHub__create_commit: async (args) => {
+    actions.push({kind:'commit', args});
+    return {result: {sha:'a'.repeat(40)}};
+  },
+  mcp__GitHub__update_ref: async (args) => {
+    actions.push({kind:'ref', args});
+    return {result: {success:true}};
+  },
+};
+new AsyncFunction('tools', 'text', source)(tools, () => {})
+  .then(() => process.stdout.write(JSON.stringify(actions)))
+  .catch(e => { console.error(e.message); process.exitCode = 1; });
+"""
+    return subprocess.run(
+        ["node", "-e", js, json.dumps(expected_trees)], input=source,
+        capture_output=True, text=True,
+    )
+
+
+def test_complete_tool_call_uses_original_arguments_and_checks_all_before_writes(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    expected_trees = summary["tree_expected_shas"]
+    original_packets = [json.loads(Path(file).read_text(encoding="utf-8"))
+                        for file in summary["tree_packets"]]
+    original_commit = json.loads(Path(summary["commit_packet"]).read_text(encoding="utf-8"))
+    emitted = run_request(repo, "emit-tool-call").stdout
+    assert emitted == run_request(repo, "emit-tool-call", "--stage", "all").stdout
+    assert emitted.count("mcp__GitHub__create_tree(") == 1
+    assert "mcp__GitHub__create_commit(" in emitted
+    assert "mcp__GitHub__update_ref(" in emitted
+    completed = _execute_emitted_call(emitted, expected_trees)
+    assert completed.returncode == 0, completed.stderr
+    actions = json.loads(completed.stdout)
+    assert [action["kind"] for action in actions] == ["tree"] * len(original_packets) + ["commit", "ref"]
+    assert [action["args"] for action in actions[:-2]] == [p["action_args"] for p in original_packets]
+    assert actions[-2]["args"] == original_commit["action_args"]
+    assert actions[-1]["args"]["sha"] == "a" * 40
+    assert actions[-1]["args"]["force"] is False
+
+    # Mutation in a later packet is caught before the first tree write.
+    additional_tree = dict(original_packets[0])
+    two_tree_source = PUBLISH_REQUEST._render_complete_tool_call([
+        original_packets[0], additional_tree, original_commit
+    ])
+    broken = two_tree_source.replace(
+        '"naro0216n-collab/Space-Idle"', '"naro0216n-collab/Space-Idlf"', 1
+    )
+    failed = _execute_emitted_call(broken, expected_trees * 2)
+    assert failed.returncode != 0
+    assert "transfer mismatch" in failed.stderr
+    assert failed.stdout == ""  # no GitHub write was reached
+
+    # Source-file alteration is rejected independently of transfer checksum.
+    packet_file = Path(summary["commit_packet"])
+    altered = json.loads(packet_file.read_text(encoding="utf-8"))
+    altered["action_args"]["message"] += "modified"
+    packet_file.write_text(json.dumps(altered), encoding="utf-8")
+    rejected = run_request(repo, "emit-tool-call", check=False)
+    assert rejected.returncode != 0
+    assert "packet no longer matches" in rejected.stderr
+
+
+def test_complete_tool_call_rejects_oversized_script_without_partial_output(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    (repo / "large.bin").write_bytes(os.urandom(420_000))
+    commit_all(repo, "large checkpoint")
+    run_request(repo, "prepare")
+    summary = plan(repo, base, publish_head)
+    assert summary["tree_call_count"] > 1
+    rejected = run_request(repo, "emit-tool-call", check=False)
+    assert rejected.returncode != 0
+    assert rejected.stdout == ""
+    assert "single-call budget" in rejected.stderr
+    assert "--stage tree" in rejected.stderr
+    assert "mcp__GitHub__create_tree" in run_request(
+        repo, "emit-tool-call", "--stage", "tree", "--index", "0"
+    ).stdout

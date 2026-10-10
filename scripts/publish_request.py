@@ -942,44 +942,127 @@ def _render_tool_call(packet: dict[str, object], *, publish_base_head: str) -> s
     return "\n".join(lines) + "\n"
 
 
+def _verified_execution_packets(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
+    """Read every original packet and validate it against the immutable execution plan."""
+    plan = state["plan"]
+    assert isinstance(plan, dict)
+    batches = plan["batches"]
+    files = state["tree_packets"]
+    if not isinstance(batches, list) or not isinstance(files, list) or len(batches) != len(files) or not files:
+        raise PublishStateError("invalid Connector execution plan")
+    packets: list[dict[str, object]] = []
+    for index, (file, batch) in enumerate(zip(files, batches)):
+        if not isinstance(batch, dict):
+            raise PublishStateError("invalid Connector tree batch")
+        packet = json.loads(Path(str(file)).read_text(encoding="utf-8"))
+        expected = _tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), index,
+            str(batch["expected_tree"]),
+        )
+        if packet != expected:
+            raise PublishStateError(f"tree packet no longer matches the active plan: index {index}")
+        packets.append(packet)
+
+    commit_packet = json.loads(Path(str(state["commit_packet"])).read_text(encoding="utf-8"))
+    expected_commit = {
+        "stage": "create-publish-transport-commit",
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": f"Publish transport {state['request_id']}",
+            "tree_sha": plan["final_tree"],
+            "parent_sha": state["publish_base_head"],
+        },
+    }
+    if commit_packet != expected_commit:
+        raise PublishStateError("commit packet no longer matches the active plan")
+    packets.append(commit_packet)
+    return packets
+
+
+def _render_complete_tool_call(packets: list[dict[str, object]]) -> str:
+    """Emit one atomic preflight followed by the existing ordered Connector writes."""
+    items: list[str] = []
+    for packet in packets:
+        action_args = packet["action_args"]
+        assert isinstance(action_args, dict)
+        compact = json.dumps(action_args, ensure_ascii=False, separators=(",", ":"))
+        try:
+            compact.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise PublishStateError("tool-call source requires ASCII packet arguments; use exact source-file handoff") from exc
+        expected_tree = packet.get("expected_tree") if packet["action"] == "GitHub.create_tree" else None
+        if expected_tree is not None:
+            _require_hex_sha(str(expected_tree), name="packet expected tree")
+        item = (
+            "{args:" + compact +
+            ",size:" + str(len(compact)) +
+            ",fingerprint:0x" + f"{_tool_call_fingerprint(compact):08x}" +
+            ",expectedTree:" + json.dumps(expected_tree) + "}"
+        )
+        items.append(item)
+    source = "\n".join([
+        "// One verified execution plan; one functions.exec call for tree, commit and ref update.",
+        "const packets = [" + ",\n".join(items) + "];",
+        "// Preflight every argument before any GitHub write, including later batches.",
+        "for (const packet of packets) {",
+        "  const data = JSON.stringify(packet.args);",
+        "  let hash = 2166136261;",
+        "  for (let i = 0; i < data.length; i++) {",
+        "    const c = data.charCodeAt(i);",
+        "    if (c > 127) throw Error('Non-ASCII packet requires direct source-file handoff');",
+        "    hash = Math.imul(hash ^ c, 16777619) >>> 0;",
+        "  }",
+        "  if (data.length !== packet.size || hash !== packet.fingerprint) "
+        "throw Error('Connector argument transfer mismatch; no writes performed');",
+        "}",
+        "for (let i = 0; i < packets.length - 1; i++) {",
+        "  const packet = packets[i];",
+        "  const result = await tools.mcp__GitHub__create_tree(packet.args);",
+        "  if (result.result.sha !== packet.expectedTree) "
+        "throw Error('GitHub tree SHA mismatch; stop this transaction');",
+        "  text(JSON.stringify({stage:'tree-established',index:i,sha:result.result.sha}));",
+        "}",
+        "const commit = await tools.mcp__GitHub__create_commit(packets[packets.length - 1].args);",
+        "const sha = commit.result.sha;",
+        "if (!/^[a-f0-9]{40}$/.test(sha)) throw Error('Invalid GitHub commit SHA');",
+        "const updated = await tools.mcp__GitHub__update_ref({"
+        f"repository_full_name:{json.dumps(GITHUB_REPOSITORY)},"
+        f"branch_name:{json.dumps(PUBLISH_BRANCH)},sha,force:false"
+        "});",
+        "if (updated.result.success !== true) throw Error('Publish ref was not updated');",
+        "text(JSON.stringify({stage:'transport-ref-updated',transport_commit:sha}));",
+        "",
+    ])
+    if len(source.encode("utf-8")) >= CONNECTOR_CALL_BUDGET_BYTES:
+        raise PublishStateError(
+            "complete tool call exceeds the single-call budget; "
+            "use the verified --stage tree --index N and --stage commit calls in order"
+        )
+    return source
+
+
 def cmd_emit_tool_call(args: argparse.Namespace) -> int:
-    """Emit the connector call unchanged as executable source, not a second payload format."""
+    """Emit exact verified Connector arguments, in one call where size permits."""
     repo = _repo_from_cwd()
     state = _read_connector_state(repo)
     _verify_record_identity(repo, _read_prepared_request(_manifest_path(repo)), state)
     if state.get("stage") != "execution-plan-ready":
         raise PublishStateError("tool-call source requires an active execution plan")
-    plan = state["plan"]
-    assert isinstance(plan, dict)
+    packets = _verified_execution_packets(repo, state)
+    if args.stage == "all":
+        if args.index != 0:
+            raise PublishStateError("complete tool-call stage does not accept an index")
+        print(_render_complete_tool_call(packets), end="")
+        return 0
     if args.stage == "tree":
-        files = state["tree_packets"]
-        batches = plan["batches"]
-        if not isinstance(files, list) or not isinstance(batches, list) or args.index < 0 or args.index >= len(files):
+        if args.index < 0 or args.index >= len(packets) - 1:
             raise PublishStateError("tree packet index is outside the generated plan")
-        packet = json.loads(Path(str(files[args.index])).read_text(encoding="utf-8"))
-        batch = batches[args.index]
-        expected = _tree_packet(
-            str(batch["base_tree"]), list(batch["elements"]), args.index,
-            str(batch["expected_tree"]),
-        )
-        if packet != expected:
-            raise PublishStateError("tree packet no longer matches the active plan")
+        packet = packets[args.index]
     else:
         if args.index != 0:
             raise PublishStateError("commit stage does not accept a tree batch index")
-        packet = json.loads(Path(str(state["commit_packet"])).read_text(encoding="utf-8"))
-        expected = {
-            "stage": "create-publish-transport-commit",
-            "action": "GitHub.create_commit",
-            "action_args": {
-                "repository_full_name": GITHUB_REPOSITORY,
-                "message": f"Publish transport {state['request_id']}",
-                "tree_sha": plan["final_tree"],
-                "parent_sha": state["publish_base_head"],
-            },
-        }
-        if packet != expected:
-            raise PublishStateError("commit packet no longer matches the active plan")
+        packet = packets[-1]
     print(_render_tool_call(packet, publish_base_head=str(state["publish_base_head"])), end="")
     return 0
 
@@ -1090,9 +1173,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.set_defaults(func=cmd_connector_plan)
 
     tool_call = sub.add_parser(
-        "emit-tool-call", help="print a verified direct Connector invocation for the active original packet",
+        "emit-tool-call", help="print the shortest verified Connector execution sequence for the active transaction",
     )
-    tool_call.add_argument("--stage", required=True, choices=("tree", "commit"))
+    tool_call.add_argument("--stage", default="all", choices=("all", "tree", "commit"))
     tool_call.add_argument("--index", type=int, default=0)
     tool_call.set_defaults(func=cmd_emit_tool_call)
 
