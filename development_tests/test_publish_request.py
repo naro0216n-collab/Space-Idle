@@ -352,3 +352,38 @@ def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> 
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
     assert "actions/workflows/ci.yml/dispatches" in workflow
     assert '-f ref="${TARGET_BRANCH}"' in workflow
+
+
+def test_emitted_tool_calls_preserve_active_packets_and_reject_modified_inputs(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    packet_dir = transaction(repo) / "connector"
+    for stage, packet_name in (("tree", "tree-batch-000.json"), ("commit", "create-transport-commit.json")):
+        packet_path = packet_dir / packet_name
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        generated = run_request(repo, "emit-tool-call", "--stage", stage).stdout
+        args_line = next(line for line in generated.splitlines() if line.startswith("const args = "))
+        args = json.loads(args_line[len("const args = "):-1])
+        assert args == packet["action_args"]
+        compact = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+        assert f"serialized.length !== {len(compact)}" in generated
+        assert f"0x{PUBLISH_REQUEST._tool_call_fingerprint(compact):08x}" in generated
+        if stage == "tree":
+            assert packet["expected_tree"] == summary["tree_expected_shas"][0]
+            assert f'result.result.sha !== "{packet["expected_tree"]}"' in generated
+            assert "tools.mcp__GitHub__create_tree(args)" in generated
+        else:
+            assert "tools.mcp__GitHub__create_commit(args)" in generated
+            assert "tools.mcp__GitHub__update_ref(" in generated
+            assert "force:false" in generated
+        packet["action_args"]["repository_full_name"] = "untrusted/modified"
+        packet_path.write_text(json.dumps(packet), encoding="utf-8")
+        rejected = run_request(repo, "emit-tool-call", "--stage", stage, check=False)
+        assert rejected.returncode != 0
+        assert "packet no longer matches" in rejected.stderr
+        packet["action_args"]["repository_full_name"] = PUBLISH_REQUEST.GITHUB_REPOSITORY
+        packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+    rejected = run_request(repo, "emit-tool-call", "--stage", "tree", "--index", "-1", check=False)
+    assert rejected.returncode != 0
