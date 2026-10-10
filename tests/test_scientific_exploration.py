@@ -712,7 +712,15 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
     assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
     assert loaded.query(GetFleet()).commitments == app.query(GetFleet()).commitments
-    assert observe_state(loaded._simulation).metrics == observe_state(sim).metrics
+    original_metrics = observe_state(sim).metrics
+    restored_metrics = observe_state(loaded._simulation).metrics
+    # Save/Load retains physical quantity semantics; storage occupation may
+    # differ by a few floating-point ulps across supported Python versions.
+    identity = lambda row: (row.kind, row.subject_id, row.context_id, row.unit, row.provenance)
+    assert tuple(map(identity, restored_metrics)) == tuple(map(identity, original_metrics))
+    assert [row.quantity for row in restored_metrics] == pytest.approx(
+        [row.quantity for row in original_metrics], abs=1e-9,
+    )
     for current in (app, loaded):
         current._simulation.research.stored_points = 0.0
         current.execute(AdvanceTime(12))
