@@ -6,6 +6,14 @@ from . import base_ids as ids
 
 def build_power_specs() -> dict:
     return {
+        ids.ORBITAL_CONSTRUCTION_PLATFORM: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.15),
+        ids.ORBITAL_SOLAR_ARRAY: PowerSpec(SolarGeneration(4.0 / 0.62, 1361.0), 0.04),
+        ids.ORBITAL_PROPELLANT_DEPOT: PowerSpec(None, 0.20, standby_load_mw=0.20),
+        ids.ORBITAL_ASSEMBLY_YARD: PowerSpec(None, 0.65),
+        ids.ORBITAL_HABITAT: PowerSpec(None, 0.55),
+        ids.PROPULSION_TEST_FACILITY: PowerSpec(None, 0.45),
+        ids.DEEP_SPACE_TRACKING_ARRAY: PowerSpec(None, 0.38),
+        ids.SURFACE_ROVER_SERVICE_DEPOT: PowerSpec(None, 0.15),
         ids.EARTH_RESEARCH_LAB: PowerSpec(None, 0.10),
         ids.EARTH_LIFE_SUPPORT: PowerSpec(None, 0.04),
         ids.FOOD_FARM: PowerSpec(None, 0.14),

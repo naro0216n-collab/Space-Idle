@@ -144,6 +144,106 @@ def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:
 def build_vehicle_definitions() -> dict:
     """Owned base-game fleets are constrained only by physical requirements."""
     return {
+        ids.CREW_TRANSFER_SPACECRAFT: VehicleDef(
+            id=ids.CREW_TRANSFER_SPACECRAFT,
+            display_name="軌道間有人輸送船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=9.0, payload_t=3.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=5.0,
+                propellant_t_per_total_t_per_km_s=0.018,
+                operation_capabilities=(SpaceflightCapability(7.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=120.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=9.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 6.0), (ids.MACHINERY, 3.5), (ids.PRECISION_ELECTRONICS, 3.0)),
+                prerequisite_technologies=frozenset({ids.LS_ATMOSPHERE_WATER_WASTE_01, ids.research_id("GN-NAVIGATION-04")}),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=4.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0), (ids.MACHINERY, 1.75), (ids.PRECISION_ELECTRONICS, 1.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=3.0),
+            passengers=PassengerAccommodation(
+                seats=12, life_support_person_days_per_day=12, onboard_power_mw=1.5,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
+        ),
+        ids.ROBOTIC_SURFACE_PROSPECTOR: VehicleDef(
+            id=ids.ROBOTIC_SURFACE_PROSPECTOR,
+            display_name="自律地表地質探査車",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=0.9, payload_t=0.2,
+                operation_capabilities=(SurfaceTransportCapability(45.0),),
+                endurance_days=360.0,
+                generic_capabilities=("surface_survey", "robotic_prospecting_sensor"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=3.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 0.9), (ids.MACHINERY, 0.6), (ids.PRECISION_ELECTRONICS, 1.2)),
+                prerequisite_technologies=frozenset({ids.research_id("SM-SURFACE-MOBILITY-02"), ids.SS_SENSING_04}),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=1.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.45), (ids.MACHINERY, 0.3), (ids.PRECISION_ELECTRONICS, 0.6)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="surface_vehicle_servicing", turnaround_days=1.0),
+        ),
+        ids.PRESSURIZED_SURFACE_ROVER: VehicleDef(
+            id=ids.PRESSURIZED_SURFACE_ROVER,
+            display_name="与圧有人地表探査車",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=6.0, payload_t=1.0,
+                operation_capabilities=(SurfaceTransportCapability(110.0),),
+                endurance_days=90.0,
+                generic_capabilities=("surface_mobility",),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=8.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 5.0), (ids.MACHINERY, 3.0), (ids.PRECISION_ELECTRONICS, 2.0)),
+                prerequisite_technologies=frozenset({ids.LS_ATMOSPHERE_WATER_WASTE_01, ids.research_id("SM-SURFACE-MOBILITY-04")}),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=3.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 1.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="surface_vehicle_servicing", turnaround_days=2.0),
+            passengers=PassengerAccommodation(
+                seats=6, life_support_person_days_per_day=6, onboard_power_mw=0.8,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
+            ),
+        ),
+        ids.RADAR_MAPPING_ORBITER: VehicleDef(
+            id=ids.RADAR_MAPPING_ORBITER,
+            display_name="合成開口レーダー地質探査衛星",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=3.0, payload_t=0.8,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=1.2,
+                propellant_t_per_total_t_per_km_s=0.018,
+                operation_capabilities=(SpaceflightCapability(6.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=800.0,
+                generic_capabilities=("radar_sounder", "docking_interface", "refueling_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=6.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 2.8), (ids.MACHINERY, 1.4), (ids.PRECISION_ELECTRONICS, 3.0)),
+                prerequisite_technologies=frozenset({ids.research_id("SS-SENSING-06"), ids.research_id("GN-NAVIGATION-03")}),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=2.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 1.4), (ids.MACHINERY, 0.7), (ids.PRECISION_ELECTRONICS, 1.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=2.0),
+        ),
         ids.REUSABLE_LAUNCH_VEHICLE: VehicleDef(
             id=ids.REUSABLE_LAUNCH_VEHICLE,
             display_name="再使用型打上げヴィークル",

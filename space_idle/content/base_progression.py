@@ -93,6 +93,28 @@ def build_survey_providers() -> dict:
         prerequisite_technologies=frozenset({DefinitionId("SS-SENSING-02")}),
     )
     return {
+        ids.SURFACE_PROSPECTOR_SURVEY_PROVIDER: SurveyProviderSpec(
+            ids.SURFACE_PROSPECTOR_SURVEY_PROVIDER, SurveyProviderSourceKind.FLEET,
+            frozenset({"robotic_prospecting_sensor"}),
+            (SurveyObservationModeSpec(
+                "mobile_surface_geology", 6.0,
+                SurveyReachSpec(SurveyReachScope.LOCATION_TERRITORY),
+                KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.20, 0.08,
+                required_source_capabilities=frozenset({"robotic_prospecting_sensor"}),
+                display_name="探査車地質測定",
+            ),),
+        ),
+        ids.RADAR_MAPPING_SURVEY_PROVIDER: SurveyProviderSpec(
+            ids.RADAR_MAPPING_SURVEY_PROVIDER, SurveyProviderSourceKind.FLEET,
+            frozenset({"radar_sounder"}),
+            (SurveyObservationModeSpec(
+                "orbital_radar_sounding", 7.0,
+                SurveyReachSpec(SurveyReachScope.SAME_BODY),
+                KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL, 0.28, 0.07,
+                required_source_capabilities=frozenset({"radar_sounder"}),
+                display_name="軌道レーダー地下探査",
+            ),),
+        ),
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
             ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,
             frozenset({"surface_survey", "robotic_prospecting_kit"}), (local_robotic,),

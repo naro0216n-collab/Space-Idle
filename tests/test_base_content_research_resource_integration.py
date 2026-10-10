@@ -223,3 +223,118 @@ def test_survey_method_technology_blocks_progress_without_discarding_campaign():
     app.execute(AdvanceTime(1))
     assert sim.survey.progress(cell_id, resource_id) == progress
     assert campaign.id in sim.survey.campaigns
+
+
+def test_space_asset_portfolio_uses_same_construction_production_provider_and_save_contract(tmp_path):
+    """An orbit-owned asset portfolio follows ordinary procurement, power and Fleet lifecycle.
+
+    A scenario with delivered materials exercises physical industry instead of
+    minting a replacement Fleet directly at the destination as a research reward.
+    """
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from space_idle import (
+        AdvanceTime, GetBuildOptions, GetLogistics, PlanBuild, ProduceVehicle,
+        SetSurveyProviderFleetQuantity,
+    )
+    from space_idle.bootstrap import build_game_application_for_scenario, build_game_application_for_load
+    from space_idle.content import base_ids as ids
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.persistence import capture_state, save_game, load_game
+    from space_idle.scenario import ScenarioInventoryStock
+
+    baseline = build_standard_scenario_definition()
+    delivered = tuple(
+        ScenarioInventoryStock(ids.LUNAR_ORBIT, resource_id, 300.0)
+        for resource_id in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS)
+    )
+    scenario = replace(
+        baseline,
+        inventory_stock=baseline.inventory_stock + delivered,
+        completed_technologies=tuple(build_research_definitions()),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+
+    orbital_assets = (
+        ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.ORBITAL_SOLAR_ARRAY,
+        ids.ORBITAL_ASSEMBLY_YARD, ids.ORBITAL_PROPELLANT_DEPOT, ids.ORBITAL_HABITAT,
+    )
+    for definition_id in orbital_assets:
+        option = next(
+            row for row in app.query(GetBuildOptions(str(ids.LUNAR_ORBIT))).items
+            if row.facility_definition_id == str(definition_id)
+        )
+        assert not any(row.kind in ("spatial", "technology") for row in option.blockers)
+        assert app.execute(PlanBuild(str(ids.LUNAR_ORBIT), str(definition_id))).created_id
+
+    # All construction competes for the one robotic platform and real local stock.
+    app.execute(AdvanceTime(200))
+    installed = {row.definition_id for row in sim.facilities.all_at(ids.LUNAR_ORBIT)}
+    assert set(orbital_assets) <= installed
+    for vehicle_id in (ids.CREW_TRANSFER_SPACECRAFT, ids.RADAR_MAPPING_ORBITER):
+        option = next(
+            row for row in app.query(GetLogistics()).vehicle_production_options
+            if row.vehicle_definition_id == str(vehicle_id)
+            and row.operational_node_id == str(ids.LUNAR_ORBIT)
+        )
+        assert not any(row.kind in ("spatial", "technology") for row in option.blockers)
+        assert app.execute(ProduceVehicle(str(vehicle_id), str(ids.LUNAR_ORBIT))).created_id
+
+    app.execute(AdvanceTime(45))
+    for vehicle_id in (ids.CREW_TRANSFER_SPACECRAFT, ids.RADAR_MAPPING_ORBITER):
+        assert sim.transport.fleet_pool(vehicle_id, ids.LUNAR_ORBIT).total_units == 1
+    assert app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.RADAR_MAPPING_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.RADAR_MAPPING_ORBITER), 1,
+    )).created_id
+    assert sim.transport.fleet_free_units(ids.RADAR_MAPPING_ORBITER, ids.LUNAR_ORBIT) == 0
+
+    moment = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / "physical-portfolio.json"
+    save_game(app, path, saved_at=moment)
+    restored, _ = load_game(path, build_game_application_for_load, now=moment)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    restored.execute(AdvanceTime(1))
+    app.execute(AdvanceTime(1))
+    assert capture_state(restored._simulation) == capture_state(sim)
+
+
+def test_surface_mobility_assets_have_real_service_and_exclusive_survey_fleet():
+    from dataclasses import replace
+    from space_idle import AdvanceTime, PlanBuild, ProduceVehicle, SetSurveyProviderFleetQuantity
+    from space_idle.bootstrap import build_game_application_for_scenario
+    from space_idle.content import base_ids as ids
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+
+    scenario = build_standard_scenario_definition()
+    app = build_game_application_for_scenario(replace(
+        scenario, completed_technologies=tuple(build_research_definitions()),
+    ))
+    sim = app._simulation
+    assert app.execute(PlanBuild(str(ids.EARTH), str(ids.SURFACE_ROVER_SERVICE_DEPOT))).created_id
+    app.execute(AdvanceTime(35))
+    assert any(row.definition_id == ids.SURFACE_ROVER_SERVICE_DEPOT
+               for row in sim.facilities.all_at(ids.EARTH))
+    for vehicle_id in (ids.ROBOTIC_SURFACE_PROSPECTOR, ids.PRESSURIZED_SURFACE_ROVER):
+        assert app.execute(ProduceVehicle(str(vehicle_id), str(ids.EARTH))).created_id
+    app.execute(AdvanceTime(25))
+    assert sim.transport.fleet_pool(ids.ROBOTIC_SURFACE_PROSPECTOR, ids.EARTH).total_units == 1
+    assert sim.transport.fleet_pool(ids.PRESSURIZED_SURFACE_ROVER, ids.EARTH).total_units == 1
+    assert app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.SURFACE_PROSPECTOR_SURVEY_PROVIDER), str(ids.EARTH),
+        str(ids.ROBOTIC_SURFACE_PROSPECTOR), 1,
+    )).created_id
+    assert sim.transport.fleet_free_units(ids.ROBOTIC_SURFACE_PROSPECTOR, ids.EARTH) == 0
+    assert sim.transport.fleet_free_units(ids.PRESSURIZED_SURFACE_ROVER, ids.EARTH) == 1
+
+    # Physical communication/propulsion test laboratories contribute RP through
+    # the normal installed Facility -> Research Provider path, not a technology buff.
+    for facility_id in (ids.PROPULSION_TEST_FACILITY, ids.DEEP_SPACE_TRACKING_ARRAY):
+        assert app.execute(PlanBuild(str(ids.EARTH), str(facility_id))).created_id
+    app.execute(AdvanceTime(85))
+    from space_idle import GetResearch
+    providers = {row.provider_definition_id: row for row in app.query(GetResearch()).providers}
+    assert providers[str(ids.PROPULSION_TEST_RESEARCH_PROVIDER)].generation_points_per_day > 0
+    assert providers[str(ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER)].generation_points_per_day > 0

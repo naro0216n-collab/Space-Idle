@@ -11,6 +11,42 @@ def build_facility_definitions() -> dict:
     surface = req.SURFACE_SITE
     orbit = req.ORBIT_SITE
     definitions = {
+        ids.ORBITAL_CONSTRUCTION_PLATFORM: FacilityDef(
+            ids.ORBITAL_CONSTRUCTION_PLATFORM, "軌道上ロボット施工プラットフォーム",
+            req._capabilities("robotic_orbital_construction"), orbit, orbit,
+        ),
+        ids.ORBITAL_SOLAR_ARRAY: FacilityDef(
+            ids.ORBITAL_SOLAR_ARRAY, "軌道上太陽電池アレイ",
+            req._capabilities("orbital_solar_generation"), orbit, orbit,
+        ),
+        ids.ORBITAL_PROPELLANT_DEPOT: FacilityDef(
+            ids.ORBITAL_PROPELLANT_DEPOT, "軌道上推進剤貯蔵・補給所",
+            req._capabilities("vehicle_refueling", "cryogenic_storage", "orbital_fuel_transfer"),
+            orbit, orbit, service_capacity_supplies=req._services(spacecraft_servicing=0.3),
+        ),
+        ids.ORBITAL_ASSEMBLY_YARD: FacilityDef(
+            ids.ORBITAL_ASSEMBLY_YARD, "軌道上宇宙機組立ヤード",
+            req._capabilities("vehicle_assembly", "robotic_orbital_assembly"), orbit, orbit,
+            service_capacity_supplies=req._services(vehicle_assembly=0.85),
+        ),
+        ids.ORBITAL_HABITAT: FacilityDef(
+            ids.ORBITAL_HABITAT, "軌道居住・生命維持モジュール",
+            req._capabilities("pressurized_habitation"), orbit, orbit, housing_capacity=18,
+            life_support=LifeSupportSpec(18, ((ids.FOOD, 0.001), (ids.WATER, 0.002), (ids.OXYGEN, 0.003))),
+        ),
+        ids.PROPULSION_TEST_FACILITY: FacilityDef(
+            ids.PROPULSION_TEST_FACILITY, "ロケット推進系試験場",
+            req._capabilities("propulsion_test_equipment", "research_lab"), surface, surface,
+        ),
+        ids.DEEP_SPACE_TRACKING_ARRAY: FacilityDef(
+            ids.DEEP_SPACE_TRACKING_ARRAY, "深宇宙通信・測距アンテナ群",
+            req._capabilities("deep_space_tracking_equipment", "research_lab"), surface, surface,
+        ),
+        ids.SURFACE_ROVER_SERVICE_DEPOT: FacilityDef(
+            ids.SURFACE_ROVER_SERVICE_DEPOT, "地表探査車整備・充填拠点",
+            req._capabilities("rover_maintenance"), surface, surface,
+            service_capacity_supplies=req._services(surface_vehicle_servicing=1.2),
+        ),
         ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab", "general_research_equipment"), surface, surface),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: FacilityDef(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, "微小重力実験プラットフォーム", req._capabilities("research_lab", "microgravity_experiment_equipment"), orbit, orbit),
         ids.CREWED_ORBITAL_LABORATORY: FacilityDef(ids.CREWED_ORBITAL_LABORATORY, "有人軌道研究所", req._capabilities("research_lab", "crewed_orbital_research_equipment"), orbit, req.SiteRequirements(environment=req.LOW_RADIATION_ENV, spatial_classification_requirements=req.ORBIT_CLASSIFICATION)),

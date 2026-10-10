@@ -74,6 +74,16 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
 
 def build_research_providers() -> dict:
     return {
+        ids.PROPULSION_TEST_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.PROPULSION_TEST_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
+            frozenset({"propulsion_test_equipment"}), tier=2,
+            levels=(ResearchProviderLevelSpec(1, 8.0, 500.0, 0.8),),
+        ),
+        ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
+            frozenset({"deep_space_tracking_equipment"}), tier=2,
+            levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 0.8),),
+        ),
         ids.EARTH_RESEARCH_LAB: ResearchProviderSpec(
             ids.EARTH_RESEARCH_LAB,
             ResearchProviderSourceKind.FACILITY,

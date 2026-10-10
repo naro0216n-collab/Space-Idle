@@ -104,6 +104,16 @@ INDUSTRIAL_WATER_INTAKE = DefinitionId("base.facility.industrial_water_intake")
 BASIC_STRUCTURAL_MATERIAL_PLANT = DefinitionId("base.facility.basic_structural_material_plant")
 BASIC_MACHINERY_WORKS = DefinitionId("base.facility.basic_machinery_works")
 
+# Physically motivated space-support assets; their rules are ordinary definitions.
+ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
+ORBITAL_SOLAR_ARRAY = DefinitionId("base.facility.orbital_solar_array")
+ORBITAL_PROPELLANT_DEPOT = DefinitionId("base.facility.orbital_propellant_depot")
+ORBITAL_ASSEMBLY_YARD = DefinitionId("base.facility.orbital_assembly_yard")
+ORBITAL_HABITAT = DefinitionId("base.facility.orbital_habitat")
+PROPULSION_TEST_FACILITY = DefinitionId("base.facility.propulsion_test_facility")
+DEEP_SPACE_TRACKING_ARRAY = DefinitionId("base.facility.deep_space_tracking_array")
+SURFACE_ROVER_SERVICE_DEPOT = DefinitionId("base.facility.surface_rover_service_depot")
+
 # Industrial processes are separately selectable from facility definitions.
 PROCESS_ELECTROLYSIS = DefinitionId("base.process.water_electrolysis")
 PROCESS_PROPELLANT_BLEND = DefinitionId("base.process.propellant_blending")
@@ -171,6 +181,15 @@ LUNAR_FLEET_SURVEY_PROVIDER = DefinitionId("base.survey_provider.lunar_orbital_s
 REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_cargo_lander")
 SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 
+
+CREW_TRANSFER_SPACECRAFT = DefinitionId("base.vehicle.crew_transfer_spacecraft")
+ROBOTIC_SURFACE_PROSPECTOR = DefinitionId("base.vehicle.robotic_surface_prospector")
+PRESSURIZED_SURFACE_ROVER = DefinitionId("base.vehicle.pressurized_surface_rover")
+RADAR_MAPPING_ORBITER = DefinitionId("base.vehicle.radar_mapping_orbiter")
+SURFACE_PROSPECTOR_SURVEY_PROVIDER = DefinitionId("base.survey_provider.surface_prospector")
+RADAR_MAPPING_SURVEY_PROVIDER = DefinitionId("base.survey_provider.radar_mapping")
+PROPULSION_TEST_RESEARCH_PROVIDER = DefinitionId("base.research_provider.propulsion_test")
+DEEP_SPACE_TRACKING_RESEARCH_PROVIDER = DefinitionId("base.research_provider.deep_space_tracking")
 
 # Scientific Exploration campaigns are finite science activities, separate from resource survey.
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")

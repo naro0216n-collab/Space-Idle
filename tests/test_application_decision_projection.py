@@ -680,7 +680,8 @@ def test_survey_service_catalog_uses_physical_source_names_for_new_content():
     expanded = {row.id: row.display_name for row in app.query(GetCatalog()).service_capacities}
     assert len(expanded) == len(projected) + 1
     provider = next(row for row in sim.survey.providers.values()
-                    if row.source_kind.value == "fleet")
+                    if row.source_kind.value == "fleet"
+                    and row.required_source_capabilities <= {"survey_sensor"})
     service_id = sim.survey.service_type_for_provider(provider.id, source_id)
     assert expanded[service_id] == "追加観測プラットフォーム 調査能力"
     assert all(expanded[key] == name for key, name in projected.items())

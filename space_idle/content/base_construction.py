@@ -16,6 +16,43 @@ from . import base_requirements as req
 
 def build_construction_recipes() -> dict:
     return {
+        ids.ORBITAL_CONSTRUCTION_PLATFORM: ConstructionRecipe(
+            ids.ORBITAL_CONSTRUCTION_PLATFORM,
+            (req._structure_resource(4.0), req._machinery_resource(3.0), req._electronics_resource(1.5)),
+            0.0, req.ORBIT_SITE, frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_01}), True,
+        ),
+        ids.ORBITAL_SOLAR_ARRAY: ConstructionRecipe(
+            ids.ORBITAL_SOLAR_ARRAY,
+            (req._structure_resource(3.0), req._machinery_resource(1.0), req._electronics_resource(1.2)),
+            0.0, req.ORBIT_SITE, frozenset({ids.PG_SOLAR_POWER_02}), True,
+        ),
+        ids.ORBITAL_PROPELLANT_DEPOT: ConstructionRecipe(
+            ids.ORBITAL_PROPELLANT_DEPOT,
+            (req._structure_resource(7.0), req._machinery_resource(5.0), req._electronics_resource(2.0)),
+            26.0, req.ORBIT_SITE, frozenset({ids.research_id("CR-CRYOGENIC-STORAGE-TRANSFER-08")}),
+        ),
+        ids.ORBITAL_ASSEMBLY_YARD: ConstructionRecipe(
+            ids.ORBITAL_ASSEMBLY_YARD,
+            (req._structure_resource(10.0), req._machinery_resource(9.0), req._electronics_resource(3.0)),
+            38.0, req.ORBIT_SITE, frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_05}),
+        ),
+        ids.ORBITAL_HABITAT: ConstructionRecipe(
+            ids.ORBITAL_HABITAT,
+            (req._structure_resource(7.0), req._machinery_resource(5.0), req._electronics_resource(3.0)),
+            30.0, req.ORBIT_SITE, frozenset({ids.LS_ATMOSPHERE_WATER_WASTE_01}),
+        ),
+        ids.PROPULSION_TEST_FACILITY: req._surface_recipe(
+            ids.PROPULSION_TEST_FACILITY, 10.0, 10.0, 4.0, 55.0,
+            technologies=frozenset({ids.research_id("CH-COMBUSTION-01")}),
+        ),
+        ids.DEEP_SPACE_TRACKING_ARRAY: req._surface_recipe(
+            ids.DEEP_SPACE_TRACKING_ARRAY, 8.0, 5.0, 6.0, 42.0,
+            technologies=frozenset({ids.research_id("CO-RF-COMMUNICATIONS-02")}),
+        ),
+        ids.SURFACE_ROVER_SERVICE_DEPOT: req._surface_recipe(
+            ids.SURFACE_ROVER_SERVICE_DEPOT, 4.0, 5.0, 1.0, 23.0,
+            technologies=frozenset({ids.research_id("SM-SURFACE-MOBILITY-01")}),
+        ),
         ids.EARTH_RESEARCH_LAB: req._surface_recipe(
             ids.EARTH_RESEARCH_LAB, 12, 10, 8, 55,
         ),
@@ -249,6 +286,7 @@ def build_facility_decommission_recipes(facility_definition_ids) -> dict:
 
 def build_construction_providers() -> dict:
     return {
+        ids.ORBITAL_CONSTRUCTION_PLATFORM: ConstructionProviderSpec(ids.ORBITAL_CONSTRUCTION_PLATFORM, 0.7),
         ids.ROBOTIC_SURVEY_PACKAGE: ConstructionProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, 0.35),
         ids.CONSTRUCTION_YARD: ConstructionProviderSpec(ids.CONSTRUCTION_YARD, 0.8),
         ids.HEAVY_EQUIPMENT_ASSEMBLY: ConstructionProviderSpec(ids.HEAVY_EQUIPMENT_ASSEMBLY, 1.5),

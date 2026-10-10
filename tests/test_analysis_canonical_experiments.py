@@ -565,8 +565,15 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
                                    for fid in sim.research.compatible_facility_definition_ids(provider.id)))
     source_facility = next(fid for fid in sim.research.compatible_facility_definition_ids(source_provider.id)
                            if fid in sim.projects.recipes and fid in sim.power.specs)
-    source_vehicle = next(vehicle for vehicle in sim.transport.vehicle_definitions()
-                          if vehicle.production.days > 0)
+    # Select by the actual Application acquisition contract, not registration order.
+    from space_idle.application_commands import GetLogistics
+    from space_idle.shared import DefinitionId
+    source_vehicle = sim.transport.vehicle_defs[DefinitionId(next(
+        row.vehicle_definition_id for row in base.query(GetLogistics()).vehicle_production_options
+        if row.operational_node_id == str(ids.EARTH) and row.can_plan
+        and not any(blocker.kind == "technology" for blocker in row.blockers)
+        and sim.transport.vehicle_defs[DefinitionId(row.vehicle_definition_id)].production.days > 0
+    ))]
     new_facility = 'experiment.facility.research'
     new_provider = 'experiment.provider.research'
     new_vehicle = 'experiment.vehicle.production'
