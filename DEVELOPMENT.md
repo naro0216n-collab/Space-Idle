@@ -138,6 +138,21 @@ helperはsource-snapshot由来の `publish` base tree、各chunk本文、削除�
 
 Gatewayはtransport commitをcheckoutした後、そのworking treeにある固定slotだけを読む。GitHub Contents / Blob APIでpayloadを再取得せず、連番partを連結してbundleを検証し、bundleからpublish commit、base、target treeを導出する。checkout済み `origin/<target>` がbundle parentと一致することをローカル確認した後、exact publish commitをnon-force pushする。成功したpush後の `ls-remote` /再fetch、receipt書込み、Fast CI pending status書込みは行わない。Fast CIの明示dispatchは `GITHUB_TOKEN` pushから別workflowが自動起動しないため維持する。
 
+#### Tool-call argument handoff and resumption
+
+`connector-plan` が生成した JSON packet の **`action_args` 全体**が GitHub Connector の入力である。ローカルファイルpath、ZIP、packetの要約、logical chunkの一部はtool call引数の代わりにならない。`expected_tree` は結果照合用であり、GitHubの `create_tree` 引数に混入させない。
+
+ツール実行環境とlocal repoのファイルシステムが分離している場合、呼出元がpacketの全`action_args`を欠落なく読み、その値を変更せずにConnectorへ渡せるかを**送信前**に確定する。実行環境が原本packetの**同一バイト列のsource-file reference**を提供する場合、そのreferenceの読取結果をJSONとして解釈し、`action_args`のみを元の値のままConnectorへ渡す。この読取はpacketの引数転記であり、transport payloadを再pack・再生成してはならない。読み出し結果が省略・加工・不完全なら実行しない。source-file referenceが使えない場合に限り、原本packetから全引数を新規に転記する。大きな `content` の途中を省略した転記、出力上の省略表示を元packetとみなした転記、前回途中まで転記した文字列の継ぎ足しはしない。十分な転送経路がない場合は、途中までの文字列やfile pathを渡す代替tool callを行わず、active transactionを保持して実行環境上の障害として報告する。**保全ファイルが存在することと、Connectorへ全引数を渡せたことは別の状態**である。
+
+再開時は、次の4状態を区別して作業位置を記録する。
+
+1. `execution-plan-ready`：packet生成済み、GitHubへのtree書込みは未確認。`summary.json` とpacket自身の `tree_batch_index`、`expected_tree` が再開基点となる。
+2. `tree batch N established`：そのbatchの `create_tree` 返却SHAと `expected_tree` の一致を**実際に確認済み**。未確認batchを成功扱いせず、次のbatchだけ実行する。
+3. `transport ref updated`：最終tree成立、生成済みcommit packetでのcommit作成、返却SHAを渡したnon-force `publish` ref更新まで成立済み。Gatewayのrun ID・conclusion待ち。
+4. `recorded`：同じtransport SHAのGateway runが `completed/success`、`record`成功済み。
+
+会話やツール実行が中断しても、確認済みの境界より先に進まない。`create_tree` 呼出しの成否を確定できない場合、packetの `expected_tree` が一致する返却値を観測していない限り成立済みと宣言しない。ref更新前の転記失敗には `Pre-ref packet retry` を適用する。再開のためにpacketを再生成、再分割、別転送経路へupload、既存local commitをrebase/resetしない。`DEVELOPMENT.md`のこの節は手順を明示するものであり、既存transactionのpacketやGateway書込経路を変更する許可ではない。
+
 #### Transaction continuation and cancellation
 
 active transactionが存在する場合は、その記録済みexecution planから続行する。prepared targetを `publish` refへ出す前に取り消す場合だけ、heads一覧を1回観測し、`develop` と`publish` の両HEADがtransaction開始時から不変であることをhelperへ渡して `cancel` する。tree/commit objectの作成だけでrefが未更新なら、生成済みobjectはunreferenced objectとして扱いcancel可能である。transaction directoryを手動削除しない。
