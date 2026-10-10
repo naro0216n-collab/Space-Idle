@@ -77,6 +77,10 @@ class ResearchProgressionProjectorMixin:
 
         for process in sim.industry.processes.values():
             append("process", str(process.id), process.display_name, process.prerequisite_technologies)
+        if sim.extraction is not None:
+            for method in sim.extraction.specs.values():
+                append("extraction_method", str(method.id), method.display_name or str(method.id),
+                       method.prerequisite_technologies)
         for vehicle in sim.transport.vehicle_definitions():
             append("vehicle_production", str(vehicle.id), vehicle.display_name,
                    vehicle.production.prerequisite_technologies)
@@ -93,6 +97,7 @@ class ResearchProgressionProjectorMixin:
         kind_order = {
             "research": 0,
             "process": 1,
+            "extraction_method": 1,
             "vehicle_production": 2,
             "survey_mode": 2,
             "scientific_exploration": 2,

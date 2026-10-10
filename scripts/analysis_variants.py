@@ -77,7 +77,8 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
         facilities = []
         for raw in raw_rows:
             if not isinstance(raw, Mapping) or set(raw) - {
-                "definition_id", "operational_node_id", "site_cell_id", "invested_resources"
+                "definition_id", "operational_node_id", "site_cell_id", "invested_resources",
+                "selected_extraction_method_id"
             } or not {"definition_id", "operational_node_id"} <= set(raw):
                 raise ValueError("invalid facilities row fields")
             site = raw.get("site_cell_id")
@@ -93,11 +94,15 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
                 invested.append((DefinitionId(investment[0]), _finite_nonnegative(investment[1])))
             if len({resource for resource, _ in invested}) != len(invested):
                 raise ValueError("duplicate investment resource")
+            selected_method = raw.get("selected_extraction_method_id")
+            if selected_method is not None and (not isinstance(selected_method, str) or not selected_method):
+                raise ValueError("selected_extraction_method_id must be a Definition ID or null")
             facilities.append(ScenarioFacility(
                 DefinitionId(str(raw["definition_id"])),
                 SpatialNodeId(str(raw["operational_node_id"])),
                 None if site is None else SurfaceCellId(site),
                 tuple(invested),
+                None if selected_method is None else DefinitionId(selected_method),
             ))
         updated["facilities"] = tuple(facilities)
     if "funds_balance_musd" in changes:
@@ -670,14 +675,28 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             if not found:
                 raise ValueError("unrecognized Research stage ID")
             sim.research.definitions[definition_id] = replace(definition, stage_specs=tuple(stages))
-        elif ((kind in ("process", "construction") and field_name == "prerequisite_technologies")
+        elif kind == "extraction" and field_name in ("resource_id", "output_resource_id"):
+            if not isinstance(value, str) or not value:
+                raise ValueError("extraction Resource reference must be a nonempty Definition ID")
+            domain = sim.extraction.specs
+            domain[definition_id] = replace(domain[definition_id], **{field_name: DefinitionId(value)})
+        elif kind == "extraction" and field_name == "required_capabilities":
+            required = _identifiers(value, "extraction method capabilities")
+            if not required:
+                raise ValueError("extraction method requires physical capabilities")
+            domain = sim.extraction.specs
+            domain[definition_id] = replace(domain[definition_id], required_capabilities=required)
+        elif ((kind in ("process", "construction", "extraction") and field_name == "prerequisite_technologies")
               or (kind == "research" and field_name == "prerequisites")):
             if not isinstance(value, list) or any(not isinstance(row, str) for row in value):
                 raise ValueError(f"{field_name} must be a list of Definition IDs")
             prerequisites = frozenset(DefinitionId(row) for row in value)
             if len(prerequisites) != len(value):
                 raise ValueError("duplicate prerequisite technologies")
-            if kind == "process":
+            if kind == "extraction":
+                domain = sim.extraction.specs
+                domain[definition_id] = replace(domain[definition_id], prerequisite_technologies=prerequisites)
+            elif kind == "process":
                 domain = sim.industry.processes
                 domain[definition_id] = replace(domain[definition_id], prerequisite_technologies=prerequisites)
             elif kind == "research":
@@ -727,3 +746,8 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             sim.transport.invalidate_movement_plans()
         else:
             raise ValueError(f"unsupported typed Content variant: {kind}.{field_name}")
+
+    # Definition membership and Capability edits change compatibility; refresh
+    # derived indexes before the canonical Composition/Scenario validators run.
+    if sim.extraction is not None:
+        sim.extraction.refresh_definition_compatibility()

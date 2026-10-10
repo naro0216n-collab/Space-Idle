@@ -173,8 +173,7 @@ class ProjectProjectorMixin:
         definition = sim.facilities.definitions[facility.definition_id]
 
         if sim.extraction is not None:
-            extraction_spec = sim.extraction.method_for_definition(facility.definition_id)
-            if extraction_spec is not None:
+            if sim.extraction.compatible_methods(facility.definition_id):
                 current = sim.extraction.nominal_capacity(facility)
                 target = definition.extraction_capacity_t_per_day * target_level
                 if abs(target - current) > 1e-9:

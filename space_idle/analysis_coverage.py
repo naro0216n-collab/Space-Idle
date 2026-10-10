@@ -121,6 +121,22 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             f"technology:{outlet.technology.id}:reachable_method_count:0",
             *(f"downstream_technology:{row.id}" for row in outlet.downstream_technologies),
         )))
+    # A registered extraction method can be awaiting future hardware. This is
+    # authoring coverage, not an invalid reference or a claim that the Scenario
+    # cannot operate. Physical compatibility comes from the same Graph edges
+    # emitted for normal installed extraction capacity.
+    extractable = {
+        relation.target for relation in graph.relations
+        if relation.kind == "nominal_extraction_capacity"
+        and relation.source.kind == "facility"
+        and relation.target.kind == "extraction_method"
+    }
+    for method in sorted(node for node in graph.nodes if node.kind == "extraction_method"):
+        if method not in extractable:
+            findings.append(DefinitionCoverageFinding(
+                "extraction_method_without_registered_compatible_facility", method,
+                ("scope:registered_physical_interface_only;future_facilities_unknown",),
+            ))
     for node in sorted(graph.nodes):
         if node.kind not in ("facility", "vehicle"):
             continue

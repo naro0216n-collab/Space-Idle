@@ -31,6 +31,7 @@ def capture_facilities(sim: Any) -> dict[str, Any]:
                 "level": f.level,
                 "lifecycle": f.lifecycle.value,
                 "selected_process_id": None if f.selected_process_id is None else str(f.selected_process_id),
+                "selected_extraction_method_id": None if f.selected_extraction_method_id is None else str(f.selected_extraction_method_id),
                 "invested_resources": {str(resource_id): amount for resource_id, amount in sorted(f.invested_resources.items(), key=lambda row: str(row[0]))},
             }
             for f in sorted(sim.facilities.facilities.values(), key=lambda row: str(row.id))
@@ -43,7 +44,7 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
     fields = {
         "id", "definition_id", "operational_node_id", "site_cell_id", "paused",
         "activity_priority", "maintenance_priority", "level", "lifecycle",
-        "selected_process_id", "invested_resources",
+        "selected_process_id", "selected_extraction_method_id", "invested_resources",
     }
     for index, raw in enumerate(decode_list(data["items"], "facility items")):
         row = require_fields(raw, fields, f"facility[{index}]")
@@ -52,6 +53,7 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             raise ValueError(f"duplicate facility: {fid}")
         site_cell_id = row["site_cell_id"]
         selected_process_id = row["selected_process_id"]
+        selected_extraction_method_id = row["selected_extraction_method_id"]
         invested_resources = decode_dict(row["invested_resources"], "facility invested_resources")
         sim.facilities.facilities[fid] = FacilityState(
             id=fid,
@@ -73,6 +75,10 @@ def restore_facilities(sim: Any, data: dict[str, Any]) -> None:
             selected_process_id=(
                 None if selected_process_id is None
                 else DefinitionId(decode_str(selected_process_id, "facility selected_process_id"))
+            ),
+            selected_extraction_method_id=(
+                None if selected_extraction_method_id is None
+                else DefinitionId(decode_str(selected_extraction_method_id, "facility selected_extraction_method_id"))
             ),
             invested_resources={
                 DefinitionId(key): decode_float(value, "facility invested resource")

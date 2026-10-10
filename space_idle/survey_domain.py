@@ -250,12 +250,16 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
     if sim.extraction is None:
         return
     _require(sim.extraction.graph is sim.graph, "extraction service must use simulation spatial graph")
+    _require(sim.extraction.technology_state is sim.technology,
+             "extraction eligibility must use the authoritative Technology State")
     for definition_id, spec in sim.extraction.specs.items():
         _require(definition_id == spec.id, f"extraction method key mismatch: {definition_id}")
         _require(
             spec.required_capabilities.issubset(ctx.known_capabilities),
             f"extraction method requires unknown capability: {definition_id}",
         )
+        _require(spec.prerequisite_technologies.issubset(ctx.known_technologies),
+                 f"extraction method references unknown technology: {definition_id}")
         if spec.minimum_knowledge_level is not None:
             _require(
                 sim.extraction.survey is not None,
@@ -396,6 +400,14 @@ def validate_survey_runtime(sim: Any) -> None:
 def validate_extraction_runtime(sim: Any) -> None:
     if sim.extraction is None:
         return
+    for facility in sim.facilities.facilities.values():
+        selected = facility.selected_extraction_method_id
+        if selected is None:
+            continue
+        _require(selected in sim.extraction.specs,
+                 f"extraction selection references missing method: {selected}")
+        _require(selected in {method.id for method in sim.extraction.compatible_methods(facility.definition_id)},
+                 f"selected extraction method incompatible with facility: {facility.id}/{selected}")
     # Extraction has no mutable reserve/deposit state. Throughput is derived from
     # static Surface Cell potential, current Facilities, and operational fulfillment.
     for location_id in sim.graph.locations:

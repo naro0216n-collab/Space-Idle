@@ -6,7 +6,7 @@ from .app_contracts.construction import (
     SetProjectProcurementPolicy,
 )
 from .app_contracts.operations import (
-    PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityActivityPriority,
+    PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityExtractionMethod, SetFacilityActivityPriority,
     SetMaintenancePriority, SetTimeControl, AdvanceTime,
 )
 from .app_contracts.progression import (
@@ -48,7 +48,7 @@ Command: TypeAlias = (
     SetPopulationTarget | ClearPopulationTarget | RequestPassengerTransfer | CancelPassengerTransfer |
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectProcurementPolicy |
-    PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
+    PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityExtractionMethod | SetFacilityActivityPriority | SetMaintenancePriority |
     SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | UpdateSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |

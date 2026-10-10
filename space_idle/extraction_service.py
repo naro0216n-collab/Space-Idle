@@ -21,6 +21,7 @@ from .spatial import EnvironmentResolver, SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
 from .exploration_models import ExtractionResourceSnapshot, ExtractionSpec, ExtractionSnapshot
 from .survey_service import SurveyService
+from .technology import TechnologyState
 
 
 @dataclass
@@ -33,25 +34,99 @@ class ExtractionService:
     surface_infrastructure: SurfaceInfrastructureService
     survey: SurveyService | None = None
     facility_definitions: Mapping[DefinitionId, FacilityDef] = field(default_factory=dict)
-    _method_by_facility: dict[DefinitionId, ExtractionSpec] = field(init=False, repr=False)
+    technology_state: TechnologyState | None = None
+    _methods_by_facility: dict[DefinitionId, tuple[ExtractionSpec, ...]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.refresh_definition_compatibility()
+
+    def refresh_definition_compatibility(self) -> None:
+        """Index physical interfaces; Content variants recompose this index before play.
+
+        Installed capacity is shared by all compatible methods, never added once
+        per method. A Facility's selected method determines its Resource stream.
+        """
         if any(key != method.id for key, method in self.specs.items()):
             raise ValueError("extraction method definition key mismatch")
-        methods: dict[DefinitionId, ExtractionSpec] = {}
+        methods: dict[DefinitionId, tuple[ExtractionSpec, ...]] = {}
         for definition_id, definition in self.facility_definitions.items():
             if definition.extraction_capacity_t_per_day <= 0:
                 continue
             supplied = frozenset(capability.id for capability in definition.capability_supplies)
-            compatible = [method for method in self.specs.values()
-                          if method.required_capabilities <= supplied]
-            if len(compatible) != 1:
-                raise ValueError(f"facility {definition_id} requires one extraction method, found {len(compatible)}")
-            methods[definition_id] = compatible[0]
-        self._method_by_facility = methods
+            compatible = tuple(sorted((
+                method for method in self.specs.values()
+                if method.required_capabilities <= supplied
+            ), key=lambda method: str(method.id)))
+            if not compatible:
+                raise ValueError(f"facility {definition_id} has no compatible extraction method")
+            methods[definition_id] = compatible
+        self._methods_by_facility = methods
 
-    def method_for_definition(self, definition_id: DefinitionId) -> ExtractionSpec | None:
-        return self._method_by_facility.get(definition_id)
+    def compatible_methods(self, definition_id: DefinitionId) -> tuple[ExtractionSpec, ...]:
+        return self._methods_by_facility.get(definition_id, ())
+
+    def method_for_facility(self, facility: FacilityState) -> ExtractionSpec | None:
+        methods = self.compatible_methods(facility.definition_id)
+        if facility.selected_extraction_method_id is not None:
+            for method in methods:
+                if method.id == facility.selected_extraction_method_id:
+                    return method
+            raise RuntimeError("selected extraction method incompatible with facility")
+        return methods[0] if len(methods) == 1 else None
+
+    def missing_method_technologies(self, method: ExtractionSpec) -> tuple[DefinitionId, ...]:
+        if self.technology_state is None:
+            if method.prerequisite_technologies:
+                raise RuntimeError("extraction technology eligibility is not composed")
+            return ()
+        return self.technology_state.missing(method.prerequisite_technologies)
+
+    def set_method(self, facility: FacilityState, method_id: DefinitionId) -> None:
+        candidate = next((method for method in self.compatible_methods(facility.definition_id)
+                          if method.id == method_id), None)
+        if candidate is None:
+            raise ValueError("extraction method incompatible with facility")
+        missing = self.missing_method_technologies(candidate)
+        if missing:
+            raise ValueError("extraction method technology requirements not met: " + ", ".join(map(str, missing)))
+        facility.selected_extraction_method_id = method_id
+
+    def method_opportunity(self, location_id: SpatialNodeId, method: ExtractionSpec, day: int) -> float:
+        """Actual developed-Cell physics/Knowledge for a single candidate method."""
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return 0.0
+        return math.fsum(
+            self.graph.surface_cells[cell_id].resource_potential_by_resource.get(method.resource_id, 0.0)
+            * self._cell_accessibility(method, cell_id, day)
+            for cell_id in sorted(location.developed_cell_ids, key=str)
+            if self._knowledge_cell_eligible(method, cell_id, method.resource_id)
+        )
+
+    def method_opportunity_blockers(
+        self, location_id: SpatialNodeId, method: ExtractionSpec, day: int,
+    ) -> tuple[str, ...]:
+        """Explain unavailable physical opportunity without duplicating Site rules in UI."""
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return (f"site:{location_id}",)
+        cells = [
+            cell_id for cell_id in sorted(location.developed_cell_ids, key=str)
+            if self.graph.surface_cells[cell_id].resource_potential_by_resource.get(
+                method.resource_id, 0.0
+            ) > 1e-12
+        ]
+        if not cells:
+            return (f"resource_opportunity:{method.resource_id}",)
+        eligible = [cell_id for cell_id in cells if self._knowledge_cell_eligible(
+            method, cell_id, method.resource_id
+        )]
+        if not eligible:
+            return (f"knowledge:{method.resource_id}",)
+        if not any(self._cell_accessibility(method, cell_id, day) > 1e-12
+                   for cell_id in eligible):
+            return (f"site:{method.id}",)
+        return ()
 
     def nominal_capacity(self, facility: FacilityState) -> float:
         return self.facility_definitions[facility.definition_id].extraction_capacity_t_per_day * facility.level
@@ -120,10 +195,10 @@ class ExtractionService:
         if location is None:
             return (0, 0)
         specs = [
-            self.method_for_definition(facility.definition_id)
+            self.method_for_facility(facility)
             for facility in facilities.all_at(location_id)
-            if self.method_for_definition(facility.definition_id) is not None
-            and self.method_for_definition(facility.definition_id).resource_id == resource_id
+            if self.method_for_facility(facility) is not None
+            and self.method_for_facility(facility).resource_id == resource_id
         ]
         eligible = blocked = 0
         for cell_id in location.developed_cell_ids:
@@ -151,12 +226,13 @@ class ExtractionService:
         # Opportunity is physical/geological state. Surface Infrastructure is
         # deliberately absent here and constrains extraction service execution
         # once, through the shared service-capacity dependency graph.
-        active_specs = {
-            facility.definition_id: self.method_for_definition(facility.definition_id)
+        active_specs = (
+            self.method_for_facility(facility)
             for facility in facilities.active_compatible_at(location_id, day)
-            if self.method_for_definition(facility.definition_id) is not None
-            and self.method_for_definition(facility.definition_id).resource_id == resource_id
-        }
+        )
+        active_specs = tuple(spec for spec in active_specs if spec is not None
+                             and spec.resource_id == resource_id
+                             and not self.missing_method_technologies(spec))
         if not active_specs:
             return 0.0
         total = 0.0
@@ -166,7 +242,7 @@ class ExtractionService:
             if potential <= 1e-12:
                 continue
             eligible_specs = [
-                spec for spec in active_specs.values()
+                spec for spec in active_specs
                 if self._knowledge_cell_eligible(spec, cell_id, resource_id)
             ]
             if not eligible_specs:
@@ -190,16 +266,23 @@ class ExtractionService:
         fulfillment_by = {}
         reasons = {}
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
-            spec = self.method_for_definition(facility.definition_id)
+            spec = self.method_for_facility(facility)
             if spec is None:
                 continue
             spec_by[facility.id] = spec
             nominal = self.nominal_capacity(facility)
             nominal_by[facility.id] = nominal
             failures = facilities.activation_failures(facility, day)
+            failures = list(failures) + [
+                (f"technology:{tech}", "research prerequisite is incomplete")
+                for tech in self.missing_method_technologies(spec)
+            ]
             if failures:
                 fulfillment_by[facility.id] = 0.0
-                reasons[facility.id] = [f"facility:{code}" for code, _ in failures]
+                reasons[facility.id] = [
+                    code if code.startswith("technology:") else f"facility:{code}"
+                    for code, _ in failures
+                ]
                 continue
             power_factor = max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
             maintenance_factor = max(0.0, min(1.0, power.maintenance_factor_by_facility.get(facility.id, 1.0)))
@@ -228,8 +311,8 @@ class ExtractionService:
             raise KeyError(service_type)
         return frozenset(
             definition_id
-            for definition_id, spec in self._method_by_facility.items()
-            if self.service_type(spec.resource_id) == service_type
+            for definition_id, specs in self._methods_by_facility.items()
+            if any(self.service_type(spec.resource_id) == service_type for spec in specs)
         )
 
     def service_capacity_upstream_services(
@@ -253,8 +336,9 @@ class ExtractionService:
             nominal = sum(
                 self.nominal_capacity(facility)
                 for facility in facilities.active_compatible_at(location_id, day)
-                for spec in (self.method_for_definition(facility.definition_id),)
+                for spec in (self.method_for_facility(facility),)
                 if spec is not None and self.service_type(spec.resource_id) == service_type
+                and not self.missing_method_technologies(spec)
             )
             return (nominal, nominal)
         nominal, enabled = self.service_supply(
@@ -285,28 +369,50 @@ class ExtractionService:
             enabled[key] = enabled.get(key, 0.0) + amount * fulfillment_by.get(facility_id, 0.0) * upstream
         return nominal, enabled
 
+    def _opportunity_adjusted_installed_capacity(
+        self, location_id: SpatialNodeId, facilities: list[FacilityState],
+        opportunity: float, day: int,
+    ) -> dict[EntityId, float]:
+        """Each selected method accesses only the developed cells it can exploit.
+
+        Common Resource Opportunity is never multiplied by the number of
+        compatible extraction methods, or by the number of active Facilities.
+        """
+        return {
+            facility.id: (
+                self.nominal_capacity(facility) * min(
+                    1.0, self.method_opportunity(
+                        location_id, self.method_for_facility(facility), day,
+                    ) / opportunity,
+                ) if opportunity > 1e-12 else 0.0
+            )
+            for facility in facilities
+        }
+
     def _full_output_by_facility(
         self, location_id: SpatialNodeId, facilities: FacilityBook, day: int
     ) -> dict[EntityId, float]:
         active = [
             facility
             for facility in facilities.active_compatible_at(location_id, day)
-            if self.method_for_definition(facility.definition_id) is not None
+            if self.method_for_facility(facility) is not None
+            and not self.missing_method_technologies(self.method_for_facility(facility))
         ]
         result: dict[EntityId, float] = {}
-        resources = sorted({self.method_for_definition(f.definition_id).resource_id for f in active}, key=str)
+        resources = sorted({self.method_for_facility(f).resource_id for f in active}, key=str)
         for resource_id in resources:
-            rows = [f for f in active if self.method_for_definition(f.definition_id).resource_id == resource_id]
-            installed = math.fsum(
-                self.nominal_capacity(f) for f in rows
+            rows = [f for f in active if self.method_for_facility(f).resource_id == resource_id]
+            opportunity = self.effective_opportunity(location_id, resource_id, facilities, day=day)
+            effective_capacity = self._opportunity_adjusted_installed_capacity(
+                location_id, rows, opportunity, day,
             )
-            response = self.diminishing_response(
-                installed,
-                self.effective_opportunity(location_id, resource_id, facilities, day=day),
-            )
+            installed = math.fsum(effective_capacity.values())
+            response = self.diminishing_response(installed, opportunity)
             for facility in rows:
-                nominal = self.nominal_capacity(facility)
-                result[facility.id] = 0.0 if installed <= 1e-12 else response * nominal / installed
+                result[facility.id] = (
+                    0.0 if installed <= 1e-12 else
+                    response * effective_capacity[facility.id] / installed
+                )
         return result
 
     def execution_requirement_bundles(
@@ -319,8 +425,8 @@ class ExtractionService:
         full_output = self._full_output_by_facility(location_id, facilities, day)
         rows = []
         for facility in sorted(facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)):
-            spec = self.method_for_definition(facility.definition_id)
-            if spec is None:
+            spec = self.method_for_facility(facility)
+            if spec is None or self.missing_method_technologies(spec):
                 continue
             nominal = self.nominal_capacity(facility)
             if nominal <= 1e-12:
@@ -359,14 +465,14 @@ class ExtractionService:
             for cell_id in location.developed_cell_ids:
                 resource_ids.update(self.graph.surface_cells[cell_id].resource_potential_by_resource)
         for facility in facilities.all_at(location_id):
-            spec = self.method_for_definition(facility.definition_id)
+            spec = self.method_for_facility(facility)
             if spec is not None:
                 resource_ids.add(spec.resource_id)
         rows = []
         for resource_id in sorted(resource_ids, key=str):
             active = [
                 f for f in facilities.active_compatible_at(location_id, day)
-                if (spec := self.method_for_definition(f.definition_id)) is not None and spec.resource_id == resource_id
+                if (spec := self.method_for_facility(f)) is not None and spec.resource_id == resource_id
             ]
             installed = math.fsum(self.nominal_capacity(f) for f in active)
             output = 0.0
@@ -383,7 +489,18 @@ class ExtractionService:
             opportunity = self.effective_opportunity(
                 location_id, resource_id, facilities, power, day
             )
-            response = self.diminishing_response(installed, opportunity)
+            # A method's inaccessible cells reduce its effective throughput,
+            # not the installed physical Capacity shown in the UI. Indicators
+            # use the same opportunity-adjusted installation as settlement.
+            usable = [f for f in active if not self.missing_method_technologies(
+                self.method_for_facility(f)
+            )]
+            effective_installed = math.fsum(
+                self._opportunity_adjusted_installed_capacity(
+                    location_id, usable, opportunity, day,
+                ).values()
+            )
+            response = self.diminishing_response(effective_installed, opportunity)
             eligible_cells, blocked_cells = self.knowledge_eligibility_counts(
                 location_id, resource_id, facilities
             )
@@ -396,7 +513,7 @@ class ExtractionService:
                 installed,
                 operational,
                 0.0 if installed <= 1e-12 else response / installed,
-                self.marginal_response(installed, opportunity) * operational,
+                self.marginal_response(effective_installed, opportunity) * operational,
                 output,
             ))
         return tuple(rows)
@@ -420,11 +537,12 @@ class ExtractionService:
         }
         rows = []
         for facility in sorted(facilities.all_at(location_id), key=lambda item: str(item.id)):
-            spec = self.method_for_definition(facility.definition_id)
+            spec = self.method_for_facility(facility)
             if spec is None:
                 continue
             nominal = self.nominal_capacity(facility)
             reasons = [f"facility:{code}" for code, _ in facilities.activation_failures(facility, day)]
+            reasons.extend(f"technology:{tech}" for tech in self.missing_method_technologies(spec))
             try:
                 allocation = execution_allocations.allocation(self.execution_bundle_id(facility.id))
                 scale = allocation.fulfillment
@@ -436,17 +554,11 @@ class ExtractionService:
             except KeyError:
                 scale = 0.0
             summary = resource_summary.get(spec.resource_id)
-            opportunity = self.effective_opportunity(
-                location_id, spec.resource_id, facilities, power, day
-            )
+            # The Facility view describes its own selected method, not a
+            # different method's accessible cells at the same Location.
+            opportunity = self.method_opportunity(location_id, spec, day)
             if opportunity <= 1e-12 and nominal > 1e-12:
-                _eligible_cells, blocked_cells = self.knowledge_eligibility_counts(
-                    location_id, spec.resource_id, facilities
-                )
-                if blocked_cells:
-                    reasons.append(f"knowledge:{spec.resource_id}")
-                else:
-                    reasons.append(f"resource_opportunity:{spec.resource_id}")
+                reasons.extend(self.method_opportunity_blockers(location_id, spec, day))
             rows.append(ExtractionSnapshot(
                 facility.id,
                 facility.definition_id,

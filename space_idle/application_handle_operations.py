@@ -5,7 +5,7 @@ from .application_commands import (
     CommandResult,
     PauseFacility,
     ResumeFacility,
-    SetFacilityProcess,
+    SetFacilityProcess, SetFacilityExtractionMethod,
     SetFacilityActivityPriority,
     SetMaintenancePriority,
     SetTimeControl,
@@ -52,6 +52,12 @@ class OperationsCommandHandlerMixin:
         if isinstance(command, SetFacilityProcess):
             facility = sim.facilities.facilities[EntityId(command.facility_id)]
             sim.industry.set_process(facility, DefinitionId(command.process_id))
+            return CommandResult()
+        if isinstance(command, SetFacilityExtractionMethod):
+            facility = sim.facilities.facilities[EntityId(command.facility_id)]
+            if sim.extraction is None:
+                raise ValueError("extraction is not configured")
+            sim.extraction.set_method(facility, DefinitionId(command.method_id))
             return CommandResult()
         if isinstance(command, SetFacilityActivityPriority):
             sim.facilities.set_activity_priority(

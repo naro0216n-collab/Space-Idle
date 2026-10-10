@@ -23,6 +23,7 @@ class ScenarioFacility:
     operational_node_id: SpatialNodeId
     site_cell_id: SurfaceCellId | None = None
     invested_resources: tuple[tuple[DefinitionId, float], ...] = ()
+    selected_extraction_method_id: DefinitionId | None = None
 
 
 @dataclass(frozen=True)
@@ -124,13 +125,16 @@ class ScenarioDefinition:
 
         for row in self.storage_infrastructure:
             sim.storage.set_infrastructure_capacity(row.operational_node_id, row.storage_pool_key, row.amount_t)
+        initial_extraction_choices = []
         for row in self.facilities:
-            sim.facilities.install(
+            facility_id = sim.facilities.install(
                 row.definition_id,
                 row.operational_node_id,
                 site_cell_id=row.site_cell_id,
                 invested_resources=dict(row.invested_resources),
             )
+            if row.selected_extraction_method_id is not None:
+                initial_extraction_choices.append((facility_id, row.selected_extraction_method_id))
         sim.refresh_storage()
         for row in self.inventory_stock:
             sim.inventory.add(row.operational_node_id, row.resource_id, row.amount_t)
@@ -145,6 +149,10 @@ class ScenarioDefinition:
             for cell_id, resource_id in self.known_surface_resources:
                 sim.survey.initialize_known(cell_id, resource_id)
         sim.technology.replace(set(self.completed_technologies))
+        for facility_id, method_id in initial_extraction_choices:
+            if sim.extraction is None:
+                raise ValueError("Scenario has extraction choices without Extraction Domain")
+            sim.extraction.set_method(sim.facilities.facilities[facility_id], method_id)
         if self.survey_fleet_assignments and sim.survey is None:
             raise ValueError("Scenario has Survey Fleet assignments without Survey Domain")
         for row in self.survey_fleet_assignments:

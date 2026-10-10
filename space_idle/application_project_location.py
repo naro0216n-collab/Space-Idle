@@ -10,6 +10,7 @@ from .application_views import (
     EnvironmentFacetRow,
     LocationEnvironmentSummaryRow,
     ExtractionRow,
+    ExtractionMethodOptionRow,
     ExtractionResourceRow,
     FacilityRow,
     IndustryProcessOptionRow,
@@ -567,33 +568,64 @@ class LocationProjectorMixin:
         extraction: list[ExtractionRow] = []
         extraction_resources: list[ExtractionResourceRow] = []
         if sim.extraction is not None:
-            for snap in sim.extraction.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day,
-                execution_allocations,
-            ):
-                definition = sim.facilities.definitions[snap.facility_def_id]
-                extraction.append(
-                    ExtractionRow(
-                        str(snap.facility_id),
-                        str(snap.facility_def_id),
-                        definition.display_name,
-                        str(snap.resource_id),
-                        self._resource_name(snap.resource_id),
-                        str(snap.output_resource_id),
-                        self._resource_name(snap.output_resource_id),
-                        snap.nominal_capacity_t_per_day,
-                        snap.effective_opportunity,
-                        snap.marginal_efficiency,
-                        snap.scale,
-                        snap.output_t_per_day,
-                        limiting_factors_from_codes(
-                            snap.limiting_factors,
-                            affected_action="run_extraction",
-                            related_entity_kind="facility",
-                            related_entity_id=str(snap.facility_id),
-                        ),
-                    )
+            snapshots_by_facility = {
+                snap.facility_id: snap for snap in sim.extraction.snapshots(
+                    location_id, sim.facilities, sim.inventory, power, sim.day,
+                    execution_allocations,
                 )
+            }
+            for facility in sorted(sim.facilities.all_at(location_id), key=lambda item: str(item.id)):
+                methods = sim.extraction.compatible_methods(facility.definition_id)
+                if not methods:
+                    continue
+                selected = sim.extraction.method_for_facility(facility)
+                snap = snapshots_by_facility.get(facility.id)
+                options = []
+                for method in methods:
+                    missing = sim.extraction.missing_method_technologies(method)
+                    opportunity = sim.extraction.method_opportunity(location_id, method, sim.day)
+                    method_blockers = [f"technology:{technology}" for technology in missing]
+                    if opportunity <= 1e-12:
+                        method_blockers.extend(sim.extraction.method_opportunity_blockers(
+                            location_id, method, sim.day,
+                        ))
+                    options.append(ExtractionMethodOptionRow(
+                        str(method.id), method.display_name or str(method.id),
+                        str(method.resource_id), self._resource_name(method.resource_id),
+                        str(method.output_resource_id), self._resource_name(method.output_resource_id),
+                        opportunity, sim.extraction.diminishing_response(
+                            sim.extraction.nominal_capacity(facility), opportunity,
+                        ), not missing,
+                        constraints_from_codes(
+                            method_blockers,
+                            affected_action="select_extraction_method" if missing else "run_extraction",
+                            related_entity_kind="extraction_method",
+                            related_entity_id=str(method.id),
+                        ),
+                    ))
+                reasons = (
+                    snap.limiting_factors if snap is not None
+                    else ("extraction:unselected",)
+                )
+                extraction.append(ExtractionRow(
+                    str(facility.id), str(facility.definition_id),
+                    sim.facilities.definitions[facility.definition_id].display_name,
+                    "" if snap is None else str(snap.resource_id),
+                    "" if snap is None else self._resource_name(snap.resource_id),
+                    "" if snap is None else str(snap.output_resource_id),
+                    "" if snap is None else self._resource_name(snap.output_resource_id),
+                    sim.extraction.nominal_capacity(facility),
+                    0.0 if snap is None else snap.effective_opportunity,
+                    0.0 if snap is None else snap.marginal_efficiency,
+                    0.0 if snap is None else snap.scale,
+                    0.0 if snap is None else snap.output_t_per_day,
+                    limiting_factors_from_codes(
+                        reasons, affected_action="run_extraction",
+                        related_entity_kind="facility", related_entity_id=str(facility.id),
+                    ),
+                    None if selected is None else str(selected.id),
+                    tuple(options), len(methods) > 1 and selected is None,
+                ))
             extraction_resources.extend(
                 ExtractionResourceRow(
                     str(row.resource_id),

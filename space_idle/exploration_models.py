@@ -219,8 +219,12 @@ class ExtractionSpec:
     geology_accessibility_key: str | None = None
     terrain_accessibility_attribute: str | None = None
     minimum_knowledge_level: KnowledgeLevel | None = None
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
+        if self.display_name is not None and not self.display_name:
+            raise ValueError("extraction method display name must not be empty")
         if not self.required_capabilities or any(not capability for capability in self.required_capabilities):
             raise ValueError("extraction method requires explicit capability")
         if self.geology_accessibility_key is not None and not self.geology_accessibility_key:

@@ -614,6 +614,92 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     assert all(abs(row["unattributed_delta_t"]) < 1e-7
                for run in runs for row in run.flow_reconciliation)
 
+    # Typed extraction methods participate in the same independent Content and
+    # Scenario comparison: no experiment-only source or eligibility is invented.
+    from space_idle.application_commands import SetFacilityExtractionMethod
+    extraction_id = 'experiment.extraction.alternate_crust'
+    extraction_edits = changes + (
+        {'operation': 'add', 'kind': 'extraction', 'id': extraction_id,
+         'source_id': str(ids.EXTRACTION_CRUST_ORE)},
+        {'kind': 'extraction', 'id': extraction_id, 'field': 'resource_id',
+         'value': str(ids.MINERAL_FEEDSTOCK)},
+        {'kind': 'extraction', 'id': extraction_id, 'field': 'output_resource_id',
+         'value': str(ids.MINERAL_FEEDSTOCK)},
+        {'kind': 'extraction', 'id': extraction_id, 'field': 'prerequisite_technologies',
+         'value': [research_id]},
+    )
+    authored_facilities = [{
+        'definition_id': str(row.definition_id),
+        'operational_node_id': str(row.operational_node_id),
+        'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
+        'invested_resources': [[str(resource), quantity]
+                               for resource, quantity in row.invested_resources],
+        'selected_extraction_method_id': (
+            str(ids.EXTRACTION_CRUST_ORE) if row.definition_id == ids.METAL_ORE_MINE else None
+        ),
+    } for row in scenario.facilities]
+    scenario_with_choice = scenario_variant(scenario, {'facilities': authored_facilities})
+    scenario_with_unlock = scenario_variant(with_technology, {'facilities': authored_facilities})
+    extraction_locked = factory(scenario_with_choice, extraction_edits)
+    extraction_node = extraction_locked.query(GetOperationalNode(str(ids.EARTH)))
+    method_row = next(row for row in extraction_node.extraction
+                      if any(option.method_id == extraction_id for option in row.method_options))
+    assert method_row.method_id == str(ids.EXTRACTION_CRUST_ORE)
+    assert not next(option for option in method_row.method_options
+                    if option.method_id == extraction_id).can_select
+    graph = build_definition_dependency_graph(extraction_locked._simulation,
+                                              extraction_locked._catalog)
+    assert any(rel.kind == 'unlocks_method'
+               and rel.source == DependencyNode('technology', research_id)
+               and rel.target == DependencyNode('extraction_method', extraction_id)
+               for rel in graph.relations)
+
+    def choose_extraction(app, day):
+        if day != 0:
+            return ()
+        node = app.query(GetOperationalNode(str(ids.EARTH)))
+        row = next(item for item in node.extraction
+                   if any(option.method_id == extraction_id for option in item.method_options))
+        return (SetFacilityExtractionMethod(row.facility_id, extraction_id),)
+
+    extraction_cases = (
+        ExperimentCase('extraction-locked',
+                       lambda: factory(scenario_with_choice, extraction_edits), choose_extraction),
+        ExperimentCase('extraction-unlocked',
+                       lambda: factory(scenario_with_unlock, extraction_edits), choose_extraction),
+    )
+    extraction_runs = run_experiments(extraction_cases, days=2)
+    assert [run.to_json_data() for run in extraction_runs] == [
+        run.to_json_data() for run in run_experiments(extraction_cases, days=2)
+    ]
+    assert len(extraction_runs[0].rejected_commands) == 1
+    assert not extraction_runs[1].rejected_commands
+    assert extraction_runs[0].content_definitions_sha256 == extraction_runs[1].content_definitions_sha256
+    assert extraction_runs[0].initial_state_sha256 != extraction_runs[1].initial_state_sha256
+    assert any(flow.activity_id.endswith(f':{ids.MINERAL_FEEDSTOCK}')
+               for trace in extraction_runs[1].canonical_traces
+               for flow in trace.activity_flows())
+    assert all(abs(row['unattributed_delta_t']) < 1e-7
+               for run in extraction_runs for row in run.flow_reconciliation)
+
+    # An extraction method with no installed-compatible hardware is not an
+    # invalid Content reference. It is an explicit authoring-coverage gap until
+    # appropriate hardware appears; no imaginary provider is added to the game.
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    orphan_id = 'experiment.extraction.future_instrument'
+    orphan_edits = changes + (
+        {'operation': 'add', 'kind': 'extraction', 'id': orphan_id,
+         'source_id': str(ids.EXTRACTION_CRUST_ORE)},
+        {'kind': 'extraction', 'id': orphan_id, 'field': 'required_capabilities',
+         'value': ['basic_structural_material']},
+    )
+    orphan_app = factory(scenario, orphan_edits)
+    orphan_graph = build_definition_dependency_graph(orphan_app._simulation, orphan_app._catalog)
+    assert not orphan_graph.diagnostics
+    assert any(row.code == 'extraction_method_without_registered_compatible_facility'
+               and row.subject.id == orphan_id
+               for row in inspect_definition_coverage(orphan_graph))
+
     # Removing a method changes the actual candidates/Definition Graph; nothing
     # rewrites the Scenario or dependent Technology requirements to conceal it.
     removed_method = changes + ({"operation": "remove", "kind": "process", "id": process_id},)

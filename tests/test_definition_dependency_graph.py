@@ -1046,13 +1046,14 @@ def test_survey_and_extraction_dependencies_preserve_physical_methods_and_target
                            and key in r.source.id for r in graph.relations)
     for facility in sim.facilities.definitions.values():
         if facility.extraction_capacity_t_per_day > 0:
-            method = sim.extraction.method_for_definition(facility.id)
-            assert method is not None
-            assert any(r.kind == "nominal_extraction_capacity"
-                       and r.source == DependencyNode("facility", str(facility.id))
-                       and r.target == DependencyNode("extraction_method", str(method.id))
-                       and r.quantity == facility.extraction_capacity_t_per_day
-                       for r in graph.relations)
+            methods = sim.extraction.compatible_methods(facility.id)
+            assert methods
+            for method in methods:
+                assert any(r.kind == "nominal_extraction_capacity"
+                           and r.source == DependencyNode("facility", str(facility.id))
+                           and r.target == DependencyNode("extraction_method", str(method.id))
+                           and r.quantity == facility.extraction_capacity_t_per_day
+                           for r in graph.relations)
 
     # Content can add a mode-specific physical requirement and site condition;
     # the graph must report that requirement without modifying Generic Core.

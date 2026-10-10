@@ -16,7 +16,7 @@ from .application import (
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
-    ResumeVehicleProduction, SetFacilityProcess,
+    ResumeVehicleProduction, SetFacilityProcess, SetFacilityExtractionMethod,
     SetMaintenancePriority, SetFacilityActivityPriority, SetProjectPriority,
     SetProjectProcurementPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,

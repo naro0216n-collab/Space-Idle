@@ -185,6 +185,20 @@ class SurfaceLocationDecisionRow:
 
 
 @dataclass(frozen=True)
+class ExtractionMethodOptionRow:
+    method_id: str
+    display_name: str
+    resource_id: str
+    resource_name: str
+    output_resource_id: str
+    output_resource_name: str
+    potential_opportunity: float
+    nominal_output_t_per_day: float
+    can_select: bool
+    blockers: tuple[DecisionConstraintRow, ...]
+
+
+@dataclass(frozen=True)
 class ExtractionRow:
     facility_id: str
     facility_definition_id: str
@@ -199,6 +213,9 @@ class ExtractionRow:
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[DecisionConstraintRow, ...]
+    method_id: str | None = None
+    method_options: tuple[ExtractionMethodOptionRow, ...] = ()
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)

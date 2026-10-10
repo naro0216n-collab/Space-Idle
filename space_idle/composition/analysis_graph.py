@@ -458,6 +458,12 @@ def build_definition_dependency_graph(
                     f"extraction:{method.id}:resource_id",
                     condition="developed_cell_static_potential_and_local_distribution_required",
                 ))
+                for tech in method.prerequisite_technologies:
+                    relations.append(DependencyRelation(
+                        "unlocks_method", _node("technology", tech), owner,
+                        f"extraction:{method.id}:prerequisite_technologies",
+                        condition="method_selection_not_retroactive_equipment_upgrade",
+                    ))
                 context_contributors.contribute_site_requirements(
                     owner, "opportunity", method.opportunity_requirements, nodes, relations,
                 )
@@ -478,16 +484,15 @@ def build_definition_dependency_graph(
             for facility in sim.facilities.definitions.values():
                 if facility.extraction_capacity_t_per_day <= 0:
                     continue
-                method = sim.extraction.method_for_definition(facility.id)
-                if method is None:
-                    continue
-                relations.append(DependencyRelation(
-                    "nominal_extraction_capacity", _node("facility", facility.id),
-                    _node("extraction_method", method.id),
-                    f"facility:{facility.id}:extraction_capacity_t_per_day",
-                    facility.extraction_capacity_t_per_day, "t/day", "per_facility_level",
-                    condition="requires_developed_opportunity;actual_site_power_maintenance_and_allocation",
-                ))
+                for method in sim.extraction.compatible_methods(facility.id):
+                    relations.append(DependencyRelation(
+                        "nominal_extraction_capacity", _node("facility", facility.id),
+                        _node("extraction_method", method.id),
+                        f"facility:{facility.id}:extraction_capacity_t_per_day",
+                        facility.extraction_capacity_t_per_day, "t/day", "per_facility_level",
+                        condition="alternative_method;one_selected_per_facility;"
+                                  "requires_developed_opportunity;actual_site_power_maintenance_and_allocation",
+                    ))
         if sim.extraction is not None:
             nodes.extend(_node("opportunity_factor", field + ":" + value) for field, values in (
                 ("geology_accessibility_key", {spec.geology_accessibility_key for spec in sim.extraction.specs.values()}),

@@ -115,6 +115,7 @@ class FacilityState:
     site_cell_id: SurfaceCellId | None = None
     lifecycle: FacilityLifecycle = FacilityLifecycle.NORMAL
     selected_process_id: DefinitionId | None = None
+    selected_extraction_method_id: DefinitionId | None = None
 
     def __post_init__(self) -> None:
         self.activity_priority = ActivityPriority(self.activity_priority)

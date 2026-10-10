@@ -16,7 +16,7 @@ from .app_contracts.location_views import (
     InventoryRow, ResourceAllocationRow, StorageRow, FacilityRow, CapabilityRow, ServiceCapacityRow, IndustryProcessOptionRow, IndustryRow,
     SurfaceInfrastructureLoadRow, SurfaceInfrastructureRow,
     EnvironmentFacetRow, LocationEnvironmentSummaryRow, SurfaceAccessAnchorRow,
-    SurfaceLocationDecisionRow, ExtractionRow, ExtractionResourceRow, OperationalNodeView,
+    SurfaceLocationDecisionRow, ExtractionMethodOptionRow, ExtractionRow, ExtractionResourceRow, OperationalNodeView,
     PopulationView, ExternalPopulationSourceRow,
 )
 from .app_contracts.logistics_views import (
