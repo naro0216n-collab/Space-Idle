@@ -8,7 +8,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .shared import DefinitionId, EntityId
 from .supply_planning import SupplyPlanningMixin
-from .logistics_models import CargoArrivalWaiting, CargoFlowSegment
+from .logistics_models import CargoArrivalWaiting, CargoFlowSegment, CargoPositionSnapshot
 from .supply import SupplyRoutingConstraintScope, SupplyRoutingConstraintState, TargetStockPolicy
 from .transport.service import TransportService
 from .transport.models import TransportServiceSupply
@@ -42,6 +42,23 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
     _projection_cache_depth: int = field(default=0, init=False, repr=False)
     _cargo_flow_counter: int = 0
     _arrival_waiting_counter: int = 0
+
+    def cargo_position_snapshot(self) -> tuple[CargoPositionSnapshot, ...]:
+        """Physical Cargo positions from Logistics-owned active lifecycle State.
+
+        Cargo in transit or awaiting handling is not Inventory at its final
+        destination.  The current leg is distinct from the final route target.
+        """
+        rows = [CargoPositionSnapshot(
+            row.id, row.resource_id, row.amount_t, "in_transit", None,
+            row.leg.source_id, row.leg.destination_id,
+            row.final_destination_id, row.owner_kind, row.owner_id,
+        ) for row in self.cargo_flows.values()]
+        rows.extend(CargoPositionSnapshot(
+            row.id, row.resource_id, row.amount_t, "arrival_waiting", row.node_id,
+            None, None, row.final_destination_id, row.owner_kind, row.owner_id,
+        ) for row in self.arrival_waiting.values())
+        return tuple(sorted(rows, key=lambda row: (row.phase, str(row.cargo_id))))
 
     def __post_init__(self) -> None:
         self.register_supply_owner_resolver(

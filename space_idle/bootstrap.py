@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .application import GameApplication
 from .content.base_catalog import build_base_catalog
 from .content.base_scenario import build_standard_scenario_definition
@@ -8,13 +10,18 @@ from .scenario import ScenarioDefinition
 from .validation import validate_catalog_coverage, validate_runtime_state, validate_simulation_configuration
 
 
-def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinition) -> GameApplication:
+def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinition,
+                              definition_transform: Callable | None = None) -> GameApplication:
     catalog = build_base_catalog()
     simulation = build_base_simulation(
         catalog, population_rules=scenario.population_rules,
         external_population_sources=scenario.external_population_sources,
     )
     simulation.scenario_id = scenario.id
+    if definition_transform is not None:
+        # Experiment definitions are edited before the Scenario is instantiated
+        # and go through the same configuration / reference validation.
+        definition_transform(simulation, catalog)
 
     # Static World / Content definitions must be valid independently of any
     # Scenario-owned runtime State.  This same validated composition is used
@@ -38,14 +45,18 @@ def build_game_application() -> GameApplication:
     return _compose_base_application(apply_scenario=True, scenario=build_standard_scenario_definition())
 
 
-def build_game_application_for_scenario(scenario: ScenarioDefinition) -> GameApplication:
+def build_game_application_for_scenario(
+    scenario: ScenarioDefinition, *, definition_transform: Callable | None = None,
+) -> GameApplication:
     """Compose and validate a fresh game from the supplied new-game Scenario.
 
     Used by explicit development experiments without editing a running game's
     authoritative State. Uses the same Scenario application and day-0 boundary
     as a normal new game; never re-applies Scenario values on Save Load.
     """
-    return _compose_base_application(apply_scenario=True, scenario=scenario)
+    return _compose_base_application(
+        apply_scenario=True, scenario=scenario, definition_transform=definition_transform,
+    )
 
 
 def build_game_application_for_load() -> GameApplication:

@@ -14,6 +14,7 @@ from ..research_models import ResearchTheoryStageSpec
 from ..power import FixedGeneration, SolarGeneration
 from ..inventory import DEFAULT_STORAGE_POOL_KEY
 from ..simulation import Simulation
+from . import analysis_context_contributors as context_contributors
 
 
 def _node(kind: str, identifier: object) -> DependencyNode:
@@ -63,7 +64,8 @@ def build_definition_dependency_graph(
             + tuple(_node("capability", cap) for cap in sorted(all_capabilities))
             + tuple(_node("service_capacity", service) for service in sorted(services))
             + (_node("capacity_pool", "housing"), _node("capacity_pool", "passenger_seats"),
-               _node("research_point_pool", "research_points")),
+               _node("research_point_pool", "research_points"),
+               _node("capacity_pool", "fleet_units"), _node("capacity_pool", "population")),
             tuple(DependencyRelation(
                 "uses_storage_pool", _node("resource", resource.id),
                 _node("storage_pool", resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY),
@@ -71,7 +73,8 @@ def build_definition_dependency_graph(
             ) for resource in catalog.resources.values()),
         )
 
-    registry.register("catalog", resources, relation_kinds={"uses_storage_pool"})
+    registry.register("catalog", resources, relation_kinds={"uses_storage_pool"},
+                      expected_definitions=lambda: (_node("resource", key) for key in catalog.resources))
 
     def research() -> DependencyFragment:
         if sim.research is None:
@@ -114,7 +117,9 @@ def build_definition_dependency_graph(
                 ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("research", research, relation_kinds={
+    registry.register("research", research, expected_definitions=lambda: (
+        _node("technology", key) for key in (() if sim.research is None else sim.research.definitions)
+    ), relation_kinds={
         "technology_prerequisite", "research_stage", "research_point_cost",
         "uses_asset_definition",
     })
@@ -173,7 +178,9 @@ def build_definition_dependency_graph(
                 ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("facility", facilities, relation_kinds={
+    registry.register("facility", facilities, expected_definitions=lambda: (
+        _node("facility", key) for key in sim.facilities.definitions
+    ), relation_kinds={
         "supplies_capability", "nominal_service_supply", "nominal_housing_capacity",
         "uses_asset_definition", "nominal_life_support_supply", "consumes_resource",
         "maintenance_investment_fraction",
@@ -262,7 +269,9 @@ def build_definition_dependency_graph(
                 ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("external_market", external_market, relation_kinds={
+    registry.register("external_market", external_market, expected_definitions=lambda: (
+        _node("market_provider", key) for key in sim.market.provider_defs
+    ), relation_kinds={
         "external_buy_offer", "external_sell_offer", "external_supply_capacity", "external_demand_capacity",
     })
 
@@ -308,7 +317,10 @@ def build_definition_dependency_graph(
                 ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("production_and_extraction", industry, relation_kinds={
+    registry.register("production_and_extraction", industry, expected_definitions=lambda: (
+        list(_node("process", key) for key in sim.industry.processes) +
+        list(_node("extraction_method", key) for key in (() if sim.extraction is None else sim.extraction.specs))
+    ), relation_kinds={
         "requires_capability", "consumes_resource", "produces_resource", "unlocks_method",
         "extracts_resource",
     })
@@ -335,7 +347,9 @@ def build_definition_dependency_graph(
                 ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("construction", construction, relation_kinds={
+    registry.register("construction", construction, expected_definitions=lambda: (
+        _node("construction_method", key) for key in sim.projects.recipes
+    ), relation_kinds={
         "constructs_facility", "consumes_resource", "unlocks_method",
     })
 
@@ -438,7 +452,9 @@ def build_definition_dependency_graph(
                     ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("vehicle_production", vehicle_production, relation_kinds={
+    registry.register("vehicle_production", vehicle_production, expected_definitions=lambda: (
+        _node("vehicle", definition.id) for definition in sim.transport.vehicle_definitions()
+    ), relation_kinds={
         "produces_vehicle", "supplies_capability", "consumes_resource", "unlocks_method",
         "requires_service_capacity", "uses_asset_definition", "retires_vehicle",
         "recovers_resource", "nominal_passenger_seats", "nominal_life_support_supply",
@@ -484,10 +500,37 @@ def build_definition_dependency_graph(
                     ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
-    registry.register("observation", observations, relation_kinds={
+    registry.register("observation", observations, expected_definitions=lambda: (
+        list(_node("survey_provider", key) for key in (() if sim.survey is None else sim.survey.providers)) +
+        list(_node("scientific_exploration", key) for key in (
+            () if sim.scientific_exploration is None else sim.scientific_exploration.definitions))
+    ), relation_kinds={
         "provides_mode", "requires_capability", "unlocks_method", "uses_asset_definition",
     })
 
+    registry.register('world', lambda: context_contributors.world(sim),
+                      expected_definitions=lambda: (
+                          [_node('star_system', key) for key in sim.graph.star_systems]
+                          + [_node('body', key) for key in sim.graph.bodies]
+                          + [_node('spatial_node', key) for key in sim.graph.nodes]
+                          + [_node('surface_cell', key) for key in sim.graph.surface_cells]
+                      ), relation_kinds=context_contributors.WORLD_RELATIONS)
+    registry.register('movement', lambda: context_contributors.movement(sim),
+                      expected_definitions=lambda: (
+                          [_node('surface_movement_rule', r.id) for r in sim.transport.surface_movement_rules]
+                          + [_node('surface_access_movement_rule', r.id) for r in sim.transport.surface_access_movement_rules]
+                          + [_node('spaceflight_movement_rule', r.id) for r in sim.transport.spaceflight_movement_rules]
+                      ), relation_kinds=context_contributors.MOVEMENT_RELATIONS)
+    registry.register('founding', lambda: context_contributors.founding(sim),
+                      expected_definitions=lambda: (
+                          _node('founding_method', key) for key in (
+                              () if sim.founding is None else sim.founding.deployment_recipes)
+                      ), relation_kinds=context_contributors.FOUNDING_RELATIONS)
+    registry.register('population', lambda: context_contributors.population(sim),
+                      expected_definitions=lambda: (
+                          _node('external_population_source', key) for key in (
+                              () if sim.population is None else sim.population.external_definitions)
+                      ), relation_kinds=context_contributors.POPULATION_RELATIONS)
     for name, contributor, kinds in additional_contributors:
         registry.register(name, contributor, relation_kinds=kinds)
     return registry.build()

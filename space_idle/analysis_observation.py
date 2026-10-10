@@ -5,10 +5,11 @@ State. No forecast, allocation or flow is inferred from a stock observation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from math import isfinite
 
 from .shared import DefinitionId, SpatialNodeId
+from .logistics_models import CargoPositionSnapshot
 from .simulation import Simulation
 
 
@@ -35,6 +36,7 @@ class StateObservation:
     metrics: tuple[StateMetric, ...]
     operational_node_ids: tuple[str, ...] | None = None
     resource_ids: tuple[str, ...] | None = None
+    cargo_positions: tuple[CargoPositionSnapshot, ...] = ()
 
     def to_json_data(self) -> dict:
         return {
@@ -46,6 +48,8 @@ class StateObservation:
                 "resource_ids": (None if self.resource_ids is None
                                  else list(self.resource_ids)),
             },
+            "cargo_positions": [{k: str(v) if v is not None and not isinstance(v, (int, float, bool)) else v
+                                 for k, v in asdict(row).items()} for row in self.cargo_positions],
             "metrics": [
                 {
                     "kind": value.kind, "subject_id": value.subject_id,
@@ -162,8 +166,16 @@ def observe_state(
             emit("research_points_stored", "research_points", "organization",
                  sim.research.stored_points, "research_points", "research.stored_points")
 
+    # A destination is not physical ownership. Observe active Cargo through its
+    # owner Domain's public projection; do not add unarrived Cargo to Inventory.
+    cargo = tuple(row for row in sim.logistics.cargo_position_snapshot()
+                  if (resource_ids is None or row.resource_id in resource_ids)
+                  and (operational_node_ids is None
+                       or row.current_node_id in operational_node_ids
+                       or row.leg_source_id in operational_node_ids
+                       or row.leg_destination_id in operational_node_ids))
     return StateObservation(
         sim.day, sim.scenario_id, tuple(sorted(rows)),
         None if operational_node_ids is None else tuple(sorted(map(str, operational_node_ids))),
-        None if resource_ids is None else tuple(sorted(map(str, resource_ids))),
+        None if resource_ids is None else tuple(sorted(map(str, resource_ids))), cargo,
     )

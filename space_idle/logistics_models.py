@@ -163,3 +163,17 @@ class CargoArrivalWaiting:
     @property
     def next_leg(self) -> CargoServiceLeg | None:
         return None if not self.remaining_legs else self.remaining_legs[0]
+
+@dataclass(frozen=True)
+class CargoPositionSnapshot:
+    """Read-only physical whereabouts; destination does not imply Inventory admission."""
+    cargo_id: EntityId
+    resource_id: DefinitionId
+    amount_t: float
+    phase: str
+    current_node_id: SpatialNodeId | None
+    leg_source_id: SpatialNodeId | None
+    leg_destination_id: SpatialNodeId | None
+    final_destination_id: SpatialNodeId
+    owner_kind: str
+    owner_id: EntityId

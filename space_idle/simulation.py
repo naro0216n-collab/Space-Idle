@@ -164,6 +164,9 @@ class Simulation:
     _boundary_service_usage: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
     _initial_state_initialized: bool = field(default=False, init=False, repr=False)
     _boundary_settled_day: int = field(init=False, repr=False)
+    _analysis_decision_observer: Callable[[TickDecisionProjection], None] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     def __post_init__(self) -> None:
         # A freshly composed Simulation has not yet executed the day-0 boundary.
@@ -1478,10 +1481,11 @@ class Simulation:
             plan = self._plan_tick(intents)
             # Phase 5: Allocation.
             allocations = self._allocate_tick(snapshot, intents, plan)
-            if observe_decision is not None:
-                # Read-only forecast observation of the exact allocation that
-                # will execute; no second tick plan or altered settlement path.
-                observe_decision(TickDecisionProjection(snapshot, intents, plan, allocations))
+            observer = observe_decision if observe_decision is not None else self._analysis_decision_observer
+            if observer is not None:
+                # An opt-in observer reads the allocation that actually executes,
+                # without invoking the planner a second time.
+                observer(TickDecisionProjection(snapshot, intents, plan, allocations))
             # Phase 6: Domain execution.
             activities = self._execute_tick_domains(snapshot, allocations)
         # Phase 7: Logistics / Movement progression.

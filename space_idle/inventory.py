@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, Callable
 
 from .catalog import ResourceDef
 from .shared import DefinitionId, EntityId, SpatialNodeId
@@ -54,6 +54,17 @@ class InventoryBook:
     usable_storage_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float] = field(default_factory=dict)
     storage_limiting_factors: dict[tuple[SpatialNodeId, StoragePoolKey], tuple[str, ...]] = field(default_factory=dict)
     external_occupancy: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
+    # Only an explicit analysis scope attaches a sink. This transient callback is
+    # neither authoritative State nor part of the Save codec.
+    _settlement_observer: Callable[[str, SpatialNodeId, DefinitionId, float, str, str | None], None] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    def _record_settlement(self, direction: str, node_id: SpatialNodeId, resource_id: DefinitionId,
+                           amount: float, operation: str, owner: EntityId | None = None) -> None:
+        if self._settlement_observer is not None and amount > _EPS:
+            self._settlement_observer(direction, node_id, resource_id, amount, operation,
+                                      None if owner is None else str(owner))
 
     def storage_pool_for_resource(self, resource_id: DefinitionId) -> StoragePoolKey:
         definition = self.resource_definitions.get(resource_id)
@@ -113,6 +124,8 @@ class InventoryBook:
             return 0.0
         key = (owner_id, operational_node_id, resource_id)
         self.external_occupancy[key] = self.external_occupancy.get(key, 0.0) + accepted
+        self._record_settlement("external_storage_in", operational_node_id, resource_id, accepted,
+                                "inventory.occupy_storage", owner_id)
         return accepted
 
     def release_storage_occupancy(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
@@ -127,6 +140,8 @@ class InventoryBook:
             self.external_occupancy.pop(key, None)
         else:
             self.external_occupancy[key] = left
+        self._record_settlement("external_storage_out", operational_node_id, resource_id, amount,
+                                "inventory.release_storage_occupancy", owner_id)
 
     def admission_state_for_pool(
         self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey
@@ -188,6 +203,7 @@ class InventoryBook:
         if accepted > _EPS:
             key = (operational_node_id, resource_id)
             self.stock[key] = self.stock.get(key, 0.0) + accepted
+        self._record_settlement("inventory_in", operational_node_id, resource_id, accepted, "inventory.admit")
         after = self.admission_state(operational_node_id, resource_id)
         return InventoryAdmissionResult(requested, accepted, max(0.0, requested - accepted), before, after)
 
@@ -214,6 +230,7 @@ class InventoryBook:
         if stock + 1e-9 < amount:
             raise RuntimeError("allocated resource stock changed before execution")
         self.stock[key] = max(0.0, stock - amount)
+        self._record_settlement("inventory_out", operational_node_id, resource_id, amount, "inventory.consume_allocated")
 
     def stage_allocated(
         self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
@@ -232,6 +249,10 @@ class InventoryBook:
         self.external_occupancy[occupancy_key] = (
             self.external_occupancy.get(occupancy_key, 0.0) + amount
         )
+        self._record_settlement("inventory_out", operational_node_id, resource_id, amount,
+                                "inventory.stage_allocated", owner_id)
+        self._record_settlement("external_storage_in", operational_node_id, resource_id, amount,
+                                "inventory.stage_allocated", owner_id)
 
     def staged_for(
         self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId
@@ -276,6 +297,10 @@ class InventoryBook:
         self.external_occupancy[occupancy_key] = (
             self.external_occupancy.get(occupancy_key, 0.0) + amount
         )
+        self._record_settlement("inventory_out", operational_node_id, resource_id, amount,
+                                "inventory.stage_reserved", staging_owner_id)
+        self._record_settlement("external_storage_in", operational_node_id, resource_id, amount,
+                                "inventory.stage_reserved", staging_owner_id)
 
     def unstage_to_stock(
         self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
@@ -295,6 +320,8 @@ class InventoryBook:
         self.release_storage_occupancy(owner_id, operational_node_id, resource_id, amount)
         stock_key = (operational_node_id, resource_id)
         self.stock[stock_key] = self.stock.get(stock_key, 0.0) + amount
+        self._record_settlement("inventory_in", operational_node_id, resource_id, amount,
+                                "inventory.unstage_to_stock", owner_id)
 
     def reserve(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
         if amount < -1e-9:
@@ -342,6 +369,8 @@ class InventoryBook:
         if self.stock.get(stock_key, 0.0) + 1e-9 < amount:
             raise ValueError("stock shortfall despite reservation")
         self.stock[stock_key] = max(0.0, self.stock[stock_key] - amount)
+        self._record_settlement("inventory_out", operational_node_id, resource_id, amount,
+                                "inventory.consume_reserved", owner_id)
         left = held - amount
         if left <= 1e-9:
             self.reserved.pop(key, None)

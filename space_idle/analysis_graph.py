@@ -130,13 +130,17 @@ class DefinitionGraphRegistry:
     def __init__(self) -> None:
         self._contributors: dict[str, Contributor] = {}
         self._relation_kinds: dict[str, frozenset[str]] = {}
+        self._expected_definitions: dict[str, Callable[[], Iterable[DependencyNode]]] = {}
 
-    def register(self, domain: str, contributor: Contributor, *, relation_kinds: Iterable[str]) -> None:
+    def register(self, domain: str, contributor: Contributor, *, relation_kinds: Iterable[str],
+                 expected_definitions: Callable[[], Iterable[DependencyNode]] | None = None) -> None:
         kinds = frozenset(relation_kinds)
         if not domain or domain in self._contributors or not kinds or any(not kind for kind in kinds):
             raise ValueError(f"invalid or duplicate graph Contributor registration: {domain}")
         self._contributors[domain] = contributor
         self._relation_kinds[domain] = kinds
+        if expected_definitions is not None:
+            self._expected_definitions[domain] = expected_definitions
 
     def build(self) -> DependencyDefinitionGraph:
         definitions: dict[DependencyNode, str] = {}
@@ -151,6 +155,13 @@ class DefinitionGraphRegistry:
                     ))
                 else:
                     definitions[node] = domain
+            if domain in self._expected_definitions:
+                for node in self._expected_definitions[domain]():
+                    if node not in fragment.nodes:
+                        diagnostics.append(DependencyDiagnostic(
+                            "unrepresented_registered_definition",
+                            f"{domain} did not contribute {node.kind}:{node.id}", node=node,
+                        ))
             for relation in fragment.relations:
                 if relation.kind not in self._relation_kinds[domain]:
                     diagnostics.append(DependencyDiagnostic(
@@ -158,7 +169,19 @@ class DefinitionGraphRegistry:
                         relation.kind, relation.provenance, relation.source,
                     ))
                 relations.append(relation)
+        seen_relations: set[DependencyRelation] = set()
         for relation in relations:
+            if relation in seen_relations:
+                diagnostics.append(DependencyDiagnostic(
+                    "duplicate_relation", f"duplicate {relation.kind} {relation.source} → {relation.target}",
+                    relation.kind, relation.provenance, relation.target,
+                ))
+            seen_relations.add(relation)
+            if relation.quantity is not None and relation.time_basis is None:
+                diagnostics.append(DependencyDiagnostic(
+                    "quantitative_relation_without_time_basis", f"{relation.kind} lacks time basis",
+                    relation.kind, relation.provenance, relation.target,
+                ))
             for endpoint in (relation.source, relation.target):
                 if endpoint not in definitions:
                     diagnostics.append(DependencyDiagnostic(
