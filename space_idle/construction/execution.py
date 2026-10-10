@@ -72,6 +72,8 @@ class ConstructionExecutionMixin:
                 project.operational_node_id, target.cell_id
             )
         project.status = ProjectStatus.COMPLETE
+        if isinstance(target, FacilityDecommissionTarget):
+            self.__dict__.pop("_retired_facility_definitions", None)
 
     def _target_ready_for_execution(self, project: ConstructionProject) -> bool:
         target = project.target
