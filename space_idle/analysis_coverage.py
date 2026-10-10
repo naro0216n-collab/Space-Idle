@@ -45,7 +45,7 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     demands: dict[DependencyNode, set[str]] = defaultdict(set)
     outlet: dict[DependencyNode, set[str]] = defaultdict(set)
     for relation in graph.relations:
-        if relation.kind == "requires_capability" and relation.source.kind == "capability":
+        if relation.kind in ("requires_capability", "requires_site_capability") and relation.source.kind == "capability":
             demands[relation.source].add(relation.provenance)
         if relation.kind in ("unlocks_method", "technology_prerequisite") and relation.source.kind == "technology":
             outlet[relation.source].add(relation.provenance)

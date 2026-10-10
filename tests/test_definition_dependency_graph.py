@@ -53,8 +53,12 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
     )
     from space_idle.execution_requirements import ServiceCapacityRequirement
     from space_idle.service_capacity import ServiceCapacityScope
-    from space_idle.site import SiteRequirements, CapabilityRequirement, CapabilityRequirementState
+    from space_idle.site import (SiteRequirements, CapabilityRequirement, CapabilityRequirementState,
+                                 SpatialClassificationRequirement, SpatialClassification,
+                                 RequiresFacet)
     from space_idle.content import base_ids as ids
+    from space_idle.spatial import AtmosphereField
+    from space_idle.analysis_coverage import inspect_definition_coverage
 
     app = build_game_application()
     sim = app._simulation
@@ -65,9 +69,15 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
         ResearchTheoryStageSpec("theory", 2.0),
         ResearchPrototypeStageSpec(
             "prototype", {ids.MACHINERY: 1.25},
-            SiteRequirements(capability_requirements=(CapabilityRequirement(
-                "general_research_equipment", CapabilityRequirementState.ACTIVE,
-            ),)),
+            SiteRequirements(
+                capability_requirements=(CapabilityRequirement(
+                    "general_research_equipment", CapabilityRequirementState.ACTIVE,
+                ),),
+                spatial_classification_requirements=(SpatialClassificationRequirement(
+                    SpatialClassification.SURFACE, "test.prototype.surface", "surface equipment",
+                ),),
+                environment=(RequiresFacet(AtmosphereField, "test.prototype.atmosphere", "atmosphere measured"),),
+            ),
             (ServiceCapacityRequirement("research_execution", 0.6, scope=ServiceCapacityScope.ORGANIZATION),),
             required_work=4.0,
         ),
@@ -82,7 +92,16 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
         return [row for row in graph.relations if row.kind == kind and row.target == dest]
     assert matches("consumes_resource", stage)[0].quantity == 1.25
     assert matches("consumes_resource", stage)[0].time_basis == "per_stage"
-    assert matches("requires_capability", stage)[0].condition == "required_state:ACTIVE"
+    assert matches("requires_site_capability", stage)[0].condition == "required_state:ACTIVE"
+    site_classification = matches("requires_site_classification", stage)[0]
+    assert site_classification.source == DependencyNode("spatial_classification", "SURFACE")
+    site_environment = matches("requires_site_environment", stage)[0]
+    assert site_environment.source.kind == "site_condition"
+    assert "AtmosphereField" in site_environment.condition
+    stage_subset = graph.subset((stage,))
+    assert {"requires_site_capability", "requires_site_classification", "requires_site_environment"} <= {
+        row.kind for row in stage_subset.relations if row.target == stage
+    }
     assert matches("requires_execution_capacity", stage)[0].quantity == 0.6
     assert matches("requires_execution_capacity", stage)[0].condition == "scope:ORGANIZATION"
     assert matches("research_work", DependencyNode("technology", str(target)))
@@ -104,6 +123,22 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
     graph = build_definition_dependency_graph(sim, app._catalog)
     assert any(row.code == "undefined_reference" and row.node == DependencyNode(
         "experience_category", "unknown.experience") for row in graph.diagnostics)
+
+    # Site capability authoring gaps must be visible to the coverage analyzer,
+    # including Research Stage constraints, rather than silently ignored.
+    unrelated = sim.research.definitions[target]
+    prototype = unrelated.stage_specs[1]
+    sim.research.definitions[target] = replace(unrelated, stage_specs=(
+        unrelated.stage_specs[0],
+        replace(prototype, site_requirements=SiteRequirements(capability_requirements=(
+            CapabilityRequirement("test.no_physical_supplier"),
+        ))),
+    ))
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+    assert any(row.code == "required_capability_without_definition_supplier"
+               and row.subject == DependencyNode("capability", "test.no_physical_supplier")
+               for row in inspect_definition_coverage(graph))
 
 
 def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_relations():
@@ -547,3 +582,51 @@ def test_every_registered_project_method_participates_in_analysis_including_upgr
                   if row.technology.id == str(ids.RP_RESOURCE_CHAIN_14))
     assert outlet.classification == "direct_method"
     assert outlet.direct_method_count >= 2
+
+
+def test_scientific_exploration_dependency_graph_preserves_real_movement_inputs_and_site_requirements():
+    """A newly registered finite Campaign uses the same site/asset graph contract."""
+    from space_idle.content import base_ids as ids
+    from space_idle.scientific_exploration import ScientificExplorationDefinition
+    from space_idle.transport.models import MovementEndpoint
+    from space_idle.site import (SiteRequirements, SpatialClassificationRequirement,
+                                 SpatialClassification, RequiresFacet)
+    from space_idle.spatial import RadiationField
+
+    app = build_game_application()
+    sim = app._simulation
+    identifier = DefinitionId('test.exploration.physical_context')
+    capability = next(cap for vehicle in sim.transport.vehicle_definitions()
+                      for cap in vehicle.generic_capabilities)
+    definition = ScientificExplorationDefinition(
+        identifier, 'physical survey campaign', ids.LEO,
+        MovementEndpoint(physical_target_node_id=ids.MARS_ORBIT), 7.0, 19.0,
+        consumable_resources=((ids.MACHINERY, 1.2),), required_units=2,
+        required_crew=2, required_vehicle_capabilities=(capability,),
+        destination_requirements=SiteRequirements(
+            spatial_classification_requirements=(SpatialClassificationRequirement(
+                SpatialClassification.ORBITAL, 'orbit.required', 'orbit target',
+            ),), environment=(RequiresFacet(RadiationField, 'radiation.required', 'radiation known'),),
+        ),
+    )
+    sim.scientific_exploration.definitions[identifier] = definition
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+    method = DependencyNode('scientific_exploration', str(identifier))
+    subset = graph.subset((method,))
+    def get(kind):
+        return [row for row in subset.relations if row.kind == kind and row.target == method]
+
+    assert get('requires_origin_context')[0].source == DependencyNode('spatial_node', str(ids.LEO))
+    assert any(row.kind == 'targets_spatial_context' and row.source == method
+               and row.target == DependencyNode('spatial_node', str(ids.MARS_ORBIT))
+               for row in subset.relations)
+    assert get('consumes_resource')[0].quantity == 1.2
+    assert get('requires_fleet_units')[0].quantity == 2
+    assert get('requires_population_commitment')[0].quantity == 2
+    assert get('requires_capability')[0].source == DependencyNode('capability', capability)
+    assert get('requires_site_classification')[0].source == DependencyNode('spatial_classification', 'ORBITAL')
+    assert get('requires_site_environment')[0].source.kind == 'site_condition'
+    assert any(row.kind == 'campaign_duration' and row.source == method and row.quantity == 7.0
+               for row in subset.relations)
+    assert not sim.graph.has_operational_node(ids.MARS_ORBIT)

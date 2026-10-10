@@ -218,3 +218,78 @@ def test_initial_facility_scenario_variants_use_regular_site_and_power_contracts
     with pytest.raises(ValueError, match="nonnegative"):
         scenario_variant(scenario, {"facilities": [{"definition_id": str(ids.FOOD_FARM),
             "operational_node_id": str(node), "invested_resources": [[str(ids.WATER), -1.0]]}]})
+
+
+def test_comparative_canonical_policy_connects_market_construction_power_and_multiple_nodes():
+    """Different authored conditions remain distinct from policy and observed stock flow.
+
+    An adaptive policy reads actual Application options, not guessed recipe IDs
+    or a fixture-specific preferred build order. All cases use the same Command
+    policy; each case composes its own State and typed Content before executing.
+    """
+    from space_idle.application_commands import CreateTradeOrder, GetBuildOptions, GetMarket, PlanBuild
+    from space_idle.content import base_ids as ids
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+
+    original = build_standard_scenario_definition()
+    candidate_stock = next(row for row in original.inventory_stock
+                           if row.operational_node_id == ids.EARTH
+                           and row.resource_id == ids.STRUCTURAL_COMPONENTS)
+    extra_stock = scenario_variant(original, {'inventory_stock': [{
+        'operational_node_id': str(candidate_stock.operational_node_id),
+        'resource_id': str(candidate_stock.resource_id),
+        'amount_t': candidate_stock.amount_t + 50.0,
+    }]})
+
+    def make_case(name, scenario, edits=()):
+        def factory():
+            return build_game_application_for_scenario(
+                scenario,
+                definition_transform=(
+                    (lambda sim, catalog: apply_content_variant(sim, catalog, edits)) if edits else None
+                ),
+            )
+
+        def policy(app, offset):
+            if offset != 0:
+                return ()
+            options = app.query(GetBuildOptions(str(ids.EARTH)))
+            feasible = [row for row in options.items if row.can_plan and not row.blockers
+                        and row.construction_required > 0]
+            assert feasible
+            selected = min(feasible, key=lambda row: (row.construction_required,
+                                                       row.facility_definition_id))
+            interface = next(row for row in app.query(GetMarket()).interfaces
+                             if row.operational_node_id == str(ids.EARTH) and row.enabled)
+            offer = next(row for row in interface.offers if row.buy_price_musd_per_t is not None)
+            return (CreateTradeOrder('buy', offer.resource_id, interface.id,
+                                     quantity_target_t=1.25),
+                    PlanBuild(str(ids.EARTH), selected.facility_definition_id))
+
+        return ExperimentCase(name, factory, policy)
+
+    runs = run_experiments((
+        make_case('baseline', original),
+        make_case('reduced-power', original, ({'kind': 'power', 'id': str(ids.GRID_POWER_SUPPLY),
+                                              'field': 'generation_mw', 'value': 0.1},)),
+        make_case('additional-stock', extra_stock),
+    ), days=4, operational_node_ids=frozenset((ids.EARTH, ids.LEO)))
+    assert all(len(run.attempted_commands) == 2 and not run.rejected_commands for run in runs)
+    assert all(len(run.canonical_traces) == 4 and len(run.observations) == 5 for run in runs)
+    assert all(abs(row['unattributed_delta_t']) < 1e-7
+               for run in runs for row in run.flow_reconciliation)
+    assert all({move.operation for trace in run.canonical_traces for move in trace.movements}
+               for run in runs)
+    assert runs[0].content_definitions_sha256 != runs[1].content_definitions_sha256
+    assert runs[0].initial_state_sha256 == runs[1].initial_state_sha256
+    assert runs[0].content_definitions_sha256 == runs[2].content_definitions_sha256
+    assert runs[0].initial_state_sha256 != runs[2].initial_state_sha256
+    comparison = compare_experiments(runs)
+    assert len(comparison['comparisons']) == 2
+    assert all(not row['same_comparison_conditions'] for row in comparison['comparisons'])
+    assert all((metric.context_id in (str(ids.EARTH), str(ids.LEO), 'organization')
+                or metric.kind.startswith('external_market_'))
+               for run in runs for observation in run.observations for metric in observation.metrics)
+    again = run_experiments((make_case('baseline', original),), days=4,
+                            operational_node_ids=frozenset((ids.EARTH, ids.LEO)))
+    assert again[0].to_json_data() == runs[0].to_json_data()

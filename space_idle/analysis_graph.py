@@ -111,8 +111,9 @@ class DependencyDefinitionGraph:
             "technology_prerequisite", "research_point_cost", "requires_experience",
             "requires_execution_capacity", "requires_service_capacity",
             "requires_construction_work", "requires_site_capability",
-            "requires_site_classification", "requires_knowledge",
+            "requires_site_classification", "requires_site_environment", "requires_knowledge",
             "invests_resource", "funds_initial_inventory", "requires_fleet_units",
+            "requires_population_commitment", "requires_origin_context",
         }
         selected.update(
             relation.source for relation in self.relations

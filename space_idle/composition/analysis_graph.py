@@ -59,6 +59,11 @@ def build_definition_dependency_graph(
                             requirement.capability_id
                             for requirement in stage.site_requirements.capability_requirements
                         )
+        if sim.scientific_exploration is not None:
+            for campaign in sim.scientific_exploration.definitions.values():
+                all_capabilities.update(campaign.required_vehicle_capabilities)
+                for requirements in (campaign.origin_requirements, campaign.destination_requirements):
+                    all_capabilities.update(row.capability_id for row in requirements.capability_requirements)
         for recipe in (
             *sim.projects.recipes.values(), *sim.projects.upgrade_recipes.values(),
             *sim.projects.decommission_recipes.values(), *sim.projects.spatial_recipes.values(),
@@ -158,24 +163,13 @@ def build_definition_dependency_graph(
                                 "consumes_resource", _node("resource", resource_id), stage_node,
                                 f"{provenance}:resources:{resource_id}", amount, "t", "per_stage",
                             ))
-                    for requirement in stage.site_requirements.capability_requirements:
-                        relations.append(DependencyRelation(
-                            "requires_capability", _node("capability", requirement.capability_id), stage_node,
-                            f"{provenance}:site_capabilities:{requirement.capability_id}",
-                            condition=f"required_state:{requirement.required_state.value}",
-                        ))
-                    for requirement in stage.site_requirements.spatial_classification_requirements:
-                        relations.append(DependencyRelation(
-                            "requires_site_condition", stage_node, owner,
-                            f"{provenance}:spatial_classification:{requirement.code}",
-                            condition=f"classification:{requirement.classification.value}",
-                        ))
-                    for requirement in stage.site_requirements.environment:
-                        relations.append(DependencyRelation(
-                            "requires_site_condition", stage_node, owner,
-                            f"{provenance}:environment:{requirement.code}",
-                            condition=requirement.description,
-                        ))
+                    # Research uses the same physical Site definition contract as
+                    # construction, founding, and movement. Keep each typed
+                    # constraint as a prerequisite of the actual Stage, including
+                    # environment parameters rather than just display descriptions.
+                    context_contributors.contribute_site_requirements(
+                        stage_node, "research_stage", stage.site_requirements, nodes, relations,
+                    )
                 elif isinstance(stage, ResearchOperationalExperienceStageSpec):
                     for category, amount in sorted(stage.requirements.items()):
                         relations.append(DependencyRelation(
@@ -254,7 +248,8 @@ def build_definition_dependency_graph(
         _node("technology", key) for key in (() if sim.research is None else sim.research.definitions)
     ), relation_kinds={
         "technology_prerequisite", "research_stage", "research_point_cost",
-        "research_work", "consumes_resource", "requires_capability", "requires_site_condition",
+        "research_work", "consumes_resource", "requires_site_capability",
+        "requires_site_classification", "requires_site_environment",
         "contributes_experience", "requires_experience", "requires_execution_capacity",
         "uses_asset_definition", "nominal_research_point_generation",
         "nominal_research_point_storage", "nominal_research_execution",
@@ -690,21 +685,75 @@ def build_definition_dependency_graph(
                             f"survey:{provider.id}/{mode.id}:prerequisite_technologies",
                         ))
         if sim.scientific_exploration is not None:
+            from ..transport.models import MovementEndpoint
             for definition in sim.scientific_exploration.definitions.values():
                 owner = _node("scientific_exploration", definition.id)
                 nodes.append(owner)
-                relations.append(DependencyRelation(
-                    "finite_research_point_reward", owner,
-                    _node("research_point_pool", "research_points"),
-                    f"scientific_exploration:{definition.id}:research_points_total",
-                    definition.research_points_total, "research_points", "per_completed_campaign",
-                    condition="finite_reward;rp_pool_admission_required",
+                origin = _node("spatial_node", definition.origin_id)
+                target_kind = (
+                    "surface_cell" if isinstance(definition.destination, MovementEndpoint)
+                    and definition.destination.physical_target_cell_id is not None
+                    else "spatial_node"
+                )
+                target = _node(target_kind, definition.destination_id)
+                provenance = f"scientific_exploration:{definition.id}"
+                relations.extend((
+                    DependencyRelation(
+                        "requires_origin_context", origin, owner,
+                        f"{provenance}:origin_id", condition="real_departure_site_and_movement_required",
+                    ),
+                    DependencyRelation(
+                        "targets_spatial_context", owner, target,
+                        f"{provenance}:destination", condition=(
+                            "physical_target_no_automatic_operational_node" if isinstance(definition.destination, MovementEndpoint)
+                            else "operational_destination_required"
+                        ),
+                    ),
+                    DependencyRelation(
+                        "requires_fleet_units", _node("capacity_pool", "fleet_units"), owner,
+                        f"{provenance}:required_units", definition.required_units,
+                        "units", "per_campaign_commitment", condition="real_fleet_commitment_and_movement_required",
+                    ),
+                    DependencyRelation(
+                        "campaign_duration", owner, _node("exploration_parameter", "duration"),
+                        f"{provenance}:duration_days", definition.duration_days,
+                        "days", "per_campaign", condition="after_physical_arrival",
+                    ),
+                    DependencyRelation(
+                        "finite_research_point_reward", owner,
+                        _node("research_point_pool", "research_points"),
+                        f"{provenance}:research_points_total",
+                        definition.research_points_total, "research_points", "per_completed_campaign",
+                        condition="finite_reward;rp_pool_admission_required",
+                    ),
                 ))
+                for rid, amount in definition.consumable_resources:
+                    relations.append(DependencyRelation(
+                        "consumes_resource", _node("resource", rid), owner,
+                        f"{provenance}:consumable_resources:{rid}", amount, "t", "per_campaign",
+                        condition="actual_launch_site_inventory_settlement_required",
+                    ))
+                if definition.required_crew:
+                    relations.append(DependencyRelation(
+                        "requires_population_commitment", _node("capacity_pool", "population"), owner,
+                        f"{provenance}:required_crew", definition.required_crew,
+                        "people", "per_campaign_commitment", condition="real_crew_and_onboard_support_required",
+                    ))
+                for capability in definition.required_vehicle_capabilities:
+                    relations.append(DependencyRelation(
+                        "requires_capability", _node("capability", capability), owner,
+                        f"{provenance}:required_vehicle_capabilities:{capability}",
+                        condition="compatible_real_vehicle_required",
+                    ))
+                for scope, requirements in (("origin", definition.origin_requirements),
+                                            ("destination", definition.destination_requirements)):
+                    context_contributors.contribute_site_requirements(owner, scope, requirements, nodes, relations)
                 for technology in definition.prerequisite_technologies:
                     relations.append(DependencyRelation(
                         "unlocks_method", _node("technology", technology), owner,
-                        f"scientific_exploration:{definition.id}:prerequisite_technologies",
+                        f"{provenance}:prerequisite_technologies",
                     ))
+            nodes.append(_node("exploration_parameter", "duration"))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("observation", observations, expected_definitions=lambda: (
@@ -713,7 +762,10 @@ def build_definition_dependency_graph(
             () if sim.scientific_exploration is None else sim.scientific_exploration.definitions))
     ), relation_kinds={
         "provides_mode", "requires_capability", "unlocks_method", "uses_asset_definition",
-        "finite_research_point_reward",
+        "finite_research_point_reward", "consumes_resource", "requires_fleet_units",
+        "requires_population_commitment", "requires_origin_context", "targets_spatial_context",
+        "campaign_duration", "requires_site_capability", "requires_site_classification",
+        "requires_site_environment",
     })
 
     registry.register('world', lambda: context_contributors.world(sim),
