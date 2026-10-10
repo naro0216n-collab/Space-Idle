@@ -290,6 +290,24 @@ class ScientificExplorationProjectorMixin:
                     can_return=service.can_return(definition.id),
                     can_set_completion_disposition=(physical_target is None and state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
                     can_unassign=service.can_unassign_fleet(definition.id),
+                    return_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "return"),
+                        affected_action="return_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
+                    abort_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "abort"),
+                        affected_action="abort_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
+                    unassign_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "unassign_fleet"),
+                        affected_action="unassign_scientific_exploration_fleet",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
                     fleet_options=tuple(fleet_options),
                 )
             )

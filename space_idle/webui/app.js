@@ -417,6 +417,7 @@
     physical_storage_full:'物理保管容量不足',usable_storage_full:'利用可能保管容量不足',
     knowledge_goal_reached:'調査目標へ到達済み',survey_decision_required:'観測手段の選択が必要',
     campaign_scope_conflict:'既存調査との対象重複',survey_candidate_unavailable:'利用可能な調査手段なし',
+    scientific_exploration_not_started:'探査開始前',scientific_exploration_phase_restricts_action:'現在の探査段階では操作不可',scientific_exploration_fleet_already_in_use:'探査に機体・資源を投入済み',fleet_unassigned:'Fleet未配備',
     no_transport_capacity:'輸送能力不足',market_interface_disabled:'市場接続停止中',offer_unavailable:'Market offerなし',
     price_condition:'価格条件外',provider_supply:'市場供給不足',provider_demand:'市場需要不足',
     resource_not_at_market_interface:'市場接続拠点に売却対象資源なし',paused_plan:'計画停止中',
@@ -430,7 +431,7 @@
     plan_facility_upgrade:'設備更新',plan_build:'建設計画',progress_construction_project:'建設進行',develop_surface_cell:'地域開発',
     plan_founding:'拠点設立',select_research_execution_site:'研究地点選択',set_research_provider_fleet:'研究Fleet配備',
     operate_research_provider:'研究実行',progress_research:'研究進行',start_research:'研究開始',start_survey:'調査開始',
-    progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',plan_vehicle_production:'輸送機生産計画',
+    progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',return_scientific_exploration:'科学探査の帰還',abort_scientific_exploration:'科学探査の中止',unassign_scientific_exploration_fleet:'科学探査Fleet解除',plan_vehicle_production:'輸送機生産計画',
     progress_vehicle_production:'輸送機生産',use_movement_plan:'移動',operate_transport_allocation:'輸送運用',
     satisfy_supply_requirement:'補給',satisfy_service_demand:'サービス需要',satisfy_forecast_service_demand:'将来サービス需要',
   };

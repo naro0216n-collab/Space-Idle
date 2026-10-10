@@ -587,8 +587,13 @@ def test_scientific_exploration_technology_is_a_start_requirement_not_an_in_flig
     sim.technology.completed.difference_update(definition.prerequisite_technologies)
     assert sim.scientific_exploration.blockers(mission_id) == ("fleet_unassigned",)
     assert sim.scientific_exploration.campaigns[mission_id].phase.value == "awaiting_fleet"
-    assert not next(row for row in app.query(GetScientificExplorations()).items
-                    if row.id == str(mission_id)).can_start
+    waiting = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(mission_id))
+    assert not waiting.can_start and waiting.can_abort
+    assert not waiting.can_return and not waiting.can_unassign
+    assert [row.code for row in waiting.return_action_blockers] == ["fleet_unassigned"]
+    assert [row.code for row in waiting.unassign_action_blockers] == ["scientific_exploration_phase_restricts_action"]
+    assert not waiting.abort_action_blockers
 
 
 def _start_unoperated_science(app):
@@ -612,6 +617,11 @@ def _start_unoperated_science(app):
                       for node, resource, _amount, _ in needs}
     app.execute(AdvanceTime(2))
     assert state.phase.value == "outbound"
+    outbound = next(row for row in app.query(GetScientificExplorations()).items
+                    if row.id == str(mission_id))
+    assert outbound.can_abort and outbound.can_return and not outbound.can_unassign
+    assert not outbound.return_action_blockers and not outbound.abort_action_blockers
+    assert [row.code for row in outbound.unassign_action_blockers] == ["scientific_exploration_phase_restricts_action"]
     return state, start_balances, needs
 
 

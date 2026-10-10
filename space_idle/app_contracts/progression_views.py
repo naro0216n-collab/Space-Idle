@@ -227,6 +227,9 @@ class ScientificExplorationRow:
     can_return: bool
     can_set_completion_disposition: bool
     can_unassign: bool
+    return_action_blockers: tuple[DecisionConstraintRow, ...]
+    abort_action_blockers: tuple[DecisionConstraintRow, ...]
+    unassign_action_blockers: tuple[DecisionConstraintRow, ...]
     fleet_options: tuple[ScientificExplorationFleetOptionRow, ...]
 
 

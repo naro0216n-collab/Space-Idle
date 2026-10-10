@@ -48,7 +48,7 @@ from .app_contracts.surface_views import (
     SurfaceLocationTerritoryRow, SurfaceMapView, SurfaceResourceKnowledgeRow,
 )
 from .app_contracts.economy_views import (
-    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
+    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketOrderCandidateRow, MarketView, TradeOrderRow,
 )
 from .app_contracts.passenger_views import (
     PassengerDispatchOptionRow, PassengerTransferPreviewView,

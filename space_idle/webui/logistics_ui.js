@@ -512,16 +512,21 @@
   }
 
   function numberOrNull(input){const raw=input?.value?.trim();return raw===''?null:Number(raw);}
-  function marketOfferRows(){
-    return (state.market?.interfaces||[]).flatMap((iface)=>(iface.offers||[]).map((offer)=>({iface,offer})));
-  }
   function marketResourceOptions(){
-    const seen=new Set();const rows=[];
-    for(const {offer} of marketOfferRows()){
-      if(seen.has(offer.resource_id))continue;seen.add(offer.resource_id);
-      rows.push(`<option value="${esc(offer.resource_id)}">${esc(resourceName(offer.resource_id))}</option>`);
-    }
-    return rows.join('');
+    const resourceIds=[...new Set((state.market?.order_candidates||[]).map((row)=>row.resource_id))].sort();
+    return resourceIds.map((resourceId)=>`<option value="${esc(resourceId)}">${esc(resourceName(resourceId))}</option>`).join('');
+  }
+  function updateMarketCreateEligibility(){
+    const root=$('#marketPanel [data-new-market-order]');if(!root)return;
+    const interfaceId=root.querySelector('[data-market-interface]')?.value;
+    const direction=root.querySelector('[data-market-direction]')?.value;
+    const resourceId=root.querySelector('[data-market-resource]')?.value;
+    const option=(state.market?.order_candidates||[]).find((candidate)=>candidate.market_interface_id===interfaceId&&candidate.direction===direction&&candidate.resource_id===resourceId);
+    const create=root.querySelector('[data-market-create]');if(create)create.disabled=!option?.can_create;
+    const footer=root.querySelector('[data-market-new-conditions]');if(!footer)return;
+    const reasons=(option?.blockers||[]).map(A.constraintSummary);
+    footer.textContent=reasons.length?`注文条件: ${reasons.join(' / ')}`:option?.can_create?`Offer価格: $${fmt(option.offer_price_musd_per_t,2)}M/t · 成立量は有限在庫・Funds・輸送能力による`:'選択できる市場・取引条件がありません';
+    footer.classList.toggle('has-warning',!option?.can_create);
   }
   function marketInterfaceOptions(){
     return (state.market?.interfaces||[]).map((row)=>`<option value="${esc(row.id)}">${esc(row.provider_name)} · ${esc(locationName(row.operational_node_id))}</option>`).join('');
@@ -548,9 +553,10 @@
       return `<article class="market-order-card ${issue?'has-warning':''}" data-market-order-row="${esc(row.id)}"><div class="decision-card-title"><span><strong>${direction} · ${esc(resourceName(row.resource_id))}</strong><small>${esc(definitionName(row.market_interface_id))}</small></span><span class="badge ${issue?'warn':'ok'}">${issue?'要確認':'稼働中'}</span></div><div class="market-order-price"><span><small>現在価格</small><strong>${row.current_offer_price_musd_per_t==null?'—':`$${fmt(row.current_offer_price_musd_per_t,2)}M/t`}</strong></span><label>価格条件<input data-market-price type="number" min="0" step="0.01" value="${row.price_limit_musd_per_t==null?'':esc(row.price_limit_musd_per_t)}" placeholder="条件なし" data-draft-key="market:${esc(row.id)}:price" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:${esc(row.id)}"></label></div><div class="market-order-controls"><label>取引目標${marketTargetFields(`market:${esc(row.id)}`,row.control_mode,row.quantity_target_t,row.rate_target_t_per_day)}</label>${priorityControl(row.priority,`data-market-priority data-draft-key="market:${esc(row.id)}:priority" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:${esc(row.id)}"`)}</div><div class="market-order-progress">${progress}</div>${issue?`<div class="decision-card-footer has-warning">制約: ${esc(issue)}</div>`:''}<div class="action-row"><button type="button" data-market-save="${esc(row.id)}">設定適用</button><button type="button" class="danger-button" data-market-cancel="${esc(row.id)}">取消</button></div></article>`;
     }).join('');
     const commitmentCards=(market.buy_commitments||[]).map((row)=>{const blockers=(row.blockers||[]).map(A.constraintSummary);return `<article class="market-commitment-card ${blockers.length?'has-warning':''}"><div class="decision-card-title"><span><strong>${esc(resourceName(row.resource_id))}</strong><small>買付確保</small></span><span class="badge ${blockers.length?'warn':'ok'}">${blockers.length?'入庫待ち':'輸送待ち'}</span></div><div class="market-commitment-metrics"><span><small>未成立量</small><strong>${fmt(row.remaining_quantity_t,2)} t</strong></span><span><small>確保価格</small><strong>$${fmt(row.committed_price_musd_per_t,2)}M/t</strong></span><span><small>予約資金</small><strong>$${fmt(row.reserved_funds_musd,2)}M</strong></span><span><small>確定予定</small><strong>Day ${fmt(row.maturity_day,0)}</strong></span></div><div class="decision-card-footer ${blockers.length?'has-warning':''}">${esc(blockers[0]||'主要な入庫制約なし')}</div></article>`;}).join('');
-    const canCreate=(market.interfaces||[]).length&&marketOfferRows().length;
-    const createCard=`<section class="market-create-card" data-new-market-order><div class="decision-surface-heading"><div><span class="eyebrow">新規注文</span><h3>取引を設定</h3><p>市場・方向・資源を選び、総量または日量のどちらか一方を目標として設定します。</p></div></div><div class="market-create-grid"><label>市場<select data-market-interface data-draft-key="market:new:interface" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new">${marketInterfaceOptions()}</select></label><label>方向<select data-market-direction data-draft-key="market:new:direction" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"><option value="buy">買う</option><option value="sell">売る</option></select></label><label>資源<select data-market-resource data-draft-key="market:new:resource" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new">${marketResourceOptions()}</select></label><label>取引目標${marketTargetFields('market:new','quantity',0,null)}</label>${priorityControl(3,'data-market-priority data-draft-key="market:new:priority" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"')}<label>価格条件<input data-market-price type="number" min="0" step="0.01" placeholder="買い上限 / 売り下限" data-draft-key="market:new:price" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"></label></div><button type="button" class="primary" data-market-create ${canCreate?'':'disabled'}>取引注文を作成</button></section>`;
+    const canCreate=(market.order_candidates||[]).some((row)=>row.can_create);
+    const createCard=`<section class="market-create-card" data-new-market-order><div class="decision-surface-heading"><div><span class="eyebrow">新規注文</span><h3>取引を設定</h3><p>市場・方向・資源を選び、総量または日量のどちらか一方を目標として設定します。</p></div></div><div class="market-create-grid"><label>市場<select data-market-interface data-draft-key="market:new:interface" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new">${marketInterfaceOptions()}</select></label><label>方向<select data-market-direction data-draft-key="market:new:direction" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"><option value="buy">買う</option><option value="sell">売る</option></select></label><label>資源<select data-market-resource data-draft-key="market:new:resource" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new">${marketResourceOptions()}</select></label><label>取引目標${marketTargetFields('market:new','quantity',0,null)}</label>${priorityControl(3,'data-market-priority data-draft-key="market:new:priority" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"')}<label>価格条件<input data-market-price type="number" min="0" step="0.01" placeholder="買い上限 / 売り下限" data-draft-key="market:new:price" data-structured-draft data-planning-baseline="fixed" data-draft-scope="market:new"></label></div><button type="button" class="primary" data-market-create ${canCreate?'':'disabled'}>取引注文を作成</button><div class="decision-card-footer" data-market-new-conditions aria-live="polite"></div></section>`;
     A.setHtmlIfChanged($('#marketPanel'),`<div class="market-decision-surface"><section class="market-funds-strip"><div><span>総資金</span><strong>$${fmt(market.funds_total_musd,2)}M</strong></div><div><span>利用可能資金</span><strong>$${fmt(market.funds_available_musd,2)}M</strong></div><div><span>市場</span><strong>${market.interfaces?.length||0}</strong></div><div><span>注文</span><strong>${market.orders?.length||0}</strong></div></section><section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">市場</span><h3>取引条件</h3><p>価格だけでなく、相手側の供給・需要可能量も同時に比較します。</p></div></div><div class="market-offer-grid">${offerCards||'<div class="empty-state">利用可能な取引条件はありません。</div>'}</div></section><section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">注文</span><h3>進行中の取引</h3><p>目標・価格条件・物流上の制約を同じカードで確認します。</p></div></div><div class="market-order-grid">${orderCards||'<div class="empty-state">進行中の取引注文はありません。</div>'}</div></section>${createCard}${commitmentCards?`<section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">買付確保</span><h3>確保済み資源</h3></div></div><div class="market-commitment-grid">${commitmentCards}</div></section>`:''}</div>`);
+    queueMicrotask(updateMarketCreateEligibility);
   }
 
   function marketOrderPayload(root,{create=false}={}){
@@ -737,6 +743,11 @@
   document.addEventListener('change',(event)=>{
     if(state.activeView!=='logistics')return;
     if(event.target.matches('[data-market-mode]')){const control=event.target.closest('.market-target-control');const unit=control?.querySelector(':scope > span');if(unit)unit.textContent=event.target.value==='rate'?'t/日':'t';}
+    if(event.target.matches('[data-market-interface],[data-market-direction],[data-market-resource]'))updateMarketCreateEligibility();
+  });
+
+  document.addEventListener('spaceidle:draft-restored',(event)=>{
+    if(event.detail?.scope==='market:new')updateMarketCreateEligibility();
   });
 
   document.addEventListener('change',(event)=>{

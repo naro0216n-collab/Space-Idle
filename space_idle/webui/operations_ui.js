@@ -965,12 +965,15 @@
     return true;
   }
 
-  function lifecycleButton({domain,id,canStart,canPause,canResume,complete=false,startLabel,pauseLabel,resumeLabel,completeLabel='完了'}){
-    let action='start',label=startLabel,enabled=Boolean(canStart),primary=Boolean(canStart);
-    if(canPause){action='pause';label=pauseLabel;enabled=true;primary=false;}
-    else if(canResume){action='resume';label=resumeLabel;enabled=true;primary=true;}
-    else if(complete)return `<button type="button" data-lifecycle-control="${esc(domain)}" disabled>${esc(completeLabel)}</button>`;
-    return `<button type="button" ${primary?'class="primary" ':''}data-lifecycle-control="${esc(domain)}" data-${domain}-action="${action}" data-id="${esc(id)}" ${enabled?'':'disabled'}>${label}</button>`;
+  function lifecycleButton({domain,id,started=false,paused=false,canStart,canPause,canResume,complete=false,startLabel,pauseLabel,resumeLabel,completeLabel='完了'}){
+    if(complete)return `<button type="button" data-lifecycle-control="${esc(domain)}" disabled>${esc(completeLabel)}</button>`;
+    // The operation identity comes from the authoritative lifecycle phase, not
+    // from current eligibility. Otherwise a blocked active campaign misleadingly
+    // changes into a disabled "Start" button during a refresh.
+    const action=!started?'start':paused?'resume':'pause';
+    const label=action==='start'?startLabel:action==='resume'?resumeLabel:pauseLabel;
+    const enabled=action==='start'?canStart:action==='resume'?canResume:canPause;
+    return `<button type="button" ${action!=='pause'?'class="primary" ':''}data-lifecycle-control="${esc(domain)}" data-${domain}-action="${action}" data-id="${esc(id)}" ${enabled?'':'disabled'}>${esc(label)}</button>`;
   }
   function researchBlockers(r){return r.current_blockers||[];}
   function researchSiteLabel(site){if(!site)return '未選択';return `${locationName(site.operational_node_id)}${site.surface_cell_id?` / ${surfaceCellLabel(site.surface_cell_id)}`:''}`;}
@@ -1035,7 +1038,7 @@
   }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
-    const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
+    const action=lifecycleButton({domain:'research',id:r.id,started:!['available','locked'].includes(r.status),paused:r.paused,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
     const phaseBlockers=researchBlockers(r);let phase='';
     if(r.status==='theory'){
       phase=section('理論研究',kv([['進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)} RP`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)} /日`],['残りRP',`${fmt(r.rp_remaining,1)} RP`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)} /日`]]));
@@ -1082,10 +1085,17 @@
     const disposition=dispositionLabels[x.completion_disposition]||A.userFacingText(x.completion_disposition)||'—';
     const targetKindLabels={operational_node:'運用拠点',surface_cell:'未運用の地表',non_surface_spatial_node:'非地表の物理Context'};
     const fleetPosition=x.fleet_location_kind==='physical_target'?`物理目標で滞在中 · ${esc(locationName(x.fleet_location_id))}`:x.fleet_location_kind==='in_transit'?'航行中':x.fleet_location_kind==='operational_node'?esc(locationName(x.fleet_location_id)):'未配備／帰還済み';
-    let action=lifecycleButton({domain:'exploration',id:x.id,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:['complete','aborted'].includes(x.status),startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:x.status==='aborted'?'探査中止済み':'探査完了'});
-    if(x.can_return)action+=`<button type="button" data-exploration-return="${esc(x.id)}">出発地へ帰還</button>`;
-    if(x.can_abort)action+=`<button type="button" class="danger" data-exploration-abort="${esc(x.id)}">探査を中止</button>`;
-    if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Fleet配備を解除</button>`;
+    let action=lifecycleButton({domain:'exploration',id:x.id,started:x.status!=='available',paused:x.paused,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:['complete','aborted'].includes(x.status),startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:x.status==='aborted'?'探査中止済み':'探査完了'});
+    if(x.status!=='available'&&!['complete','aborted'].includes(x.status)){
+      // The Application exposes transition-specific reasons. Keep disabled
+      // choices visible without reinterpreting physical phases in the UI.
+      const transitionAction=(attribute,label,enabled,blockers,danger=false)=>
+        `<div class="action-stack"><button type="button" ${danger?'class="danger" ':''}${attribute}="${esc(x.id)}" ${enabled?'':'disabled'}>${label}</button>`+
+        (!enabled&&(blockers||[]).length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'')+'</div>';
+      action+=transitionAction('data-exploration-return','出発地へ帰還',x.can_return,x.return_action_blockers);
+      action+=transitionAction('data-exploration-abort','探査を中止',x.can_abort,x.abort_action_blockers,true);
+      action+=transitionAction('data-exploration-unassign','Fleet配備を解除',x.can_unassign,x.unassign_action_blockers);
+    }
     const dispositionControl=x.can_set_completion_disposition?`<label class="form-field"><span>完了時のFleet</span><select data-exploration-disposition="${esc(x.id)}"><option value="release_at_destination" ${x.completion_disposition==='release_at_destination'?'selected':''}>探査先に残して解放</option><option value="return_to_origin" ${x.completion_disposition==='return_to_origin_then_release'?'selected':''}>出発地へ帰還して解放</option></select></label>`:'';
     setInspector(x.display_name,
       section('探査状態',kv([['物理Phase',esc(stateLabels[x.status]||x.status)],['手動停止',x.paused?'あり（進行を停止）':'なし'],['終了Intent',x.termination_intent?esc(A.userFacingText(x.termination_intent)):'なし'],['出発地',esc(locationName(x.origin_id))],['探査先',esc(locationName(x.destination_id))],['目的地種別',esc(targetKindLabels[x.destination_kind]||x.destination_kind)],['Fleet現在地',fleetPosition],['往路時間',x.outbound_latency_days==null?'未確定':`${fmt(x.outbound_latency_days,0)}日`],['復路時間',x.return_latency_days==null?(x.assigned_vehicle_definition_id?'なし':'未確定'):`${fmt(x.return_latency_days,0)}日`],['現地活動期間',`${fmt(x.duration_days,1)}日`],['活動進捗',`${fmt(x.progress_days,1)}日`],['獲得RP',`${fmt(x.research_points_awarded,1)} / ${fmt(x.research_points_total,1)}`],['RP獲得速度',`${fmt(x.research_points_per_day,2)} /日`],['本日のRP要求 / 受入',`${fmt(x.rp_requested_today,2)} / ${fmt(x.rp_admitted_today,2)}`],['RP受入余力',fmt(x.rp_admission_headroom,2)],['RP受入制約',x.rp_admission_blocker?esc(A.constraintSummary(x.rp_admission_blocker)):'なし'],['必要Crew',fmt(x.required_crew,0)],['拘束Crew',fmt(x.committed_crew,0)],['航行中Crew',fmt(x.crew_in_transit,0)],['船内Resource',onboard],['必要機数',fmt(x.required_units,0)],['活動優先度',esc(priorityName(x.priority??3))],['配備Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.committed_units,0)} 機`:'未配備'],['完了時のFleet',esc(disposition)],['現在可能な操作',esc(transitions)]]))+
@@ -1128,7 +1138,7 @@
     }).join('');
     const blockers=c.blockers||[];
     const provider=c.projected_provider_definition_id?`${c.projected_provider_display_name||'調査手段'} @ ${locationName(c.projected_provider_operational_node_id)} / ${c.projected_observation_mode_display_name||'観測方式'}`:'未解決';
-    const actions=lifecycleButton({domain:'survey-campaign',id:c.id,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'調査停止',resumeLabel:'調査再開',completeLabel:'調査完了'});
+    const actions=lifecycleButton({domain:'survey-campaign',id:c.id,started:true,paused:c.paused,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'調査停止',resumeLabel:'調査再開',completeLabel:'調査完了'});
     setInspector(`地表調査 · ${knowledgeGoalName(c.goal_knowledge_level)}`,
       section('調査状態',kv([['状態',esc(stateLabels[c.status]||A.userFacingText(c.status))],['調査目標',esc(knowledgeGoalName(c.goal_knowledge_level))],['完了 / 残り対象',`${fmt(c.covered_targets,0)} / ${fmt(c.remaining_targets,0)}`],['解決された観測手段',esc(provider)],['能力要求 / 割当',`${fmt(c.requested_service_units_per_day,2)} / ${fmt(c.allocated_service_units_per_day,2)}`],['調査進行能力',`${fmt(c.capacity_points_per_day,2)} /日`],['必要 / 配備Fleet',c.required_fleet_units==null?'—':`${fmt(c.required_fleet_units,0)} / ${fmt(c.assigned_fleet_units,0)}`],['予測残り時間',c.projected_remaining_days==null?'—':`${fmt(c.projected_remaining_days,1)}日`],['優先度',esc(priorityName(c.priority??3))]]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+

@@ -495,13 +495,36 @@ class ScientificExplorationService:
             self.movement_path(definition, state.vehicle_definition_id, day, reverse=True)
         state.completion_disposition = disposition
 
-    def can_abort(self, definition_id: DefinitionId) -> bool:
+    def transition_blockers(self, definition_id: DefinitionId, action: str) -> tuple[str, ...]:
+        """One lifecycle authority for both eligibility and disabled-action reasons."""
+        if action not in ("abort", "return", "unassign_fleet"):
+            raise ValueError("unknown exploration transition")
         state = self.campaigns.get(definition_id)
-        return state is not None and state.phase not in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RECOVERING}
+        if state is None:
+            return ("scientific_exploration_not_started",)
+        if action == "abort":
+            if state.phase in {ScientificExplorationPhase.COMPLETE, ScientificExplorationPhase.ABORTED, ScientificExplorationPhase.RECOVERING}:
+                return ("scientific_exploration_phase_restricts_action",)
+            return ()
+        if action == "return":
+            if state.vehicle_definition_id is None:
+                return ("fleet_unassigned",)
+            if state.phase not in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.ACTIVE}:
+                return ("scientific_exploration_phase_restricts_action",)
+            return ()
+        if state.phase is not ScientificExplorationPhase.PREPARING:
+            return ("scientific_exploration_phase_restricts_action",)
+        if state.vehicle_definition_id is None:
+            return ("fleet_unassigned",)
+        if state.progress_days > 1e-9 or state.inputs_consumed or state.movement_execution_id is not None:
+            return ("scientific_exploration_fleet_already_in_use",)
+        return ()
+
+    def can_abort(self, definition_id: DefinitionId) -> bool:
+        return not self.transition_blockers(definition_id, "abort")
 
     def can_return(self, definition_id: DefinitionId) -> bool:
-        state = self.campaigns.get(definition_id)
-        return (state is not None and state.vehicle_definition_id is not None and state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.ACTIVE})
+        return not self.transition_blockers(definition_id, "return")
 
     def abort(self, definition_id: DefinitionId, *, day: int = 0) -> None:
         if not self.can_abort(definition_id):
@@ -612,15 +635,7 @@ class ScientificExplorationService:
         )
 
     def can_unassign_fleet(self, definition_id: DefinitionId) -> bool:
-        state = self.campaigns.get(definition_id)
-        return (
-            state is not None
-            and state.phase is ScientificExplorationPhase.PREPARING
-            and state.vehicle_definition_id is not None
-            and state.progress_days <= 1e-9
-            and not state.inputs_consumed
-            and state.movement_execution_id is None
-        )
+        return not self.transition_blockers(definition_id, "unassign_fleet")
 
     def assign_fleet(
         self,

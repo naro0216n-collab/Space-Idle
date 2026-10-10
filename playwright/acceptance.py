@@ -14,6 +14,7 @@ from space_idle import (
     GetOperationalNode,
     GetResearch,
     GetScientificExplorations,
+    GetMarket,
     GetSurfaceMap,
     GetSurveys,
     GetSurveyCampaignIntentPreview,
@@ -899,6 +900,17 @@ def run(browser) -> dict[str, object]:
             choose_priority(page, '#explorationPriorityInput', 4)
             exploration_lifecycle.click()
 
+            _assert(
+                page.locator('#inspectorContent [data-exploration-return]').count() == 1
+                and not page.locator('#inspectorContent [data-exploration-return]').is_enabled(),
+                "Return choice must remain visible but unavailable before Fleet assignment",
+            )
+            _assert(
+                page.locator('#inspectorContent [data-exploration-unassign]').count() == 1
+                and not page.locator('#inspectorContent [data-exploration-unassign]').is_enabled(),
+                "Fleet release must remain visible with its actual eligibility",
+            )
+
             # Completion disposition is a real Direct Action. The browser test
             # validates the select -> Command -> refreshed Inspector round trip.
             disposition_control = page.locator('#inspectorContent [data-exploration-disposition]')
@@ -1377,6 +1389,49 @@ def run(browser) -> dict[str, object]:
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
+            checkpoint("market order decisions")
+            page.locator('.primary-nav-button[data-section="economy"]').click()
+            create_market = page.locator('#marketPanel [data-new-market-order]')
+            create_market.wait_for(timeout=10000)
+            market_candidates = runtime._app.query(GetMarket()).order_candidates
+            blocked_market = next((row for row in market_candidates if not row.can_create), None)
+            accepted_market = next((row for row in market_candidates if row.can_create), None)
+            _assert(blocked_market is not None and accepted_market is not None,
+                    "browser Market fixture must expose selectable and blocked order offers")
+            for row in (blocked_market, accepted_market):
+                create_market.locator('[data-market-interface]').select_option(row.market_interface_id)
+                create_market.locator('[data-market-direction]').select_option(row.direction)
+                create_market.locator('[data-market-resource]').select_option(row.resource_id)
+                page.wait_for_function(
+                    "expected => document.querySelector('[data-market-create]')?.disabled === expected",
+                    arg=not row.can_create,
+                    timeout=10000,
+                )
+                _assert(bool(create_market.locator('[data-market-new-conditions]').inner_text().strip()),
+                        "Market create conditions must remain visible for every candidate")
+            # Draft state and the selected offer must survive the regular server sync.
+            create_market.locator('[data-market-price]').fill('25')
+            _wait_for_periodic_sync(page)
+            _assert(create_market.locator('[data-market-price]').input_value() == '25',
+                    "periodic Market refresh must preserve an edited price-condition draft")
+            _assert(create_market.locator('[data-market-resource]').input_value() == accepted_market.resource_id,
+                    "periodic Market refresh must preserve the selected resource")
+            create_market.locator('[data-market-price]').fill('')
+            create_market.locator('[data-market-target]').fill('1')
+            with page.expect_response(
+                lambda response: response.request.method == 'POST'
+                and response.url.endswith('/api/v1/commands')
+                and 'CreateTradeOrder' in (response.request.post_data or ''),
+                timeout=10000,
+            ) as market_create_response:
+                create_market.locator('[data-market-create]').click()
+            _assert(market_create_response.value.ok,
+                    "an eligible Market candidate must create an order through the real Application")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#marketPanel [data-market-order-row]').length > 0",
+                timeout=10000,
+            )
+
             checkpoint("responsive layout")
             page.locator('.primary-nav-button[data-section="location"]').click()
 
