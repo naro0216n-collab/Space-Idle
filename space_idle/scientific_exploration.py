@@ -999,7 +999,9 @@ class ScientificExplorationService:
         ):
             if amount_t > 1e-12:
                 self.inventory.consume_reserved(
-                    owner_id, node_id, resource_id, amount_t
+                    owner_id, node_id, resource_id, amount_t,
+                    destination_owner=f"scientific_exploration:{definition.id}",
+                    activity_id=f"scientific_exploration:{definition.id}:{'return' if returning else 'outbound'}",
                 )
         if not returning:
             if definition.required_crew:

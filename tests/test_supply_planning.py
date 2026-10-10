@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, PauseTransportAllocation,
     PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
@@ -255,7 +256,17 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         if str(row.requirement.owner_id) == project_id and amount > 0.0
     ]
 
-    sim.advance_days(1)
+    with observe_canonical_day(sim) as trace:
+        sim.advance_days(1)
+    dispatches = [row for row in trace.activity_flows()
+                  if row.activity_id.startswith('cargo_dispatch:')]
+    assert dispatches
+    assert all(row.source_owner == f'inventory:{EARTH}'
+               and row.destination_owner == f"logistics_cargo:{row.activity_id.split(':', 1)[1]}" for row in dispatches)
+    assert sum(row.quantity_t for row in dispatches) == pytest.approx(
+        sum(row.quantity_t for row in trace.movements
+            if row.activity_id is not None and row.activity_id.startswith('cargo_dispatch:'))
+    )
     generated = [
         row for row in sim.logistics.cargo_flows.values()
         if row.owner_id == EntityId(project_id)

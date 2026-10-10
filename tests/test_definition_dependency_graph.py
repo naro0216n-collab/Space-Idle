@@ -536,6 +536,40 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
     assert not any(row.code == "required_capability_without_definition_supplier"
                    for row in inspect_definition_coverage(connected))
 
+    # Research and manufacturing graphs may each be acyclic while their
+    # *combined* acquisition requirement is self-gated. An alternative
+    # ungated supplier makes the diagnosis disappear (OR alternatives), while
+    # multiple prerequisites of one method are still an AND gate.
+    technology = DependencyNode("technology", "test.microscope.research")
+    successor = DependencyNode("technology", "test.follow_on")
+    stage = DependencyNode("research_stage", "test.microscope.research/prototype")
+    method = DependencyNode("construction_method", "test.lab.build")
+    supplier = DependencyNode("facility", "test.lab")
+    relations = (
+        DependencyRelation("research_stage", stage, technology, "test:prototype"),
+        DependencyRelation("requires_site_capability", capability, stage, "test:required_instrument"),
+        DependencyRelation("supplies_capability", supplier, capability, "test:instrument"),
+        DependencyRelation("constructs_facility", method, supplier, "test:build"),
+        DependencyRelation("technology_prerequisite", technology, successor, "test:prerequisite"),
+        DependencyRelation("unlocks_method", successor, method, "test:unlock"),
+    )
+    all_nodes = (technology, successor, stage, method, supplier, capability)
+    risks = inspect_definition_coverage(DependencyDefinitionGraph(all_nodes, relations, ()))
+    gated = tuple(row for row in risks if row.code == "potential_research_acquisition_dependency_cycle")
+    assert len(gated) == 1
+    assert gated[0].subject == technology
+    assert any("initial_assets_and_sites_unknown" in evidence for evidence in gated[0].evidence)
+    assert any("test.follow_on" in evidence for evidence in gated[0].evidence)
+    alternative = DependencyNode("construction_method", "test.lab.alternative")
+    alternatives = (
+        *relations,
+        DependencyRelation("constructs_facility", alternative, supplier, "test:alternative"),
+    )
+    assert not any(row.code == "potential_research_acquisition_dependency_cycle"
+                   for row in inspect_definition_coverage(
+                       DependencyDefinitionGraph((*all_nodes, alternative), alternatives, ())
+                   ))
+
 
 def test_technology_outlet_classification_follows_declared_research_edges_only():
     from space_idle.analysis_technology_outlets import classify_technology_outlets

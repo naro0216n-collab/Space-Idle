@@ -60,6 +60,8 @@ class ConstructionExecutionMixin:
                 facility.operational_node_id,
                 recovery_potential,
                 decommission_recoverable_fraction,
+                source_owner=f"decommissioned_facility:{target.facility_id}",
+                activity_id=f"facility_decommission:{project.id}",
             )
             project.salvage_recovered_fraction = min(
                 1.0, max(0.0, float(decommission_recoverable_fraction))

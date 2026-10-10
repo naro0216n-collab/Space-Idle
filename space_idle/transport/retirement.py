@@ -228,7 +228,11 @@ class FleetRetirementMixin:
                 for resource_id, amount_per_unit in spec.resources_per_unit:
                     amount = amount_per_unit * state.requested_units * fraction_remaining * factor
                     if amount > _EPS:
-                        self.inventory.consume_allocated(state.operational_node_id, resource_id, amount)
+                        self.inventory.consume_allocated(
+                            state.operational_node_id, resource_id, amount,
+                            destination_owner=f"vehicle_retirement:{state.id}",
+                            activity_id=f"vehicle_retirement_work:{state.id}",
+                        )
                 state.progress_work = min(total_work, state.progress_work + remaining_work * factor)
                 if total_work - state.progress_work <= _EPS:
                     state.progress_work = total_work
@@ -243,7 +247,9 @@ class FleetRetirementMixin:
                 continue
             salvage = self._retirement_salvage(state)
             settle_salvage_recovery(
-                self.inventory, state.operational_node_id, salvage, factor
+                self.inventory, state.operational_node_id, salvage, factor,
+                source_owner=f"retired_vehicle:{state.id}",
+                activity_id=f"vehicle_retirement_salvage:{state.id}",
             )
             state.salvage_recovered_fraction = min(1.0, max(0.0, factor))
             self.consume_fleet_commitment(state.fleet_commitment_id, day=day)

@@ -85,6 +85,72 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             retirement.add(relation.source)
         if relation.kind == "retires_vehicle" and relation.source.kind == "vehicle":
             retirement.add(relation.source)
+    # A static DAG can be acyclic even though the only authored route to a
+    # Research Stage's required physical capability needs that very Research.
+    # Keep alternative suppliers (OR) separate from each method's combined
+    # prerequisites (AND). This is an authoring risk, not an assertion about
+    # installed Scenario assets or environmental eligibility.
+    downstream_technologies: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    capability_suppliers: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    acquisitions: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    method_techs: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    research_stages: dict[DependencyNode, DependencyNode] = {}
+    stage_capabilities: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    for relation in graph.relations:
+        if relation.kind == "technology_prerequisite":
+            downstream_technologies[relation.source].add(relation.target)
+        elif relation.kind == "supplies_capability" and relation.source.kind in ("facility", "vehicle"):
+            capability_suppliers[relation.target].add(relation.source)
+        elif relation.kind in ("constructs_facility", "deploys_facility", "produces_vehicle"):
+            if relation.target.kind in ("facility", "vehicle"):
+                acquisitions[relation.target].add(relation.source)
+        elif relation.kind == "unlocks_method" and relation.source.kind == "technology":
+            method_techs[relation.target].add(relation.source)
+        elif relation.kind == "research_stage" and relation.target.kind == "technology":
+            research_stages[relation.source] = relation.target
+        elif relation.kind == "requires_site_capability" and relation.target.kind == "research_stage":
+            stage_capabilities[relation.target].add(relation.source)
+
+    def dependent_technologies(technology: DependencyNode) -> set[DependencyNode]:
+        # These methods cannot be acquired before the input Technology, even
+        # when it is only an indirect prerequisite of their gate Technology.
+        reached = {technology}
+        pending = [technology]
+        while pending:
+            for later in downstream_technologies.get(pending.pop(), ()):
+                if later not in reached:
+                    reached.add(later)
+                    pending.append(later)
+        return reached
+
+    bootstrap_risks: list[DefinitionCoverageFinding] = []
+    for stage, capabilities in stage_capabilities.items():
+        technology = research_stages.get(stage)
+        if technology is None:
+            continue
+        dependent = dependent_technologies(technology)
+        for capability in capabilities:
+            providers = capability_suppliers.get(capability, set())
+            methods = set().union(*(acquisitions.get(asset, set()) for asset in providers))
+            # Missing suppliers or missing acquisition paths are reported by
+            # their own coverage categories, not reinterpreted as a cycle.
+            if (not providers or any(not acquisitions.get(asset) for asset in providers)
+                    or not methods):
+                continue
+            if not all(method_techs.get(method, set()) & dependent for method in methods):
+                continue
+            bootstrap_risks.append(DefinitionCoverageFinding(
+                "potential_research_acquisition_dependency_cycle", technology,
+                tuple(sorted((
+                    f"stage:{stage.id}:requires_capability:{capability.id}",
+                    "scope:registered_definition_acquisition_only;initial_assets_and_sites_unknown",
+                    *(f"supplier:{asset.kind}:{asset.id}"
+                      for asset in providers),
+                    *(f"method:{method.kind}:{method.id}:depends_on:"
+                      + ",".join(sorted(gate.id for gate in method_techs[method] & dependent))
+                      for method in methods),
+                ))),
+            ))
     findings: list[DefinitionCoverageFinding] = []
     for node, evidence in sorted(demands.items()):
         if node not in supplied:
@@ -109,4 +175,5 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                 f"{node.kind}_without_registered_retirement_method", node,
                 (f"{node.kind}:{node.id}:no_registered_retirement_or_decommission",),
             ))
-    return tuple(sorted(findings, key=lambda row: (row.code, row.subject)))
+    findings.extend(bootstrap_risks)
+    return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))

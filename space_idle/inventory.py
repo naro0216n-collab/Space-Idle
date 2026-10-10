@@ -56,15 +56,16 @@ class InventoryBook:
     external_occupancy: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     # Only an explicit analysis scope attaches a sink. This transient callback is
     # neither authoritative State nor part of the Save codec.
-    _settlement_observer: Callable[[str, SpatialNodeId, DefinitionId, float, str, str | None], None] | None = field(
+    _settlement_observer: Callable[[str, SpatialNodeId, DefinitionId, float, str, str | None, str | None, str | None], None] | None = field(
         default=None, init=False, repr=False, compare=False,
     )
 
     def _record_settlement(self, direction: str, node_id: SpatialNodeId, resource_id: DefinitionId,
-                           amount: float, operation: str, owner: EntityId | None = None) -> None:
+                           amount: float, operation: str, owner: EntityId | None = None,
+                           counterparty: str | None = None, activity: str | None = None) -> None:
         if self._settlement_observer is not None and amount > _EPS:
             self._settlement_observer(direction, node_id, resource_id, amount, operation,
-                                      None if owner is None else str(owner))
+                                      None if owner is None else str(owner), counterparty, activity)
 
     def storage_pool_for_resource(self, resource_id: DefinitionId) -> StoragePoolKey:
         definition = self.resource_definitions.get(resource_id)
@@ -194,7 +195,8 @@ class InventoryBook:
     def available(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return max(0.0, self.amount(operational_node_id, resource_id) - self.reserved_total(operational_node_id, resource_id))
 
-    def admit(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> InventoryAdmissionResult:
+    def admit(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float, *,
+              source_owner: str | None = None, activity_id: str | None = None) -> InventoryAdmissionResult:
         if amount < -_EPS:
             raise ValueError("negative admission")
         requested = max(0.0, amount)
@@ -203,7 +205,8 @@ class InventoryBook:
         if accepted > _EPS:
             key = (operational_node_id, resource_id)
             self.stock[key] = self.stock.get(key, 0.0) + accepted
-        self._record_settlement("inventory_in", operational_node_id, resource_id, accepted, "inventory.admit")
+        self._record_settlement("inventory_in", operational_node_id, resource_id, accepted, "inventory.admit",
+                                counterparty=source_owner, activity=activity_id)
         after = self.admission_state(operational_node_id, resource_id)
         return InventoryAdmissionResult(requested, accepted, max(0.0, requested - accepted), before, after)
 
@@ -213,7 +216,8 @@ class InventoryBook:
             raise ValueError(f"storage capacity exceeded: {resource_id}")
 
     def consume_allocated(
-        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
+        self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float, *,
+        destination_owner: str | None = None, activity_id: str | None = None,
     ) -> None:
         """Consume material already authorized by a Resource Allocation.
 
@@ -230,7 +234,8 @@ class InventoryBook:
         if stock + 1e-9 < amount:
             raise RuntimeError("allocated resource stock changed before execution")
         self.stock[key] = max(0.0, stock - amount)
-        self._record_settlement("inventory_out", operational_node_id, resource_id, amount, "inventory.consume_allocated")
+        self._record_settlement("inventory_out", operational_node_id, resource_id, amount, "inventory.consume_allocated",
+                                counterparty=destination_owner, activity=activity_id)
 
     def stage_allocated(
         self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float
@@ -360,7 +365,9 @@ class InventoryBook:
     def reserved_for(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.reserved.get((owner_id, operational_node_id, resource_id), 0.0)
 
-    def consume_reserved(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
+    def consume_reserved(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId,
+                         amount: float, *, destination_owner: str | None = None,
+                         activity_id: str | None = None) -> None:
         key = (owner_id, operational_node_id, resource_id)
         held = self.reserved.get(key, 0.0)
         if held + 1e-9 < amount:
@@ -370,7 +377,8 @@ class InventoryBook:
             raise ValueError("stock shortfall despite reservation")
         self.stock[stock_key] = max(0.0, self.stock[stock_key] - amount)
         self._record_settlement("inventory_out", operational_node_id, resource_id, amount,
-                                "inventory.consume_reserved", owner_id)
+                                "inventory.consume_reserved", owner_id,
+                                counterparty=destination_owner, activity=activity_id)
         left = held - amount
         if left <= 1e-9:
             self.reserved.pop(key, None)

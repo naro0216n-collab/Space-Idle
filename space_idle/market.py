@@ -546,7 +546,11 @@ class MarketService:
             provider_supply = provider_state.supply_available_t.get(commitment.resource_id, 0.0)
             if provider_supply + _EPS < amount:
                 raise RuntimeError("reserved provider supply disappeared before settlement")
-            admission = inventory.admit(interface.operational_node_id, commitment.resource_id, amount)
+            admission = inventory.admit(
+                interface.operational_node_id, commitment.resource_id, amount,
+                source_owner=f"market_provider:{interface.provider_id}",
+                activity_id=f"market_buy:{commitment.id}",
+            )
             if abs(admission.admitted_t - amount) > 1e-7:
                 raise RuntimeError("market buy boundary allocation exceeded Inventory Admission")
             self.funds.balance -= cost
@@ -657,7 +661,11 @@ class MarketService:
             demand = self.provider_states[interface.provider_id].demand_available_t.get(order.resource_id, 0.0)
             if demand + _EPS < amount:
                 raise RuntimeError("market sell allocation exceeded provider demand")
-            inventory.consume_allocated(interface.operational_node_id, order.resource_id, amount)
+            inventory.consume_allocated(
+                interface.operational_node_id, order.resource_id, amount,
+                destination_owner=f"market_provider:{interface.provider_id}",
+                activity_id=f"market_sell:{order.id}",
+            )
             self.provider_states[interface.provider_id].demand_available_t[order.resource_id] = max(0.0, demand - amount)
             self.funds.balance += amount * price
             order.settled_quantity_t += amount

@@ -16,6 +16,7 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.catalog import ResourceDef
 from space_idle.app_contracts.construction import CancelBuild, PlanFacilityDecommission
 from space_idle.application_commands import ApplicationError
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle.content import base_ids as ids
 from space_idle.construction import (
     BuildResourceRequirement,
@@ -264,7 +265,14 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
     assert 0.0 < expected_fraction < 1.0
     stock_before = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
 
-    app.execute(AdvanceTime(1))
+    with observe_canonical_day(sim) as trace:
+        app.execute(AdvanceTime(1))
+    recovered = tuple(flow for flow in trace.activity_flows()
+                      if flow.activity_id == f"facility_decommission:{project_id}")
+    assert len(recovered) == 1
+    assert recovered[0].source_owner == f"decommissioned_facility:{facility_id}"
+    assert recovered[0].destination_owner == f"inventory:{ids.EARTH}"
+    assert recovered[0].quantity_t == pytest.approx(4.0 * expected_fraction)
     completed = _project_row(app, project_id)
     assert completed.status == "complete"
     assert completed.actual_salvage_fraction == pytest.approx(expected_fraction)

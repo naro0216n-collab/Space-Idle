@@ -1290,7 +1290,11 @@ class LogisticsFlowMixin:
                     legs=waiting.remaining_legs, dispatch_day=day,
                 )
             else:
-                admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount)
+                admission = self.inventory.admit(
+                    waiting.node_id, waiting.resource_id, amount,
+                    source_owner=f"logistics_cargo:{waiting.requirement_id}",
+                    activity_id=f"cargo_arrival:{waiting.id}",
+                )
                 if abs(admission.admitted_t - amount) > 1e-7:
                     raise RuntimeError("boundary Cargo allocation exceeded Inventory Admission")
             waiting.amount_t = max(0.0, waiting.amount_t - amount)
@@ -1370,7 +1374,11 @@ class LogisticsFlowMixin:
         activities: list[DomainActivity] = []
         for row, amount in execution.executable_dispatches:
             requirement = row.requirement
-            self.inventory.consume_allocated(row.source_id, requirement.resource_id, amount)
+            self.inventory.consume_allocated(
+                row.source_id, requirement.resource_id, amount,
+                destination_owner=f"logistics_cargo:{requirement.id}",
+                activity_id=f"cargo_dispatch:{requirement.id}",
+            )
 
             activities.append(
                 DomainActivity(
@@ -1392,7 +1400,11 @@ class LogisticsFlowMixin:
         for allocation_id, location_id, resource_id, amount in (
             execution.operational_resource_use_by_allocation
         ):
-            self.inventory.consume_allocated(location_id, resource_id, amount)
+            self.inventory.consume_allocated(
+                location_id, resource_id, amount,
+                destination_owner=f"transport_allocation:{allocation_id}",
+                activity_id=f"transport_operation:{allocation_id}",
+            )
 
         for allocation_id, directional in execution.used_by_allocation:
             if (

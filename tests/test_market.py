@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     CreateTradeOrder,
     GetMarket,
@@ -193,7 +194,12 @@ def test_sell_funds_cannot_finance_same_tick_buy():
     )).created_id
     assert sell_id and buy_id
 
-    sim.advance_days(1)
+    with observe_canonical_day(sim) as trace:
+        sim.advance_days(1)
+    assert any(row.activity_id.startswith('market_sell:')
+               and row.destination_owner.startswith('market_provider:')
+               and row.source_owner.startswith('inventory:')
+               for row in trace.activity_flows())
     assert sim.market.funds.balance > 0.0
     assert not [row for row in sim.market.buy_commitments.values() if str(row.order_id) == buy_id]
 
@@ -220,7 +226,15 @@ def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
 
-    sim.advance_days(3)
+    traces = []
+    for _ in range(3):
+        with observe_canonical_day(sim) as trace:
+            sim.advance_days(1)
+        traces.append(trace)
+    assert any(row.activity_id.startswith('market_buy:')
+               and row.source_owner.startswith('market_provider:')
+               and row.destination_owner.startswith('inventory:')
+               for trace in traces for row in trace.activity_flows())
     loaded._simulation.advance_days(3)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
     assert loaded.query(GetMarket()) == app.query(GetMarket())

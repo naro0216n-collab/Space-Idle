@@ -202,7 +202,11 @@ class ResearchWorkflowMixin:
         owner_id = self._prototype_reservation_owner_id(research_id, stage_id)
         for resource_id, required in spec.resources.items():
             if required > 1e-12:
-                self.inventory.consume_reserved(owner_id, site.operational_node_id, resource_id, required)
+                self.inventory.consume_reserved(
+                    owner_id, site.operational_node_id, resource_id, required,
+                    destination_owner=f"research:{research_id}",
+                    activity_id=f"research_prototype:{research_id}:{stage_id}",
+                )
 
     def prototype_failures(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, power: PowerSnapshot | None = None, surface_cell_id: SurfaceCellId | None = None) -> tuple[SiteRequirementFailure, ...]:
         spec = self.current_stage_spec(research_id)

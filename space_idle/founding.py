@@ -1098,7 +1098,11 @@ class OperationalNodeFoundingService:
         target_power = self.power.snapshot(target_node_id, self.facilities, day)
         self.storage.refresh_node(target_node_id, day, target_power)
         for resource_id, amount_t in recipe.initial_inventory_totals().items():
-            admission = self.inventory.admit(target_node_id, resource_id, amount_t)
+            admission = self.inventory.admit(
+                target_node_id, resource_id, amount_t,
+                source_owner=f"founding_manifest:{project.id}",
+                activity_id=f"founding_deployment:{project.id}",
+            )
             if not admission.fully_admitted:
                 raise RuntimeError(
                     f"Founding settlement diverged from preflight Inventory Admission: {resource_id}"

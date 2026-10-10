@@ -23,6 +23,10 @@ class InventoryMovement:
     quantity_t: float
     operation: str
     staging_owner_id: str | None = None
+    # Optional facts supplied by the actual settling Domain. Null means the
+    # corresponding cause is unknown; Graph edges never fill it in.
+    counterparty_id: str | None = None
+    activity_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.direction not in ("inventory_in", "inventory_out", "external_storage_in", "external_storage_out"):
@@ -44,6 +48,18 @@ class CustodyTransfer:
     quantity_t: float
     source_owner: str
     destination_owner: str
+    operation: str
+
+
+@dataclass(frozen=True)
+class ActivityFlow:
+    """One settled Inventory movement with a proven external activity endpoint."""
+    day: int
+    resource_id: str
+    quantity_t: float
+    source_owner: str
+    destination_owner: str
+    activity_id: str
     operation: str
 
 
@@ -77,7 +93,27 @@ class CanonicalDayTrace:
         return {"day": self.day,
                 "inventory_movements": [asdict(row) for row in self.movements],
                 "custody_transfers": [asdict(row) for row in self.custody_transfers()],
+                "activity_flows": [asdict(row) for row in self.activity_flows()],
                 "allocations": [asdict(row) for row in self.allocations]}
+
+    def activity_flows(self) -> tuple[ActivityFlow, ...]:
+        """Project known settlement endpoints, without inventing other Flow.
+
+        Transfers into staging are reclassifications, separately represented
+        by custody_transfers; they are not Resource production or consumption.
+        """
+        rows = []
+        for movement in self.movements:
+            if (movement.direction not in ("inventory_in", "inventory_out")
+                    or movement.counterparty_id is None or movement.activity_id is None):
+                continue
+            inventory_owner = f"inventory:{movement.node_id}"
+            source, target = ((movement.counterparty_id, inventory_owner)
+                              if movement.direction == "inventory_in"
+                              else (inventory_owner, movement.counterparty_id))
+            rows.append(ActivityFlow(movement.day, movement.resource_id, movement.quantity_t,
+                                     source, target, movement.activity_id, movement.operation))
+        return tuple(rows)
 
     def custody_transfers(self) -> tuple[CustodyTransfer, ...]:
         """Pair only adjacent atomic ledger entries with the same known owner.
@@ -198,11 +234,12 @@ def observe_canonical_day(
         raise RuntimeError("nested canonical observation is not supported")
     trace = CanonicalDayTrace(sim.day)
 
-    def inventory_sink(direction, node_id, resource_id, amount, operation, owner):
+    def inventory_sink(direction, node_id, resource_id, amount, operation, owner, counterparty, activity):
         if ((operational_node_ids is None or node_id in operational_node_ids)
                 and (resource_ids is None or resource_id in resource_ids)):
             trace.movements.append(InventoryMovement(
                 sim.day, direction, str(node_id), str(resource_id), amount, operation, owner,
+                counterparty, activity,
             ))
 
     # The canonical allocator names physical scopes as ``node:<id>`` while

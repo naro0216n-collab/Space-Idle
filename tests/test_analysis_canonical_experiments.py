@@ -62,6 +62,32 @@ def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save
     assert all(abs(item['unattributed_delta_t']) < 1e-7 for item in trace.reconcile(stock, final))
     assert any(row.direction == 'inventory_in' for row in trace.movements)
     assert any(row.direction == 'inventory_out' for row in trace.movements)
+    # These are actual Owner settlements, not static output rate forecasts.
+    flows = trace.activity_flows()
+    assert any(row.activity_id.startswith('industry_process:') and row.source_owner.startswith('process:')
+               and row.destination_owner.startswith('inventory:') for row in flows)
+    assert any(row.activity_id.startswith('extraction:') and row.source_owner.startswith('extraction_facility:')
+               for row in flows)
+    assert any(row.activity_id.startswith('facility_maintenance:')
+               and row.destination_owner.startswith('maintained_facility:') for row in flows)
+    assert any(row.activity_id.startswith('population_life_support:')
+               and row.destination_owner.startswith('life_support:') for row in flows)
+    assert all(row.quantity_t > 0 for row in flows)
+    for direction in ('inventory_in', 'inventory_out'):
+        attributed = [move for move in trace.movements if move.direction == direction
+                      and move.counterparty_id is not None and move.activity_id is not None]
+        projected = [flow for flow in flows if (
+            (flow.destination_owner.startswith('inventory:')) if direction == 'inventory_in'
+            else (flow.source_owner.startswith('inventory:'))
+        )]
+        assert sum(row.quantity_t for row in projected) == pytest.approx(
+            sum(row.quantity_t for row in attributed)
+        )
+    assert all(row.counterparty_id is not None and row.activity_id is not None
+               for row in trace.movements if row.activity_id is not None)
+    assert sum(row.quantity_t for row in flows if row.destination_owner.startswith('inventory:')) <= (
+        sum(row.quantity_t for row in trace.movements if row.direction == 'inventory_in') + 1e-9
+    )
     assert json.dumps(observe_state(sim).to_json_data(), ensure_ascii=False)
     with pytest.raises(RuntimeError, match='nested'):
         with observe_canonical_day(sim):
@@ -119,6 +145,7 @@ def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource
     assert all(row.quantity_t == pytest.approx(quantity) for row in transfers)
     payload = {'runs': [{'name': 'custody', 'canonical_traces': [trace.to_json_data()]}]}
     assert 'staging:' in to_csv(payload, 'custody_transfers')
+    assert trace.activity_flows() == ()  # custody reclassification is not new production
 
 
 def test_typed_independent_scenario_and_content_variants_do_not_mutate_base_or_initialization():

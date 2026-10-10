@@ -1020,7 +1020,11 @@ class PopulationService:
                 self._acquire_external(demand.source_external_provider_id, count, day)
                 self._add_uncommitted_at(demand.origin_node_id, count)
             for resource, rate in per_person_onboard.items():
-                self.inventory.consume_allocated(demand.origin_node_id, resource, count * rate)
+                self.inventory.consume_allocated(
+                    demand.origin_node_id, resource, count * rate,
+                    destination_owner=f"passenger_service:{transit_id}",
+                    activity_id=f"passenger_dispatch:{demand_id}",
+                )
             operational_use: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
             for _, _, size, _, resources, _ in rows:
                 for key, per_person in resources.items():
@@ -1029,7 +1033,11 @@ class PopulationService:
                 if node == demand.origin_node_id and resource in per_person_onboard:
                     amount -= count * per_person_onboard[resource]
                 if amount > 1e-12:
-                    self.inventory.consume_allocated(node, resource, amount)
+                    self.inventory.consume_allocated(
+                        node, resource, amount,
+                        destination_owner=f"passenger_service:{transit_id}",
+                        activity_id=f"passenger_dispatch:{demand_id}",
+                    )
             remaining = count
             manifest = []
             for group in self.groups_at(demand.origin_node_id):
@@ -1155,7 +1163,11 @@ class PopulationService:
             )
             transport.dispatch_fleet_commitment(commitment_id, execution_id, day=day)
             for node, resource, amount in option.resources_for_dispatch:
-                self.inventory.consume_allocated(node, resource, amount)
+                self.inventory.consume_allocated(
+                    node, resource, amount,
+                    destination_owner=f"passenger_transfer:{order_id}",
+                    activity_id=f"passenger_transfer_dispatch:{order_id}",
+                )
             if order.source_external_provider_id is not None:
                 self._acquire_external(order.source_external_provider_id, count, day)
                 self._add_uncommitted_at(order.origin_node_id, count)
@@ -1489,7 +1501,11 @@ class PopulationService:
                     amount = 0.0
                 by_node[node_id] = by_node.get(node_id, 0.0) + amount
                 for resource, rate in spec.net_resources:
-                    self.inventory.consume_allocated(node_id, resource, amount * rate)
+                    self.inventory.consume_allocated(
+                        node_id, resource, amount * rate,
+                        destination_owner=f"life_support:{facility.id}",
+                        activity_id=f"population_life_support:{facility.id}",
+                    )
         self._day_fulfillment = by_node
 
     def settle_deprivation(self) -> None:

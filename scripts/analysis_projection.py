@@ -14,10 +14,10 @@ import sys
 
 
 def csv_rows(payload: dict, table: str):
-    if table not in {"inventory_movements", "custody_transfers", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
+    if table not in {"inventory_movements", "custody_transfers", "activity_flows", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
         raise ValueError(f"unknown typed projection: {table}")
     for run in payload["runs"]:
-        if table in {"inventory_movements", "custody_transfers", "allocations"}:
+        if table in {"inventory_movements", "custody_transfers", "activity_flows", "allocations"}:
             for trace in run["canonical_traces"]:
                 for item in trace[table]:
                     yield {"case": run["name"], "day": trace["day"], **item}
@@ -132,6 +132,41 @@ def _fulfillment_heatmap(traces: list[dict]) -> str:
         parts.append('</tr>')
     return ''.join(parts) + '</tbody></table>'
 
+def _activity_sankey(traces: list[dict]) -> str:
+    """Display only proven Source → Activity → Destination physical movement.
+
+    One settled transfer contributes once. An inventory admission/consumption
+    is not matched to another site's change by rate or Resource coincidence.
+    """
+    flows = {}
+    for trace in traces:
+        for row in trace.get('activity_flows', ()):
+            key = (row['source_owner'], row['activity_id'], row['destination_owner'], row['resource_id'])
+            flows[key] = flows.get(key, 0.0) + row['quantity_t']
+    if not flows:
+        return '<p>この期間に出所・用途を特定できるResource Flowはありません。</p>'
+    width = 1160
+    max_quantity = max(flows.values())
+    height = max(65, 45 * len(flows) + 40)
+    parts = [f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+             'xmlns="http://www.w3.org/2000/svg">',
+             '<text x="4" y="16" font-size="12">Source</text>',
+             '<text x="350" y="16" font-size="12">Activity / Resource</text>',
+             '<text x="790" y="16" font-size="12">Destination</text>']
+    for index, ((source, activity, target, resource), amount) in enumerate(sorted(flows.items())):
+        y = 45 + index * 45
+        stroke = max(1.0, min(12.0, 12.0 * amount / max_quantity))
+        for x, label in ((4, source), (350, f"{activity} / {resource}"), (790, target)):
+            parts.append(f'<text x="{x}" y="{y}" font-size="11"><title>{escape(label)}</title>'
+                         f'{escape(label)}</text>')
+        parts.append(f'<path d="M 250 {y+10} C 290 {y+10}, 300 {y+10}, 345 {y+10} '
+                     f'M 680 {y+10} C 720 {y+10}, 740 {y+10}, 785 {y+10}" '
+                     f'fill="none" stroke="#648ab4" stroke-width="{stroke:.2f}">'
+                     f'<title>{amount:.8g} t</title></path>')
+        parts.append(f'<text x="790" y="{y+22}" font-size="10">{amount:.6g} t</text>')
+    return ''.join(parts) + '</svg>'
+
+
 def _custody_table(traces: list[dict]) -> str:
     """Only physically paired staging movements get explicit end points."""
     rows = [row for trace in traces for row in trace.get('custody_transfers', ())]
@@ -147,6 +182,20 @@ def _custody_table(traces: list[dict]) -> str:
     return ''.join(contents) + '</tbody></table>'
 
 
+def _activity_table(traces: list[dict]) -> str:
+    rows = [row for trace in traces for row in trace.get('activity_flows', ())]
+    if not rows:
+        return '<p>この期間に因果が特定されたActivity Flowはありません。</p>'
+    parts = ['<table><thead><tr><th>日</th><th>Resource</th><th>Source</th>'
+             '<th>Activity</th><th>Destination</th><th>量 [t]</th></tr></thead><tbody>']
+    for row in rows:
+        parts.append('<tr>' + ''.join(f'<td>{escape(str(value))}</td>' for value in (
+            row['day'], row['resource_id'], row['source_owner'], row['activity_id'],
+            row['destination_owner'], f"{row['quantity_t']:.6g}",
+        )) + '</tr>')
+    return ''.join(parts) + '</tbody></table>'
+
+
 def project_html(payload: dict) -> str:
     """Static resource-gross-flow and demand-fulfillment charts.
 
@@ -157,18 +206,23 @@ def project_html(payload: dict) -> str:
              '<style>body{font:14px system-ui;margin:2em;max-width:1050px}section{padding:1em 0;border-bottom:1px solid #bbb}'
              'svg{max-width:100%;height:auto}h2{margin:0 0 1em}small{color:#555}</style>',
              '<h1>Space Idle Canonical Experiment</h1>',
-             '<p>確定入出庫と要求・割当を区別。発生源が未確認の入庫と出庫には転送の因果関係を付与しない。</p>']
+             '<p>確定入出庫と要求・割当を区別。既知のActivity Flowと原因未特定のInventory移動は別に表示し、拠点間転送を推定しない。</p>']
     for run in payload["runs"]:
         movements = [r for day in run["canonical_traces"] for r in day["inventory_movements"]]
         flows: dict[tuple, float] = {}
         for move in movements:
-            if move["direction"] not in {"inventory_in", "inventory_out"}:
+            # Proven activity movements have their own explicit diagram below;
+            # otherwise the unknown arrows would falsely discard known causes.
+            if move["direction"] not in {"inventory_in", "inventory_out"} or move.get('counterparty_id'):
                 continue
             key = (move["node_id"], move["resource_id"], move["direction"])
             flows[key] = flows.get(key, 0) + move["quantity_t"]
         parts.extend([f'<section><h2>{escape(run["name"])}</h2>',
             f'<small>期間 {run["observations"][0]["day"]}–{run["observations"][-1]["day"]}日、定義hash {escape(run["content_definitions_sha256"][:14])}</small>',
-            '<h3>拠点・Resource別の確定Stock入出庫 Sankey [t]</h3>',
+            '<h3>実決済に基づくSource・Activity・Destination [t]</h3>',
+            _activity_sankey(run['canonical_traces']),
+            _activity_table(run['canonical_traces']),
+            '<h3>原因未特定のInventory入出庫 [t]</h3>',
             _sankey(flows),
             '<h3>確定した拠点Inventory・所有者Staging間の移管</h3>',
             _custody_table(run['canonical_traces']),
@@ -187,7 +241,7 @@ def main() -> None:
     parser.add_argument("result", type=Path, help="compare_experiments.py のJSON結果")
     parser.add_argument("--format", choices=("html", "csv"), default="html")
     parser.add_argument("--table", default="inventory_movements",
-                        choices=("inventory_movements", "custody_transfers", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
+                        choices=("inventory_movements", "custody_transfers", "activity_flows", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
     args = parser.parse_args()
     payload = json.loads(args.result.read_text(encoding="utf-8"))
     sys.stdout.write(to_csv(payload, args.table) if args.format == "csv" else project_html(payload))

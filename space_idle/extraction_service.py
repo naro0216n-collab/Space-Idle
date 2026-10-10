@@ -473,13 +473,15 @@ class ExtractionService:
         snapshots = self.snapshots(
             location_id, facilities, inventory, power, day, execution_allocations
         )
-        for resource_id in sorted({snapshot.output_resource_id for snapshot in snapshots}, key=str):
-            output = math.fsum(
-                snapshot.output_t_per_day for snapshot in snapshots
-                if snapshot.output_resource_id == resource_id
-            )
-            if output > 1e-12:
-                admission = inventory.admit(location_id, resource_id, output)
+        # Each settled extraction quantity originates from the actual installed
+        # Facility and its canonical allocated execution, not a Graph estimate.
+        for snapshot in snapshots:
+            if snapshot.output_t_per_day > 1e-12:
+                admission = inventory.admit(
+                    location_id, snapshot.output_resource_id, snapshot.output_t_per_day,
+                    source_owner=f"extraction_facility:{snapshot.facility_id}",
+                    activity_id=f"extraction:{snapshot.facility_id}:{snapshot.resource_id}",
+                )
                 if not admission.fully_admitted:
                     raise RuntimeError("allocated extraction output exceeded Inventory Admission")
         return tuple(
