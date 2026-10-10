@@ -34,6 +34,115 @@ def _idle(_app, _day):
     return ()
 
 
+def test_registered_definition_alternatives_require_shared_inputs_and_physical_conditions():
+    """A Contributor's new method kind participates without ID-specific rules.
+
+    Matching authored relations produce *candidates*, never actual eligibility
+    or automatic Content removal. Process Pareto reasoning retains AND gates.
+    """
+    from space_idle.analysis_coverage import inspect_definition_alternatives
+
+    ore = DependencyNode("resource", "input.ore")
+    product = DependencyNode("resource", "product.alloy")
+    capability = DependencyNode("capability", "smelting")
+    different_capability = DependencyNode("capability", "advanced.smelting")
+    p1, p2, p3, p4 = (
+        DependencyNode("process", f"process.{index}") for index in range(4)
+    )
+    future1, future2 = (
+        DependencyNode("future_operation_method", f"new.{index}") for index in range(2)
+    )
+
+    def source_fragment():
+        return DependencyFragment((ore, product, capability, different_capability), ())
+
+    def process_fragment():
+        relations = []
+        for node, amount, cap in (
+            (p1, 3.0, capability), (p2, 5.0, capability),
+            (p3, 5.0, different_capability), (p4, 3.0, capability),
+        ):
+            relations.extend((
+                DependencyRelation("consumes_resource", ore, node, f"input:{node.id}",
+                                   amount, "t", "per_execution"),
+                DependencyRelation("produces_resource", node, product, f"output:{node.id}",
+                                   4.0, "t", "per_execution"),
+                DependencyRelation("requires_capability", cap, node, f"capability:{node.id}"),
+            ))
+        return DependencyFragment((p1, p2, p3, p4), tuple(relations))
+
+    def added_domain_fragment():
+        return DependencyFragment((future1, future2), (
+            DependencyRelation("requires_capability", capability, future1, "added:one"),
+            DependencyRelation("requires_capability", capability, future2, "added:two"),
+        ))
+
+    registry = DefinitionGraphRegistry()
+    registry.register("inputs", source_fragment, relation_kinds=("requires_capability",))
+    registry.register("processes", process_fragment,
+                      relation_kinds=("consumes_resource", "produces_resource", "requires_capability"))
+    registry.register("new_contributor", added_domain_fragment,
+                      relation_kinds=("requires_capability",))
+    graph = registry.build()
+    assert not graph.diagnostics
+    findings = inspect_definition_alternatives(graph)
+    # Registration order changes neither typed relations nor the audit.
+    reordered = DefinitionGraphRegistry()
+    reordered.register("new_contributor", added_domain_fragment,
+                       relation_kinds=("requires_capability",))
+    reordered.register("processes", process_fragment,
+                       relation_kinds=("consumes_resource", "produces_resource", "requires_capability"))
+    reordered.register("inputs", source_fragment, relation_kinds=("requires_capability",))
+    assert inspect_definition_alternatives(reordered.build()) == findings
+    by_subject = {(finding.code, finding.subject.id): finding.evidence for finding in findings}
+    assert "candidate:process:process.3" in by_subject[
+        ("possible_equivalent_relation_contract", "process.0")
+    ]
+    assert "candidate:future_operation_method:new.1" in by_subject[
+        ("possible_equivalent_relation_contract", "new.0")
+    ]
+    assert "possible_dominator:process:process.0" in by_subject[
+        ("possible_dominated_process", "process.1")
+    ]
+    assert ("possible_dominated_process", "process.2") not in by_subject
+    assert ("possible_equivalent_relation_contract", "process.2") not in by_subject
+    assert all(finding.significance == "informational" for finding in findings)
+
+    # Confirm the same diagnosis on a *real* Composition with an additional
+    # compatible Process. The Domain and Application intentionally continue to
+    # offer both candidates: a diagnostic is not an automatic rule or deletion.
+    from space_idle.app_contracts.queries import GetOperationalNode
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION, FOOD_FARM, EARTH
+
+    new_id = DefinitionId("experiment.duplicate.food_process")
+
+    def author_variant(sim, _catalog):
+        sim.industry.processes[new_id] = replace(
+            sim.industry.processes[PROCESS_FOOD_PRODUCTION], id=new_id,
+            display_name="Alternate food production",
+        )
+
+    app = build_game_application_for_scenario(
+        build_standard_scenario_definition(), definition_transform=author_variant,
+    )
+    before = capture_state(app._simulation)
+    authored_graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    assert not authored_graph.diagnostics
+    authored_findings = inspect_definition_coverage(authored_graph)
+    assert any(row.code == "possible_equivalent_relation_contract"
+               and row.subject.id == str(new_id)
+               and f"candidate:process:{PROCESS_FOOD_PRODUCTION}" in row.evidence
+               for row in authored_findings)
+    food = next(row for row in app.query(GetOperationalNode(str(EARTH))).industry
+                if row.facility_definition_id == str(FOOD_FARM))
+    assert {candidate.process_id for candidate in food.process_options} == {
+        str(new_id), str(PROCESS_FOOD_PRODUCTION),
+    }
+    assert capture_state(app._simulation) == before
+
+
 def test_optional_canonical_trace_matches_authoritative_stock_and_preserves_save_and_gameplay():
     ordinary = build_game_application()
     observed = build_game_application()

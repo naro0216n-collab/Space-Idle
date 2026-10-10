@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections import defaultdict
+from collections.abc import Iterable
 
 from .analysis_graph import DependencyDefinitionGraph, DependencyNode
 from .analysis_technology_outlets import classify_technology_outlets
@@ -30,6 +31,131 @@ class DefinitionCoverageFinding:
             },
             "evidence": list(self.evidence),
         }
+
+
+def inspect_definition_alternatives(graph: DependencyDefinitionGraph) -> tuple[DefinitionCoverageFinding, ...]:
+    """Surface conditional, relation-level alternatives from *all* Contributors.
+
+    This is not a semantic deduplicator. The graph may omit physical parameters,
+    acquisition availability and actual finite Allocation. Never declare that
+    two Definitions are interchangeable or silently delete one from Content.
+    Both inbound requirements and outbound effects must be considered; comparing
+    a method's outputs alone would erase important Player tradeoffs.
+    """
+    # World, geographical and resource identities are not competing authored
+    # methods. All other registered Definition kinds participate without an
+    # analyzer-specific list of future Facility / Provider / Vehicle IDs.
+    contextual_kinds = {
+        "resource", "capability", "service_capacity", "capacity_pool", "storage_pool",
+        "site_condition", "spatial_classification", "body", "surface_cell",
+        "spatial_node", "star_system", "survey_target", "survey_parameter",
+        "survey_knowledge_level", "survey_reach_scope", "activity_kind",
+        "experience_category", "research_point_pool", "opportunity_factor",
+        "movement_parameter", "founding_parameter", "exploration_parameter",
+    }
+    # Exact multiset signatures, including quantity, unit, time and conditions.
+    # Relation provenance is evidence of authorship, not a physical parameter;
+    # omitting it allows separately-authored Definitions to be compared.
+    signatures: dict[DependencyNode, list[tuple]] = defaultdict(list)
+    for relation in graph.relations:
+        attributes = (relation.kind, relation.quantity, relation.unit,
+                      relation.time_basis, relation.condition)
+        signatures[relation.source].append(("out", relation.target, *attributes))
+        if relation.target != relation.source:
+            signatures[relation.target].append(("in", relation.source, *attributes))
+
+    def stable(rows: Iterable[tuple]) -> tuple:
+        return tuple(sorted(rows, key=repr))
+
+    candidates = [node for node in graph.nodes
+                  if node.kind not in contextual_kinds and signatures[node]]
+    groups: dict[tuple, list[DependencyNode]] = defaultdict(list)
+    for node in candidates:
+        groups[(node.kind, node.scope, stable(signatures[node]))].append(node)
+
+    findings: list[DefinitionCoverageFinding] = []
+    for nodes in groups.values():
+        if len(nodes) < 2:
+            continue
+        for node in sorted(nodes):
+            alternatives = sorted(other for other in nodes if other != node)
+            relation_evidence = tuple(
+                f"relation:{direction}:{kind}:{neighbor.kind}:{neighbor.id}:"
+                f"{quantity}:{unit}:{time_basis}:{condition}"
+                for direction, neighbor, kind, quantity, unit, time_basis, condition
+                in stable(signatures[node])
+            )
+            findings.append(DefinitionCoverageFinding(
+                "possible_equivalent_relation_contract", node,
+                ("scope:all_registered_relations_only;unmodeled_physical_differences_unknown",
+                 *(f"candidate:{other.kind}:{other.id}" for other in alternatives),
+                 *relation_evidence),
+            ))
+
+    # An additional narrow Pareto check: a production Process that asks for no
+    # less of any *identical* input but yields no more of any *identical* output
+    # may be dominated. Every other authored relation must match exactly,
+    # including eligibility, service and technology requirements. This is only
+    # a candidate because installed throughput and current access vary.
+    processes = sorted(node for node in candidates if node.kind == "process")
+    nonflow: dict[DependencyNode, tuple] = {}
+    flow: dict[DependencyNode, dict[str, dict[tuple, float]]] = {}
+    for node in processes:
+        inputs: dict[tuple, float] = {}
+        outputs: dict[tuple, float] = {}
+        fixed = []
+        for row in signatures[node]:
+            direction, neighbor, kind, quantity, unit, time_basis, condition = row
+            if (kind == "consumes_resource" and direction == "in" and neighbor.kind == "resource"
+                    or kind == "produces_resource" and direction == "out" and neighbor.kind == "resource"):
+                bucket = inputs if direction == "in" else outputs
+                key = (neighbor, unit, time_basis, condition)
+                if quantity is None:
+                    # An unspecified quantity cannot establish a yield comparison.
+                    fixed.append(row)
+                else:
+                    bucket[key] = bucket.get(key, 0.0) + quantity
+            else:
+                fixed.append(row)
+        nonflow[node] = stable(fixed)
+        flow[node] = {"inputs": inputs, "outputs": outputs}
+
+    for dominated in processes:
+        possible_dominators = []
+        for dominator in processes:
+            if dominated == dominator or nonflow[dominated] != nonflow[dominator]:
+                continue
+            inferior_inputs = flow[dominated]["inputs"]
+            superior_inputs = flow[dominator]["inputs"]
+            inferior_outputs = flow[dominated]["outputs"]
+            superior_outputs = flow[dominator]["outputs"]
+            if (not inferior_outputs or inferior_inputs.keys() != superior_inputs.keys()
+                    or inferior_outputs.keys() != superior_outputs.keys()):
+                continue
+            if (all(inferior_inputs[key] >= superior_inputs[key] for key in inferior_inputs)
+                    and all(inferior_outputs[key] <= superior_outputs[key] for key in inferior_outputs)
+                    and (any(inferior_inputs[key] > superior_inputs[key] for key in inferior_inputs)
+                         or any(inferior_outputs[key] < superior_outputs[key] for key in inferior_outputs))):
+                possible_dominators.append(dominator)
+        if not possible_dominators:
+            continue
+        # One candidate finding per inferior option, even when multiple authored
+        # methods have identical or better ratios. All witnesses remain visible.
+        findings.append(DefinitionCoverageFinding(
+            "possible_dominated_process", dominated,
+            ("scope:registered_process_ratios_and_identical_nonflow_relations_only;"
+             "installed_capacity_and_eligibility_unknown",
+             *(f"possible_dominator:process:{node.id}" for node in possible_dominators),
+             *(f"comparison:{dominator.id}:input:{key[0].id}:"
+               f"{flow[dominated]['inputs'][key]:g}->{flow[dominator]['inputs'][key]:g}"
+               for dominator in possible_dominators
+               for key in sorted(flow[dominated]["inputs"])),
+             *(f"comparison:{dominator.id}:output:{key[0].id}:"
+               f"{flow[dominated]['outputs'][key]:g}->{flow[dominator]['outputs'][key]:g}"
+               for dominator in possible_dominators
+               for key in sorted(flow[dominated]["outputs"]))),
+        ))
+    return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
 
 
 def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[DefinitionCoverageFinding, ...]:
@@ -286,6 +412,7 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
         graph, owned_assets, acquisitions, physical_suppliers, method_inputs,
         method_techs, downstream_technologies, research_stages,
     ))
+    findings.extend(inspect_definition_alternatives(graph))
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
 
 
