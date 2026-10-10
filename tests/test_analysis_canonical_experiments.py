@@ -110,6 +110,15 @@ def test_owner_scoped_custody_transfer_is_not_mistaken_for_inventory_or_resource
         'inventory_in', 'inventory_out', 'external_storage_in', 'external_storage_out'
     }
     assert trace.inventory_balance(node_id=str(node), resource_id=str(resource)) == pytest.approx(0)
+    transfers = trace.custody_transfers()
+    assert len(transfers) == 2
+    assert [(row.source_owner, row.destination_owner) for row in transfers] == [
+        (f'inventory:{node}', f'staging:{owner}'),
+        (f'staging:{owner}', f'inventory:{node}'),
+    ]
+    assert all(row.quantity_t == pytest.approx(quantity) for row in transfers)
+    payload = {'runs': [{'name': 'custody', 'canonical_traces': [trace.to_json_data()]}]}
+    assert 'staging:' in to_csv(payload, 'custody_transfers')
 
 
 def test_typed_independent_scenario_and_content_variants_do_not_mutate_base_or_initialization():
@@ -485,3 +494,174 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
         factory(scenario, removed_method + ({"operation": "remove", "kind": "resource", "id": resource_id},))
     # Definitions are isolated from the standard factory and other experiment cases.
     assert all(row.id != process_id for row in build_game_application().query(GetCatalog()).processes)
+
+
+def test_independent_definition_membership_connects_assets_providers_acquisition_and_policy():
+    """Added Definitions participate in the real Application, not a parallel experiment ruleset."""
+    base = build_game_application()
+    sim = base._simulation
+    source_provider = next(provider for provider in sim.research.providers.values()
+                           if provider.source_kind.value == "facility"
+                           and any(fid in sim.projects.recipes and fid in sim.power.specs
+                                   for fid in sim.research.compatible_facility_definition_ids(provider.id)))
+    source_facility = next(fid for fid in sim.research.compatible_facility_definition_ids(source_provider.id)
+                           if fid in sim.projects.recipes and fid in sim.power.specs)
+    source_vehicle = next(vehicle for vehicle in sim.transport.vehicle_definitions()
+                          if vehicle.production.days > 0)
+    new_facility = 'experiment.facility.research'
+    new_provider = 'experiment.provider.research'
+    new_vehicle = 'experiment.vehicle.production'
+    additions = [
+        {'operation': 'add', 'kind': kind, 'source_id': str(source), 'id': target}
+        for kind, source, target in (
+            ('facility', source_facility, new_facility),
+            ('construction', source_facility, new_facility),
+            ('decommission', source_facility, new_facility),
+            ('power', source_facility, new_facility),
+            ('vehicle', source_vehicle.id, new_vehicle),
+            ('research_provider', source_provider.id, new_provider),
+        )
+    ]
+    edits = [
+        {'kind': 'facility', 'id': new_facility, 'field': 'capability_supplies',
+         'value': ['experiment_research_equipment']},
+        {'kind': 'research_provider', 'id': new_provider,
+         'field': 'required_source_capabilities', 'value': ['experiment_research_equipment']},
+        {'kind': 'vehicle', 'id': new_vehicle, 'field': 'production_days', 'value': 5.0},
+        {'kind': 'construction', 'id': new_facility, 'field': 'construction_work', 'value': 5.0},
+    ]
+    from space_idle.application_commands import GetBuildOptions, GetLogistics, PlanBuild, ProduceVehicle
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+
+    def factory(additions=additions):
+        return build_game_application_for_scenario(
+            build_standard_scenario_definition(),
+            definition_transform=lambda runtime, catalog: apply_content_variant(
+                runtime, catalog, additions + edits),
+        )
+
+    app = factory()
+    options = app.query(GetBuildOptions(str(ids.EARTH)))
+    facility_option = next(row for row in options.items
+                           if row.facility_definition_id == new_facility)
+    vehicle_option = next(row for row in app.query(GetLogistics()).vehicle_production_options
+                          if row.vehicle_definition_id == new_vehicle
+                          and row.operational_node_id == str(ids.EARTH))
+    assert facility_option.can_plan and vehicle_option.can_plan
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    assert not graph.diagnostics
+    assert any(row.kind == 'facility' and row.id == new_facility for row in graph.nodes)
+    assert any(row.kind == 'vehicle' and row.id == new_vehicle for row in graph.nodes)
+    assert any(row.kind == 'research_provider' and row.id == new_provider for row in graph.nodes)
+
+    # Both strategies issue the same Player intent. The baseline rejects unknown
+    # authored assets and records the blocker; the modified Content accepts them.
+    def policy(_app, day):
+        return (PlanBuild(str(ids.EARTH), new_facility),
+                ProduceVehicle(new_vehicle, str(ids.EARTH))) if day == 0 else ()
+
+    runs = run_experiments((ExperimentCase('base', build_game_application, policy),
+                            ExperimentCase('variant', factory, policy)), days=2)
+    assert len(runs[0].rejected_commands) == 2
+    assert not runs[1].rejected_commands
+    assert len(runs[1].attempted_commands) == 2
+    assert all(abs(row['unattributed_delta_t']) < 1e-7
+               for run in runs for row in run.flow_reconciliation)
+    assert runs[0].content_definitions_sha256 != runs[1].content_definitions_sha256
+    assert runs[0].initial_state_sha256 == runs[1].initial_state_sha256
+    assert not compare_experiments(runs)['comparisons'][0]['same_comparison_conditions']
+    assert runs[1].to_json_data() == run_experiments(
+        (ExperimentCase('variant', factory, policy),), days=2,
+    )[0].to_json_data()
+    reordered = factory(list(reversed(additions)))
+    assert build_definition_dependency_graph(reordered._simulation, reordered._catalog).to_json_data() == graph.to_json_data()
+
+    # Additions never silently invent acquisition recipes. Missing references
+    # or competing providers are invalid through normal Composition validation.
+    with pytest.raises(ValueError):
+        build_game_application_for_scenario(
+            build_standard_scenario_definition(),
+            definition_transform=lambda runtime, catalog: apply_content_variant(
+                runtime, catalog, additions + edits + [
+                    {'operation': 'remove', 'kind': 'facility', 'id': new_facility},
+                ]),
+        )
+    with pytest.raises(ValueError):
+        build_game_application_for_scenario(
+            build_standard_scenario_definition(),
+            definition_transform=lambda runtime, catalog: apply_content_variant(
+                runtime, catalog, [additions[-1]]),
+        )
+
+
+def test_independent_survey_definition_requires_a_real_compatible_vehicle(tmp_path):
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    base = build_game_application()
+    sim = base._simulation
+    source = next(provider for provider in sim.survey.providers.values()
+                  if provider.source_kind.value == 'fleet')
+    craft = next(vehicle for vehicle in sim.transport.vehicle_definitions()
+                 if source.required_source_capabilities.issubset(vehicle.generic_capabilities))
+    added_vehicle = 'experiment.vehicle.survey'
+    added_provider = 'experiment.provider.survey'
+    edits = [
+        {'operation': 'add', 'kind': 'vehicle', 'id': added_vehicle, 'source_id': str(craft.id)},
+        {'kind': 'vehicle', 'id': added_vehicle, 'field': 'generic_capabilities',
+         'value': sorted(set(craft.generic_capabilities) | {'experiment_survey_sensor'})},
+        {'operation': 'add', 'kind': 'survey_provider', 'id': added_provider,
+         'source_id': str(source.id)},
+        {'kind': 'survey_provider', 'id': added_provider,
+         'field': 'required_source_capabilities', 'value': ['experiment_survey_sensor']},
+        {'kind': 'survey_provider', 'id': added_provider,
+         'field': 'capacity_units_per_source_per_day', 'value': 2.0},
+    ]
+    def factory(changes):
+        return build_game_application_for_scenario(
+            build_standard_scenario_definition(),
+            definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, changes),
+        )
+    modified = factory(edits)
+    assert not build_definition_dependency_graph(modified._simulation, modified._catalog).diagnostics
+    assert modified._simulation.survey.compatible_source_definition_ids(
+        modified._simulation.survey.providers[DefinitionId(added_provider)]
+    )
+    # The copied Fleet is a real physical asset in an independent Scenario.
+    # Application candidates, exclusive commitment, Save/Load and progression
+    # all use the ordinary Survey and Transport Domains.
+    from datetime import datetime, timezone
+    from space_idle.application_commands import GetSurveys, SetSurveyProviderFleetQuantity, AdvanceTime
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import save_game, load_game
+    node_id = ids.LUNAR_ORBIT
+    variant_scenario = scenario_variant(build_standard_scenario_definition(), {
+        'fleet': [{'operational_node_id': str(node_id),
+                   'vehicle_definition_id': added_vehicle, 'units': 1}],
+    })
+    variant = build_game_application_for_scenario(
+        variant_scenario,
+        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, edits),
+    )
+    def candidate(app):
+        return next(row for row in app.query(GetSurveys(str(node_id))).provider_fleet
+                    if row.provider_definition_id == added_provider
+                    and row.vehicle_definition_id == added_vehicle)
+    assert candidate(variant).free_units == 1 and candidate(variant).can_set_quantity
+    assignment = variant.execute(SetSurveyProviderFleetQuantity(
+        added_provider, str(node_id), added_vehicle, 1,
+    )).created_id
+    assert assignment is not None
+    assert candidate(variant).committed_units == 1
+    assert variant._simulation.transport.fleet_free_units(DefinitionId(added_vehicle), node_id) == 0
+    path = tmp_path / 'independent-content-survey.json'
+    save_game(variant, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, lambda: build_game_application_for_load(
+        scenario=variant_scenario,
+        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, edits),
+    ))
+    assert capture_state(loaded._simulation) == capture_state(variant._simulation)
+    variant.execute(AdvanceTime(1))
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(variant._simulation)
+    assert candidate(loaded).committed_units == 1
+    with pytest.raises(ValueError):
+        factory(edits[2:])  # No compatible physical source for the new provider.

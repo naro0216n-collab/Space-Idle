@@ -14,10 +14,10 @@ import sys
 
 
 def csv_rows(payload: dict, table: str):
-    if table not in {"inventory_movements", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
+    if table not in {"inventory_movements", "custody_transfers", "allocations", "state_metrics", "cargo_positions", "reconciliation"}:
         raise ValueError(f"unknown typed projection: {table}")
     for run in payload["runs"]:
-        if table in {"inventory_movements", "allocations"}:
+        if table in {"inventory_movements", "custody_transfers", "allocations"}:
             for trace in run["canonical_traces"]:
                 for item in trace[table]:
                     yield {"case": run["name"], "day": trace["day"], **item}
@@ -132,6 +132,21 @@ def _fulfillment_heatmap(traces: list[dict]) -> str:
         parts.append('</tr>')
     return ''.join(parts) + '</tbody></table>'
 
+def _custody_table(traces: list[dict]) -> str:
+    """Only physically paired staging movements get explicit end points."""
+    rows = [row for trace in traces for row in trace.get('custody_transfers', ())]
+    if not rows:
+        return '<p>この期間に確定したOwner間のStaging移管はありません。</p>'
+    contents = ['<table><thead><tr><th>日</th><th>Resource</th><th>出所</th>'
+                '<th>移管先</th><th>量 [t]</th></tr></thead><tbody>']
+    for row in rows:
+        contents.append('<tr>' + ''.join(f'<td>{escape(str(value))}</td>' for value in (
+            row['day'], row['resource_id'], row['source_owner'], row['destination_owner'],
+            f"{row['quantity_t']:.6g}",
+        )) + '</tr>')
+    return ''.join(contents) + '</tbody></table>'
+
+
 def project_html(payload: dict) -> str:
     """Static resource-gross-flow and demand-fulfillment charts.
 
@@ -155,6 +170,8 @@ def project_html(payload: dict) -> str:
             f'<small>期間 {run["observations"][0]["day"]}–{run["observations"][-1]["day"]}日、定義hash {escape(run["content_definitions_sha256"][:14])}</small>',
             '<h3>拠点・Resource別の確定Stock入出庫 Sankey [t]</h3>',
             _sankey(flows),
+            '<h3>確定した拠点Inventory・所有者Staging間の移管</h3>',
+            _custody_table(run['canonical_traces']),
             '<h3>日別需要充足ヒートマップ（実Allocation / 要求）</h3>',
             _fulfillment_heatmap(run['canonical_traces']),
         ])
@@ -170,7 +187,7 @@ def main() -> None:
     parser.add_argument("result", type=Path, help="compare_experiments.py のJSON結果")
     parser.add_argument("--format", choices=("html", "csv"), default="html")
     parser.add_argument("--table", default="inventory_movements",
-                        choices=("inventory_movements", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
+                        choices=("inventory_movements", "custody_transfers", "allocations", "state_metrics", "cargo_positions", "reconciliation"))
     args = parser.parse_args()
     payload = json.loads(args.result.read_text(encoding="utf-8"))
     sys.stdout.write(to_csv(payload, args.table) if args.format == "csv" else project_html(payload))

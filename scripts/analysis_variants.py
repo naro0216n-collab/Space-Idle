@@ -120,12 +120,16 @@ def _definition_fields(value: object, required: set[str], optional: set[str], la
     return value
 
 
-def _definition_ids(raw: object, label: str) -> frozenset[DefinitionId]:
+def _identifiers(raw: object, label: str) -> frozenset[str]:
     if not isinstance(raw, list) or any(not isinstance(value, str) or not value for value in raw):
-        raise ValueError(f"{label} must be a list of Definition IDs")
+        raise ValueError(f"{label} must be a list of nonempty identifiers")
     if len(set(raw)) != len(raw):
         raise ValueError(f"duplicate {label}")
-    return frozenset(DefinitionId(value) for value in raw)
+    return frozenset(raw)
+
+
+def _definition_ids(raw: object, label: str) -> frozenset[DefinitionId]:
+    return frozenset(map(DefinitionId, _identifiers(raw, label)))
 
 
 def _resource_amounts(raw: object, label: str) -> dict[DefinitionId, float]:
@@ -236,6 +240,71 @@ def _new_research_stages(raw: object) -> tuple:
     return tuple(stages)
 
 
+def _owned_definition_collections(sim: Simulation) -> dict[str, tuple[dict, str | None]]:
+    """Locate authored definitions at their real Domain owner, not in a test catalog.
+
+    These are the existing Composition collections. Experiment membership edits
+    must be followed by ordinary configuration/reference validation, never by
+    synthetic access to runtime State or an experiment-only Content registry.
+    """
+    collections = {
+        "facility": (sim.facilities.definitions, "id"),
+        "vehicle": (sim.transport.vehicle_defs, "id"),
+        "construction": (sim.projects.recipes, "facility_def_id"),
+        "decommission": (sim.projects.decommission_recipes, "facility_def_id"),
+        "power": (sim.power.specs, None),
+        "storage_provider": (sim.storage.providers, "facility_def_id"),
+    }
+    if sim.research is not None:
+        collections["research_provider"] = (sim.research.providers, "id")
+    if sim.survey is not None:
+        collections["survey_provider"] = (sim.survey.providers, "id")
+    if sim.extraction is not None:
+        collections["extraction"] = (sim.extraction.specs, "id")
+    return collections
+
+
+def _change_owned_definition(sim: Simulation, change: Mapping) -> None:
+    """Copy an existing typed definition under a new ID before Scenario creation.
+
+    Cloning is an explicit authoring operation for independent experiments,
+    not an alias in the game. Related acquisition/retirement methods must be
+    cloned separately, and regular validators reject invalid compositions.
+    """
+    action, kind = change.get("operation"), change.get("kind")
+    collections = _owned_definition_collections(sim)
+    if kind not in collections:
+        raise ValueError(f"unsupported Content Definition kind: {kind}")
+    definitions, identity_field = collections[kind]
+    raw_id = change.get("id")
+    if not isinstance(raw_id, str) or not raw_id:
+        raise ValueError("Content Definition requires a nonempty ID")
+    definition_id = DefinitionId(raw_id)
+    if action == "remove":
+        if set(change) != {"operation", "kind", "id"}:
+            raise ValueError("Definition removal accepts only operation, kind and id")
+        if definition_id not in definitions:
+            raise ValueError(f"cannot remove unknown {kind} Definition: {definition_id}")
+        del definitions[definition_id]
+    elif action == "add":
+        if set(change) != {"operation", "kind", "id", "source_id"}:
+            raise ValueError("typed Definition copy requires operation, kind, id and source_id")
+        source_id = change["source_id"]
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("Definition source_id must be a nonempty ID")
+        if definition_id in definitions:
+            raise ValueError(f"duplicate {kind} Definition ID: {definition_id}")
+        source = definitions.get(DefinitionId(source_id))
+        if source is None:
+            raise ValueError(f"unknown {kind} source Definition: {source_id}")
+        definitions[definition_id] = (replace(source, **{identity_field: definition_id})
+                                      if identity_field is not None else replace(source))
+    else:
+        raise ValueError(f"unknown Content variant operation: {action}")
+    if kind == "vehicle":
+        sim.transport.invalidate_movement_plans()
+
+
 def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
     """Author typed Content additions/deletions in a fresh pre-Scenario composition.
 
@@ -248,6 +317,9 @@ def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change:
 
     action = change.get("operation")
     kind = change.get("kind")
+    if kind in _owned_definition_collections(sim):
+        _change_owned_definition(sim, change)
+        return
     if kind == "resource":
         definitions = catalog.resources
     elif kind == "process":
@@ -332,6 +404,66 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             else:
                 value = _finite_nonnegative(value)
             sim.facilities.definitions[definition_id] = replace(definition, **{field_name: value})
+        elif kind == "facility" and field_name == "capability_supplies":
+            from space_idle.facilities import CapabilitySupply
+            if not isinstance(value, list) or any(not isinstance(cap, str) or not cap for cap in value):
+                raise ValueError("facility capabilities must be a list of nonempty IDs")
+            if len(set(value)) != len(value):
+                raise ValueError("duplicate facility capabilities")
+            definition = sim.facilities.definitions[definition_id]
+            sim.facilities.definitions[definition_id] = replace(
+                definition, capability_supplies=tuple(CapabilitySupply(cap) for cap in value),
+            )
+        elif kind in ("research_provider", "survey_provider") and field_name == "required_source_capabilities":
+            sources = _identifiers(value, "provider source capabilities")
+            if not sources:
+                raise ValueError("provider source capabilities must not be empty")
+            providers = (sim.research.providers if kind == "research_provider" else sim.survey.providers)
+            providers[definition_id] = replace(
+                providers[definition_id], required_source_capabilities=sources,
+            )
+        elif kind == "vehicle" and field_name == "generic_capabilities":
+            capabilities = _identifiers(value, "vehicle capabilities")
+            vehicle = sim.transport.vehicle_defs[definition_id]
+            sim.transport.vehicle_defs[definition_id] = replace(
+                vehicle, performance=replace(vehicle.performance, generic_capabilities=tuple(sorted(capabilities))),
+            )
+            sim.transport.invalidate_movement_plans()
+        elif kind == "vehicle" and field_name in (
+            "production_days", "retirement_work_days_per_unit", "payload_t",
+        ):
+            vehicle = sim.transport.vehicle_defs[definition_id]
+            amount = _finite_nonnegative(value)
+            if field_name == "production_days":
+                vehicle = replace(vehicle, production=replace(vehicle.production, days=amount))
+            elif field_name == "retirement_work_days_per_unit":
+                vehicle = replace(vehicle, retirement=replace(vehicle.retirement, work_days_per_unit=amount))
+            else:
+                vehicle = replace(vehicle, performance=replace(vehicle.performance, payload_t=amount))
+            sim.transport.vehicle_defs[definition_id] = vehicle
+            sim.transport.invalidate_movement_plans()
+        elif kind == "research_provider" and field_name == "crew_person_days_per_research_point":
+            if sim.research is None:
+                raise ValueError("Research Domain not available")
+            provider = sim.research.providers[definition_id]
+            sim.research.providers[definition_id] = replace(
+                provider, crew_person_days_per_research_point=_finite_nonnegative(value),
+            )
+        elif kind == "survey_provider" and field_name == "capacity_units_per_source_per_day":
+            if sim.survey is None:
+                raise ValueError("Survey Domain not available")
+            amount = _finite_nonnegative(value)
+            if amount <= 0:
+                raise ValueError("survey provider capacity must be positive")
+            provider = sim.survey.providers[definition_id]
+            sim.survey.providers[definition_id] = replace(provider, capacity_units_per_source_per_day=amount)
+        elif kind in ("construction", "decommission") and field_name == "construction_work":
+            amount = _finite_nonnegative(value)
+            if amount <= 0:
+                raise ValueError("construction work must be positive")
+            recipes = (sim.projects.recipes if kind == "construction"
+                       else sim.projects.decommission_recipes)
+            recipes[definition_id] = replace(recipes[definition_id], construction_work=amount)
         elif kind == "power" and field_name in ("load_mw", "standby_load_mw", "generation_mw"):
             spec = sim.power.specs[definition_id]
             amount = _finite_nonnegative(value)

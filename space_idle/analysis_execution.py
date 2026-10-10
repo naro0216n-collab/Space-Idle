@@ -32,6 +32,22 @@ class InventoryMovement:
 
 
 @dataclass(frozen=True)
+class CustodyTransfer:
+    """An observed atomic Inventory ↔ owner-staging handoff, not production.
+
+    Only the explicitly paired Owner settlement is attributable. Other gross
+    movements keep their unknown source or destination.
+    """
+    day: int
+    node_id: str
+    resource_id: str
+    quantity_t: float
+    source_owner: str
+    destination_owner: str
+    operation: str
+
+
+@dataclass(frozen=True)
 class AllocationMetric:
     """Execution allocation is authorized execution, not consumed Resource flow."""
     day: int
@@ -60,7 +76,42 @@ class CanonicalDayTrace:
     def to_json_data(self) -> dict:
         return {"day": self.day,
                 "inventory_movements": [asdict(row) for row in self.movements],
+                "custody_transfers": [asdict(row) for row in self.custody_transfers()],
                 "allocations": [asdict(row) for row in self.allocations]}
+
+    def custody_transfers(self) -> tuple[CustodyTransfer, ...]:
+        """Pair only adjacent atomic ledger entries with the same known owner.
+
+        stage_allocated/stage_reserved each make one Inventory-out followed by
+        one staging-in; unstage_to_stock does the reverse. The two ledger rows
+        represent one change of custody, never two Resource production flows.
+        """
+        transfers = []
+        for first, second in zip(self.movements, self.movements[1:]):
+            same = (first.day == second.day and first.node_id == second.node_id
+                    and first.resource_id == second.resource_id
+                    and abs(first.quantity_t - second.quantity_t) <= 1e-9
+                    and first.staging_owner_id is not None
+                    and first.staging_owner_id == second.staging_owner_id)
+            if not same:
+                continue
+            if (first.direction == "inventory_out" and second.direction == "external_storage_in"
+                    and first.operation == second.operation
+                    and first.operation in ("inventory.stage_allocated", "inventory.stage_reserved")):
+                source = f"inventory:{first.node_id}"
+                destination = f"staging:{first.staging_owner_id}"
+                operation = first.operation
+            elif (first.direction == "external_storage_out" and second.direction == "inventory_in"
+                  and first.operation == "inventory.release_storage_occupancy"
+                  and second.operation == "inventory.unstage_to_stock"):
+                source = f"staging:{first.staging_owner_id}"
+                destination = f"inventory:{first.node_id}"
+                operation = second.operation
+            else:
+                continue
+            transfers.append(CustodyTransfer(first.day, first.node_id, first.resource_id,
+                                             first.quantity_t, source, destination, operation))
+        return tuple(transfers)
 
     def reconcile(self, before: dict, after: dict) -> list[dict]:
         """Match measured gross movements to actual ordinary Inventory stock change.
