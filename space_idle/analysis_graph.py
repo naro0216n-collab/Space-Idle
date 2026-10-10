@@ -6,6 +6,7 @@ registered definitions; live eligibility and allocation remain with their owners
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import defaultdict, deque
 import math
 from typing import Callable, Iterable
 
@@ -96,14 +97,17 @@ class DependencyDefinitionGraph:
         necessarily a physical input flow. Traversal is an analysis filter only.
         """
         selected = set(roots)
-        previous_count = -1
-        while previous_count != len(selected):
-            previous_count = len(selected)
-            for relation in self.relations:
-                start, end = ((relation.source, relation.target) if downstream
-                              else (relation.target, relation.source))
-                if start in selected:
-                    selected.add(end)
+        adjacency: dict[DependencyNode, list[DependencyNode]] = defaultdict(list)
+        for relation in self.relations:
+            start, end = ((relation.source, relation.target) if downstream
+                          else (relation.target, relation.source))
+            adjacency[start].append(end)
+        queue = deque(selected)
+        while queue:
+            for node in adjacency.get(queue.popleft(), ()):
+                if node not in selected:
+                    selected.add(node)
+                    queue.append(node)
         # Include all requirements feeding a selected method, without traversing
         # onward from those incidental input nodes to unrelated methods.
         requirement_kinds = {
@@ -114,13 +118,24 @@ class DependencyDefinitionGraph:
             "requires_site_classification", "requires_site_environment", "requires_knowledge",
             "invests_resource", "funds_initial_inventory", "requires_fleet_units",
             "requires_population_commitment", "requires_origin_context",
+            "requires_gateway_capability", "requires_body_context", "nominal_power_load",
+            "research_stage", "research_work",
             "requires_survey_reach", "requires_resource_opportunity", "requires_opportunity_factor",
             "minimum_source_units", "requires_operation",
         }
-        selected.update(
-            relation.source for relation in self.relations
-            if relation.kind in requirement_kinds and relation.target in selected
-        )
+        # Close the typed AND inputs as well: a Technology's Research Stage
+        # brings its RP, Resource and Site requirements, while unrelated
+        # production routes that merely share a Resource remain outside scope.
+        inputs: dict[DependencyNode, list[DependencyNode]] = defaultdict(list)
+        for relation in self.relations:
+            if relation.kind in requirement_kinds:
+                inputs[relation.target].append(relation.source)
+        queue = deque(selected)
+        while queue:
+            for node in inputs.get(queue.popleft(), ()):
+                if node not in selected:
+                    selected.add(node)
+                    queue.append(node)
         return DependencyDefinitionGraph(
             tuple(node for node in self.nodes if node in selected),
             tuple(row for row in self.relations if row.source in selected and row.target in selected),

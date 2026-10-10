@@ -33,6 +33,13 @@ def test_registered_definition_graph_reuses_real_content_without_gameplay_side_e
     assert any(edge.target == method and edge.kind == "consumes_resource" for edge in subset.relations)
     assert any(edge.source == method and edge.kind == "produces_resource" for edge in subset.relations)
 
+    # Movement methods must retain the physical gateway/body inputs when the
+    # graph is filtered to an individual method (not just the global graph).
+    for relation_kind in ("requires_gateway_capability", "requires_body_context"):
+        relation = next(edge for edge in graph.relations if edge.kind == relation_kind)
+        filtered = graph.subset((relation.target,))
+        assert relation in filtered.relations
+
     # A new Definition participates without extending a Core ID table.
     extra = DefinitionId("test.process.unlisted")
     missing_resource = DefinitionId("test.resource.missing")
@@ -102,6 +109,15 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
     assert {"requires_site_capability", "requires_site_classification", "requires_site_environment"} <= {
         row.kind for row in stage_subset.relations if row.target == stage
     }
+    # Requesting a Technology's partial graph retains its Research Stage and
+    # the Stage's own resource/service/knowledge AND inputs transitively.
+    technology_subset = graph.subset((DependencyNode("technology", str(target)),))
+    assert stage in technology_subset.nodes
+    assert any(row.kind == "research_stage" and row.source == stage
+               for row in technology_subset.relations)
+    assert {"consumes_resource", "requires_site_capability", "requires_execution_capacity"} <= {
+        row.kind for row in technology_subset.relations if row.target == stage
+    }
     assert matches("requires_execution_capacity", stage)[0].quantity == 0.6
     assert matches("requires_execution_capacity", stage)[0].condition == "scope:ORGANIZATION"
     assert matches("research_work", DependencyNode("technology", str(target)))
@@ -153,6 +169,44 @@ def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_
     assert {d.code for d in graph.diagnostics} == {
         "unknown_relation_kind", "undefined_reference", "duplicate_definition_owner",
     }
+
+    # Typed coverage reports missing registered paths, without making a claim
+    # about scenario initial stocks or current physical execution eligibility.
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.analysis_graph import DependencyDefinitionGraph
+
+    resource = DependencyNode("resource", "test.resource.input")
+    service = DependencyNode("service_capacity", "test.service")
+    process = DependencyNode("process", "test.process")
+    facility = DependencyNode("facility", "test.facility")
+    vehicle = DependencyNode("vehicle", "test.vehicle")
+    nodes = (resource, service, process, facility, vehicle)
+    requirements = (
+        DependencyRelation("consumes_resource", resource, process, "process:input"),
+        DependencyRelation("requires_service_capacity", service, process, "process:service"),
+    )
+    findings = inspect_definition_coverage(DependencyDefinitionGraph(nodes, requirements, ()))
+    assert {f.code for f in findings} == {
+        "resource_demand_without_registered_replenishment",
+        "service_demand_without_registered_capacity_supplier",
+        "facility_without_registered_acquisition_method",
+        "facility_without_registered_retirement_method",
+        "vehicle_without_registered_acquisition_method",
+        "vehicle_without_registered_retirement_method",
+    }
+    assert all(f.significance == "informational" and f.evidence for f in findings)
+    # Any registered supplier is an alternative, not an AND requirement; it
+    # removes the missing-definition finding but proves no current stock/flow.
+    supplies = (
+        DependencyRelation("external_buy_offer", process, resource, "market:offer"),
+        DependencyRelation("nominal_service_supply", facility, service, "facility:service"),
+        DependencyRelation("constructs_facility", process, facility, "build:fixture"),
+        DependencyRelation("decommissions_facility", facility, process, "decommission:fixture"),
+        DependencyRelation("produces_vehicle", process, vehicle, "production:fixture"),
+        DependencyRelation("retires_vehicle", vehicle, process, "retire:fixture"),
+    )
+    covered = inspect_definition_coverage(DependencyDefinitionGraph(nodes, requirements + supplies, ()))
+    assert covered == ()
 
 
 def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():
@@ -479,7 +533,8 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
         DependencyRelation("supplies_capability", DependencyNode("facility", "supplier"),
                            capability, "facility:supplier:capability_supplies"),
     ), ())
-    assert not inspect_definition_coverage(connected)
+    assert not any(row.code == "required_capability_without_definition_supplier"
+                   for row in inspect_definition_coverage(connected))
 
 
 def test_technology_outlet_classification_follows_declared_research_edges_only():
