@@ -10,8 +10,9 @@ from math import isfinite
 from typing import Mapping, Sequence
 
 from space_idle.catalog import GameCatalog
-from space_idle.scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility
-from space_idle.shared import DefinitionId, SpatialNodeId, SurfaceCellId
+from space_idle.scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility, ScenarioMarketInterface, ScenarioProviderFleetAssignment
+from space_idle.shared import DefinitionId, SpatialNodeId, SurfaceCellId, EntityId
+from space_idle.population import ExternalPopulationSourceDefinition
 from space_idle.simulation import Simulation
 
 
@@ -26,7 +27,9 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
     if not changes:
         return base
     allowed = {"inventory_stock", "fleet", "storage_infrastructure", "initial_population", "facilities",
-               "completed_technologies", "funds_balance_musd", "operational_node_ids"}
+               "completed_technologies", "funds_balance_musd", "operational_node_ids",
+               "market_provider_ids", "market_interfaces", "survey_fleet_assignments",
+               "research_fleet_assignments", "external_population_sources"}
     if set(changes) - allowed:
         raise ValueError(f"unknown Scenario variant fields: {sorted(set(changes) - allowed)}")
     updated = {}
@@ -106,6 +109,92 @@ def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefi
         updated["operational_node_ids"] = tuple(sorted(
             set(base.operational_node_ids) | {SpatialNodeId(node) for node in new_nodes}
         ))
+    # Initial assignments are physical Fleet commitments owned by the normal
+    # Provider/Fleet Domains, not separate quantities supplied by an experiment.
+    # A provider and location identify the intended assignment; a new choice
+    # replaces it, allowing different Vehicle allocations across Scenarios.
+    for name in ("survey_fleet_assignments", "research_fleet_assignments"):
+        if name not in changes:
+            continue
+        incoming = changes[name]
+        if not isinstance(incoming, list):
+            raise ValueError(f"{name} must be a list of typed assignments")
+        assignments = {(row.provider_definition_id, row.operational_node_id): row
+                       for row in getattr(base, name)}
+        seen: set[tuple[DefinitionId, SpatialNodeId]] = set()
+        for raw in incoming:
+            row = _definition_fields(raw, {"provider_definition_id", "operational_node_id",
+                                          "vehicle_definition_id", "units"}, set(), name)
+            if any(not isinstance(row[key], str) or not row[key] for key in (
+                    "provider_definition_id", "operational_node_id", "vehicle_definition_id")):
+                raise ValueError(f"{name} requires nonempty typed IDs")
+            if type(row["units"]) is not int or row["units"] < 1:
+                raise ValueError(f"{name} units must be a positive integer")
+            assignment = ScenarioProviderFleetAssignment(
+                DefinitionId(row["provider_definition_id"]), SpatialNodeId(row["operational_node_id"]),
+                DefinitionId(row["vehicle_definition_id"]), row["units"],
+            )
+            key = assignment.provider_definition_id, assignment.operational_node_id
+            if key in seen:
+                raise ValueError(f"duplicate {name} assignment: {key}")
+            seen.add(key)
+            assignments[key] = assignment
+        updated[name] = tuple(assignments[key] for key in sorted(assignments))
+    if "external_population_sources" in changes:
+        incoming = changes["external_population_sources"]
+        if not isinstance(incoming, list):
+            raise ValueError("external_population_sources must be a list of typed sources")
+        sources = {row.id: row for row in base.external_population_sources}
+        seen: set[str] = set()
+        for raw in incoming:
+            row = _definition_fields(raw, {"id", "operational_node_id", "initial_people",
+                                          "max_acquisition_per_day"},
+                                     {"required_technology_ids"}, "external population source")
+            if not isinstance(row["id"], str) or not row["id"] or not isinstance(row["operational_node_id"], str) or not row["operational_node_id"]:
+                raise ValueError("external population source requires nonempty IDs")
+            if row["id"] in seen:
+                raise ValueError(f"duplicate external population source: {row['id']}")
+            seen.add(row["id"])
+            sources[row["id"]] = ExternalPopulationSourceDefinition(
+                row["id"], SpatialNodeId(row["operational_node_id"]),
+                row["initial_people"], row["max_acquisition_per_day"],
+                tuple(sorted(_definition_ids(row.get("required_technology_ids", []),
+                                             "population source prerequisites"))),
+            )
+        updated["external_population_sources"] = tuple(sources[key] for key in sorted(sources))
+    if "market_provider_ids" in changes:
+        providers = changes["market_provider_ids"]
+        if not isinstance(providers, list) or any(not isinstance(row, str) or not row for row in providers):
+            raise ValueError("market_provider_ids must be a list of nonempty Definition IDs")
+        if len(set(providers)) != len(providers):
+            raise ValueError("duplicate market provider in Scenario variant")
+        updated["market_provider_ids"] = tuple(sorted(
+            set(base.market_provider_ids) | {DefinitionId(row) for row in providers}
+        ))
+    if "market_interfaces" in changes:
+        incoming = changes["market_interfaces"]
+        if not isinstance(incoming, list):
+            raise ValueError("market_interfaces must be a list of typed interfaces")
+        interfaces = {row.id: row for row in base.market_interfaces}
+        seen: set[EntityId] = set()
+        for raw in incoming:
+            if not isinstance(raw, Mapping) or set(raw) - {
+                "id", "provider_id", "operational_node_id", "enabled"
+            } or not {"id", "provider_id", "operational_node_id"} <= set(raw):
+                raise ValueError("invalid market interface fields")
+            if any(not isinstance(raw[key], str) or not raw[key]
+                   for key in ("id", "provider_id", "operational_node_id")):
+                raise ValueError("market interface requires typed nonempty IDs")
+            if type(raw.get("enabled", True)) is not bool:
+                raise ValueError("market interface enabled must be boolean")
+            row = ScenarioMarketInterface(EntityId(raw["id"]), DefinitionId(raw["provider_id"]),
+                                          SpatialNodeId(raw["operational_node_id"]),
+                                          raw.get("enabled", True))
+            if row.id in seen:
+                raise ValueError(f"duplicate Scenario market interface: {row.id}")
+            seen.add(row.id)
+            interfaces[row.id] = row
+        updated["market_interfaces"] = tuple(interfaces[key] for key in sorted(interfaces))
     if "completed_technologies" in changes:
         technologies = changes["completed_technologies"]
         if not isinstance(technologies, list) or len(set(technologies)) != len(technologies):
@@ -254,6 +343,10 @@ def _owned_definition_collections(sim: Simulation) -> dict[str, tuple[dict, str 
         "decommission": (sim.projects.decommission_recipes, "facility_def_id"),
         "power": (sim.power.specs, None),
         "storage_provider": (sim.storage.providers, "facility_def_id"),
+        "market_provider": (sim.market.provider_defs, "id"),
+        "spatial_development": (sim.projects.spatial_recipes, "id"),
+        "construction_provider": (sim.projects.construction_providers, "facility_def_id"),
+        "construction_resource_provider": (sim.projects.construction_resource_providers, "resource_id"),
     }
     if sim.research is not None:
         collections["research_provider"] = (sim.research.providers, "id")
@@ -261,6 +354,10 @@ def _owned_definition_collections(sim: Simulation) -> dict[str, tuple[dict, str 
         collections["survey_provider"] = (sim.survey.providers, "id")
     if sim.extraction is not None:
         collections["extraction"] = (sim.extraction.specs, "id")
+    if sim.scientific_exploration is not None:
+        collections["scientific_exploration"] = (sim.scientific_exploration.definitions, "id")
+    if sim.founding is not None:
+        collections["founding"] = (sim.founding.deployment_recipes, "id")
     return collections
 
 
@@ -442,6 +539,26 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
                 vehicle = replace(vehicle, performance=replace(vehicle.performance, payload_t=amount))
             sim.transport.vehicle_defs[definition_id] = vehicle
             sim.transport.invalidate_movement_plans()
+        elif kind == "market_provider" and field_name == "lead_time_days":
+            if type(value) is not int or value < 0:
+                raise ValueError("market lead time must be a nonnegative integer")
+            provider = sim.market.provider_defs[definition_id]
+            sim.market.provider_defs[definition_id] = replace(provider, lead_time_days=value)
+        elif kind == "scientific_exploration" and field_name in (
+            "duration_days", "research_points_total",
+        ):
+            amount = _finite_nonnegative(value)
+            if amount <= 0:
+                raise ValueError(f"scientific exploration {field_name} must be positive")
+            definition = sim.scientific_exploration.definitions[definition_id]
+            sim.scientific_exploration.definitions[definition_id] = replace(
+                definition, **{field_name: amount},
+            )
+        elif kind == "founding" and field_name == "preparation_work":
+            definition = sim.founding.deployment_recipes[definition_id]
+            sim.founding.deployment_recipes[definition_id] = replace(
+                definition, preparation_work=_finite_nonnegative(value),
+            )
         elif kind == "research_provider" and field_name == "crew_person_days_per_research_point":
             if sim.research is None:
                 raise ValueError("Research Domain not available")

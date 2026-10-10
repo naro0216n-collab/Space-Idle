@@ -206,7 +206,34 @@ def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_
         DependencyRelation("retires_vehicle", vehicle, process, "retire:fixture"),
     )
     covered = inspect_definition_coverage(DependencyDefinitionGraph(nodes, requirements + supplies, ()))
-    assert covered == ()
+    # Coverage is complete, but construction is conditionally self-dependent:
+    # the only provider of the required service is the facility being acquired.
+    assert {f.code for f in covered} == {"potential_asset_self_bootstrap_dependency"}
+    assert covered[0].subject == facility
+
+    # A first installed asset cannot be its own exclusive construction service
+    # source. This is only a conditional authoring risk: an alternative source
+    # (OR), or a second acquisition method, removes it without inventing State.
+    work = DependencyNode("service_capacity", "test.work")
+    recipe = DependencyNode("construction_method", "test.build_facility")
+    self_only = (
+        DependencyRelation("constructs_facility", recipe, facility, "test:build"),
+        DependencyRelation("requires_construction_work", work, recipe, "test:work"),
+        DependencyRelation("nominal_construction_service_supply", facility, work, "test:self"),
+    )
+    self_graph = DependencyDefinitionGraph((facility, work, recipe), self_only, ())
+    assert any(row.code == "potential_asset_self_bootstrap_dependency" and row.subject == facility
+               for row in inspect_definition_coverage(self_graph))
+    alternate = DependencyRelation("nominal_construction_service_supply", vehicle, work, "test:other")
+    assert not any(row.code == "potential_asset_self_bootstrap_dependency"
+                   for row in inspect_definition_coverage(DependencyDefinitionGraph(
+                       (facility, vehicle, work, recipe), self_only + (alternate,), ())))
+    self_deploy_method = DependencyNode("construction_method", "test.self_deploy")
+    method_alternative = DependencyRelation("constructs_facility", self_deploy_method, facility,
+                                            "test:independent")
+    assert not any(row.code == "potential_asset_self_bootstrap_dependency"
+                   for row in inspect_definition_coverage(DependencyDefinitionGraph(
+                       (facility, work, recipe, self_deploy_method), self_only + (method_alternative,), ())))
 
 
 def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():

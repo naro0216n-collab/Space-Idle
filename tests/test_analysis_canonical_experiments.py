@@ -767,3 +767,242 @@ def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_with
         run.to_json_data() for run in run_experiments(cases, days=2,
             operational_node_ids=frozenset((EARTH,)))
     ]
+
+
+def test_independent_exploration_founding_and_market_variants_use_existing_domain_lifecycles(tmp_path):
+    """New Content identities require real Scenario ownership and real Commands."""
+    from space_idle.application_commands import (
+        GetScientificExplorations, GetMarket, GetSurfaceMap,
+        StartScientificExploration, CreateTradeOrder,
+    )
+    from space_idle.content.base_market import EARTH_MARKET_PROVIDER
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import load_game, save_game
+
+    new_science = 'experiment.science.orbital'
+    new_founding = 'experiment.founding.surface'
+    new_provider = 'experiment.market.provider'
+    new_interface = 'experiment.market.interface'
+    changes = tuple({"operation": "add", "kind": kind,
+                     "source_id": str(source), "id": target}
+                    for kind, source, target in (
+                        ('scientific_exploration', ids.CISLUNAR_SCIENCE_EXPLORATION, new_science),
+                        ('founding', ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE, new_founding),
+                        ('market_provider', EARTH_MARKET_PROVIDER, new_provider),
+                    )) + (
+                        {"kind": "scientific_exploration", "id": new_science,
+                         "field": "duration_days", "value": 6.0},
+                        {"kind": "founding", "id": new_founding,
+                         "field": "preparation_work", "value": 4.0},
+                        {"kind": "market_provider", "id": new_provider,
+                         "field": "lead_time_days", "value": 4},
+                    )
+    scenario = scenario_variant(build_standard_scenario_definition(), {
+        'market_provider_ids': [new_provider],
+        'market_interfaces': [{
+            'id': new_interface, 'provider_id': new_provider,
+            'operational_node_id': str(ids.EARTH), 'enabled': True,
+        }],
+    })
+
+    def factory():
+        return build_game_application_for_scenario(
+            scenario, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+        )
+
+    app = factory()
+    assert app._simulation.scientific_exploration.definitions[DefinitionId(new_science)].duration_days == 6.0
+    assert app._simulation.founding.deployment_recipes[DefinitionId(new_founding)].preparation_work == 4.0
+    assert app._simulation.market.provider_defs[DefinitionId(new_provider)].lead_time_days == 4
+    assert any(row.id == new_science for row in app.query(GetScientificExplorations()).items)
+    assert any(row.id == new_interface and row.provider_id == new_provider
+               for row in app.query(GetMarket()).interfaces)
+    cell = next(row for row in app.query(GetSurfaceMap(
+        str(ids.MOON), (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),)
+    )).cells if row.id == str(ids.MOON_CELL_FARSIDE_HIGHLANDS))
+    assert any(row.deployment_recipe_id == new_founding for row in cell.foundation_options)
+    assert all(row.deployment_recipe_id != new_founding
+               for cell in build_game_application().query(GetSurfaceMap(
+                   str(ids.MOON), (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),)
+               )).cells for row in cell.foundation_options)
+
+    def player(_app, day):
+        if day != 0:
+            return ()
+        return (StartScientificExploration(new_science),
+                CreateTradeOrder('buy', str(ids.MACHINERY), new_interface,
+                                 quantity_target_t=1.0))
+
+    fast_changes = changes + (
+        {"kind": "market_provider", "id": new_provider,
+         "field": "lead_time_days", "value": 1},
+        {"kind": "scientific_exploration", "id": new_science,
+         "field": "duration_days", "value": 4.0},
+    )
+    def fast_factory():
+        return build_game_application_for_scenario(
+            scenario, definition_transform=lambda sim, catalog: apply_content_variant(
+                sim, catalog, fast_changes),
+        )
+
+    cases = (ExperimentCase('base', build_game_application, player),
+             ExperimentCase('added', factory, player),
+             ExperimentCase('shorter-delay', fast_factory, player))
+    runs = run_experiments(cases, days=6)
+    assert len(runs[0].rejected_commands) == 2
+    assert not runs[1].rejected_commands
+    assert runs[1].to_json_data() == run_experiments((cases[1],), days=6)[0].to_json_data()
+    assert runs[1].content_definitions_sha256 != runs[0].content_definitions_sha256
+    assert runs[1].initial_state_sha256 != runs[0].initial_state_sha256
+    assert runs[1].initial_state_sha256 == runs[2].initial_state_sha256
+    assert runs[1].content_definitions_sha256 != runs[2].content_definitions_sha256
+    comparison = compare_experiments(runs[1:])['comparisons'][0]
+    assert comparison['same_initial_state'] and not comparison['same_content_definitions']
+    def first_market_delivery(run):
+        return min(row.day for trace in run.canonical_traces
+                   for row in trace.activity_flows()
+                   if row.activity_id.startswith(('market:', 'market_'))
+                   and row.destination_owner.startswith('inventory:'))
+    assert first_market_delivery(runs[2]) < first_market_delivery(runs[1])
+    assert any(row.activity_id.startswith('market:') or row.activity_id.startswith('market_')
+               for trace in runs[1].canonical_traces for row in trace.activity_flows())
+
+    app.execute(StartScientificExploration(new_science))
+    app.execute(CreateTradeOrder('buy', str(ids.MACHINERY), new_interface,
+                                 quantity_target_t=1.0))
+    app.execute(AdvanceTime(1))
+    path = tmp_path / 'independent-market-science.json'
+    save_game(app, path)
+    loaded, _ = load_game(path, lambda: build_game_application_for_load(
+        scenario=scenario, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes)
+    ))
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    loaded.execute(AdvanceTime(1))
+    app.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+    # A newly authored Founding method must also participate in the physical
+    # lifecycle, not merely appear in a candidate list. Endow a separate
+    # Scenario through the normal inventory/Fleet owners, never through a
+    # test-only resource injection after simulation initialization.
+    from space_idle.application_commands import (
+        PlanOperationalNodeFounding, SurfaceLocationFoundingTarget, GetProjects,
+    )
+    recipe = app._simulation.founding.deployment_recipes[DefinitionId(new_founding)]
+    founding_stocks = [
+        {'operational_node_id': str(ids.LUNAR_ORBIT),
+         'resource_id': str(requirement.resource_id),
+         'amount_t': requirement.amount_t + 5}
+        for requirement in recipe.payload_resources
+    ]
+    founding_stocks.append({'operational_node_id': str(ids.LUNAR_ORBIT),
+                            'resource_id': str(ids.PROPELLANT), 'amount_t': 30.0})
+    founding_scenario = scenario_variant(scenario, {
+        'inventory_stock': founding_stocks,
+        'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
+                   'vehicle_definition_id': str(ids.REUSABLE_SURFACE_CARGO_LANDER),
+                   'units': 1}],
+    })
+    def founding_factory():
+        return build_game_application_for_scenario(
+            founding_scenario,
+            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+        )
+    founded = founding_factory()
+    founding_command = PlanOperationalNodeFounding(
+        str(ids.LUNAR_ORBIT), 'Independent lunar site',
+        SurfaceLocationFoundingTarget('surface_location', str(ids.MOON),
+                                     str(ids.MOON_CELL_FARSIDE_HIGHLANDS)),
+        new_founding, str(ids.REUSABLE_SURFACE_CARGO_LANDER),
+    )
+    founding_result = founded.execute(founding_command)
+    assert founding_result.created_id
+    founded.execute(AdvanceTime(1))
+    assert any(row.id == founding_result.created_id
+               for row in founded.query(GetProjects(str(ids.LUNAR_ORBIT))).items)
+    founding_path = tmp_path / 'independent-founding.json'
+    save_game(founded, founding_path)
+    founded_loaded, _ = load_game(founding_path, lambda: build_game_application_for_load(
+        scenario=founding_scenario,
+        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+    ))
+    assert capture_state(founded_loaded._simulation) == capture_state(founded._simulation)
+    founded.execute(AdvanceTime(1))
+    founded_loaded.execute(AdvanceTime(1))
+    assert capture_state(founded_loaded._simulation) == capture_state(founded._simulation)
+
+    # Definitions cannot be deleted while Scenario states still refer to them.
+    with pytest.raises((ValueError, KeyError)):
+        build_game_application_for_scenario(
+            scenario, definition_transform=lambda sim, catalog: apply_content_variant(
+                sim, catalog, changes + ({'operation': 'remove', 'kind': 'market_provider', 'id': new_provider},)
+            ),
+        )
+
+    # Changing real Provider or Construction capacity is a Content variant,
+    # even when it does not alter static Graph edges or the initial State.
+    research_provider = next(iter(app._simulation.research.providers.values()))
+    changed_capacity = ({'kind': 'research_provider', 'id': str(research_provider.id),
+                         'field': 'crew_person_days_per_research_point', 'value': 1.5},)
+    provider_case = ExperimentCase('provider-change', lambda: build_game_application_for_scenario(
+        scenario, definition_transform=lambda sim, catalog: apply_content_variant(
+            sim, catalog, changes + changed_capacity)), _idle)
+    same_initial = run_experiments((ExperimentCase('unchanged', factory, _idle), provider_case), days=0)
+    assert same_initial[0].content_definitions_sha256 != same_initial[1].content_definitions_sha256
+    assert same_initial[0].initial_state_sha256 == same_initial[1].initial_state_sha256
+    assert same_initial[0].definition_graph_sha256 == same_initial[1].definition_graph_sha256
+
+    # Survey fleet and externally acquired Population remain finite and owned
+    # by their normal Domains when alternative Definitions are introduced.
+    new_survey = 'experiment.provider.survey'
+    survey_changes = changes + ({'operation': 'add', 'kind': 'survey_provider',
+                                 'id': new_survey,
+                                 'source_id': str(ids.LUNAR_FLEET_SURVEY_PROVIDER)},)
+    multi_owner_scenario = scenario_variant(scenario, {
+        'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
+                   'vehicle_definition_id': str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 'units': 2}],
+        'survey_fleet_assignments': [{
+            'provider_definition_id': new_survey,
+            'operational_node_id': str(ids.LUNAR_ORBIT),
+            'vehicle_definition_id': str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 'units': 1,
+        }],
+        'external_population_sources': [{
+            'id': 'experiment.population.earth',
+            'operational_node_id': str(ids.EARTH), 'initial_people': 12,
+            'max_acquisition_per_day': 4,
+        }],
+    })
+    def owner_factory():
+        return build_game_application_for_scenario(
+            multi_owner_scenario,
+            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, survey_changes))
+
+    multi_owner = owner_factory()
+    assert multi_owner._simulation.population.external_remaining['experiment.population.earth'] == 12
+    assert sum(assignment.units for assignment in multi_owner_scenario.survey_fleet_assignments
+               if assignment.operational_node_id == ids.LUNAR_ORBIT) == 2
+    survey_assigned = multi_owner._simulation.survey.provider_assignments
+    assert len(survey_assigned) >= 2
+    owner_before = capture_state(multi_owner._simulation)
+    multi_owner.execute(AdvanceTime(1))
+    owner_save = tmp_path / 'independent-survey-population.json'
+    save_game(multi_owner, owner_save)
+    owner_loaded, _ = load_game(owner_save, lambda: build_game_application_for_load(
+        scenario=multi_owner_scenario,
+        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, survey_changes),
+    ))
+    assert capture_state(owner_loaded._simulation) == capture_state(multi_owner._simulation)
+    assert capture_state(multi_owner._simulation) != owner_before
+
+    # Same Domain registrations handle spatial development and construction
+    # capacity additions, with reference validation on their removal.
+    spatial_original = next(iter(app._simulation.projects.spatial_recipes))
+    spatial_copy = 'experiment.spatial.development'
+    spatial_changes = changes + (
+        {'operation': 'add', 'kind': 'spatial_development',
+         'source_id': str(spatial_original), 'id': spatial_copy},
+    )
+    spatial_app = build_game_application_for_scenario(scenario, definition_transform=(
+        lambda sim, catalog: apply_content_variant(sim, catalog, spatial_changes)))
+    assert DefinitionId(spatial_copy) in spatial_app._simulation.projects.spatial_recipes
+    assert spatial_app._simulation.projects.spatial_recipes[DefinitionId(spatial_copy)].id == DefinitionId(spatial_copy)

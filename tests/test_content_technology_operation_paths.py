@@ -137,3 +137,23 @@ def test_authored_technology_prerequisites_are_nonredundant_and_reach_applicatio
             unlocks = rows[str(parent)].unlocks
             assert any(unlock.kind == 'research' and unlock.id == str(research_id)
                        for unlock in unlocks)
+
+    # Air chemistry, potable water, crew radiation exposure, and landing
+    # navigation are separate engineering questions. Neither the ordering of
+    # their authored series nor their shared Stage is an implicit prerequisite.
+    from space_idle.application_commands import StartResearch
+    independent = ("LS-ATMOSPHERE-WATER-WASTE-02", "BIO-HUMAN-BIOLOGY-MEDICINE-02")
+    for research_id in independent:
+        assert not definitions[research_id].prerequisites
+        assert rows[research_id].can_start
+        app.execute(StartResearch(research_id))
+    prerequisites = rows["EDL-EDL-03"].prerequisites
+    assert prerequisites == ("GN-NAVIGATION-01",)
+    assert all(blocker.kind == "prerequisite" for blocker in rows["EDL-EDL-03"].start_blockers)
+    with pytest.raises(ApplicationError) as rejected:
+        app.execute(StartResearch("EDL-EDL-03"))
+    assert rejected.value.code == "prerequisite"
+    assert "GN-NAVIGATION-01" in rejected.value.message
+    app.execute(AdvanceTime(1))
+    updated = {row.id: row for row in app.query(GetResearch()).items}
+    assert all(updated[research_id].status != "not_started" for research_id in independent)

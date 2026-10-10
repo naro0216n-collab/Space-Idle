@@ -175,5 +175,53 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                 f"{node.kind}_without_registered_retirement_method", node,
                 (f"{node.kind}:{node.id}:no_registered_retirement_or_decommission",),
             ))
+    # An installed asset cannot provide the only service needed to construct
+    # its *first* instance through every registered acquisition route.  This
+    # check deliberately preserves method OR and requirement AND: one viable
+    # alternative provider or one independent construction method avoids the
+    # self-bootstrap finding.  Initial Scenario endowments and unregistered
+    # external capabilities remain unknown, so this is authoring information,
+    # never a present-state impossibility verdict.
+    owned_assets = {node for node in graph.nodes if node.kind in ("facility", "vehicle")}
+    physical_suppliers: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    method_inputs: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    supply_kinds = {
+        "supplies_capability", "nominal_service_supply", "nominal_power_supply",
+        "nominal_research_execution", "nominal_construction_service_supply",
+        "nominal_resource_construction_supply", "nominal_survey_service_supply",
+        "nominal_life_support_supply",
+    }
+    input_kinds = {
+        "requires_capability", "requires_site_capability", "requires_service_capacity",
+        "requires_execution_capacity", "requires_construction_work",
+    }
+    for relation in graph.relations:
+        if relation.kind in supply_kinds and relation.target.kind in ("capability", "service_capacity"):
+            physical_suppliers[relation.target].add(relation.source)
+        elif (relation.kind in input_kinds and
+              relation.source.kind in ("capability", "service_capacity")):
+            method_inputs[relation.target].add(relation.source)
+    for asset in sorted(owned_assets):
+        methods = acquisitions.get(asset, set())
+        if not methods:
+            continue  # Missing acquisitions are already a separate finding.
+        bottlenecks = {}
+        for method in methods:
+            # Resource-only or self-deploying pathways remain independent of
+            # the installed physical service offered by this asset.
+            self_required = [requirement for requirement in method_inputs.get(method, ())
+                             if physical_suppliers.get(requirement) == {asset}]
+            if not self_required:
+                break
+            bottlenecks[method] = self_required
+        else:
+            findings.append(DefinitionCoverageFinding(
+                "potential_asset_self_bootstrap_dependency", asset,
+                tuple(sorted((
+                    "scope:registered_definition_acquisition_only;initial_assets_and_external_sources_unknown",
+                    *(f"method:{method.kind}:{method.id}:requires:{requirement.kind}:{requirement.id}"
+                      for method, requirements in bottlenecks.items() for requirement in requirements),
+                ))),
+            ))
     findings.extend(bootstrap_risks)
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
