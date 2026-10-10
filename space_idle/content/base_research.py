@@ -3,11 +3,16 @@ from __future__ import annotations
 from ..research import (
     ResearchDefinition,
     ResearchTheoryStageSpec,
+    ResearchPrototypeStageSpec,
+    ResearchOperationalExperienceStageSpec,
     ResearchProviderLevelSpec,
     ResearchProviderSourceKind,
     ResearchProviderSpec,
 )
 from ..knowledge import ExperienceContributionRule
+from ..execution_requirements import ServiceCapacityRequirement
+from ..service_capacity import ServiceCapacityScope
+from ..site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
 from ..shared import DefinitionId
 from . import base_ids as ids
 from . import base_requirements as req
@@ -27,6 +32,30 @@ def research_id(code: str) -> DefinitionId:
 
 
 def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
+    # Authored experiments are attached only to technical questions whose
+    # resolution actually needs hardware trials or operational evidence.
+    # All other DAG entries remain Theory-only; display stages/series never
+    # imply an automatic Research Stage kind.
+    additional_stages = {
+        ids.RP_RESOURCE_CHAIN_13: (
+            ResearchPrototypeStageSpec(
+                "oxide-reduction-prototype",
+                {ids.MINERAL_FEEDSTOCK: 0.5, ids.MACHINERY: 0.25},
+                SiteRequirements(
+                    capability_requirements=(CapabilityRequirement(
+                        "vacuum_regolith_research_equipment", CapabilityRequirementState.ACTIVE,
+                    ),),
+                ),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=3.0,
+            ),
+            ResearchOperationalExperienceStageSpec(
+                "manufacturing-experience", {ids.EXPERIENCE_MANUFACTURING_OPERATIONS: 4.0},
+            ),
+        ),
+    }
     definitions: dict[DefinitionId, ResearchDefinition] = {}
     for code, progression_stage, category, series, display_name, prerequisites, theory_cost in RESEARCH_DAG_ROWS:
         definition_id = research_id(code)
@@ -35,7 +64,7 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
         definitions[definition_id] = ResearchDefinition(
             definition_id,
             display_name,
-            (ResearchTheoryStageSpec("theory", theory_cost),),
+            (ResearchTheoryStageSpec("theory", theory_cost),) + additional_stages.get(definition_id, ()),
             prerequisites=frozenset(research_id(prerequisite) for prerequisite in prerequisites),
             progression_stage=progression_stage,
             category=category,

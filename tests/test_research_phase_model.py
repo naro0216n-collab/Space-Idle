@@ -68,6 +68,87 @@ def _research_site_fixture(sim):
     return sim.facilities.facilities[facility_id]
 
 
+def test_authored_prototype_and_operational_experience_link_physical_site_allocation_and_save(tmp_path):
+    """An actual late Content method uses its typed stages in the real Application."""
+    from datetime import datetime, timezone
+    from space_idle.bootstrap import build_game_application_for_load, build_game_application_for_scenario
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.persistence import capture_state, load_game, save_game
+    from space_idle.scenario import (
+        ScenarioFacility, ScenarioInventoryStock, ScenarioStorageInfrastructure, ScenarioSurfaceLocation,
+    )
+    from space_idle.shared import SpatialNodeId
+
+    base = build_standard_scenario_definition()
+    moon_node = SpatialNodeId("test.research.moon_site")
+    target = ids.RP_RESOURCE_CHAIN_13
+    definition = build_game_application()._simulation.research.definitions[target]
+    scenario = replace(
+        base,
+        completed_technologies=tuple(sorted(definition.prerequisites)),
+        surface_locations=base.surface_locations + (
+            ScenarioSurfaceLocation(moon_node, "Research test site", ids.MOON,
+                                    ids.MOON_CELL_SOUTH_POLAR_RIDGE),
+        ),
+        facilities=base.facilities + (
+            ScenarioFacility(ids.VACUUM_REGOLITH_PROCESS_LABORATORY, moon_node),
+            ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, moon_node),
+        ),
+        storage_infrastructure=base.storage_infrastructure + (
+            ScenarioStorageInfrastructure(moon_node, "default", 10),
+        ),
+        inventory_stock=base.inventory_stock + (
+            ScenarioInventoryStock(moon_node, ids.MINERAL_FEEDSTOCK, 2),
+            ScenarioInventoryStock(moon_node, ids.MACHINERY, 2),
+        ),
+    )
+
+    # Only shorten an experiment input: the method, site, and Research Stage
+    # definitions used by gameplay are otherwise identical to authored Content.
+    def short_theory(sim, _catalog):
+        original = sim.research.definitions[target]
+        sim.research.definitions[target] = replace(
+            original, stage_specs=(ResearchTheoryStageSpec("theory", 0.5),) + original.stage_specs[1:]
+        )
+
+    app = build_game_application_for_scenario(scenario, definition_transform=short_theory)
+    sim = app._simulation
+    sim.research.stored_points = 5.0  # test fixture's acquired RP, not an alternate Research solver
+    app.execute(StartResearch(str(target)))
+    app.execute(AdvanceTime(1))
+    row = _research_row(app, target)
+    assert row.current_stage_id == "oxide-reduction-prototype"
+    assert any(blocker.code == "prototype_site" for blocker in row.current_blockers)
+    app.execute(SetResearchPrototypeSite(str(target), "oxide-reduction-prototype", str(moon_node)))
+    app.execute(AdvanceTime(1))
+    assert sim.research.prototype_reserved_t(
+        target, "oxide-reduction-prototype", moon_node, ids.MINERAL_FEEDSTOCK
+    ) == pytest.approx(0.5)
+    assert sim.inventory.amount(moon_node, ids.MINERAL_FEEDSTOCK) == pytest.approx(2.0)
+
+    path = tmp_path / "typed-research.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    def load_factory():
+        loaded = build_game_application_for_load()
+        short_theory(loaded._simulation, loaded._catalog)
+        return loaded
+    loaded, offline = load_game(path, load_factory)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert loaded._simulation.research.prototype_reserved_t(
+        target, "oxide-reduction-prototype", moon_node, ids.MINERAL_FEEDSTOCK
+    ) == pytest.approx(0.5)
+
+    for _ in range(4):
+        app.execute(AdvanceTime(1))
+        loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert target in sim.technology.completed
+    assert _research_row(app, target).status == "complete"
+    # Stage inputs are permanently consumed once, not duplicated by Load.
+    assert sim.inventory.amount(moon_node, ids.MINERAL_FEEDSTOCK) == pytest.approx(1.5)
+
+
 def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_prerequisites():
     app = build_game_application()
     sim = app._simulation

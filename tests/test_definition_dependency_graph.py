@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from space_idle import build_game_application
 from space_idle.analysis_graph import (
@@ -43,6 +44,66 @@ def test_registered_definition_graph_reuses_real_content_without_gameplay_side_e
     assert any(d.code == "undefined_reference" and d.node == DependencyNode("resource", str(missing_resource))
                for d in graph.diagnostics)
     assert any(e.target == DependencyNode("process", str(extra)) for e in graph.relations)
+
+
+def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_experience_sources():
+    from space_idle.research import (
+        ResearchDefinition, ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+        ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
+    )
+    from space_idle.execution_requirements import ServiceCapacityRequirement
+    from space_idle.service_capacity import ServiceCapacityScope
+    from space_idle.site import SiteRequirements, CapabilityRequirement, CapabilityRequirementState
+    from space_idle.content import base_ids as ids
+
+    app = build_game_application()
+    sim = app._simulation
+    before = sim.day, sim.research.stored_points, sim.technology.completed.copy()
+    target = DefinitionId("test.research.typed_graph")
+    stage = DependencyNode("research_stage", f"{target}/prototype")
+    sim.research.definitions[target] = ResearchDefinition(target, "Typed Stage Graph", (
+        ResearchTheoryStageSpec("theory", 2.0),
+        ResearchPrototypeStageSpec(
+            "prototype", {ids.MACHINERY: 1.25},
+            SiteRequirements(capability_requirements=(CapabilityRequirement(
+                "general_research_equipment", CapabilityRequirementState.ACTIVE,
+            ),)),
+            (ServiceCapacityRequirement("research_execution", 0.6, scope=ServiceCapacityScope.ORGANIZATION),),
+            required_work=4.0,
+        ),
+        ResearchDemonstrationStageSpec("demonstration", 3.0),
+        ResearchOperationalExperienceStageSpec(
+            "operational_experience", {ids.EXPERIENCE_MANUFACTURING_OPERATIONS: 2.0},
+        ),
+    ))
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not graph.diagnostics
+    def matches(kind, dest):
+        return [row for row in graph.relations if row.kind == kind and row.target == dest]
+    assert matches("consumes_resource", stage)[0].quantity == 1.25
+    assert matches("consumes_resource", stage)[0].time_basis == "per_stage"
+    assert matches("requires_capability", stage)[0].condition == "required_state:ACTIVE"
+    assert matches("requires_execution_capacity", stage)[0].quantity == 0.6
+    assert matches("requires_execution_capacity", stage)[0].condition == "scope:ORGANIZATION"
+    assert matches("research_work", DependencyNode("technology", str(target)))
+    experience = DependencyNode("research_stage", f"{target}/operational_experience")
+    required = matches("requires_experience", experience)
+    assert len(required) == 1 and required[0].quantity == 2.0
+    assert any(row.kind == "contributes_experience" and row.target == required[0].source
+               for row in graph.relations)
+    assert before == (sim.day, sim.research.stored_points, sim.technology.completed)
+
+    # A research requirement unsupported by any registered Domain activity is
+    # a genuine unbound reference, not an inferred zero-cost source.
+    definition = sim.research.definitions[target]
+    sim.research.definitions[target] = replace(
+        definition, stage_specs=definition.stage_specs[:-1] + (
+            ResearchOperationalExperienceStageSpec("operational_experience", {"unknown.experience": 1.0}),
+        ),
+    )
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert any(row.code == "undefined_reference" and row.node == DependencyNode(
+        "experience_category", "unknown.experience") for row in graph.diagnostics)
 
 
 def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_relations():

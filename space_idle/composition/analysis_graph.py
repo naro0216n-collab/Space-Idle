@@ -10,7 +10,14 @@ from ..analysis_graph import (
     DependencyRelation, DefinitionGraphRegistry,
 )
 from ..catalog import GameCatalog
-from ..research_models import ResearchTheoryStageSpec
+from ..research_models import (
+    ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+    ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
+)
+from ..execution_requirements import (
+    ResourceRequirement, ServiceCapacityRequirement, PoolRequirement,
+    PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
+)
 from ..power import FixedGeneration, SolarGeneration
 from ..inventory import DEFAULT_STORAGE_POOL_KEY
 from ..simulation import Simulation
@@ -43,6 +50,14 @@ def build_definition_dependency_graph(
             for provider in sim.survey.providers.values():
                 for mode in provider.observation_modes:
                     all_capabilities.update(mode.required_source_capabilities)
+        if sim.research is not None:
+            for technology in sim.research.definitions.values():
+                for stage in technology.stage_specs:
+                    if isinstance(stage, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
+                        all_capabilities.update(
+                            requirement.capability_id
+                            for requirement in stage.site_requirements.capability_requirements
+                        )
         services = {"power", "life_support", "onboard_life_support"}
         services.update(supply.service_type
                         for facility in sim.facilities.definitions.values()
@@ -52,6 +67,13 @@ def build_definition_dependency_graph(
                             vehicle.retirement.service_type):
                 if service is not None:
                     services.add(service)
+        if sim.research is not None:
+            for technology in sim.research.definitions.values():
+                for stage in technology.stage_specs:
+                    if isinstance(stage, (ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+                                          ResearchDemonstrationStageSpec)):
+                        services.update(requirement.service_type for requirement in stage.execution_requirements
+                                        if isinstance(requirement, ServiceCapacityRequirement))
         resource_pools = {
             resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY
             for resource in catalog.resources.values()
@@ -79,8 +101,21 @@ def build_definition_dependency_graph(
     def research() -> DependencyFragment:
         if sim.research is None:
             return DependencyFragment((), ())
-        nodes = []
+        nodes = [
+            _node("experience_category", category)
+            for category in sorted({rule.category_id for rule in sim.research.experience_rules})
+        ]
         relations = []
+        for rule in sim.research.experience_rules:
+            activity = _node("activity_kind", rule.activity_kind)
+            if activity not in nodes:
+                nodes.append(activity)
+            relations.append(DependencyRelation(
+                "contributes_experience", activity,
+                _node("experience_category", rule.category_id),
+                f"experience:{rule.activity_kind}:{rule.category_id}",
+                rule.points_per_unit, "experience_points/activity_unit", "per_activity_unit",
+            ))
         for technology in sim.research.definitions.values():
             owner = _node("technology", technology.id)
             nodes.append(owner)
@@ -89,19 +124,84 @@ def build_definition_dependency_graph(
                     "technology_prerequisite", _node("technology", requirement), owner,
                     f"research:{technology.id}:prerequisites",
                 ))
-            for stage in technology.stage_specs:
+            for index, stage in enumerate(technology.stage_specs):
                 stage_node = _node("research_stage", f"{technology.id}/{stage.stage_id}")
                 nodes.append(stage_node)
                 relations.append(DependencyRelation(
                     "research_stage", stage_node, owner, f"research:{technology.id}:stage:{stage.stage_id}",
+                    condition=f"type:{stage.stage_type.value};order:{index}",
                 ))
+                provenance = f"research:{technology.id}:stage:{stage.stage_id}"
                 if isinstance(stage, ResearchTheoryStageSpec):
                     relations.append(DependencyRelation(
                         "research_point_cost", _node("research_point_pool", "research_points"), stage_node,
-                        f"research:{technology.id}:stage:{stage.stage_id}",
+                        provenance,
                         quantity=stage.research_point_cost, unit="research_points",
                         time_basis="per_stage",
                     ))
+                elif isinstance(stage, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
+                    relations.append(DependencyRelation(
+                        "research_work", stage_node, owner, provenance,
+                        stage.required_work, "work", "per_stage",
+                    ))
+                    if isinstance(stage, ResearchPrototypeStageSpec):
+                        for resource_id, amount in sorted(stage.resources.items()):
+                            relations.append(DependencyRelation(
+                                "consumes_resource", _node("resource", resource_id), stage_node,
+                                f"{provenance}:resources:{resource_id}", amount, "t", "per_stage",
+                            ))
+                    for requirement in stage.site_requirements.capability_requirements:
+                        relations.append(DependencyRelation(
+                            "requires_capability", _node("capability", requirement.capability_id), stage_node,
+                            f"{provenance}:site_capabilities:{requirement.capability_id}",
+                            condition=f"required_state:{requirement.required_state.value}",
+                        ))
+                    for requirement in stage.site_requirements.spatial_classification_requirements:
+                        relations.append(DependencyRelation(
+                            "requires_site_condition", stage_node, owner,
+                            f"{provenance}:spatial_classification:{requirement.code}",
+                            condition=f"classification:{requirement.classification.value}",
+                        ))
+                    for requirement in stage.site_requirements.environment:
+                        relations.append(DependencyRelation(
+                            "requires_site_condition", stage_node, owner,
+                            f"{provenance}:environment:{requirement.code}",
+                            condition=requirement.description,
+                        ))
+                elif isinstance(stage, ResearchOperationalExperienceStageSpec):
+                    for category, amount in sorted(stage.requirements.items()):
+                        relations.append(DependencyRelation(
+                            "requires_experience", _node("experience_category", category), stage_node,
+                            f"{provenance}:experience:{category}",
+                            amount, "experience_points", "completion_threshold",
+                        ))
+                if isinstance(stage, (ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
+                                      ResearchDemonstrationStageSpec)):
+                    for requirement in stage.execution_requirements:
+                        if isinstance(requirement, ResourceRequirement):
+                            kind, identifier = "resource", requirement.resource_id
+                        elif isinstance(requirement, ServiceCapacityRequirement):
+                            kind, identifier = "service_capacity", requirement.service_type
+                        elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement,
+                                                      StockOrPoolAdmissionRequirement)):
+                            kind, identifier = (
+                                ("research_point_pool", requirement.pool_id)
+                                if requirement.pool_id == "research_points" else
+                                ("capacity_pool", requirement.pool_id)
+                            )
+                            pool_node = _node(kind, identifier)
+                            if pool_node not in nodes and identifier not in {
+                                "research_points", "housing", "passenger_seats", "fleet_units", "population",
+                            }:
+                                nodes.append(pool_node)
+                        else:
+                            raise TypeError(f"unknown Research Stage requirement: {type(requirement).__name__}")
+                        relations.append(DependencyRelation(
+                            "requires_execution_capacity", _node(kind, identifier), stage_node,
+                            f"{provenance}:execution:{type(requirement).__name__}:{identifier}",
+                            requirement.amount_per_execution, "requirement_units/execution", "per_execution",
+                            condition=f"scope:{getattr(getattr(requirement, 'scope', None), 'value', 'node')}",
+                        ))
         for provider in sim.research.providers.values():
             target = _node("research_provider", provider.id)
             nodes.append(target)
@@ -115,13 +215,41 @@ def build_definition_dependency_graph(
                     f"research_provider:{provider.id}:required_source_capabilities",
                     condition="source_capabilities:" + ",".join(sorted(provider.required_source_capabilities)),
                 ))
+            for level in sorted(provider.levels, key=lambda row: row.level):
+                qualifier = f"research_provider:{provider.id}:level:{level.level}"
+                if level.generation_points_per_day:
+                    relations.append(DependencyRelation(
+                        "nominal_research_point_generation", target,
+                        _node("research_point_pool", "research_points"),
+                        f"{qualifier}:generation_points_per_day",
+                        level.generation_points_per_day, "research_points/day", "per_active_source",
+                        condition="admission_headroom_and_source_operations_required",
+                    ))
+                if level.storage_capacity_points:
+                    relations.append(DependencyRelation(
+                        "nominal_research_point_storage", target,
+                        _node("research_point_pool", "research_points"),
+                        f"{qualifier}:storage_capacity_points",
+                        level.storage_capacity_points, "research_points", "per_installed_source",
+                    ))
+                if level.research_execution_per_day:
+                    relations.append(DependencyRelation(
+                        "nominal_research_execution", target,
+                        _node("service_capacity", "research_execution"),
+                        f"{qualifier}:research_execution_per_day",
+                        level.research_execution_per_day, "execution_units/day", "per_active_source",
+                        condition="organization_pool;source_site_and_power_required",
+                    ))
         return DependencyFragment(tuple(nodes), tuple(relations))
 
     registry.register("research", research, expected_definitions=lambda: (
         _node("technology", key) for key in (() if sim.research is None else sim.research.definitions)
     ), relation_kinds={
         "technology_prerequisite", "research_stage", "research_point_cost",
-        "uses_asset_definition",
+        "research_work", "consumes_resource", "requires_capability", "requires_site_condition",
+        "contributes_experience", "requires_experience", "requires_execution_capacity",
+        "uses_asset_definition", "nominal_research_point_generation",
+        "nominal_research_point_storage", "nominal_research_execution",
     })
 
     def facilities() -> DependencyFragment:
@@ -493,6 +621,13 @@ def build_definition_dependency_graph(
             for definition in sim.scientific_exploration.definitions.values():
                 owner = _node("scientific_exploration", definition.id)
                 nodes.append(owner)
+                relations.append(DependencyRelation(
+                    "finite_research_point_reward", owner,
+                    _node("research_point_pool", "research_points"),
+                    f"scientific_exploration:{definition.id}:research_points_total",
+                    definition.research_points_total, "research_points", "per_completed_campaign",
+                    condition="finite_reward;rp_pool_admission_required",
+                ))
                 for technology in definition.prerequisite_technologies:
                     relations.append(DependencyRelation(
                         "unlocks_method", _node("technology", technology), owner,
@@ -506,6 +641,7 @@ def build_definition_dependency_graph(
             () if sim.scientific_exploration is None else sim.scientific_exploration.definitions))
     ), relation_kinds={
         "provides_mode", "requires_capability", "unlocks_method", "uses_asset_definition",
+        "finite_research_point_reward",
     })
 
     registry.register('world', lambda: context_contributors.world(sim),
