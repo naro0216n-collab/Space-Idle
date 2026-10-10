@@ -861,9 +861,11 @@ Scenario Definitionは少なくとも、開始時Operational Node / Surface Loca
 
 標準Scenarioでは、地球側に基礎産業・研究・打上げ・Vehicle建造を開始できる運用基盤、Resource売買に利用できる地球側Market Interface、成立済みTransport Network内で初期の反復物流を自動進行できる能力、地球周辺から月をRemote Surveyして候補を比較し、通常のResource / Fleet / Founding契約だけで最初の月面Locationを設立できる軌道・Fleet能力を持たせる。一方、開始時からプレイヤー所有の月面Surface Locationや完全な月面Resource Knowledgeは与えない。これらは開始時Facility数、Fleet数、Funds額等の固定値ではなく、標準Scenarioが成立させるゲームループ上の能力として扱う。月面進出はRemote Survey → 候補比較 → Founding Deploymentという通常ゲームループを使う。
 
-### 技術・実活動から導出する資産体系
+### Facility / Vehicleの多角的な選定と技術・実活動の観点
 
-Facility / Vehicleの必要性は**先に工学上の作業と物理的な所有形態から決める**。既存Technologyの出口件数や、別の選択肢を増やすための任意の性能差から逆算しない。研究分野を細分化したからといって各研究に一対一の施設・機種を要求しない。次に示すのは施設・機体として独立させる合理性を持つ機能群であり、同じ機体が複数機能を担う場合は必要に応じて統合する。表示名、運用先、各世代はContent定義であり、特定IDのCore規則ではない。
+Facility / Vehicleの追加・改修・統合は、宇宙開発での工学的必要性や自然さ、Technologyの成熟と応用、プレイヤーが選ぶ開発・運用方式、立地と環境、Resource・Power・Maintenance・物流の制約、既存Assetとの役割分担、ゲームループ・バランス・UX、将来の発展余地を総合して判断する。いずれか一つを唯一の選定基準や必須の検討順序にはしない。
+
+工学上の作業と物理的な所有形態から候補を列挙し、ゲーム上の性能・費用・運用差を後から設定する方法は、その判断方法の一つである。ゲーム上の選択肢や研究発展上の必要から候補を考え、工学的な整合性を確かめる方法も排除しない。Technologyの出口件数を増やすことだけや、意味を伴わない数値差だけを追加理由にしない一方、Player判断を増やすこと自体を不適切な動機とはみなさない。以下は技術・実活動の観点から検討できる資産の例であり、追加候補を限定する一覧ではない。同じ機体が複数機能を担う場合は統合も検討し、表示名・運用先・世代はContentで定め、特定IDに対応するCore規則を設けない。
 
 | 技術・運用領域 | 現実の宇宙活動で必要または自然なFacility / Infrastructure | 独立して保有・運用することが自然なVehicle / Fleet |
 |---|---|---|
@@ -878,7 +880,7 @@ Facility / Vehicleの必要性は**先に工学上の作業と物理的な所有
 | 有人活動 | 居住・生命維持モジュール、与圧研究設備、食料栽培施設、医療・退避設備 | 有人軌道間輸送船、有人着陸機、与圧地表探査車 |
 | 電力・保管・保守 | 太陽光・核分裂発電、給配電設備、定置蓄電、環境に応じた保管設備 | 点検・整備ロボット |
 
-ゲーム上の差異はこの列挙の**後段**で、設置・製造に必要なTechnology、Site/Environment、投入Resource、Power、Maintenance、搭載量、航行可能Operation、到着・回収条件、共有Service Capacity、継続性と実時間から定める。実行時の効果・状態所有・Player判断が完全に等価なら、機種または設備の追加・温存を目的化せず同一DefinitionやTier/Level等へ統合する。通信網・放熱・蓄電・Carrier輸送など、独立した物理モデルが未成立の役割は、無償効果や用途だけの装飾Capabilityを作って実装済みと呼ばない。新しいAssetを通常Commandで得られるようにする場合は、建造・移動・使用・回収・退役、Inventory、保存、判断地点まで必要な範囲を接続する。
+候補の起点にかかわらず、採用時にはTechnology、Site/Environment、投入Resource、Power、Maintenance、搭載量、航行可能Operation、到着・回収条件、共有Service Capacity、継続性と実時間によって、物理的な役割とゲーム上の差異を具体化する。実行時の効果・状態所有・Player判断が等価な候補は統合を検討するが、異なる研究投資、運用方式、制約への対応などが成立するなら別Assetとして選べる。未成立の物理モデルを装飾Capabilityや無償効果で代用せず、必要なら共通契約の実装も合わせて検討する。未実装の契約があることだけを理由に候補を機械的に取り下げない。新しいAssetを通常Commandで取得する場合は、建造・移動・使用・回収・退役、Inventory、保存、判断地点まで必要な範囲を接続する。
 
 Facility・VehicleのContent候補（以下の配置先は想定用途・初期Scenarioの例であり、使用可能Locationを定義しない）：
 
