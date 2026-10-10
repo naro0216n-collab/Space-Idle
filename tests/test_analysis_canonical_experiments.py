@@ -1006,3 +1006,71 @@ def test_independent_exploration_founding_and_market_variants_use_existing_domai
         lambda sim, catalog: apply_content_variant(sim, catalog, spatial_changes)))
     assert DefinitionId(spatial_copy) in spatial_app._simulation.projects.spatial_recipes
     assert spatial_app._simulation.projects.spatial_recipes[DefinitionId(spatial_copy)].id == DefinitionId(spatial_copy)
+
+
+def test_movement_rule_content_variants_reuse_canonical_app_and_physical_targets():
+    """Independent transport Content changes preserve one Movement model.
+
+    Additional authored profile IDs must not collide or create an alternate
+    arrival/return solver; removing a profile removes its routes in that case.
+    """
+    from space_idle.application_commands import GetMovementPlans
+
+    original = build_game_application()
+    origin = ids.LEO
+    target = ids.MARS_CELL_EQUATORIAL_PLAIN
+    source = next(rule for rule in original._simulation.transport.surface_access_movement_rules
+                  if str(rule.body_id) == "base.body.mars")
+    original_plans = original._simulation.transport.movement_plans_to_physical_target(origin, target)
+    assert len(original_plans) == 1
+
+    variant_changes = (
+        {"operation": "add", "kind": "surface_access_movement_rule",
+         "source_id": str(source.id), "id": "test.movement.alt_mars_access"},
+        {"kind": "surface_access_movement_rule", "id": "test.movement.alt_mars_access",
+         "field": "transit_days", "value": source.transit_days + 5},
+        {"operation": "add", "kind": "spaceflight_movement_rule",
+         "source_id": "base.movement.spaceflight", "id": "test.movement.alt_spaceflight"},
+    )
+
+    def factory(changes):
+        return build_game_application_for_scenario(
+            build_standard_scenario_definition(),
+            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+        )
+
+    changed = factory(variant_changes)
+    changed_plans = changed._simulation.transport.movement_plans_to_physical_target(origin, target)
+    # Two surface-access profiles x two spaceflight profiles; physical target
+    # remains distinct from an owned operational Node.
+    assert len(changed_plans) == 4
+    assert len({plan.id for plan in changed_plans}) == 4
+    assert target not in changed._simulation.graph.operational_node_ids()
+    assert all(plan.relation.movement_context == "interplanetary_transfer_surface_access"
+               for plan in changed_plans)
+    assert original._simulation.transport.movement_plans_to_physical_target(origin, target) == original_plans
+    assert changed.query(GetMovementPlans(origin_id=str(origin), include_modes=False)).items
+
+    # A separate case can legitimately remove the route. The World/Resource
+    # owner stays intact and no invented fallback movement is added.
+    removed = factory(({"operation": "remove", "kind": "surface_access_movement_rule",
+                        "id": str(source.id)},))
+    assert not removed._simulation.transport.movement_plans_to_physical_target(origin, target)
+    assert target in removed._simulation.graph.surface_cells
+    with pytest.raises(ValueError, match="duplicate .* Definition"):
+        factory(({"operation": "add", "kind": "surface_access_movement_rule",
+                  "id": str(source.id), "source_id": str(source.id)},))
+    with pytest.raises(ValueError, match="unknown .* Definition"):
+        factory(({"operation": "remove", "kind": "surface_access_movement_rule",
+                  "id": "test.no_such_rule"},))
+
+    runs = run_experiments((
+        ExperimentCase("original", build_game_application, _idle),
+        ExperimentCase("alternative", lambda: factory(variant_changes), _idle),
+    ), days=1)
+    comparison = compare_experiments(runs)["comparisons"][0]
+    assert not comparison["same_content_definitions"]
+    assert comparison["same_initial_state"]
+    assert [row.to_json_data() for row in run_experiments((
+        ExperimentCase("alternative", lambda: factory(variant_changes), _idle),
+    ), days=1)[0].observations] == [row.to_json_data() for row in runs[1].observations]

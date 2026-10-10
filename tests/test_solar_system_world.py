@@ -284,9 +284,42 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
     assert any("pressure" in reason for reason in sim.transport.vehicle_movement_physical_failures(
         venus[0].id, ids.INTERPLANETARY_LANDER, sim.day,
     ))
+    # An established atmospheric location must own an actual launch gateway;
+    # installing a surface-distribution hub alone cannot provide a launch pad.
     assert frozenset(graph.operational_node_ids()) == owner_ids
-    assert all(plan.origin_id in owner_ids and plan.destination_id in owner_ids
+    venus_cell = SurfaceCellId("base.cell.venus.highland")
+    venus_node = SpatialNodeId("test.venus.surface_base")
+    graph.found_location(venus_node, "Venus base", graph.surface_cells[venus_cell].body_id, venus_cell)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, venus_node, site_cell_id=venus_cell)
+    assert not sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
+    sim.facilities.install(ids.EARTH_LAUNCH_SUPPORT, venus_node, site_cell_id=venus_cell)
+    assert sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
+    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
+                if rule.body_id == CelestialBodyId("base.body.venus")) == "launch_operations"
+    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
+                if rule.body_id == CelestialBodyId("base.body.mars")) == "surface_distribution"
+    assert all(plan.origin_id in graph.operational_node_ids() and plan.destination_id in graph.operational_node_ids()
                for plan in resolver.all_direct_plans())
+
+    # Body IDs with equal terminal names remain separate physical contexts.
+    # A Content extension does not require an authored case or a new evaluator.
+    from space_idle.content.base_transport import build_surface_access_movement_rules
+    from space_idle.spatial import AtmosphereField
+    venus_body = graph.bodies[CelestialBodyId("base.body.venus")]
+    environment = sim.facilities.environment
+    for namespace in ("test.outer", "test.inner"):
+        new_body_id = CelestialBodyId(f"{namespace}.venus")
+        graph.add_body(replace(venus_body, id=new_body_id))
+        environment.static.body_facets[(new_body_id, AtmosphereField)] = (
+            environment.static.body_facets[(venus_body.id, AtmosphereField)]
+        )
+    all_profiles = build_surface_access_movement_rules(graph, environment)
+    assert len({profile.id for profile in all_profiles}) == len(all_profiles)
+    for namespace in ("test.outer", "test.inner"):
+        new_body_id = CelestialBodyId(f"{namespace}.venus")
+        generated = next(profile for profile in all_profiles if profile.body_id == new_body_id)
+        assert generated.gateway_capability_id == "launch_operations"
+        assert generated.descent_operations[0].operation_type == "atmospheric_entry"
 
 
 def test_martian_surface_founding_creates_operational_site_only_after_long_transit():

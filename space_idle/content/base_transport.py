@@ -42,15 +42,14 @@ def build_surface_movement_rules() -> tuple[SurfaceTransportMovementRule, ...]:
 def build_surface_access_movement_rules(
     graph: SpatialGraph, environment: EnvironmentResolver,
 ) -> tuple[SurfaceAccessMovementRule, ...]:
-    """Build one surface/space operation profile per physical surface.
+    """Build Body-local access profiles from authored physical conditions.
 
-    The existing Earth/Moon access Content retains its established profile.
-    Additional bodies derive the orbital-access Delta-V scale from the *same*
-    Body gravitational input used by Spatial transfer, and their atmosphere
-    selects an entry or powered landing operation. No OD-specific routes or
-    additional planet-specific Movement evaluators are registered.
+    Some Content defines explicit vehicle-operation profiles, while additional
+    bodies reuse the physical gravity/atmosphere derivation. Both enter the
+    same Movement resolver and Eligibility contract; no Body ID determines
+    the execution rules. No per-origin/destination route table is introduced.
     """
-    baseline = (
+    authored_profiles = (
         SurfaceAccessMovementRule(
             id=DefinitionId("base.movement.earth_surface_access"),
             display_name="地球地表アクセス",
@@ -82,9 +81,15 @@ def build_surface_access_movement_rules(
             surface_requirements=req.SURFACE_SITE,
         ),
     )
-    derived: list[SurfaceAccessMovementRule] = []
+    authored_by_body = {profile.body_id: profile for profile in authored_profiles}
+    if len(authored_by_body) != len(authored_profiles):
+        raise ValueError("duplicate authored Body surface access profile")
+    rules: list[SurfaceAccessMovementRule] = []
     for body in sorted(graph.bodies.values(), key=lambda row: str(row.id)):
-        if body.physical_surface is not PhysicalSurface.SOLID or body.id in (ids.EARTH_BODY, ids.MOON):
+        if body.physical_surface is not PhysicalSurface.SOLID:
+            continue
+        if body.id in authored_by_body:
+            rules.append(authored_by_body[body.id])
             continue
         gravity = body.representative_gravity_m_s2
         if gravity is None:
@@ -103,8 +108,8 @@ def build_surface_access_movement_rules(
             TransportOperationKind.ATMOSPHERIC_ENTRY if has_dense_atmosphere
             else TransportOperationKind.LANDING
         )
-        derived.append(SurfaceAccessMovementRule(
-            id=DefinitionId(f"base.movement.{str(body.id).split('.')[-1]}_surface_access"),
+        rules.append(SurfaceAccessMovementRule(
+            id=DefinitionId(f"base.movement.surface_access.{body.id}"),
             display_name=f"{body.display_name}地表アクセス",
             body_id=body.id,
             descent_operations=(TransportOperationRequirement(
@@ -114,10 +119,11 @@ def build_surface_access_movement_rules(
                 TransportOperationKind.POWERED_ASCENT, characteristic_delta_v,
             ),),
             transit_days=2,
+            gateway_capability_id="launch_operations" if has_dense_atmosphere else "surface_distribution",
             space_requirements=req.ORBIT_SITE,
             surface_requirements=req.ATMOSPHERIC_SURFACE_SITE if has_dense_atmosphere else req.SURFACE_SITE,
         ))
-    return baseline + tuple(derived)
+    return tuple(rules)
 
 
 def build_spaceflight_movement_rules() -> tuple[SpaceflightMovementRule, ...]:

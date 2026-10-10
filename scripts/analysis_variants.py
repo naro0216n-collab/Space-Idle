@@ -402,6 +402,52 @@ def _change_owned_definition(sim: Simulation, change: Mapping) -> None:
         sim.transport.invalidate_movement_plans()
 
 
+def _change_movement_rule_membership(sim: Simulation, change: Mapping) -> None:
+    """Edit typed Movement definitions in an isolated Composition, never State.
+
+    Movement rules are tuple-owned by Transport, not an alternative global
+    registry. A profile can be authored as an additional route choice, while
+    every generated plan still goes through the normal Operation eligibility.
+    """
+    collections = {
+        "surface_movement_rule": "surface_movement_rules",
+        "surface_access_movement_rule": "surface_access_movement_rules",
+        "spaceflight_movement_rule": "spaceflight_movement_rules",
+    }
+    kind = change.get("kind")
+    attr = collections[kind]
+    raw_id = change.get("id")
+    if not isinstance(raw_id, str) or not raw_id:
+        raise ValueError("Movement Definition requires a nonempty ID")
+    definition_id = DefinitionId(raw_id)
+    rules = {rule.id: rule for rule in getattr(sim.transport, attr)}
+    if len(rules) != len(getattr(sim.transport, attr)):
+        raise ValueError(f"duplicate {kind} Definition in Composition")
+    operation = change.get("operation")
+    if operation == "remove":
+        if set(change) != {"operation", "kind", "id"}:
+            raise ValueError("Movement Definition removal accepts only operation, kind and id")
+        if definition_id not in rules:
+            raise ValueError(f"unknown {kind} Definition: {definition_id}")
+        del rules[definition_id]
+    elif operation == "add":
+        if set(change) != {"operation", "kind", "id", "source_id"}:
+            raise ValueError("Movement Definition copy requires operation, kind, id and source_id")
+        source_id = change["source_id"]
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("Movement Definition requires a nonempty source_id")
+        if definition_id in rules:
+            raise ValueError(f"duplicate {kind} Definition: {definition_id}")
+        source = rules.get(DefinitionId(source_id))
+        if source is None:
+            raise ValueError(f"unknown {kind} source Definition: {source_id}")
+        rules[definition_id] = replace(source, id=definition_id)
+    else:
+        raise ValueError(f"unknown Movement Definition operation: {operation}")
+    setattr(sim.transport, attr, tuple(rules[key] for key in sorted(rules)))
+    sim.transport.invalidate_movement_plans()
+
+
 def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
     """Author typed Content additions/deletions in a fresh pre-Scenario composition.
 
@@ -414,6 +460,9 @@ def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change:
 
     action = change.get("operation")
     kind = change.get("kind")
+    if kind in ("surface_movement_rule", "surface_access_movement_rule", "spaceflight_movement_rule"):
+        _change_movement_rule_membership(sim, change)
+        return
     if kind in _owned_definition_collections(sim):
         _change_owned_definition(sim, change)
         return
@@ -639,6 +688,25 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             else:
                 domain = sim.projects.recipes
                 domain[definition_id] = replace(domain[definition_id], prerequisite_technologies=prerequisites)
+        elif kind == "surface_access_movement_rule" and field_name in (
+            "transit_days", "gateway_capability_id",
+        ):
+            if field_name == "transit_days":
+                if type(value) is not int or value <= 0:
+                    raise ValueError("surface access transit_days must be a positive integer")
+            elif not isinstance(value, str) or not value:
+                raise ValueError("surface access gateway capability must be a nonempty string")
+            found = False
+            rules = []
+            for rule in sim.transport.surface_access_movement_rules:
+                if rule.id == definition_id:
+                    found = True
+                    rule = replace(rule, **{field_name: value})
+                rules.append(rule)
+            if not found:
+                raise ValueError(f"unknown surface access rule {definition_id}")
+            sim.transport.surface_access_movement_rules = tuple(rules)
+            sim.transport.invalidate_movement_plans()
         elif kind == "spaceflight_movement_rule" and field_name in (
             "minimum_transit_days", "characteristic_speed_km_per_day"
         ):
