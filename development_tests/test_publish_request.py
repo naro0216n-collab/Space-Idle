@@ -521,6 +521,9 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     assert stale_actions.index("delete") < stale_actions.index("upload")
     assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
+    # An ordinary one-tree transaction must fit the Connector call budget,
+    # including Files visibility retries, without omitting the cleanup or writes.
+    assert len(actions) <= 14
     assert actions[0] == "fetch-source"
     assert actions[1] == "create_folder"
     assert actions.count("create_folder") == 1

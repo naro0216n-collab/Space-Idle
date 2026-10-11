@@ -167,7 +167,7 @@ class ScientificExplorationProjectorMixin:
                 fleet = sim.transport.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
-                option_blockers = service.fleet_failures(
+                option_blockers, can_assign = service.fleet_assignment_assessment(
                     definition.id,
                     vehicle_definition.id,
                     day=sim.day,
@@ -215,12 +215,7 @@ class ScientificExplorationProjectorMixin:
                         ),
                         outbound_latency_days=option_outbound_latency,
                         return_latency_days=option_return_latency,
-                        can_assign=service.can_assign_fleet(
-                            definition.id,
-                            vehicle_definition.id,
-                            day=sim.day,
-                            power_by_location=power_by_location,
-                        ),
+                        can_assign=can_assign,
                     )
                 )
             rows.append(

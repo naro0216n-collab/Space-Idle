@@ -612,6 +612,29 @@ class ScientificExplorationService:
             and state.paused
         )
 
+    def _fleet_assignment_open(self, definition_id: DefinitionId) -> bool:
+        state = self.campaigns.get(definition_id)
+        return (
+            state is not None
+            and state.phase is ScientificExplorationPhase.AWAITING_FLEET
+            and state.vehicle_definition_id is None
+        )
+
+    def fleet_assignment_assessment(
+        self,
+        definition_id: DefinitionId,
+        vehicle_definition_id: DefinitionId,
+        *,
+        day: int = 0,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
+    ) -> tuple[tuple[str, ...], bool]:
+        """Return blockers and action availability from the same physical assessment."""
+        failures = self.fleet_failures(
+            definition_id, vehicle_definition_id,
+            day=day, power_by_location=power_by_location,
+        )
+        return failures, self._fleet_assignment_open(definition_id) and not failures
+
     def can_assign_fleet(
         self,
         definition_id: DefinitionId,
@@ -620,12 +643,7 @@ class ScientificExplorationService:
         day: int = 0,
         power_by_location: dict[SpatialNodeId, PowerSnapshot] | None = None,
     ) -> bool:
-        state = self.campaigns.get(definition_id)
-        if (
-            state is None
-            or state.phase is not ScientificExplorationPhase.AWAITING_FLEET
-            or state.vehicle_definition_id is not None
-        ):
+        if not self._fleet_assignment_open(definition_id):
             return False
         return not self.fleet_failures(
             definition_id,

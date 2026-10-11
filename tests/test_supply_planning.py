@@ -142,6 +142,25 @@ def test_canonical_path_combines_operational_metrics_and_is_registration_order_i
     assert _selected_path_ids(edges) == ("balanced",)
     assert _selected_path_ids(tuple(reversed(edges))) == ("balanced",)
 
+    # Five normalized metrics use a single immutable candidate graph per
+    # selection; obtaining adjacency must not repeat physical eligibility work.
+    expansions: dict[str, int] = {}
+
+    def outgoing(node):
+        expansions[node] = expansions.get(node, 0) + 1
+        return tuple(edge for edge in edges if edge.source == node)
+
+    chosen = select_canonical_path(
+        "origin", "destination", outgoing=outgoing,
+        edge_destination=lambda edge: edge.destination,
+        edge_time=lambda edge: edge.time,
+        edge_propellant=lambda edge: edge.propellant,
+        edge_capacity=lambda edge: edge.capacity,
+        edge_key=lambda edge: edge.id,
+    )
+    assert tuple(row.id for row in chosen) == ("balanced",)
+    assert expansions == {"origin": 1}
+
 def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_rate_cap():
     sim = build_game_application()._simulation
     allocation_id = _owned_earth_leo_capacity(sim)

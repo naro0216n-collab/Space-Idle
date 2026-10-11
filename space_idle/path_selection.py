@@ -67,20 +67,31 @@ def select_canonical_path(
     the same candidate graph. Stable keys are only used to break equal scores.
     """
 
+    # All five metrics evaluate the same physical graph in one selection.
+    # Materialize adjacency once; recomputing ``outgoing`` can re-evaluate
+    # expensive Vehicle, site, and infrastructure eligibility for every metric.
+    # The cache belongs to this invocation, never to mutable Simulation state.
+    adjacency: dict[NodeT, tuple[EdgeT, ...]] = {}
+
+    def snapshot_outgoing(node: NodeT) -> tuple[EdgeT, ...]:
+        if node not in adjacency:
+            adjacency[node] = tuple(outgoing(node))
+        return adjacency[node]
+
     best_time, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=edge_time, edge_key=edge_key,
     )
     best_propellant, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=edge_propellant, edge_key=edge_key,
     )
     best_hops, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=lambda _edge: 1.0, edge_key=edge_key,
     )
     best_capacity_burden, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=lambda edge: 1.0 / max(float(edge_capacity(edge)), _EPS),
         edge_key=edge_key,
     )
@@ -91,7 +102,7 @@ def select_canonical_path(
     return _dijkstra(
         origin,
         destination,
-        outgoing=outgoing,
+        outgoing=snapshot_outgoing,
         edge_destination=edge_destination,
         edge_weight=lambda edge: (
             float(edge_time(edge)) / time_scale

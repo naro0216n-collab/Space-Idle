@@ -7,7 +7,7 @@ from .content.base_catalog import build_base_catalog
 from .content.base_scenario import build_standard_scenario_definition
 from .composition.base_simulation import build_base_simulation
 from .scenario import ScenarioDefinition
-from .validation import validate_catalog_coverage, validate_runtime_state, validate_simulation_configuration
+from .validation import validate_catalog_coverage, validate_domain_runtime_state, validate_simulation_configuration
 
 
 def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinition,
@@ -42,7 +42,9 @@ def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinit
         # day-0 Boundary has been settled.  Scenario State is already owned by
         # its normal Domains before this transition.
         simulation.prepare_player_command()
-        validate_runtime_state(simulation)
+        # Scenario.apply mutates owner State but not Definitions.  Static
+        # configuration was validated before State was instantiated above.
+        validate_domain_runtime_state(simulation)
     return GameApplication(simulation, catalog)
 
 
