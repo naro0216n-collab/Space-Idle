@@ -49,7 +49,9 @@ def running_api(tmp_path):
     )
     with patch("http.server.socket.getfqdn", side_effect=AssertionError("Reverse DNS on HTTP bind")):
         server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    thread = Thread(target=server.serve_forever, daemon=True)
+    # The default 0.5s serve_forever poll delay only slows shutdown in
+    # short-lived HTTP contract tests; it is not part of HTTP semantics.
+    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
     try:
         yield server.server_address[1]

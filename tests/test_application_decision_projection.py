@@ -218,7 +218,16 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
     app = build_game_application()
     sim = app._simulation
     original = sim.tick_decision_projection
+    original_dependencies = sim.service_capacity_dependencies
     calls = 0
+    dependency_derivations = 0
+
+    def counted_dependencies():
+        nonlocal dependency_derivations
+        dependency_derivations += 1
+        return original_dependencies()
+
+    monkeypatch.setattr(sim, "service_capacity_dependencies", counted_dependencies)
 
     def counted_projection():
         nonlocal calls
@@ -230,6 +239,9 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
 
     app.query(GetLogistics())
     assert calls == 1
+    # Maintenance/transport feedback must not rebuild the invariant provider
+    # dependency graph for every allocation attempt within the same query.
+    assert dependency_derivations == 1
 
     for query in (
         GetWorld(),

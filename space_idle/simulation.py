@@ -124,6 +124,19 @@ def _service_allocation_node(service_type: str) -> str:
 
 
 @dataclass(frozen=True)
+class ServiceAllocationInputs:
+    """Structural allocation inputs stable during one read-only tick projection.
+
+    Supplies remain dynamic: Power and Maintenance can change at each fixed-point
+    iteration, but topology, provider registration and Location membership do not.
+    """
+    order: tuple[str, ...]
+    locations: tuple[SpatialNodeId, ...]
+    providers: dict[str, ServiceCapacityProvider]
+    surface_dependent: frozenset[str]
+
+
+@dataclass(frozen=True)
 class TickDecisionProjection:
     snapshot: TickPhysicalSnapshot
     intents: TickIntents
@@ -471,25 +484,16 @@ class Simulation:
             limiting_factors=limiting,
         )
 
-    def _allocate_tick_services(
-        self,
-        power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        requests: tuple[ServiceCapacityRequest, ...] | None = None,
-    ) -> ServiceCapacityAllocationPlan:
-        """Standalone Service projection; normal ticks use the full DAG."""
-        requests = self._complete_service_requests(() if requests is None else requests)
+    def _prepare_service_allocation_inputs(
+        self, requests: tuple[ServiceCapacityRequest, ...]
+    ) -> ServiceAllocationInputs:
+        """Derive the invariant dependency graph once per allocation boundary."""
         service_types = self._service_allocation_types(requests)
         dependencies = self.service_capacity_dependencies()
         order = service_capacity_dependency_order(service_types, dependencies)
         locations = tuple(sorted(
             self._active_locations() | set(self.graph.operational_node_ids()), key=str
         ))
-        requests_by_type: dict[str, list[ServiceCapacityRequest]] = {}
-        for request in requests:
-            requests_by_type.setdefault(request.service_type, []).append(request)
-        # Resolve ownership once for this allocation, rather than scanning all
-        # Domain providers again for every service at every physical Location.
-        # The same duplicate-owner contract as provider_for() applies.
         providers: dict[str, ServiceCapacityProvider] = {}
         for provider in self.service_capacity_registry.providers():
             for service_type in provider.service_capacity_types():
@@ -497,23 +501,45 @@ class Simulation:
                     raise RuntimeError(f"multiple service capacity providers own {service_type}")
                 providers[service_type] = provider
         surface_dependent = (
-            set() if self.surface_infrastructure is None else {
+            frozenset() if self.surface_infrastructure is None else frozenset(
                 edge.service_type for edge in dependencies
                 if edge.upstream_service_type == self.surface_infrastructure.service_type
-            }
+            )
         )
+        return ServiceAllocationInputs(order, locations, providers, surface_dependent)
+
+    def _allocate_tick_services(
+        self,
+        power_by_location: dict[SpatialNodeId, PowerSnapshot],
+        requests: tuple[ServiceCapacityRequest, ...] | None = None,
+        *,
+        prepared_inputs: ServiceAllocationInputs | None = None,
+    ) -> ServiceCapacityAllocationPlan:
+        """Standalone Service projection; normal ticks use the full DAG."""
+        requests = self._complete_service_requests(() if requests is None else requests)
+        inputs = prepared_inputs or self._prepare_service_allocation_inputs(requests)
+        requests_by_type: dict[str, list[ServiceCapacityRequest]] = {}
+        for request in requests:
+            requests_by_type.setdefault(request.service_type, []).append(request)
         plans: list[ServiceCapacityAllocationPlan] = []
+        # Only surface-dependent stages inspect upstream allocations. Merging
+        # every prefix for every stage costs quadratic work in service types.
+        empty_plan = ServiceCapacityAllocationPlan((), (), {}, {}, {})
         with self.facilities.compatible_projection_scope():
-            for service_type in order:
+            for service_type in inputs.order:
+                surface_dependent = service_type in inputs.surface_dependent
                 plans.append(
                     self._allocate_service_stage(
                         service_type,
                         power_by_location=power_by_location,
-                        locations=locations,
+                        locations=inputs.locations,
                         stage_requests=tuple(requests_by_type.get(service_type, ())),
-                        provider=providers.get(service_type),
-                        surface_dependent=service_type in surface_dependent,
-                        resolved_plan=merge_service_capacity_plans(plans),
+                        provider=inputs.providers.get(service_type),
+                        surface_dependent=surface_dependent,
+                        resolved_plan=(
+                            merge_service_capacity_plans(plans)
+                            if surface_dependent else empty_plan
+                        ),
                     )
                 )
         return merge_service_capacity_plans(plans)
@@ -527,10 +553,14 @@ class Simulation:
         survey_scope = (
             nullcontext() if self.survey is None else self.survey.derived_projection_scope()
         )
+        founding_scope = (
+            nullcontext() if self.founding is None else self.founding.target_preview_scope()
+        )
         with (
             self.transport.derived_projection_scope(),
             self.logistics.derived_projection_scope(),
             survey_scope,
+            founding_scope,
         ):
             yield
 
@@ -741,10 +771,20 @@ class Simulation:
         resource_used: dict[AllocationConstraintKey, float] | None = None,
         service_supply: ServiceCapacityAllocationPlan | None = None,
         pool_capacity_overrides: dict[AllocationConstraintKey, float] | None = None,
+        base_pool_capacities: dict[AllocationConstraintKey, float] | None = None,
     ) -> dict[AllocationConstraintKey, float]:
         bundles = tuple(self._as_execution_bundle(row) for row in intents)
         resource_used = resource_used or {}
-        pool_capacities = self.allocation_pool_capacities(pool_capacity_overrides)
+        if base_pool_capacities is None:
+            pool_capacities = self.allocation_pool_capacities(pool_capacity_overrides)
+        else:
+            # The provider pool snapshot is unchanged while transport and
+            # maintenance fixed points vary only their projected capacities.
+            pool_capacities = dict(base_pool_capacities)
+            for key, value in (pool_capacity_overrides or {}).items():
+                if key not in pool_capacities:
+                    raise RuntimeError(f"allocation pool override has no registered owner: {key}")
+                pool_capacities[key] = value
         capacities: dict[AllocationConstraintKey, float] = {}
         for bundle in bundles:
             for requirement in bundle.requirements:
@@ -948,6 +988,11 @@ class Simulation:
         dependencies = self.transport.transport_operation_dependencies(day)
         surface_factors = {row.allocation_id: 1.0 for row in dependencies}
         reference_usage = dict(logistics_plan.planned_usage)
+        base_pool_capacities = self.allocation_pool_capacities()
+        passenger_seat_pools = (
+            {} if self.population is None
+            else self.population.service_seat_pool_capacities(day)
+        )
         tolerance = 1e-8
         damping = 0.5
 
@@ -963,8 +1008,8 @@ class Simulation:
             pool_overrides = dict(
                 self.logistics.allocation_pool_capacities(day, surface)
             )
-            if self.population is not None:
-                for key, value in self.population.service_seat_pool_capacities(day).items():
+            if passenger_seat_pools:
+                for key, value in passenger_seat_pools.items():
                     if key in pool_overrides:
                         raise RuntimeError(f'duplicate passenger seat Pool: {key}')
                     pool_overrides[key] = value
@@ -976,6 +1021,7 @@ class Simulation:
                 allocation_intents,
                 service_supply=provider_plan,
                 pool_capacity_overrides=pool_overrides,
+                base_pool_capacities=base_pool_capacities,
             )
             execution = allocate_execution_requirements(allocation_intents, capacities)
             provisional_services = self._service_plan_from_execution(
@@ -1156,6 +1202,11 @@ class Simulation:
             self.day, authorized_logistics.planned_usage
         )
         all_service_requests = self._complete_service_requests(transport_requests)
+        # Stable provider/dependency topology is shared by all Maintenance
+        # feedback iterations. Supply quantities are still recomputed each pass.
+        service_inputs = self._prepare_service_allocation_inputs(
+            self._complete_service_requests(())
+        )
         base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = tuple(
             intents.execution_requirements
         )
@@ -1171,7 +1222,9 @@ class Simulation:
             # Provider dependencies are derived from the current upstream
             # fulfillment estimate. Consumer Service requirements join the same
             # root Execution Bundles as their Resource/Transport requirements.
-            provider_plan = self._allocate_tick_services(power_by_location, requests=())
+            provider_plan = self._allocate_tick_services(
+                power_by_location, requests=(), prepared_inputs=service_inputs
+            )
             research_generation = (
                 ()
                 if self.research is None

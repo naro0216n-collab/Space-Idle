@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
 PACKAGE = Path(__file__).parents[1] / "space_idle"
 
 
-def _module_import_targets(path: Path) -> set[str]:
+@lru_cache(maxsize=1)
+def _source_modules() -> tuple[tuple[Path, Path, ast.AST], ...]:
+    """Parse each static source module once for all architecture assertions."""
+    return tuple(
+        (path, path.relative_to(PACKAGE), ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        for path in sorted(PACKAGE.rglob("*.py"))
+    )
+
+
+def _module_import_targets(path: Path, tree: ast.AST) -> set[str]:
     """Return normalized relative import targets for architecture assertions."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     module_parts = list(path.relative_to(PACKAGE).with_suffix("").parts)
     targets: set[str] = set()
     for node in ast.walk(tree):
@@ -72,9 +81,7 @@ def test_transport_and_logistics_state_ownership_boundaries():
                 assert not fields & other_fields
 
     violations: list[tuple[str, str]] = []
-    for path in PACKAGE.rglob("*.py"):
-        rel = path.relative_to(PACKAGE)
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
+    for path, rel, tree in _source_modules():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Attribute):
                 continue
@@ -93,9 +100,11 @@ def test_transport_and_logistics_state_ownership_boundaries():
 
     assert violations == []
 
-    construction_files = [PACKAGE / "projects.py", *(PACKAGE / "construction").glob("*.py")]
-    for path in construction_files:
-        targets = _module_import_targets(path)
+    construction_files = {PACKAGE / "projects.py", *(PACKAGE / "construction").glob("*.py")}
+    for path, _rel, tree in _source_modules():
+        if path not in construction_files:
+            continue
+        targets = _module_import_targets(path, tree)
         offenders = sorted(
             target
             for target in targets
@@ -132,9 +141,8 @@ def test_layer_dependency_direction_is_enforced():
         ),
         "api": ("space_idle.content", "space_idle.composition", "space_idle.bootstrap"),
     }
-    for path in PACKAGE.rglob("*.py"):
-        rel = path.relative_to(PACKAGE)
-        targets = _module_import_targets(path)
+    for path, rel, tree in _source_modules():
+        targets = _module_import_targets(path, tree)
         assert not any(target == "scripts" or target.startswith("scripts.")
                        for target in targets), f"{rel} imports development-only scripts"
 
@@ -158,7 +166,7 @@ def test_layer_dependency_direction_is_enforced():
         assert not offenders, f"{rel} imports outer layer(s): {offenders}"
 
     core_files = [
-        path for path in PACKAGE.rglob("*.py")
+        (path, tree) for path, _rel, tree in _source_modules()
         if path.name != "__init__.py"
         and not any(part in {"content", "composition", "app_contracts"} for part in path.parts)
         and path.name not in {"bootstrap.py", "persistence.py"}
@@ -170,8 +178,7 @@ def test_layer_dependency_direction_is_enforced():
         if name.isupper() and isinstance(value, str) and value.startswith("base.")
     }
     assert current_content_ids
-    for path in core_files:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path, tree in core_files:
         embedded = {
             node.value
             for node in ast.walk(tree)

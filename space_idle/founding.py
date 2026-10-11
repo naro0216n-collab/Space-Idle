@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from contextlib import contextmanager
+from dataclasses import replace
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
@@ -23,7 +24,7 @@ from .supply import SupplyRequirement
 from .spatial_claims import SurfaceCellClaim, SurfaceCellClaimRegistry
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .exploration_models import KnowledgeRequirement, KnowledgeRequirementSpec
-from .spatial import EnvironmentResolver, OperationalNodeState
+from .spatial import EnvironmentResolver, OperationalNodeState, SpatialGraph
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
@@ -186,6 +187,25 @@ class OperationalNodeFoundingService:
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     projects: dict[ProjectId, OperationalNodeFoundingProject] = field(default_factory=dict)
     _counter: int = 0
+    _target_preview_cache: dict[tuple[FoundingTargetSpec, DefinitionId, str, int], tuple[FoundingBlocker, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    @contextmanager
+    def target_preview_scope(self):
+        """Share target-side preflight within one unchanged physical projection.
+
+        Staging and Vehicle choices do not alter target facility installation,
+        power or initial Inventory admission. The scope must not cross a
+        player Command or canonical settlement.
+        """
+        previous = self._target_preview_cache
+        if previous is None:
+            self._target_preview_cache = {}
+        try:
+            yield
+        finally:
+            self._target_preview_cache = previous
 
     def __post_init__(self) -> None:
         self.surface_cell_claim_registry.register(self)
@@ -899,15 +919,40 @@ class OperationalNodeFoundingService:
         authoritative State and therefore cannot partially materialize a target.
         """
 
+        cache = self._target_preview_cache
+        cache_key = (target_spec, recipe.id, display_name, day)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+
         graph = self.facilities.environment.graph
-        preview_graph = deepcopy(graph)
+        # Founding adds one dynamic operational Location / Node. The world
+        # definitions never change in this preflight: copying all celestial
+        # bodies, Cells and geometry per Vehicle candidate is redundant.
+        preview_graph = SpatialGraph(
+            star_systems=graph.star_systems,
+            bodies=graph.bodies,
+            nodes=graph.nodes,
+            surface_cells=graph.surface_cells,
+            locations=dict(graph.locations),
+            operational_node_states=dict(graph.operational_node_states),
+        )
         preview_environment = EnvironmentResolver(
             preview_graph,
             self.facilities.environment.static,
             list(self.facilities.environment.overlays),
         )
         preview_facilities = self.facilities.copy_for_environment(preview_environment)
-        preview_inventory = deepcopy(self.inventory)
+        # Inventory owns scalar quantities keyed by Node/Resource. Snapshot
+        # only its mutable maps; Resource definitions are immutable inputs.
+        preview_inventory = replace(
+            self.inventory,
+            stock=dict(self.inventory.stock),
+            reserved=dict(self.inventory.reserved),
+            physical_storage_capacity_t=dict(self.inventory.physical_storage_capacity_t),
+            usable_storage_capacity_t=dict(self.inventory.usable_storage_capacity_t),
+            storage_limiting_factors=dict(self.inventory.storage_limiting_factors),
+            external_occupancy=dict(self.inventory.external_occupancy),
+        )
         preview_storage = StorageService(
             self.storage.providers, preview_inventory, preview_facilities
         )
@@ -922,7 +967,10 @@ class OperationalNodeFoundingService:
                 preview_facilities, recipe, target_node_id, core_cell_id
             )
         except (KeyError, ValueError, RuntimeError) as exc:
-            return (FoundingBlocker("target_settlement", str(exc)),)
+            result = (FoundingBlocker("target_settlement", str(exc)),)
+            if cache is not None:
+                cache[cache_key] = result
+            return result
 
         target_context_id = core_cell_id if core_cell_id is not None else target_node_id
         for failure in evaluate_site_requirements(
@@ -951,7 +999,10 @@ class OperationalNodeFoundingService:
                     "initial_inventory_admission",
                     f"{resource_id}:{admission.admitted_t:g}/{amount_t:g}",
                 ))
-        return tuple(failures)
+        result = tuple(failures)
+        if cache is not None:
+            cache[cache_key] = result
+        return result
 
     def _preflight_settlement(
         self, project: OperationalNodeFoundingProject, recipe: DeploymentRecipe, day: int
