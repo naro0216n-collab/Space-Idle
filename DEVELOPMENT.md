@@ -58,6 +58,13 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
+通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合を実行する。バランス調整、設備世代間の量的比較、Content戦略実験、開発用依存Graph診断は`evaluation_tests/`に置き、Content・分析機構の変更や調整作業で明示実行する。評価結果から共通の不変条件が判明した場合は、値や攻略順を固定せず、所有するDomain・Application契約のテストへ組み込む。
+
+```bash
+python scripts/local_test_run.py start -- evaluation_tests -q
+python scripts/local_test_run.py status <startで返されたrun_id>
+```
+
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 
 ### 作業ファイルと成果物

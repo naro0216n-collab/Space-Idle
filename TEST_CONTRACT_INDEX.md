@@ -16,7 +16,9 @@ regression case; remove redundant checks across layers. Do not merge unrelated
 failure modes or hide parameter cases inside a loop merely to lower collected
 pytest counts: separate failures should remain independently diagnosable.
 Domain tests own rules, Application tests their projection, HTTP tests the
-boundary, and browser acceptance tests actual interaction continuity.
+boundary, and browser acceptance tests actual interaction continuity. The default
+pytest suite collects `tests/` only; evaluation scenarios run explicitly via
+`evaluation_tests/` and do not participate in Fast CI.
 
 | Owning contract | Test modules / acceptance entrypoint | Boundary verified |
 | --- | --- | --- |
@@ -24,12 +26,14 @@ boundary, and browser acceptance tests actual interaction continuity.
 | Time and normal/offline Simulation | `tests/test_time_progression.py` | Clock control, invalid elapsed time, canonical day transitions |
 | Authoritative state and derived-state restoration | `tests/test_persistence.py` | Whole-snapshot roundtrip, Offline equivalence, validation/atomic save, cache rederivation |
 | Resource accounting and market | `tests/test_inventory_admission.py`, `tests/test_market.py`, `tests/test_maintenance.py` | Pool admission, funds and stock conservation, ongoing operating allocation |
+| Population, Housing and Passenger transfer | `tests/test_population.py` | Population ownership, Life Support, Service and one-shot transfer, and transit reconciliation |
 | Local resource production and external dependency | `tests/test_resource_potential_extraction.py`, `tests/test_dependency_analytics.py`, `tests/test_supply_planning.py` | Knowledge-limited extraction, flow accounting, resource reservations and cargo transit |
 | Building, assets, facilities and infrastructure | `tests/test_construction_state_transitions.py`, `tests/test_facility_lifecycle.py`, `tests/test_facility_surface_placement.py`, `tests/test_surface_infrastructure.py` | Project ownership, build/decommission, Site eligibility and services |
 | World, environment and operational-node founding | `tests/test_surface_spatial_model.py`, `tests/test_dynamic_environment.py`, `tests/test_surface_location_projects.py` | Graph/Cell invariants, overlays, node creation and founding-owned payload |
 | Movement, vehicles and Fleet | `tests/test_movement_planning.py`, `tests/test_vehicle_configuration.py`, `tests/test_vehicle_production.py`, `tests/test_fleet_allocations.py`, `tests/test_fleet_retirement.py` | Physical operation requirements, Fleet ownership/commitment, production/retirement |
 | Research and scientific operations | `tests/test_research_phase_model.py`, `tests/test_research_execution.py`, `tests/test_scientific_exploration.py`, `tests/test_survey_progression.py` | Research DAG and stage execution, experiment, survey, provider commitments |
-| Base Content integration | `tests/test_base_content_research_resource_integration.py`, `tests/test_solar_system_world.py` | Definition connectivity and physical world examples without fixing balancing figures or generic rules |
+| Base Content contract | `tests/test_base_content_research_resource_integration.py`, `tests/test_solar_system_world.py` | Resource input limits, generic Research/asset eligibility and registered World geometry |
+| Evaluation and diagnostic scenarios (explicit run) | `evaluation_tests/test_content_technology_operation_paths.py`, `evaluation_tests/test_definition_dependency_graph.py`, `evaluation_tests/test_analysis_canonical_experiments.py` | Quantitative equipment/flow comparisons, optional dependency diagnostics and alternative Content experiments; independent of default contract suite and Fast CI |
 | Application decision state | `tests/test_application_decision_projection.py` | Player-facing blockers, options, projections, scope and read-only behavior |
 | HTTP and packaged WebUI boundary | `tests/test_api_server.py` | Command/revision/query routing, persistence endpoints, resource serving |
 | Publish Gateway transport | `development_tests/test_publish_request.py` | Snapshot restore, fixed-slot packets, transaction safety and gateway contract |

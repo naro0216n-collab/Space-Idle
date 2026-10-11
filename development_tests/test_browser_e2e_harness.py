@@ -118,26 +118,29 @@ def test_browser_context_lifecycle_isolates_each_scenario_and_closes_on_error() 
     assert first is not second and first.closed and second.closed
 
 
-def test_monitored_page_fails_on_browser_specific_runtime_errors() -> None:
+@pytest.mark.parametrize(
+    ("event", "payload", "message"),
+    [
+        ("pageerror", RuntimeError("uncaught browser exception"), "uncaught browser exception"),
+        ("console", SimpleNamespace(type="error", text="browser console error"), "browser console error"),
+        ("requestfailed", SimpleNamespace(method="GET", url="/api/v1/ui-state", failure="connection lost"), "connection lost"),
+    ],
+)
+def test_monitored_page_fails_on_browser_specific_runtime_errors(event, payload, message) -> None:
     support = _load_module("space_idle_e2e_support_monitor_test", PLAYWRIGHT_DIR / "e2e_support.py")
 
     class FakePage:
         def __init__(self):
             self.handlers = {}
 
-        def on(self, event, handler):
-            self.handlers[event] = handler
+        def on(self, name, handler):
+            self.handlers[name] = handler
 
     page = FakePage()
     context = SimpleNamespace(new_page=lambda: page)
-
-    try:
+    with pytest.raises(AssertionError, match=message):
         with support.monitored_page(context):
-            page.handlers["pageerror"](RuntimeError("broken browser handler"))
-    except AssertionError as exc:
-        assert "broken browser handler" in str(exc)
-    else:
-        raise AssertionError("browser runtime errors must fail the scenario")
+            page.handlers[event](payload)
 
 
 def _runnable_browser_scenarios() -> set[str]:
