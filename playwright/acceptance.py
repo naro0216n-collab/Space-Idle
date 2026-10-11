@@ -238,7 +238,13 @@ def run(browser) -> dict[str, object]:
             # Map placement and zoom are insufficient if redraws discard
             # keyboard focus: both selection and the focused control survive.
             first_global_node.focus()
-            page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
+            with page.expect_response(
+                lambda response: response.request.method == 'GET' and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as map_keyboard_refresh:
+                first_global_node.press("Enter")
+            _assert(map_keyboard_refresh.value.ok, "keyboard map selection must refresh Application state")
+            page.wait_for_function("() => !window.SpaceIdleApp.state.syncInFlight", timeout=10000)
             _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
                     "map redraw must retain keyboard focus on the same Operational Node")
             _wait_for_periodic_sync(page)
@@ -320,19 +326,20 @@ def run(browser) -> dict[str, object]:
               const state=window.SpaceIdleApp.state;
               return state.world.operational_nodes.find(node => node.id !== state.operationalNodeId && node.body_id && node.body_id !== body)?.id || null;
             }""", str(ids.MOON))
-            if alternate_provider:
-                page.locator(f'#locationList [data-location-id="{alternate_provider}"]').click()
-                page.wait_for_function("""([provider,body,cell]) => {
-                  const state=window.SpaceIdleApp.state;
-                  return state.operationalNodeId===provider && state.operationalNode?.id===provider
-                    && state.selectedSurfaceBodyId===body && state.surfaceMap?.body_id===body
-                    && state.inspector?.id===cell
-                    && document.querySelectorAll('#operationsTabContent .surface-cell-button.is-selected').length===1;
-                }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
-                _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1,
-                        "switching an execution provider must preserve the independently selected physical cell")
-                page.locator(f'#locationList [data-location-id="{previous_operational_node_id}"]').click()
-                page.wait_for_function("id => window.SpaceIdleApp.state.operationalNodeId===id", arg=previous_operational_node_id)
+            _assert(alternate_provider is not None,
+                    "cross-provider Surface Map continuity needs another real Operational Node")
+            page.locator(f'#locationList [data-location-id="{alternate_provider}"]').click()
+            page.wait_for_function("""([provider,body,cell]) => {
+              const state=window.SpaceIdleApp.state;
+              return state.operationalNodeId===provider && state.operationalNode?.id===provider
+                && state.selectedSurfaceBodyId===body && state.surfaceMap?.body_id===body
+                && state.inspector?.id===cell
+                && document.querySelectorAll('#operationsTabContent .surface-cell-button.is-selected').length===1;
+            }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
+            _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1,
+                    "switching an execution provider must preserve the independently selected physical cell")
+            page.locator(f'#locationList [data-location-id="{previous_operational_node_id}"]').click()
+            page.wait_for_function("id => window.SpaceIdleApp.state.operationalNodeId===id", arg=previous_operational_node_id)
             page.locator('[data-tab="survey"]').click()
             page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body && document.querySelector('#operationsTabContent .survey-decision-surface') !== null", arg=str(ids.MOON))
             _assert(page.locator('#operationsTabContent .survey-loading-card').count() == 0,

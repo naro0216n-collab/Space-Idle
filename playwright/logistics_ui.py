@@ -256,7 +256,13 @@ def run(browser) -> None:
             # Comparing several allocations must not lose the keyboard target
             # merely because a new authoritative projection has been rendered.
             allocation_map_entry.focus()
-            page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
+            with page.expect_response(
+                lambda response: response.request.method == 'GET' and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as allocation_keyboard_refresh:
+                allocation_map_entry.press("Enter")
+            assert allocation_keyboard_refresh.value.ok
+            page.wait_for_function("() => !window.SpaceIdleApp.state.syncInFlight", timeout=10000)
             assert allocation_map_entry.evaluate("node => document.activeElement === node"), (
                 "shared Map relation controls must retain focus across redraw"
             )
@@ -316,13 +322,17 @@ def run(browser) -> None:
             assert any(flow.owner_id == project_id and flow.status == 'in_transit' for flow in cargo), (
                 'the real project and UI-created Transport Allocation must dispatch cargo'
             )
+            # The Logistics canvas receives authoritative changes through its
+            # normal periodic synchronization; its contextual refresh button is
+            # not visible here, so a forced click would bypass real navigation.
             with page.expect_response(
                 lambda response: response.request.method == 'GET'
                 and '/api/v1/ui-state' in response.url,
                 timeout=10000,
             ) as cargo_refresh:
-                page.locator('#refreshButton').click()
+                pass
             assert cargo_refresh.value.ok
+            page.wait_for_function('() => !window.SpaceIdleApp.state.syncInFlight', timeout=10000)
             cargo_card = page.locator('#cargoTable .cargo-flow-card').first
             cargo_card.wait_for(state='visible', timeout=10000)
             assert '最終目的地' in cargo_card.inner_text()
