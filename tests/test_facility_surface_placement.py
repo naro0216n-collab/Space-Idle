@@ -410,7 +410,7 @@ def test_process_interface_can_be_shared_by_a_differently_named_higher_throughpu
     assert sim.day > 0
 
 
-def test_scenario_facilities_have_the_same_normal_construction_contract_as_later_assets(tmp_path):
+def test_scenario_and_later_facilities_share_construction_and_site_contracts(tmp_path):
     """Scenario ownership cannot create a class of otherwise unobtainable facilities."""
     from datetime import datetime, timezone
 
@@ -450,12 +450,9 @@ def test_scenario_facilities_have_the_same_normal_construction_contract_as_later
     restored, _ = load_game(path, build_game_application_for_load, now=now)
     assert any(row.id == project_id for row in restored.query(GetProjects(str(ids.EARTH))).items)
 
-
-def test_external_power_uses_world_site_eligibility_not_initial_asset_identity():
+    # A second Grid instance uses the same World-side site eligibility as the
+    # scenario-provided instance; initial ownership grants no special power.
     from space_idle.spatial import ExternalGridConnectionField
-
-    app = build_game_application()
-    sim = app._simulation
     grid = ids.GRID_POWER_SUPPLY
     initial = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == grid)
     assert initial.site_cell_id == ids.EARTH_CELL_INDUSTRIAL

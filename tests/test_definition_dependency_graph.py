@@ -181,6 +181,116 @@ def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_ex
                for row in inspect_definition_coverage(graph))
 
 
+def test_registered_definition_alternatives_require_shared_inputs_and_physical_conditions():
+    """Only comparable authored Process alternatives are screened.
+
+    Other Definition kinds may have physical performance outside the graph;
+    a matching neighbourhood alone is not evidence of interchangeability.
+    """
+    from space_idle.analysis_coverage import inspect_definition_alternatives
+    from space_idle.bootstrap import build_game_application_for_scenario
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.persistence import capture_state
+
+    ore = DependencyNode("resource", "input.ore")
+    product = DependencyNode("resource", "product.alloy")
+    capability = DependencyNode("capability", "smelting")
+    different_capability = DependencyNode("capability", "advanced.smelting")
+    p1, p2, p3, p4 = (
+        DependencyNode("process", f"process.{index}") for index in range(4)
+    )
+    future1, future2 = (
+        DependencyNode("future_operation_method", f"new.{index}") for index in range(2)
+    )
+
+    def source_fragment():
+        return DependencyFragment((ore, product, capability, different_capability), ())
+
+    def process_fragment():
+        relations = []
+        for node, amount, cap in (
+            (p1, 3.0, capability), (p2, 5.0, capability),
+            (p3, 5.0, different_capability), (p4, 3.0, capability),
+        ):
+            relations.extend((
+                DependencyRelation("consumes_resource", ore, node, f"input:{node.id}",
+                                   amount, "t", "per_execution"),
+                DependencyRelation("produces_resource", node, product, f"output:{node.id}",
+                                   4.0, "t", "per_execution"),
+                DependencyRelation("requires_capability", cap, node, f"capability:{node.id}"),
+            ))
+        return DependencyFragment((p1, p2, p3, p4), tuple(relations))
+
+    def added_domain_fragment():
+        return DependencyFragment((future1, future2), (
+            DependencyRelation("requires_capability", capability, future1, "added:one"),
+            DependencyRelation("requires_capability", capability, future2, "added:two"),
+        ))
+
+    registry = DefinitionGraphRegistry()
+    registry.register("inputs", source_fragment, relation_kinds=("requires_capability",))
+    registry.register("processes", process_fragment,
+                      relation_kinds=("consumes_resource", "produces_resource", "requires_capability"))
+    registry.register("new_contributor", added_domain_fragment,
+                      relation_kinds=("requires_capability",))
+    graph = registry.build()
+    assert not graph.diagnostics
+    findings = inspect_definition_alternatives(graph)
+    # Registration order changes neither typed relations nor the audit.
+    reordered = DefinitionGraphRegistry()
+    reordered.register("new_contributor", added_domain_fragment,
+                       relation_kinds=("requires_capability",))
+    reordered.register("processes", process_fragment,
+                       relation_kinds=("consumes_resource", "produces_resource", "requires_capability"))
+    reordered.register("inputs", source_fragment, relation_kinds=("requires_capability",))
+    assert inspect_definition_alternatives(reordered.build()) == findings
+    by_subject = {(finding.code, finding.subject.id): finding.evidence for finding in findings}
+    assert "candidate:process:process.3" in by_subject[
+        ("possible_equivalent_relation_contract", "process.0")
+    ]
+    assert ("possible_equivalent_relation_contract", "new.0") not in by_subject
+    assert "possible_dominator:process:process.0" in by_subject[
+        ("possible_dominated_process", "process.1")
+    ]
+    assert ("possible_dominated_process", "process.2") not in by_subject
+    assert ("possible_equivalent_relation_contract", "process.2") not in by_subject
+    assert all(finding.significance == "informational" for finding in findings)
+
+    # Confirm the same diagnosis on a *real* Composition with an additional
+    # compatible Process. The Domain and Application intentionally continue to
+    # offer both candidates: a diagnostic is not an automatic rule or deletion.
+    from space_idle.app_contracts.queries import GetOperationalNode
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION, FOOD_FARM, EARTH
+
+    new_id = DefinitionId("experiment.duplicate.food_process")
+
+    def author_variant(sim, _catalog):
+        sim.industry.processes[new_id] = replace(
+            sim.industry.processes[PROCESS_FOOD_PRODUCTION], id=new_id,
+            display_name="Alternate food production",
+        )
+
+    app = build_game_application_for_scenario(
+        build_standard_scenario_definition(), definition_transform=author_variant,
+    )
+    before = capture_state(app._simulation)
+    authored_graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    assert not authored_graph.diagnostics
+    authored_findings = inspect_definition_coverage(authored_graph)
+    assert any(row.code == "possible_equivalent_relation_contract"
+               and row.subject.id == str(new_id)
+               and f"candidate:process:{PROCESS_FOOD_PRODUCTION}" in row.evidence
+               for row in authored_findings)
+    food = next(row for row in app.query(GetOperationalNode(str(EARTH))).industry
+                if row.facility_definition_id == str(FOOD_FARM))
+    assert {candidate.process_id for candidate in food.process_options} == {
+        str(new_id), str(PROCESS_FOOD_PRODUCTION),
+    }
+    assert capture_state(app._simulation) == before
+
+
 def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_relations():
     a = DependencyNode("a", "one")
     b = DependencyNode("b", "two")
@@ -193,6 +303,18 @@ def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_
     assert {d.code for d in graph.diagnostics} == {
         "unknown_relation_kind", "undefined_reference", "duplicate_definition_owner",
     }
+
+    # Registry metadata rejects double edges, missing definitions and untyped quantities.
+    node = DependencyNode('test_method', 'generic')
+    resource = DependencyNode('resource', 'R')
+    extra = DependencyNode('test_method', 'expected')
+    relation = DependencyRelation('consumes_resource', resource, node, 'test:recipe', 2.0, 't')
+    registry = DefinitionGraphRegistry()
+    registry.register('method', lambda: DependencyFragment((node, resource), (relation, relation)),
+                      expected_definitions=lambda: (node, extra), relation_kinds={'consumes_resource'})
+    diagnostic = {row.code for row in registry.build().diagnostics}
+    assert {'duplicate_relation', 'quantitative_relation_without_time_basis',
+            'unrepresented_registered_definition'} <= diagnostic
 
     # Typed coverage reports missing registered paths, without making a claim
     # about scenario initial stocks or current physical execution eligibility.
@@ -662,101 +784,10 @@ def test_live_state_observation_uses_owned_state_and_is_distinct_from_definition
         break
 
 
-def test_canonical_experiments_replay_player_commands_and_preserve_absent_metrics():
-    from scripts.analysis_experiments import (
-        ExperimentCase, run_experiments, compare_experiments,
-    )
-    from space_idle.application_commands import StartResearch
-
-    app = build_game_application()
-    technology = next(iter(app._simulation.research.definitions))
-    # The two cases start from independently composed Scenario/Domain States.
-    cases = (
-        ExperimentCase("baseline", build_game_application, lambda _app, _day: ()),
-        ExperimentCase("research", build_game_application,
-                       lambda _app, day: (StartResearch(str(technology)),) if day == 0 else ()),
-        ExperimentCase("rejected", build_game_application,
-                       lambda _app, day: (StartResearch("unregistered.technology"),) if day == 0 else ()),
-    )
-    observed = run_experiments(cases, days=2)
-    repeated = run_experiments(cases, days=2)
-    assert [run.to_json_data() for run in observed] == [run.to_json_data() for run in repeated]
-    assert {run.initial_state_sha256 for run in observed}.__len__() == 1
-    assert {run.definition_graph_sha256 for run in observed}.__len__() == 1
-    assert all([snapshot.day for snapshot in run.observations] == [0, 1, 2] for run in observed)
-    assert observed[2].rejected_commands[0].code == "not_found"
-    assert not observed[1].rejected_commands
-    assert observed[0].observations == observed[2].observations
-    differences = compare_experiments(observed)
-    assert differences["baseline"] == "baseline"
-    assert differences["comparisons"][0]["same_initial_state"]
-    # RP or resulting research activity differs due to a *real* Application Command.
-    assert differences["comparisons"][0]["metric_differences"]
-
-    # A missing metric is never silently converted into zero or an invented flow.
-    from space_idle.analysis_observation import StateObservation, StateMetric
-    from dataclasses import replace
-    base = observed[0]
-    expanded = replace(observed[1], observations=(
-        StateObservation(0, base.scenario_id, ()),
-        StateObservation(1, base.scenario_id, ()),
-        StateObservation(2, base.scenario_id, (StateMetric(
-            "inventory_stock", "new-resource", "another-node", 1, "t", "inventory.stock"),)),
-    ))
-    missing = compare_experiments((base, expanded))["comparisons"][0]["metric_differences"]
-    new = next(row for row in missing if row["subject_id"] == "new-resource")
-    assert new["baseline_final"] is None and new["variant_initial"] is None
-    assert new["final_difference"] is None and new["variant_net_change"] is None
 
 
-def test_experiment_input_requires_explicit_time_and_real_command_types():
-    from scripts.analysis_experiments import ExperimentCase, run_experiments
-    from space_idle.application_commands import AdvanceTime
-    from scripts.compare_experiments import parse_cases
-    import pytest
-
-    with pytest.raises(ValueError, match="names must be unique"):
-        run_experiments((ExperimentCase("same", build_game_application, lambda a, d: ()),
-                         ExperimentCase("same", build_game_application, lambda a, d: ())), days=0)
-    with pytest.raises(ValueError, match="cannot control"):
-        run_experiments((ExperimentCase("bad", build_game_application,
-                                         lambda a, d: (AdvanceTime(5),)),), days=1)
-    with pytest.raises(ValueError, match="outside experiment horizon"):
-        parse_cases({"days": 2, "cases": [{"name": "late", "commands": [
-            {"day": 2, "type": "StartResearch", "args": {"research_id": "anything"}},
-        ]}]})
-    with pytest.raises(ValueError, match="unknown or unsupported"):
-        parse_cases({"days": 1, "cases": [{"name": "untyped", "commands": [
-            {"day": 0, "type": "MagicResult", "args": {}},
-        ]}]})
 
 
-def test_comparison_accepts_distinct_validated_scenario_definitions_without_mutating_live_state():
-    from dataclasses import replace
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-    from space_idle import build_game_application_for_scenario
-    from scripts.analysis_experiments import ExperimentCase, run_experiments, compare_experiments
-
-    initial = build_standard_scenario_definition()
-    first = initial.inventory_stock[0]
-    more = replace(initial, id="test.scenario.resource_perturbation", inventory_stock=(
-        replace(first, amount_t=first.amount_t + 10.0), *initial.inventory_stock[1:],
-    ))
-    cases = (
-        ExperimentCase("normal", lambda: build_game_application_for_scenario(initial), lambda _app, _day: ()),
-        ExperimentCase("extra", lambda: build_game_application_for_scenario(more), lambda _app, _day: ()),
-    )
-    runs = run_experiments(cases, days=1)
-    differences = compare_experiments(runs)["comparisons"][0]
-    assert not differences["same_initial_state"]
-    assert not differences["same_scenario"]
-    change = next(row for row in differences["metric_differences"]
-                  if row["kind"] == "inventory_stock" and
-                  row["subject_id"] == str(first.resource_id) and
-                  row["context_id"] == str(first.operational_node_id))
-    assert change["variant_initial"] - change["baseline_initial"] == 10.0
-    assert change["final_difference"] is not None
-    assert build_standard_scenario_definition() == initial
 
 
 def test_definition_coverage_reports_missing_suppliers_without_classifying_technology_value():

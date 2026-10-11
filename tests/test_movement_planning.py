@@ -206,9 +206,9 @@ def test_generic_spaceflight_plan_derivation_uses_spatial_geometry_without_pairw
     # Coordinate-only systems remain supported when no central-orbit physical
     # model has been supplied. Their geometry is not a second solar baseline.
     new_body_sim = build_game_application()._simulation
-    legacy_system = StarSystemId("test.system.coordinate_only")
+    coordinate_system = StarSystemId("test.system.coordinate_only")
     new_body_sim.graph.add_star_system(StarSystemDef(
-        legacy_system, "Coordinate only", CharacteristicTransportGeometry((0.0, 0.0, 0.0)),
+        coordinate_system, "Coordinate only", CharacteristicTransportGeometry((0.0, 0.0, 0.0)),
     ))
     origin_body = CelestialBodyId("test.body.coordinate_origin")
     origin_orbit = SpatialNodeId("test.node.coordinate_origin")
@@ -219,17 +219,17 @@ def test_generic_spaceflight_plan_derivation_uses_spatial_geometry_without_pairw
         (1_000_000.0, 0.0, 0.0),
         (6.0, 0.0, 0.0),
     )
-    new_body_sim.graph.add_body(CelestialBodyDef(origin_body, "Origin", 1000.0, legacy_system, zero))
-    new_body_sim.graph.add_body(CelestialBodyDef(body_id, "New Body", 1000.0, legacy_system, geometry))
+    new_body_sim.graph.add_body(CelestialBodyDef(origin_body, "Origin", 1000.0, coordinate_system, zero))
+    new_body_sim.graph.add_body(CelestialBodyDef(body_id, "New Body", 1000.0, coordinate_system, geometry))
     new_body_sim.graph.add(SpatialNodeDef(
-        origin_orbit, "Origin Orbit", legacy_system, zero,
+        origin_orbit, "Origin Orbit", coordinate_system, zero,
         body_id=origin_body, kind=SpatialNodeKind.ORBITAL,
     ))
     new_body_sim.graph.add_operational_node(OperationalNodeState(origin_orbit))
     new_body_sim.graph.add(SpatialNodeDef(
         new_body_orbit,
         "New Body Orbit",
-        legacy_system,
+        coordinate_system,
         geometry,
         body_id=body_id,
         kind=SpatialNodeKind.ORBITAL,

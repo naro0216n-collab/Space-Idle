@@ -404,7 +404,7 @@ def test_operational_experience_is_driven_by_real_activity_not_research_time():
     assert extraction_id in sim.research.completed
 
 
-def test_research_source_capabilities_enable_alternative_vehicle_without_duplicating_provider():
+def test_research_source_capabilities_accept_alternative_vehicle_and_facility_definitions():
     app = build_game_application()
     sim = app._simulation
     provider_id = ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER
@@ -445,10 +445,7 @@ def test_research_source_capabilities_enable_alternative_vehicle_without_duplica
     assert sim.transport.fleet_free_units(alternative_id, ids.LEO) == 1
     assert sim.transport.fleet_free_units(baseline_vehicle_id, ids.LEO) == initial_original
 
-
-def test_research_source_capabilities_enable_alternative_facility_definition():
-    app = build_game_application()
-    sim = app._simulation
+    # Facility-backed providers use the same source capability contract.
     provider_id = ids.GENERAL_RESEARCH_LAB
     alternative_id = DefinitionId("test.facility.alternative_research_laboratory")
     original = sim.facilities.definitions[ids.GENERAL_RESEARCH_LAB]

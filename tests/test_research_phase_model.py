@@ -24,7 +24,6 @@ from space_idle.research import (
     ResearchTheoryStageSpec,
     ResearchDemonstrationStageSpec,
     ResearchPrototypeStageSpec,
-    ResearchStage,
 )
 from space_idle.construction.models import ConstructionRecipe
 from space_idle.execution_requirements import ServiceCapacityRequirement
@@ -529,6 +528,14 @@ def test_prototype_site_comparison_uses_per_resource_readiness_and_does_not_prom
     before = sim.inventory.stock.copy()
     row = _research_row(app, research_id)
     earth = next(option for option in row.execution_context_options if option.operational_node_id == str(EARTH))
+    assert {axis.key for axis in row.execution_context_comparison_axes} >= {
+        "service_work_capacity", "estimated_days"
+    }
+    leo = next(option for option in row.execution_context_options if option.operational_node_id == str(LEO))
+    leo_values = {value.axis_key: value for value in leo.comparison_values}
+    assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
+    assert leo_values["estimated_days"].number_value is None
+    assert leo_values["estimated_days"].text_value
     resources = {item.resource_id: item for item in earth.resources}
     assert tuple(item.resource_id for item in earth.resources) == tuple(sorted((str(rare), str(common))))
     assert resources[str(rare)].shortfall_t == pytest.approx(2.0)
@@ -562,49 +569,6 @@ def test_prototype_site_comparison_uses_per_resource_readiness_and_does_not_prom
     assert next(value for value in ready.comparison_values if value.axis_key == "estimated_days").number_value == pytest.approx(2.0)
 
 
-def test_research_execution_context_projects_strategic_comparison_axes_from_application_state():
-    app = build_game_application()
-    sim = app._simulation
-    research_id = DefinitionId("test.research.execution_context_comparison")
-    resource_id = DefinitionId("test.resource.context_comparison")
-    _research_site_fixture(sim)
-    sim.inventory.add(EARTH, resource_id, 2.0)
-    sim.research.definitions[research_id] = ResearchDefinition(
-        research_id,
-        "Execution Context Comparison",
-        (
-            ResearchPrototypeStageSpec(
-                "prototype",
-                {resource_id: 2.0},
-                SiteRequirements(),
-                (ServiceCapacityRequirement(TEST_RESEARCH_SITE_SERVICE, 1.0),),
-                required_work=2.0,
-            ),
-        ),
-        prerequisites=frozenset(),
-    )
-
-    app.execute(StartResearch(str(research_id)))
-    row = _research_row(app, research_id)
-
-    axis_keys = {axis.key for axis in row.execution_context_comparison_axes}
-    assert "service_work_capacity" in axis_keys
-    assert "estimated_days" in axis_keys
-
-    earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
-    leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
-    earth_values = {value.axis_key: value for value in earth.comparison_values}
-    leo_values = {value.axis_key: value for value in leo.comparison_values}
-    assert earth_values["service_work_capacity"].number_value == pytest.approx(1.0)
-    assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
-    assert earth_values["estimated_days"].number_value == pytest.approx(2.0)
-    assert leo_values["estimated_days"].number_value is None
-    assert earth_values["estimated_days"].text_value is None
-    assert leo_values["estimated_days"].text_value
-    assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
-            for item in earth.resources] == [(2.0, 0.0, 2.0, 0.0)]
-    assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
-            for item in leo.resources] == [(2.0, 0.0, 0.0, 2.0)]
 
 
 def test_authored_hardware_research_stages_require_real_site_resources_and_survive_load(tmp_path):

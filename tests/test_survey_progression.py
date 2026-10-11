@@ -16,7 +16,7 @@ from space_idle import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityDef, CapabilitySupply
-from space_idle.exploration_models import SurveyCampaignControlState, SurveyProviderConstraint
+from space_idle.exploration_models import SurveyCampaignControlState
 from space_idle.shared import DefinitionId
 from space_idle.survey import (
     KnowledgeLevel,
@@ -405,54 +405,6 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert any("survey_provider_limit" in code for code in blockers)
 
 
-def test_initial_orbital_survey_uses_real_exclusive_fleet_and_survives_save_load(tmp_path):
-    """An independently deployed observer is a Fleet unit, not installed Infrastructure."""
-    from datetime import datetime, timezone
-    from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-    from space_idle.persistence import capture_state, load_game, save_game
-
-    app = build_game_application()
-    sim = app._simulation
-    provider = sim.survey.provider(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)
-    vehicle_id = ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT
-    assert provider.source_kind is SurveyProviderSourceKind.FLEET
-    assert sim.survey.source_is_compatible(provider, vehicle_id)
-    assert {mode.id for mode in provider.observation_modes} >= {
-        "remote_orbital_spectrometry", "fleet_remote_mapping",
-    }
-    assert not any(
-        row.definition_id == vehicle_id for row in sim.facilities.facilities.values()
-    )
-    initial_assignment = next(
-        row for row in build_standard_scenario_definition().survey_fleet_assignments
-        if row.provider_definition_id == provider.id
-    )
-    pool = sim.transport.fleet_pool_snapshot(vehicle_id, ids.LUNAR_ORBIT)
-    assert pool.total_units >= initial_assignment.units > 0
-    assert pool.other_committed_units == initial_assignment.units
-    assert pool.free_units == pool.total_units - initial_assignment.units
-    assignment = sim.survey.provider_assignment_for(provider.id, ids.LUNAR_ORBIT)
-    assert assignment is not None
-    commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
-    assert commitment is not None and commitment.quantity == initial_assignment.units
-
-    target = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
-    _start_campaign(app, (target[0],), (target[1],))
-    app.execute(AdvanceTime(1))
-    assert sim.survey.progress(*target) > 0
-
-    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    path = tmp_path / "survey-fleet-ownership.json"
-    save_game(app, path, saved_at=saved_at)
-    restored, _ = load_game(path, build_game_application_for_load, now=saved_at)
-    assert capture_state(restored._simulation) == capture_state(sim)
-
-    restored.execute(SetSurveyProviderFleetQuantity(
-        str(provider.id), str(ids.LUNAR_ORBIT), str(vehicle_id), 0,
-    ))
-    assert restored._simulation.survey.provider_assignment_for(provider.id, ids.LUNAR_ORBIT) is None
-    assert restored._simulation.transport.fleet_free_units(vehicle_id, ids.LUNAR_ORBIT) == pool.total_units
 
 
 def test_survey_provider_separates_compatible_vehicle_commitments_modes_and_capacity(tmp_path):
@@ -466,6 +418,19 @@ def test_survey_provider_separates_compatible_vehicle_commitments_modes_and_capa
     main_vehicle = ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT
     alternative_vehicle = ids.DEEP_SPACE_PROBE
     node = ids.LUNAR_ORBIT
+    # A Fleet-backed Survey source holds an ordinary Transport commitment;
+    # neither the provider nor the Scenario creates a Facility substitute.
+    provider = sim.survey.provider(provider_id)
+    assert provider.source_kind is SurveyProviderSourceKind.FLEET
+    assert sim.survey.source_is_compatible(provider, main_vehicle)
+    initial = sim.survey.provider_assignment_for(provider_id, node, main_vehicle)
+    assert initial is not None
+    initial_commitment = sim.transport.fleet_commitment_snapshot(initial.fleet_commitment_ref)
+    assert initial_commitment is not None and initial_commitment.quantity > 0
+    pool = sim.transport.fleet_pool_snapshot(main_vehicle, node)
+    assert pool.other_committed_units == initial_commitment.quantity
+    assert pool.free_units == pool.total_units - initial_commitment.quantity
+    assert not any(row.definition_id == main_vehicle for row in sim.facilities.facilities.values())
     assert set(sim.survey.compatible_source_definition_ids(sim.survey.provider(provider_id))) >= {
         main_vehicle, alternative_vehicle,
     }

@@ -73,6 +73,26 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
     with pytest.raises(KeyError, match="missing allocation capacities"):
         allocate_execution_requirements([missing], {})
 
+    # Reservation and shared-pool requests use the same allocator rather than
+    # separate owner-specific settlement mechanisms.
+    reservation = ReservationAcquisitionRequirement(
+        id=EntityId("reserve"), owner_id=EntityId("project"),
+        operational_node_id=NODE, resource_id=ORE,
+        requested_amount=7, priority=ActivityPriority(3),
+    )
+    reservation_plan = allocate_execution_requirements(
+        [reservation], {resource_constraint(NODE, ORE): 3}
+    )
+    assert reservation_plan.allocated(reservation.id) == pytest.approx(3)
+
+    pool_request = bundle(
+        "research", 10, PoolRequirement("research_points", 1, scope_id="organization"),
+    )
+    pool_plan = allocate_execution_requirements(
+        [pool_request], {pool_constraint("research_points", "organization"): 4}
+    )
+    assert pool_plan.allocated(pool_request.id) == pytest.approx(4)
+
 
 
 def test_boundary_settlement_resources_feed_the_next_physical_snapshot_allocation():
@@ -248,29 +268,6 @@ def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key()
     assert plan.allocated(newer.id) == pytest.approx(0)
 
 
-def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools():
-    intent = ReservationAcquisitionRequirement(
-        id=EntityId("reserve"),
-        owner_id=EntityId("project"),
-        operational_node_id=NODE,
-        resource_id=ORE,
-        requested_amount=7,
-        priority=ActivityPriority(3),
-    )
-    reservation = allocate_execution_requirements(
-        [intent], {resource_constraint(NODE, ORE): 3}
-    )
-    assert reservation.allocated(intent.id) == pytest.approx(3)
-
-    shared_pool = bundle(
-        "research",
-        10,
-        PoolRequirement("research_points", 1, scope_id="organization"),
-    )
-    pool_plan = allocate_execution_requirements(
-        [shared_pool], {pool_constraint("research_points", "organization"): 4}
-    )
-    assert pool_plan.allocated(shared_pool.id) == pytest.approx(4)
 
 
 def test_canonical_tick_routes_domain_requirements_through_common_execution_allocation():

@@ -113,6 +113,28 @@ def test_authored_technology_prerequisites_are_nonredundant_and_reach_applicatio
 
     app = build_game_application()
     definitions = app._simulation.research.definitions
+    assert definitions
+    assert all(row.progression_stage >= 1 and row.category and row.series
+               for row in definitions.values())
+    # Explicit DFS checks the authored prerequisite graph as a DAG, regardless
+    # of the currently authored series, IDs, or number of technologies.
+    visiting, visited = set(), set()
+
+    def validate_dag(research_id):
+        if research_id in visited:
+            return
+        assert research_id not in visiting
+        visiting.add(research_id)
+        for parent in definitions[research_id].prerequisites:
+            assert parent in definitions
+            assert definitions[parent].progression_stage <= definitions[research_id].progression_stage
+            validate_dag(parent)
+        visiting.remove(research_id)
+        visited.add(research_id)
+
+    for research_id in definitions:
+        validate_dag(research_id)
+
     ancestors_by_id = {}
 
     def ancestors(research_id):
@@ -138,25 +160,27 @@ def test_authored_technology_prerequisites_are_nonredundant_and_reach_applicatio
             assert any(unlock.kind == 'research' and unlock.id == str(research_id)
                        for unlock in unlocks)
 
-    # Air chemistry, potable water, crew radiation exposure, and landing
-    # navigation are separate engineering questions. Neither the ordering of
-    # their authored series nor their shared Stage is an implicit prerequisite.
+    # Application prerequisite blockers derive from authored edges, not names
+    # or a fixed position in the Research DAG.
     from space_idle.application_commands import StartResearch
-    independent = ("LS-ATMOSPHERE-WATER-WASTE-02", "BIO-HUMAN-BIOLOGY-MEDICINE-02")
-    for research_id in independent:
-        assert not definitions[research_id].prerequisites
-        assert rows[research_id].can_start
-        app.execute(StartResearch(research_id))
-    prerequisites = rows["EDL-EDL-03"].prerequisites
-    assert prerequisites == ("GN-NAVIGATION-01",)
-    assert all(blocker.kind == "prerequisite" for blocker in rows["EDL-EDL-03"].start_blockers)
+    blocked = next((row for row in rows.values()
+                    if row.prerequisites and row.start_blockers
+                    and all(blocker.kind == "prerequisite" for blocker in row.start_blockers)), None)
+    assert blocked is not None
     with pytest.raises(ApplicationError) as rejected:
-        app.execute(StartResearch("EDL-EDL-03"))
+        app.execute(StartResearch(blocked.id))
     assert rejected.value.code == "prerequisite"
-    assert "GN-NAVIGATION-01" in rejected.value.message
+    assert any(str(parent) in rejected.value.message for parent in blocked.prerequisites)
+
+    # Independently eligible roots can be started without interpreting series
+    # or display stage as additional dependency edges.
+    independent = [row for row in rows.values() if not row.prerequisites and row.can_start]
+    assert len(independent) >= 2
+    for row in independent[:2]:
+        app.execute(StartResearch(row.id))
     app.execute(AdvanceTime(1))
     updated = {row.id: row for row in app.query(GetResearch()).items}
-    assert all(updated[research_id].status != "not_started" for research_id in independent)
+    assert all(updated[row.id].status != "not_started" for row in independent[:2])
 
 
 def test_energy_generation_and_wet_beneficiation_keep_physical_choices_after_unlock(tmp_path):

@@ -73,6 +73,18 @@ def test_http_command_and_world_read_cross_json_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+        # Optimistic revision checking is part of the same HTTP Command boundary.
+        status, headers, rejected = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 1}},
+            headers={"If-Match": '"rev-0"'},
+        )
+        assert status == 409
+        assert rejected["error"]["code"] == "revision_conflict"
+        assert rejected["error"]["details"]["current_revision"] == 1
+        assert headers["X-Space-Idle-Revision"] == "1"
+        assert _request(port, "GET", "/api/v1/world")[2]["data"]["day"] == 2
+
         # The independent finite passenger intent uses real HTTP Command and
         # Query contracts; setting a Population Target is not a prerequisite.
         status, _, payload = _request(port, "GET", f"/api/v1/population/passenger-preview?origin_node_id={ids.EARTH}&destination_node_id={ids.LEO}&requested_count=2")
@@ -330,24 +342,6 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
         assert payload["error"]["code"] == "invalid_save"
 
 
-def test_http_api_rejects_stale_command_revision(tmp_path):
-    with running_api(tmp_path) as port:
-        status, _, payload = _request(
-            port, "POST", "/api/v1/commands",
-            {"type": "AdvanceTime", "payload": {"days": 1}},
-            headers={"If-Match": '"rev-0"'},
-        )
-        assert status == 200 and payload["revision"] == 1
-
-        status, headers, payload = _request(
-            port, "POST", "/api/v1/commands",
-            {"type": "AdvanceTime", "payload": {"days": 1}},
-            headers={"If-Match": '"rev-0"'},
-        )
-        assert status == 409
-        assert payload["error"]["code"] == "revision_conflict"
-        assert payload["error"]["details"]["current_revision"] == 1
-        assert headers.get("X-Space-Idle-Revision") == "1"
 
 
 def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):

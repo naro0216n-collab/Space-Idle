@@ -168,45 +168,33 @@ def test_surface_movement_requires_known_physical_fields_without_reclassifying_v
     assert "operation:landing:gravity_unknown" in failures
     assert "operation:landing:pressure_unknown" in failures
 
-
-def test_surface_temperature_and_entry_energy_are_vehicle_operation_requirements():
-    from space_idle.transport import AtmosphericEntryCapability, LandingCapability
-    from space_idle.transport import TransportOperationKind, TransportOperationRequirement
-    from space_idle.transport.operations import (
-        OperationEvaluationContext, SurfaceOperationEnvironment, build_default_operation_registry,
-    )
+    # The same operation registry evaluates real surface pressure, temperature
+    # and entry energy. Missing thermal data remains unknown, not a 0 K proxy.
     from space_idle.spatial import ThermalField
     from space_idle.shared import CelestialBodyId, SurfaceCellId
-
-    sim = build_game_application()._simulation
-    entry = TransportOperationRequirement(TransportOperationKind.ATMOSPHERIC_ENTRY)
-    land = TransportOperationRequirement(TransportOperationKind.LANDING, 1)
-    reg = build_default_operation_registry()
-    venus_surface = sim.transport._surface_environment(
-        SurfaceCellId("base.cell.venus.highland"), sim.day
-    )
+    venus_cell = SurfaceCellId("base.cell.venus.highland")
+    venus_surface = sim.transport._surface_environment(venus_cell, sim.day)
     assert venus_surface.maximum_temperature_k > 700
-    context = OperationEvaluationContext(1, None, venus_surface)
-    # Distinct pressure, temperature and aerodynamic entry-energy requirements.
+    hot_context = OperationEvaluationContext(1, None, venus_surface)
     hot_enough = AtmosphericEntryCapability(10_000_000, 800, 50)
-    assert not reg.evaluate(entry, hot_enough, context)
-    assert any("temperature:" in failure for failure in reg.evaluate(
-        entry, AtmosphericEntryCapability(10_000_000, 500, 50), context,
+    assert not registry.evaluate(entry, hot_enough, hot_context)
+    assert any("temperature:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(10_000_000, 500, 50), hot_context,
     ))
-    assert any("entry_energy:" in failure for failure in reg.evaluate(
-        entry, AtmosphericEntryCapability(10_000_000, 800, 10), context,
+    assert any("entry_energy:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(10_000_000, 800, 10), hot_context,
     ))
-    assert any("pressure:" in failure for failure in reg.evaluate(
-        entry, AtmosphericEntryCapability(500_000, 800, 50), context,
+    assert any("pressure:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(500_000, 800, 50), hot_context,
     ))
-    assert any("temperature:" in failure for failure in reg.evaluate(
-        land, LandingCapability(5, 20, 10_000_000, 500), context,
+    assert any("temperature:" in failure for failure in registry.evaluate(
+        landing, LandingCapability(5, 20, 10_000_000, 500), hot_context,
     ))
-    # Missing thermal environment is unknown, never a reference 0 K.
-    sim.facilities.environment.static.body_facets.pop((CelestialBodyId("base.body.venus"), ThermalField))
-    assert "operation:atmospheric_entry:temperature_unknown" in reg.evaluate(
-        entry, hot_enough,
-        OperationEvaluationContext(1, None, sim.transport._surface_environment(
-            SurfaceCellId("base.cell.venus.highland"), sim.day,
-        )),
+    sim.facilities.environment.static.body_facets.pop(
+        (CelestialBodyId("base.body.venus"), ThermalField)
+    )
+    assert "operation:atmospheric_entry:temperature_unknown" in registry.evaluate(
+        entry, hot_enough, OperationEvaluationContext(
+            1, None, sim.transport._surface_environment(venus_cell, sim.day),
+        ),
     )

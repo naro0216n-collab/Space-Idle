@@ -17,6 +17,24 @@ from space_idle.site import evaluate_physical_site_requirements
 from space_idle.population import PopulationRules
 
 
+def _prepare_leo_passenger_service(sim, *, supplies=2.0, with_service=True):
+    """Construct the shared physical destination and optional player-owned service."""
+    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
+    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
+        sim.inventory.add(ids.LEO, resource, supplies)
+    if not with_service:
+        return None
+    capacity = sim.transport.transport_capacity_for_units(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
+    )
+    allocation = sim.transport.create_transport_allocation(
+        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
+        target_capacity=capacity, day=sim.day,
+    )
+    sim.transport.advance_fleet_state(sim.day)
+    return allocation
+
+
 def test_population_life_support_and_resource_allocation_share_the_normal_day():
     app = build_game_application()
     sim = app._simulation
@@ -223,15 +241,7 @@ def test_transport_service_passengers_share_mass_and_seats_and_survive_reload(tm
     app = build_game_application()
     sim = app._simulation
     transport = sim.transport
-    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
-    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 2.0)
-    capacity = transport.transport_capacity_for_units(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day)
-    allocation = transport.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
-        target_capacity=capacity, day=sim.day)
-    transport.advance_fleet_state(sim.day)
+    allocation = _prepare_leo_passenger_service(sim)
     options = app.query(GetPassengerTransferPreview(str(ids.EARTH), str(ids.LEO), 2)).options
     service = next(row for row in options if row.mode == 'service')
     assert service.dispatchable_people > 0
@@ -262,18 +272,8 @@ def test_transport_service_passengers_share_mass_and_seats_and_survive_reload(tm
 def test_competing_orders_share_arrival_space_and_service_transit_mortality_preserves_ownership(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
+    _prepare_leo_passenger_service(sim)
     sim.population.initialize(ids.LEO, 7)  # One actual bed remains for both requests.
-    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 2.0)
-    capacity = sim.transport.transport_capacity_for_units(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
-    )
-    sim.transport.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
-        target_capacity=capacity, day=sim.day,
-    )
-    sim.transport.advance_fleet_state(sim.day)
     for _ in range(2):
         app.execute(RequestPassengerTransfer(str(ids.EARTH), str(ids.LEO), 1))
     initial_total = sum(group.count for group in sim.population.groups.values())
@@ -323,17 +323,7 @@ def test_competing_orders_share_arrival_space_and_service_transit_mortality_pres
 def test_population_target_dispatch_uses_finite_service_capacity_without_creating_orders(tmp_path):
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
-    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 2.0)
-    capacity = sim.transport.transport_capacity_for_units(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
-    )
-    sim.transport.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
-        target_capacity=capacity, day=sim.day,
-    )
-    sim.transport.advance_fleet_state(sim.day)
+    _prepare_leo_passenger_service(sim)
     app.execute(SetPopulationTarget(str(ids.LEO), 2))
     people = sum(group.count for group in sim.population.groups.values())
     sources = sum(sim.population.external_remaining.values())
@@ -364,17 +354,7 @@ def test_population_target_dispatch_uses_finite_service_capacity_without_creatin
 def test_population_target_prefers_available_owned_surplus_then_finite_external_people():
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
-    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 3.0)
-    capacity = sim.transport.transport_capacity_for_units(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
-    )
-    sim.transport.create_transport_allocation(
-        ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
-        target_capacity=capacity, day=sim.day,
-    )
-    sim.transport.advance_fleet_state(sim.day)
+    _prepare_leo_passenger_service(sim, supplies=3.0)
     current = sim.population.count_at(ids.EARTH)
     app.execute(SetPopulationTarget(str(ids.EARTH), current - 1))
     app.execute(SetPopulationTarget(str(ids.LEO), 2))
@@ -397,18 +377,7 @@ def test_arrived_passengers_disembark_before_leftover_stock_is_admitted(tmp_path
     """Arrival holding retains actual cargo/Fleet without holding already admitted people."""
     app = build_game_application()
     sim = app._simulation
-    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
-    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 2.0)
-    if not dedicated:
-        capacity = sim.transport.transport_capacity_for_units(
-            ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
-        )
-        sim.transport.create_transport_allocation(
-            ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO,
-            target_capacity=capacity, day=sim.day,
-        )
-        sim.transport.advance_fleet_state(sim.day)
+    _prepare_leo_passenger_service(sim, with_service=not dedicated)
     app.execute(RequestPassengerTransfer(
         str(ids.EARTH), str(ids.LEO), 1,
         capacity_source_constraint=(PassengerCapacityChoice(
