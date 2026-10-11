@@ -387,7 +387,7 @@ Facility Inspectorでは次を安定配置する。
 
 Facility低稼働の主要原因を別画面へ移らないと判断できない構成にしない。
 
-Process候補に戦略差がある場合だけ、primary input / output、Capability requirement、Resource burden、Service burden、blockerを比較する。
+Process候補は同一Facility内でも異なるResourceを生産・消費し得るため、共通の優劣軸やPin比較に縮約しない。各候補のResource別投入・産出、Service requirement、切替条件、blockerを同じInspectorで表示する。
 
 ---
 
@@ -607,12 +607,11 @@ Comparisonは、同じ判断目的の代替候補間に、解釈可能な共通�
 代表対象:
 
 - Founding候補Cell
-- Process候補
 - Research Execution Context
 - Survey provider / observation mode
 - Movement候補
 
-共通Componentは2〜4候補のPin、共通比較軸、差分強調、blocker表示、Inspector展開を提供できる。候補が一意またはゲーム上同等ならComparisonを要求せず、Coreの決定論的選択を利用する。
+共通Componentは、同じ目的・評価単位を持つ2〜4候補のPin、共通物理軸、差分強調、blocker表示、Inspector展開に限って利用できる。Location名、異種Resourceの総質量、異機種Fleet台数、登録された工程・能力・インフラの件数等、大小を判断できない値を比較軸にしない。代替の選択に比較画面が不要なときは、候補ごとのInspectorと明細を使う。候補が一意またはゲーム上同等ならComparisonを要求せず、Coreの決定論的選択を利用する。
 
 全Domainを一つの巨大Generic Tableへ統合しない。
 

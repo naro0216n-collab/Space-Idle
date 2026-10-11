@@ -179,11 +179,10 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     )
     assert unresolved.selection_required
     assert unresolved.process_id is None
+    assert not hasattr(unresolved, "process_comparison_axes")
     assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
         str(process.id), str(alternate_process_id),
     )))
-    assert unresolved.process_comparison_axes
-    assert any(axis.differs for axis in unresolved.process_comparison_axes)
     primary_option = next(
         option for option in unresolved.process_options if option.process_id == str(process.id)
     )
@@ -196,15 +195,11 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
     )
     assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
-    assert {value.axis_key for value in primary_option.comparison_values} == {
-        axis.key for axis in unresolved.process_comparison_axes
-    }
-    # Different Resource kinds are not interchangeable throughput. Each
-    # process retains its own per-Resource material flows instead of a
-    # total mass "better/worse" comparison score.
-    assert not {"input_total_t", "output_total_t"} & {
-        axis.key for axis in unresolved.process_comparison_axes
-    }
+    assert not hasattr(primary_option, "comparison_values")
+    # The alternative process is selectable via its individual material
+    # flows, not a shared score or a separately pinned comparison.
+    assert all(option.input_rates_per_day is not None and option.output_rates_per_day is not None
+               for option in unresolved.process_options)
 
     app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
     selected = next(

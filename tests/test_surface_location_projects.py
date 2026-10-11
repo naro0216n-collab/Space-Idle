@@ -466,7 +466,6 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
         "preparation_work",
         "required_units",
         "payload_t",
-        "staging_resource_t",
         "terrain_factor",
         "bearing_capacity_factor",
         "dust_factor",
@@ -476,7 +475,6 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert option.comparison_key.startswith(f"{cell.id}|")
     assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}
     assert option_values["terrain_factor"] == pytest.approx(dict(cell.terrain)["terrain_factor"])
-    assert option_values["staging_resource_t"] == pytest.approx(sum(displayed_resources.values()))
 
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):

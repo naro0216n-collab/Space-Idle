@@ -166,9 +166,6 @@ class SurveyProgressionProjectorMixin:
                     number_value=row.measurement_precision_fraction,
                 ),
                 ComparisonValueRow(
-                    axis_key="minimum_source_units", number_value=float(row.minimum_source_units)
-                ),
-                ComparisonValueRow(
                     axis_key="capacity_units_per_day", number_value=capacity_units_per_day
                 ),
             )
@@ -210,7 +207,6 @@ class SurveyProgressionProjectorMixin:
                 ("max_knowledge_level", "到達可能な調査知識", "integer", None),
                 ("estimate_uncertainty_fraction", "推定の不確実性", "percent", None),
                 ("measurement_precision_fraction", "測定誤差", "percent", None),
-                ("minimum_source_units", "最低配備数", "integer", "機"),
                 ("capacity_units_per_day", "利用可能能力", "number", "/日"),
             ),
             (row.comparison_values for row in candidates),

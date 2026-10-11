@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 
-from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_codes, constraints_from_pairs, limiting_factors_from_codes
 from .application_views import (
     CapabilityRow,
@@ -25,7 +24,6 @@ from .application_views import (
     SurfaceLocationDecisionRow,
     StorageRow,
 )
-from .app_contracts.ui_reports import ComparisonValueRow
 from .execution_requirements import ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement
 from .shared import DefinitionId, SpatialNodeId
 from .disposal import project_salvage_recovery
@@ -394,25 +392,6 @@ class LocationProjectorMixin:
             if not compatible:
                 continue
             definition = sim.facilities.definitions[facility.definition_id]
-            input_resource_ids = tuple(sorted(
-                {resource_id for process in compatible for resource_id in process.inputs_per_day},
-                key=str,
-            ))
-            output_resource_ids = tuple(sorted(
-                {resource_id for process in compatible for resource_id in process.outputs_per_day},
-                key=str,
-            ))
-            process_axis_definitions = [
-                ("storage_burden_t", "保管負荷", "number", "t/日"),
-            ]
-            process_axis_definitions.extend(
-                (f"input:{resource_id}", f"{self._resource_name(resource_id)} 投入", "number", "t/日")
-                for resource_id in input_resource_ids
-            )
-            process_axis_definitions.extend(
-                (f"output:{resource_id}", f"{self._resource_name(resource_id)} 産出", "number", "t/日")
-                for resource_id in output_resource_ids
-            )
             option_rows: list[IndustryProcessOptionRow] = []
             for option_process in compatible:
                 missing_technology = sim.industry.missing_process_technologies(option_process)
@@ -421,7 +400,6 @@ class LocationProjectorMixin:
                     option_process, sim.inventory
                 )
                 service_requirements: list[tuple[str, float]] = []
-                storage_burden = 0.0
                 projected_blocker_codes: list[str] = []
                 for requirement in requirements:
                     if isinstance(requirement, ResourceRequirement):
@@ -439,30 +417,10 @@ class LocationProjectorMixin:
                         admission = sim.inventory.admission_state_for_pool(
                             location_id, requirement.pool_id
                         ).admission_capacity_t
-                        storage_burden += requirement.amount_per_execution * throughput
                         if admission + 1e-9 < requirement.amount_per_execution * throughput:
                             projected_blocker_codes.append(
                                 f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution * throughput:g}"
                             )
-                comparison_values = (
-                    ComparisonValueRow(
-                        axis_key="storage_burden_t", number_value=storage_burden
-                    ),
-                    *(
-                        ComparisonValueRow(
-                            axis_key=f"input:{resource_id}",
-                            number_value=option_process.inputs_per_day.get(resource_id, 0.0) * throughput,
-                        )
-                        for resource_id in input_resource_ids
-                    ),
-                    *(
-                        ComparisonValueRow(
-                            axis_key=f"output:{resource_id}",
-                            number_value=option_process.outputs_per_day.get(resource_id, 0.0) * throughput,
-                        )
-                        for resource_id in output_resource_ids
-                    ),
-                )
                 option_rows.append(IndustryProcessOptionRow(
                     process_id=str(option_process.id),
                     display_name=option_process.display_name,
@@ -497,14 +455,8 @@ class LocationProjectorMixin:
                         related_entity_kind="facility",
                         related_entity_id=str(facility.id),
                     ),
-                    comparison_key=str(option_process.id),
-                    comparison_values=comparison_values,
                     can_select=not missing_technology,
                 ))
-            process_comparison_axes = project_comparison_axes(
-                tuple(process_axis_definitions),
-                (row.comparison_values for row in option_rows),
-            )
             snap = snapshots.get(facility.id)
             process = sim.industry.process_for(facility)
             selection_required = len(compatible) > 1 and facility.selected_process_id is None
@@ -541,7 +493,6 @@ class LocationProjectorMixin:
                     None if process is None else str(process.id),
                     None if process is None else process.display_name,
                     tuple(option_rows),
-                    process_comparison_axes,
                     selection_required,
                     scale,
                     limiting_factors_from_codes(

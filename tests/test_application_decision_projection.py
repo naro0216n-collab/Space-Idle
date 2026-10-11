@@ -202,12 +202,10 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
         assert {
             "transit_days",
             "delta_v_km_s",
-            "operation_count",
             "service_feasible",
             "cycle_days",
             "nominal_forward_t_per_day",
             "full_load_propellant_t",
-            "infrastructure_count",
         } <= value_keys
 
     # Node-neighbourhood and OD views share the scoped Movement contract.

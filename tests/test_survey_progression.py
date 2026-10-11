@@ -262,7 +262,6 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
         "max_knowledge_level",
         "estimate_uncertainty_fraction",
         "measurement_precision_fraction",
-        "minimum_source_units",
         "capacity_units_per_day",
     }
     for candidate in viable:

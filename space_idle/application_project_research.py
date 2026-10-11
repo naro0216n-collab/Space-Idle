@@ -143,7 +143,6 @@ class ResearchProgressionProjectorMixin:
                     str(item.resource_id), item.required_t, item.reserved_t,
                     item.available_t, item.shortfall_t,
                 ) for item in resource_status)
-                resource_required = sum(item.required_t for item in resource_status)
                 resource_shortfall = sum(item.shortfall_t for item in resource_status)
                 service_requirements = tuple(
                     requirement for requirement in spec.execution_requirements
@@ -170,20 +169,11 @@ class ResearchProgressionProjectorMixin:
                         for requirement in service_requirements
                     )
                     service_work_capacity = min(1.0, service_work_capacity)
-                committed_fleet = sum(
-                    sim.research.provider_assignment_quantity(assignment.id)
-                    for assignment in sim.research.provider_assignments.values()
-                    if assignment.operational_node_id == node.id
-                )
                 estimated_days = (
                     None if blockers or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
                     else float(remaining_work) / service_work_capacity
                 )
                 comparison_values = (
-                    ComparisonValueRow("location", text_value=str(node.display_name)),
-                    ComparisonValueRow("fleet_commitment", number_value=float(committed_fleet)),
-                    ComparisonValueRow("resource_required_t", number_value=float(resource_required)),
-                    ComparisonValueRow("resource_shortfall_t", number_value=float(resource_shortfall)),
                     ComparisonValueRow("service_work_capacity", number_value=float(service_work_capacity)),
                     ComparisonValueRow(
                         "estimated_days",
@@ -424,10 +414,6 @@ class ResearchProgressionProjectorMixin:
                         power_by_location=power_by_location, service_plan=service_plan,
                     )
                     execution_context_comparison_axes = project_comparison_axes((
-                        ("location", "Location", "text", None),
-                        ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
-                        ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
                         ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))
@@ -458,10 +444,6 @@ class ResearchProgressionProjectorMixin:
                         power_by_location=power_by_location, service_plan=service_plan,
                     )
                     execution_context_comparison_axes = project_comparison_axes((
-                        ("location", "Location", "text", None),
-                        ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
-                        ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
                         ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))

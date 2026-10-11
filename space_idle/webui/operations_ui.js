@@ -160,19 +160,6 @@
     ];
     return enables[0]||'拠点能力を追加';
   }
-  function processComparisonScope(industry){return `process:${industry.facility_id}`;}
-  function processComparisonHtml(industry){
-    return comparisonSurfaceHtml({
-      scopeKey:processComparisonScope(industry),
-      axes:industry.process_comparison_axes||[],
-      candidates:industry.process_options||[],
-      emptyText:'現在の生産工程候補には、比較が必要な戦略差はありません。',
-      promptText:'生産工程から2〜4候補を比較に追加すると、投入・産出・保管負荷と制約を共通軸で確認できます。',
-      headingHtml:(row)=>`<strong>${esc(row.display_name||'生産工程')}</strong><small>${row.process_id===industry.process_id?'現在の工程':'切替候補'}</small>`,
-      detailButtonHtml:()=>' ',
-      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">現在の制約なし</span>',
-    });
-  }
   function researchComparisonScope(research){return `research:${research.id}:${research.current_stage_id||''}:execution-context`;}
   function researchComparisonPinnedKeys(research){return comparisonPinnedKeys(researchComparisonScope(research),research.execution_context_options||[]);}
   function researchComparisonHtml(research){
@@ -780,17 +767,14 @@
     const rateCards=(rows)=>(rows||[]).map(([resourceId,rate])=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(resourceId))}</span><span>${fmt(rate,3)} t/日</span></div></div>`).join('')||'<div class="empty-state">なし</div>';
     let productionSection='';
     if(industry){
-      const comparisonAvailable=(industry.process_comparison_axes||[]).length>0;
-      const pins=new Set(comparisonPinnedKeys(processComparisonScope(industry),industry.process_options||[]));
       const processOptions=(industry.process_options||[]).map((option)=>{
-        const selected=option.process_id===industry.process_id,pinned=pins.has(option.comparison_key),pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;
+        const selected=option.process_id===industry.process_id;
         const inputs=(option.input_rates_per_day||[]).map(([resourceId,rate])=>`${resourceName(resourceId)} ${fmt(rate,3)} t/日`).join(' / ')||'投入なし';
         const outputs=(option.output_rates_per_day||[]).map(([resourceId,rate])=>`${resourceName(resourceId)} ${fmt(rate,3)} t/日`).join(' / ')||'産出なし';
         const services=(option.service_requirements||[]).map(([serviceId,rate])=>`${serviceName(serviceId)} ${fmt(rate,2)}`).join(' / ')||'追加Service要求なし';
-        const compareAction=comparisonAvailable?`<button type="button" data-process-compare-pin="${esc(f.id)}" data-comparison-key="${esc(option.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
-        return `<div class="detail-card ${selected?'is-usable':''}" data-process-option="${esc(option.process_id)}"><div class="mode-title"><span>${esc(option.display_name||definitionName(option.process_id))}</span><span class="badge ${selected?'ok':(option.blockers||[]).length?'warn':''}">${selected?'現在の工程':(option.blockers||[]).length?'実行制約あり':'切替候補'}</span></div><div class="cell-sub">投入: ${esc(inputs)}</div><div class="cell-sub">産出: ${esc(outputs)}</div><div class="cell-sub">必要能力: ${esc(services)}</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-facility-process="${esc(f.id)}" data-process-id="${esc(option.process_id)}" aria-pressed="${selected?'true':'false'}" ${selected||!option.can_select?'disabled':''}>${selected?'選択中':'この工程へ切替'}</button></div></div>`;
+        return `<div class="detail-card ${selected?'is-usable':''}" data-process-option="${esc(option.process_id)}"><div class="mode-title"><span>${esc(option.display_name||definitionName(option.process_id))}</span><span class="badge ${selected?'ok':(option.blockers||[]).length?'warn':''}">${selected?'現在の工程':(option.blockers||[]).length?'実行制約あり':'切替候補'}</span></div><div class="cell-sub">投入: ${esc(inputs)}</div><div class="cell-sub">産出: ${esc(outputs)}</div><div class="cell-sub">必要能力: ${esc(services)}</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row"><button type="button" data-facility-process="${esc(f.id)}" data-process-id="${esc(option.process_id)}" aria-pressed="${selected?'true':'false'}" ${selected||!option.can_select?'disabled':''}>${selected?'選択中':'この工程へ切替'}</button></div></div>`;
       }).join('');
-      const processControl=`<div class="choice-section"><div class="choice-label">生産工程を選択</div><div class="choice-grid facility-process-choices">${processOptions||'<div class="empty-state">候補なし</div>'}</div></div>${comparisonAvailable?`<h4>工程比較</h4>${processComparisonHtml(industry)}`:''}`;
+      const processControl=`<div class="choice-section"><div class="choice-label">生産工程を選択</div><div class="choice-grid facility-process-choices">${processOptions||'<div class="empty-state">候補なし</div>'}</div></div>`;
       productionSection+=section('生産工程',kv([['現在の工程',esc(industry.process_display_name||'未選択')],['工程選択',industry.selection_required?'選択が必要':'確定'],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>現在工程の投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>現在工程の生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>現在の主な制約</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
@@ -1144,15 +1128,21 @@
     const campaignId=id.slice(0,split),candidateKey=id.slice(split+2);
     const c=state.surveys?.campaigns?.find((row)=>row.id===campaignId);if(!c)return false;
     const row=(c.candidates||[]).find((candidate)=>candidate.comparison_key===candidateKey);if(!row)return false;
-    const axes=c.comparison_axes||[];
-    const details=axes.length?kv(axes.map((axis)=>[axis.label,comparisonValueHtml(axis,comparisonValue(row,axis.key))])):kv([['調査速度',fmt(row.survey_rate,2)],['到達可能な調査知識',fmt(row.max_knowledge_level,0)],['最低配備数',`${fmt(row.minimum_source_units,0)} 機`],['利用可能能力',`${fmt(row.capacity_units_per_day,2)} /日`]]);
+    const details=kv([
+      ['調査速度',`${fmt(row.survey_rate,2)} /日`],
+      ['到達可能な調査知識',fmt(row.max_knowledge_level,0)],
+      ['必要 / 配備機数',`${fmt(row.minimum_source_units,0)} / ${fmt(row.assigned_source_units,0)} 機`],
+      ['供給可能Service',`${fmt(row.capacity_units_per_day,2)} /日`],
+      ['推定不確実性',pct(row.estimate_uncertainty_fraction)],
+      ['測定誤差',pct(row.measurement_precision_fraction)],
+    ]);
     const blockers=row.blockers||[];
     const pinned=surveyComparisonPinnedKeys(c).includes(row.comparison_key);
     setInspector(`${row.provider_display_name||'調査手段'} · ${row.observation_mode_display_name||'観測方式'}`,
       section('観測手段の状態',kv([['提供地点',esc(locationName(row.provider_operational_node_id))],['提供方式',esc(A.userFacingText(row.provider_source_kind))],['利用可否',row.viable?'利用可能':'利用不可'],['現在の固定条件に一致',row.matches_constraints?'一致':'不一致']]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack"><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}" data-source-definition-id="${esc(row.source_definition_id)}">この観測手段に固定</button>${(c.comparison_axes||[]).length?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}">${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="survey-campaign" data-id="${esc(c.id)}">調査判断へ戻る</button></div>`)+
-      section('比較軸の詳細',details)
+      section('観測手段の性能・必要条件',details)
     );
     return true;
   }
@@ -1164,14 +1154,18 @@
     const foundingPins=foundationComparisonPinnedKeys();
     const pinned=foundingPins.includes(row.comparison_key);
     const pinDisabled=!pinned&&foundingPins.length>=4;
-    const details=axes.length
-      ?kv(axes.map((axis)=>[axis.label,comparisonValueHtml(axis,comparisonValue(row,axis.key))]))
-      :kv([
-          ['移動時間',row.transit_days==null?'到達不可':`${fmt(row.transit_days,0)} 日`],
-          ['準備工数',fmt(row.preparation_work,0)],
-          ['必要機数',`${fmt(row.required_units,0)} 機`],
-          ['搭載量',`${fmt(row.payload_t,2)} t`],
-        ]);
+    const targetCell=surfaceCell(row.target_cell_id);
+    const terrain=Object.fromEntries(targetCell?.terrain||[]);
+    const details=kv([
+      ['準備工数',fmt(row.preparation_work,0)],
+      ['必要機数',`${fmt(row.required_units,0)} 機`],
+      ['搭載量',`${fmt(row.payload_t,2)} t`],
+      ['1機あたり搭載量',`${fmt(row.payload_t_per_unit,2)} t`],
+      ['地形係数',terrain.terrain_factor==null?'—':fmt(terrain.terrain_factor,2)],
+      ['地盤支持力',terrain.bearing_capacity_factor==null?'—':fmt(terrain.bearing_capacity_factor,2)],
+      ['粉塵負荷',terrain.dust_factor==null?'—':fmt(terrain.dust_factor,2)],
+      ['斜面負荷',terrain.slope_factor==null?'—':fmt(terrain.slope_factor,2)],
+    ]);
     setInspector(`設立候補 · ${row.target_cell_name}`,
       section('候補状態',kv([
         ['出発拠点',esc(locationName(row.staging_node_id))],
@@ -1182,7 +1176,7 @@
       ]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${axes.length?`<button type="button" data-founding-compare-pin="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="surface-cell" data-id="${esc(row.target_cell_id)}">候補地点へ戻る</button></div>`)+
-      section('比較軸の詳細',details)+
+      section('設立工数・地点条件',details)+
       section(row.transit_days==null?'最低展開資材':'出発拠点で必要な資源',`<div class="surface-resource-list">${tupleResourcesHtml(row.resources)}</div>${row.transit_days==null?'<div class="cell-sub">移動経路が未成立のため、運用資源を含む出発時総量は未確定です。</div>':''}`)
     );
     return true;
@@ -1368,7 +1362,6 @@
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-upgrade:${upgrade.dataset.upgrade}`);banner('設備更新案件を作成しました');}catch{}return;}
     const decommission=event.target.closest('[data-decommission]');if(decommission){const prefix=decommission.dataset.planPrefix||'decommissionPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityDecommission',{facility_id:decommission.dataset.decommission,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-decommission:${decommission.dataset.decommission}`);state.inspector={type:'facility',id:decommission.dataset.decommission};renderInspector();banner('設備撤去案件を作成しました');}catch{}return;}
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
-    const processComparePin=event.target.closest('[data-process-compare-pin]');if(processComparePin){const industry=(state.operationalNode?.industry||[]).find((row)=>row.facility_id===processComparePin.dataset.processComparePin);if(!industry)return;toggleComparisonPin(processComparisonScope(industry),industry.process_options||[],processComparePin.dataset.comparisonKey);renderInspector();return;}
     const process=event.target.closest('[data-facility-process]');if(process){try{await command('SetFacilityProcess',{facility_id:process.dataset.facilityProcess,process_id:process.dataset.processId});state.inspector={type:'facility',id:process.dataset.facilityProcess};renderInspector();banner('生産工程を更新しました');}catch{}return;}
     const extractionMethod=event.target.closest('[data-facility-extraction]');if(extractionMethod){try{await command('SetFacilityExtractionMethod',{facility_id:extractionMethod.dataset.facilityExtraction,method_id:extractionMethod.dataset.extractionMethod});state.inspector={type:'facility',id:extractionMethod.dataset.facilityExtraction};renderInspector();banner('採掘方式を更新しました');}catch{}return;}
     const projectSourcing=event.target.closest('[data-set-project-procurement]');if(projectSourcing){try{await command('SetProjectProcurementPolicy',{project_id:projectSourcing.dataset.setProjectProcurement,procurement_policy:$('#projectProcurementTimingPolicy').value});}catch{}return;}

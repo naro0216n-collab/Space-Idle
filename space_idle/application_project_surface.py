@@ -280,14 +280,6 @@ class SurfaceProjectorMixin:
                                 ),
                                 ComparisonValueRow(axis_key="payload_t", number_value=recipe.payload_t),
                                 ComparisonValueRow(
-                                    axis_key="staging_resource_t",
-                                    number_value=(
-                                        None
-                                        if transit_days is None
-                                        else sum(req.amount_t for req in founding_resources)
-                                    ),
-                                ),
-                                ComparisonValueRow(
                                     axis_key="terrain_factor", number_value=cell.terrain.terrain_factor
                                 ),
                                 ComparisonValueRow(
@@ -372,7 +364,6 @@ class SurfaceProjectorMixin:
                 ("preparation_work", "準備工数", "number", None),
                 ("required_units", "必要機数", "integer", "機"),
                 ("payload_t", "搭載量", "number", "t"),
-                ("staging_resource_t", "出発時資源量", "number", "t"),
                 ("terrain_factor", "地形係数", "number", None),
                 ("bearing_capacity_factor", "地盤支持力", "number", None),
                 ("dust_factor", "粉塵負荷", "number", None),

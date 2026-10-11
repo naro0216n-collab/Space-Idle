@@ -536,7 +536,9 @@ def test_prototype_site_comparison_uses_per_resource_readiness_and_does_not_prom
     assert resources[str(common)].shortfall_t == pytest.approx(0.0)
     assert resources[str(common)].available_t > sum(item.required_t for item in earth.resources)
     values = {value.axis_key: value.number_value for value in earth.comparison_values}
-    assert values["resource_shortfall_t"] == pytest.approx(2.0)
+    # Resource-by-Resource readiness is authoritative; do not aggregate distinct
+    # materials into an apparently comparable 'shortfall' score.
+    assert "resource_shortfall_t" not in values
     assert values["estimated_days"] is None
     assert next(value for value in earth.comparison_values if value.axis_key == "estimated_days").text_value
     assert earth.can_select  # Shortage blocks operation, not planning a site.
@@ -587,19 +589,13 @@ def test_research_execution_context_projects_strategic_comparison_axes_from_appl
     row = _research_row(app, research_id)
 
     axis_keys = {axis.key for axis in row.execution_context_comparison_axes}
-    assert "location" in axis_keys
-    assert "resource_shortfall_t" in axis_keys
     assert "service_work_capacity" in axis_keys
     assert "estimated_days" in axis_keys
-    resource_required_axis = next(axis for axis in row.execution_context_comparison_axes if axis.key == "resource_required_t")
-    assert not resource_required_axis.differs  # shared demand remains visible but is not highlighted as a strategic difference
 
     earth = next(site for site in row.execution_context_options if site.operational_node_id == str(EARTH))
     leo = next(site for site in row.execution_context_options if site.operational_node_id == str(LEO))
     earth_values = {value.axis_key: value for value in earth.comparison_values}
     leo_values = {value.axis_key: value for value in leo.comparison_values}
-    assert earth_values["resource_shortfall_t"].number_value == pytest.approx(0.0)
-    assert leo_values["resource_shortfall_t"].number_value == pytest.approx(2.0)
     assert earth_values["service_work_capacity"].number_value == pytest.approx(1.0)
     assert leo_values["service_work_capacity"].number_value == pytest.approx(0.0)
     assert earth_values["estimated_days"].number_value == pytest.approx(2.0)

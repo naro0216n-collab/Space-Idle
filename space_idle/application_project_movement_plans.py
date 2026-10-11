@@ -203,7 +203,6 @@ class LogisticsMovementPlanProjectorMixin:
                 comparison_values.extend((
                     ComparisonValueRow(axis_key="transit_days", number_value=float(movement_plan.transit_days)),
                     ComparisonValueRow(axis_key="delta_v_km_s", number_value=float(movement_plan.delta_v_km_s)),
-                    ComparisonValueRow(axis_key="operation_count", number_value=float(len(movement_plan.operations))),
                 ))
             if comparison_requested and comparison_mode is not None:
                 comparison_values.extend((
@@ -211,7 +210,6 @@ class LogisticsMovementPlanProjectorMixin:
                     ComparisonValueRow(axis_key="cycle_days", number_value=comparison_mode.cycle_days),
                     ComparisonValueRow(axis_key="nominal_forward_t_per_day", number_value=comparison_mode.nominal_capacity.forward_t_per_day),
                     ComparisonValueRow(axis_key="full_load_propellant_t", number_value=(comparison_mode.full_load_propellant_t or 0.0)),
-                    ComparisonValueRow(axis_key="infrastructure_count", number_value=float(len(comparison_mode.infrastructure_requirements))),
                 ))
             rows.append(
                 MovementPlanRow(
@@ -267,7 +265,6 @@ class LogisticsMovementPlanProjectorMixin:
             axis_definitions = [
                 ("transit_days", "移動所要時間", "integer", "日"),
                 ("delta_v_km_s", "必要Δv", "number", "km/s"),
-                ("operation_count", "運用工程数", "integer", None),
             ]
             if query.vehicle_definition_id is not None:
                 propellant_name = "推進剤"
@@ -281,7 +278,6 @@ class LogisticsMovementPlanProjectorMixin:
                     ("cycle_days", "往復運行周期", "number", "日"),
                     ("nominal_forward_t_per_day", "1機あたり往路能力", "number", "t/日"),
                     ("full_load_propellant_t", f"満載時{propellant_name}", "number", "t/便"),
-                    ("infrastructure_count", "必要インフラ数", "integer", None),
                 ))
             comparison_axes = project_comparison_axes(
                 tuple(axis_definitions),
