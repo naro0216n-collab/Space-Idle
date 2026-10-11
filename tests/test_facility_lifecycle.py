@@ -65,7 +65,7 @@ def _build_decommission_fixture_application(*, for_load: bool = False):
         STORAGE_DECOMMISSION_TARGET, construction_work=2.0
     )
     sim.storage.providers[STORAGE_DECOMMISSION_TARGET] = StorageProviderSpec(
-        STORAGE_DECOMMISSION_TARGET, {"default": 10.0}
+        STORAGE_DECOMMISSION_TARGET, {"cryogenic": 10.0}
     )
     return app
 
@@ -178,14 +178,14 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
     facility_id = sim.facilities.install(
         STORAGE_DECOMMISSION_TARGET,
         ids.EARTH,
-        invested_resources={SALVAGE_RESOURCE: 8.0},
+        invested_resources={ids.OXYGEN: 8.0},
     )
     sim.refresh_storage()
 
-    pool = sim.inventory.storage_pool_for_resource(SALVAGE_RESOURCE)
+    pool = sim.inventory.storage_pool_for_resource(ids.OXYGEN)
     physical_with_target = sim.inventory.physical_storage_capacity_t[(ids.EARTH, pool)]
     remaining_physical = physical_with_target - 10.0
-    filler = ids.CONSTRUCTION_EQUIPMENT
+    filler = ids.PROPELLANT
     original_filler = sim.inventory.amount(ids.EARTH, filler)
     occupied = sim.inventory.stored_in_pool(ids.EARTH, pool)
 
@@ -218,11 +218,11 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
         if row.id == str(facility_id)
     )
     assert dict(facility_row.expected_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(4.0)
+        str(ids.OXYGEN): pytest.approx(4.0)
     }
     assert facility_row.projected_salvage_fraction == pytest.approx(0.5)
     assert dict(facility_row.projected_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(2.0)
+        str(ids.OXYGEN): pytest.approx(2.0)
     }
     sim.inventory.stock[(ids.EARTH, filler)] = original_filler
 
@@ -263,7 +263,7 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
         salvage_bundle.id
     )
     assert 0.0 < expected_fraction < 1.0
-    stock_before = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
+    stock_before = sim.inventory.amount(ids.EARTH, ids.OXYGEN)
 
     with observe_canonical_day(sim) as trace:
         app.execute(AdvanceTime(1))
@@ -277,16 +277,16 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
     assert completed.status == "complete"
     assert completed.actual_salvage_fraction == pytest.approx(expected_fraction)
     assert dict(completed.actual_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(4.0 * expected_fraction)
+        str(ids.OXYGEN): pytest.approx(4.0 * expected_fraction)
     }
     assert facility_id not in sim.facilities.facilities
-    assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(
+    assert sim.inventory.amount(ids.EARTH, ids.OXYGEN) == pytest.approx(
         stock_before + 4.0 * expected_fraction
     )
 
-    stock_after = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
+    stock_after = sim.inventory.amount(ids.EARTH, ids.OXYGEN)
     app.execute(AdvanceTime(1))
-    assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(stock_after)
+    assert sim.inventory.amount(ids.EARTH, ids.OXYGEN) == pytest.approx(stock_after)
     assert facility_id not in sim.facilities.facilities
 
 

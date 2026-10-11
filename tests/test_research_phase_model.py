@@ -95,7 +95,6 @@ def test_authored_prototype_and_operational_experience_link_physical_site_alloca
             ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, moon_node),
         ),
         storage_infrastructure=base.storage_infrastructure + (
-            ScenarioStorageInfrastructure(moon_node, "default", 10),
         ),
         inventory_stock=base.inventory_stock + (
             ScenarioInventoryStock(moon_node, ids.MINERAL_FEEDSTOCK, 2),

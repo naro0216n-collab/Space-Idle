@@ -17,6 +17,7 @@ from space_idle.content.base_game import (
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
     PROPELLANT,
+    OXYGEN,
     REUSABLE_LAUNCH_VEHICLE,
     REUSABLE_ORBITAL_CARGO_TUG,
     WATER,
@@ -504,7 +505,6 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
 
 def test_supply_resource_competition_respects_priority_reservations_and_order_independence():
     inventory = InventoryBook()
-    inventory.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     inventory.add(EARTH, MACHINERY, 5.0)
     high = _requirement(
         4.0, requirement_id="supply.local.high", destination=EARTH, priority=5
@@ -521,7 +521,6 @@ def test_supply_resource_competition_respects_priority_reservations_and_order_in
     assert inventory.reserved == {}
 
     constrained = InventoryBook()
-    constrained.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     constrained.add(EARTH, MACHINERY, 2.0)
     first = _requirement(
         3.0, requirement_id="supply.equal.a", destination=EARTH, priority=3
@@ -539,7 +538,6 @@ def test_supply_resource_competition_respects_priority_reservations_and_order_in
     assert constrained.reserved == {}
 
     reserved = InventoryBook()
-    reserved.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     reserved.add(EARTH, MACHINERY, 5.0)
     reserved.reserve(EntityId("project.supply"), EARTH, MACHINERY, 4.0)
     other = _requirement(
@@ -635,8 +633,8 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
     allocation_id = _owned_earth_leo_capacity(sim)
     baseline = sim.logistics.current_transport_capacity_snapshot(allocation_id, day=0)
 
-    cargo = WATER
-    filler = CONSTRUCTION_EQUIPMENT
+    cargo = PROPELLANT
+    filler = OXYGEN
     free = sim.inventory.admission_state(LEO, cargo).admission_capacity_t
     assert free is not None and free > 1.0
     sim.inventory.add(LEO, filler, free)

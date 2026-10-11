@@ -656,7 +656,6 @@ def test_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisition_con
             ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.MARS_ORBIT),
         ),
         storage_infrastructure=base.storage_infrastructure + (
-            ScenarioStorageInfrastructure(moon_node, "default", 3000.0),
             ScenarioStorageInfrastructure(moon_node, "cryogenic", 1000.0),
         ),
         inventory_stock=base.inventory_stock + (
@@ -845,7 +844,6 @@ def test_high_volume_propellant_terminal_links_process_power_storage_and_fleet_r
         ),
         inventory_stock=base.inventory_stock + fuels,
         storage_infrastructure=base.storage_infrastructure + (
-            ScenarioStorageInfrastructure(lunar, "default", 600.0),
             ScenarioStorageInfrastructure(lunar, "cryogenic", 500.0),
         ),
         completed_technologies=(
@@ -1113,7 +1111,7 @@ def test_orbital_materials_and_bulk_freight_form_a_single_owned_supply_chain(tmp
     assert capacity["cargo_transfer"] >= 4.0
     assert capacity["vehicle_assembly"] > 1.0
     assert capacity["spacecraft_servicing"] >= 2.0
-    assert sim.storage.providers[ids.ORBITAL_HEAVY_CARGO_TERMINAL].capacity_t_by_pool["default"] > 100
+    assert sim.inventory.admission_state(ids.LEO, ids.BULK_STRUCTURE).blockers == ()
     assert next(row.physical_capacity_t for row in orbital.storage
                 if row.storage_pool_key == "cryogenic") == cold_capacity_before
 
@@ -1488,7 +1486,6 @@ def test_interplanetary_supply_and_science_use_one_physical_portfolio(tmp_path):
             ids.ORBITAL_HABITAT, ids.ORBITAL_PROPELLANT_DEPOT,
         )),
         storage_infrastructure=base.storage_infrastructure + (
-            ScenarioStorageInfrastructure(ids.LEO, "default", 2400.0),
             ScenarioStorageInfrastructure(ids.LEO, "cryogenic", 200.0),
         ),
         inventory_stock=base.inventory_stock + tuple(

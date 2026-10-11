@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import inf, isfinite
 from typing import Mapping, Callable
 
 from .catalog import ResourceDef
@@ -40,11 +41,10 @@ class InventoryAdmissionResult:
 
 @dataclass
 class InventoryBook:
-    """Operational Node-scoped stock and admission ownership.
+    """Operational Node-scoped Resource ownership and admission.
 
-    Resource→pool compatibility comes from immutable Content definitions. All
-    ordinary physical Resources use the finite default pool; an explicit pool
-    key is only needed for genuinely special storage requirements.
+    Ordinary Resource stock is unrestricted. Explicit special pools use finite
+    physical and operational capacity derived from installed infrastructure.
     """
 
     resource_definitions: Mapping[DefinitionId, ResourceDef] = field(default_factory=dict)
@@ -67,6 +67,10 @@ class InventoryBook:
             self._settlement_observer(direction, node_id, resource_id, amount, operation,
                                       None if owner is None else str(owner), counterparty, activity)
 
+    @staticmethod
+    def is_finite_storage_pool(pool_key: StoragePoolKey) -> bool:
+        return pool_key != DEFAULT_STORAGE_POOL_KEY
+
     def storage_pool_for_resource(self, resource_id: DefinitionId) -> StoragePoolKey:
         definition = self.resource_definitions.get(resource_id)
         if definition is None or definition.storage_pool_key is None:
@@ -79,6 +83,10 @@ class InventoryBook:
         usable_capacity_t: dict[tuple[SpatialNodeId, StoragePoolKey], float],
         limiting_factors: dict[tuple[SpatialNodeId, StoragePoolKey], tuple[str, ...]] | None = None,
     ) -> None:
+        if any(not self.is_finite_storage_pool(key[1]) for key in physical_capacity_t | usable_capacity_t):
+            raise ValueError("ordinary Inventory has no finite storage snapshot")
+        if any(not isfinite(value) or value < 0 for value in (*physical_capacity_t.values(), *usable_capacity_t.values())):
+            raise ValueError("special storage capacities must be finite and nonnegative")
         self.physical_storage_capacity_t = {key: max(0.0, amount) for key, amount in physical_capacity_t.items()}
         self.usable_storage_capacity_t = {
             key: min(self.physical_storage_capacity_t.get(key, 0.0), max(0.0, amount))
@@ -94,11 +102,11 @@ class InventoryBook:
 
     def physical_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         pool_key = self.storage_pool_for_resource(resource_id)
-        return self.physical_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
+        return inf if not self.is_finite_storage_pool(pool_key) else self.physical_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
 
     def usable_capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         pool_key = self.storage_pool_for_resource(resource_id)
-        return self.usable_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
+        return inf if not self.is_finite_storage_pool(pool_key) else self.usable_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
 
     def capacity(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         return self.usable_capacity(operational_node_id, resource_id)
@@ -117,8 +125,8 @@ class InventoryBook:
         return stock + external
 
     def occupy_storage(self, owner_id: EntityId, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> float:
-        if amount < -1e-9:
-            raise ValueError("negative storage occupancy")
+        if not isfinite(amount) or amount < -1e-9:
+            raise ValueError("nonfinite or negative storage occupancy")
         state = self.admission_state(operational_node_id, resource_id)
         accepted = min(amount, state.admission_capacity_t)
         if accepted <= 1e-12:
@@ -149,6 +157,13 @@ class InventoryBook:
     def admission_state_for_pool(
         self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey
     ) -> InventoryAdmissionState:
+        if not self.is_finite_storage_pool(pool_key):
+            # Unrestricted ordinary stock is not a fictitious finite provider.
+            # Infinity is internal admission arithmetic; projections expose null.
+            return InventoryAdmissionState(
+                operational_node_id, pool_key, inf, inf,
+                self.stored_in_pool(operational_node_id, pool_key), inf, 0.0,
+            )
         key = (operational_node_id, pool_key)
         physical = max(0.0, self.physical_storage_capacity_t.get(key, 0.0))
         usable = min(physical, max(0.0, self.usable_storage_capacity_t.get(key, 0.0)))
@@ -199,14 +214,17 @@ class InventoryBook:
 
     def admit(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float, *,
               source_owner: str | None = None, activity_id: str | None = None) -> InventoryAdmissionResult:
-        if amount < -_EPS:
-            raise ValueError("negative admission")
+        if not isfinite(amount) or amount < -_EPS:
+            raise ValueError("nonfinite or negative admission")
         requested = max(0.0, amount)
         before = self.admission_state(operational_node_id, resource_id)
         accepted = min(requested, before.admission_capacity_t)
         if accepted > _EPS:
             key = (operational_node_id, resource_id)
-            self.stock[key] = self.stock.get(key, 0.0) + accepted
+            updated = self.stock.get(key, 0.0) + accepted
+            if not isfinite(updated):
+                raise ValueError("nonfinite inventory stock")
+            self.stock[key] = updated
         self._record_settlement("inventory_in", operational_node_id, resource_id, accepted, "inventory.admit",
                                 counterparty=source_owner, activity=activity_id)
         after = self.admission_state(operational_node_id, resource_id)

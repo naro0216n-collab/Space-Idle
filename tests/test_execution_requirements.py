@@ -17,7 +17,7 @@ from space_idle.execution_requirements import (
     resource_constraint,
     service_constraint,
 )
-from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
+from space_idle.inventory import InventoryBook
 from space_idle.priority import (
     ActivityPriority,
     DEFAULT_ACTIVITY_PRIORITY,
@@ -280,7 +280,7 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
     app = build_game_application()
     sim = app._simulation
     project_id = app.execute(PlanBuild(
-        str(ids.EARTH), str(ids.WATER_STORAGE), priority=3,
+        str(ids.EARTH), str(ids.CONSTRUCTION_YARD), priority=3,
         procurement_policy="extended_wait",
     )).created_id
     project = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
@@ -378,22 +378,22 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
 
 
 def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
-    default_admission = StockOrPoolAdmissionRequirement("default", 10.0)
+    thermal_admission = StockOrPoolAdmissionRequirement("thermal", 10.0)
     cryogenic_admission = StockOrPoolAdmissionRequirement("cryogenic", 6.0)
     multi_pool = bundle(
         "multi_pool",
         1.0,
-        default_admission,
+        thermal_admission,
         cryogenic_admission,
     )
     concurrent = bundle(
         "concurrent_admission",
         1.0,
-        StockOrPoolAdmissionRequirement("default", 2.0),
+        StockOrPoolAdmissionRequirement("thermal", 2.0),
         priority=5,
     )
     capacities = {
-        admission_constraint(NODE, "default"): 8.0,
+        admission_constraint(NODE, "thermal"): 8.0,
         admission_constraint(NODE, "cryogenic"): 6.0,
     }
 
@@ -403,7 +403,7 @@ def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
         "multi_pool_reversed",
         1.0,
         cryogenic_admission,
-        default_admission,
+        thermal_admission,
     )
     reversed_requirements = allocate_execution_requirements(
         (requirements_reversed, concurrent), capacities
@@ -413,7 +413,7 @@ def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
     assert forward.fulfillment(multi_pool.id) == pytest.approx(0.6)
     assert reverse.fulfillment(multi_pool.id) == pytest.approx(0.6)
     assert reversed_requirements.fulfillment(requirements_reversed.id) == pytest.approx(0.6)
-    assert forward.used_by_constraint[admission_constraint(NODE, "default")] == pytest.approx(8.0)
+    assert forward.used_by_constraint[admission_constraint(NODE, "thermal")] == pytest.approx(8.0)
     assert forward.used_by_constraint[admission_constraint(NODE, "cryogenic")] == pytest.approx(3.6)
 
 
@@ -431,14 +431,8 @@ def test_shared_recovery_settlement_applies_allocated_fraction_independent_of_re
         }
     )
     inventory.set_capacity_snapshot(
-        {
-            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
-            (NODE, "cryogenic"): 6.0,
-        },
-        {
-            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
-            (NODE, "cryogenic"): 6.0,
-        },
+        {(NODE, "cryogenic"): 6.0},
+        {(NODE, "cryogenic"): 6.0},
     )
     potential = ((default_salvage, 10.0), (cryogenic_salvage, 6.0))
 

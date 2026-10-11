@@ -35,11 +35,8 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.BASIC_MACHINERY_WORKS, ids.EARTH, invested_resources=((S, 8.0), (M, 10.0), (E, 1.0))),
     )
     storage_infrastructure = (
-        ScenarioStorageInfrastructure(ids.EARTH, "default", 100000.0),
         ScenarioStorageInfrastructure(ids.EARTH, "cryogenic", 100000.0),
-        ScenarioStorageInfrastructure(ids.LEO, "default", 1000.0),
         ScenarioStorageInfrastructure(ids.LEO, "cryogenic", 120.0),
-        ScenarioStorageInfrastructure(ids.LUNAR_ORBIT, "default", 1000.0),
         ScenarioStorageInfrastructure(ids.LUNAR_ORBIT, "cryogenic", 120.0),
     )
     inventory = (

@@ -419,7 +419,7 @@ Facility lifecycleは少なくとも `NORMAL` と `DECOMMISSIONING` を区別す
 
 不可逆な解体開始前は取消可能とし、開始後はFacilityを通常operationへ戻さない。`DECOMMISSIONING` Facilityは通常のProcess、Active Capability、Service Capacity supply、Storage admission等の新規Activity向け能力を停止する。既存stockや開始済みcommitmentを安全にsettleするため解体中にも残す必要がある受動能力だけは明示契約として保持できるが、新規Activityの供給能力へ数えない。
 
-既に開始済みでFacilityの現存を前提に安全にsettleする必要がある不可逆commitmentを破壊する場合はDecommission開始をblockする。Storage Facility除去後の残存Physical / Usable Capacityで既存Inventoryを保持できない場合も開始をblockする。これは既にPlayer-ownedなResourceの保存を守る契約であり、salvage admissionとは別に判定する。
+既に開始済みでFacilityの現存を前提に安全にsettleする必要がある不可逆commitmentを破壊する場合はDecommission開始をblockする。特殊Storage Facility除去後の残存Physical / Usable Capacityで既存の特殊保管Resourceを保持できない場合も開始をblockする。これは既にPlayer-ownedなResourceの保存を守る契約であり、salvage admissionとは別に判定する。
 
 Decommission完了時はFacility removalとsalvage settlementを同じcanonical transitionで確定する。salvageは累積投入ResourceとContent recovery定義からrecovery potentialを導出し、Facility removal後に残るcompatible Storage headroomを用いる全salvage Resourceのadmission requirementを一つのdisposal executionとして共通Allocationへ提出する。撤去対象Facility自身のStorage Capacityをsalvage受入余力へ数えない。Allocationは0..1の共通recoverable fractionを決め、そのfractionを全salvage outputへ比例適用する。実際にadmissionする量だけInventoryへResourceとして生成し、未回収potentialをauthoritative Resource Stateへしない。
 
@@ -427,20 +427,20 @@ recoverable fractionが1未満であることだけを理由にFacility removal�
 
 ## 7. Inventory / Allocation / Storage / Power
 
-通常Inventoryに属する物理Resourceは必ず有限Storage accountingへ参加する。通常Resourceは共通のdefault storage poolを利用し、保管方式そのものが独立したゲーム上の意味を持つResourceだけContentがspecial storage pool / compatibilityを指定できる。Generic Coreは具体的なStorage分類一覧やResource名分岐を持たない。内部pool keyはcapacity poolを一意に参照する識別子であり、その名称自体をゲーム上の固定taxonomyにしない。
+通常Inventoryの物理ResourceはOperational Nodeに数量を保持し、一般貨物の保管容量・倉庫設備を有限constraintとして扱わない。`ResourceDefinition.storage_pool_key` が未指定の場合は通常の無制限Inventory Admissionとし、明示された特殊Storage poolに限ってPhysical / Usable Capacityを課す。Generic Coreは具体的なResource名や特定の保管方式を固定しない。
 
 ```text
-StorageCapacityPool
+ResourceDefinition
+  storage_pool_key?   # 未指定なら保管容量制約なし
+
+SpecialStorageCapacityPool
   key
   physical_capacity
   usable_capacity
   capabilities[]
-
-ResourceDefinition
-  storage_pool_key?   # 未指定ならdefault storage pool
 ```
 
-StorageCapacityPoolのcapacityはFacility / Infrastructure等の供給元から導出する集約projectionであり、供給元と別のauthoritative capacityを重複所有しない。Physical Storage Capacityは設備として保持可能なstock上限、Usable Storage CapacityはPower、保冷、Facility状態、必要Capability等を反映して現在安全に利用できる上限とする。一定時間あたりの有限処理flow自体が共有bottleneckになる場合だけ、目的を明示したService Capacityとして定義する。
+特殊Storage poolのcapacityはFacility / Infrastructure等の供給から導出するprojectionであり、別のauthoritative容量を重複所有しない。Physical Capacityは設備上限、Usable Capacityは電力・保冷・Facility状態等を反映した現在利用可能な上限である。通常在庫はこれらのfinite poolに参加しない。荷役・充填等の時間あたり処理量は目的を明示したService Capacityとして別途競合させる。
 
 InventoryはOperational Nodeごとの所有Resourceを表す。on-hand、Reservation、利用可能量、入庫・出庫flowを所有し、Logistics-ownedの輸送中Cargoやarrival waitingとはauthoritative ownershipを分離する。Application QueryではInventoryとInbound / outbound Cargoを統合表示してよいが、同じResource量を二つのDomain Stateへ重複保存しない。
 
@@ -491,7 +491,7 @@ FundsはResource Market settlement専用Stateであり、一般Execution Require
 
 Facility / Capabilityの存在、SiteRequirement、長期Reservation、既に確保済みStock、Fleet配置等の開始条件・保存状態・capacity provisioningはそれぞれの所有Domain契約として評価する。
 
-Production / Extraction / Research Point生成等でoutputをStock / Poolへ追加する場合、そのexecutionに必要なadmission headroomを`StockOrPoolAdmissionRequirement`としてBundleへ含める。複数Producerが同じStorage / Pool空き容量を二重利用しない。
+Production / Extraction等のoutputが特殊Storage poolを必要とする場合、そのfinite admission headroomを`StockOrPoolAdmissionRequirement`としてBundleへ含める。通常Inventoryへのoutputは保管容量によるadmission requirementを持たない。Research Point等の独立した有限Poolは各Domainの同じAllocation契約へ参加させる。
 
 同一Priority band内の連続量Bundleは、共有constraintに対するnormalized fulfillmentをprogressive max-min方式で解決する。minimum / atomic要求は永続Intentのfairness ageとstable keyで決定論的にadmissionし、transient Claim生成順をfairnessの正本にしない。
 
@@ -505,11 +505,11 @@ Project等がon-hand Resourceを将来実行用に段階的に確保する場合
 
 ### 7.4 Inventory Admission / over-capacity
 
-Operational Nodeへ物理Resourceが増加するすべての経路は共通Inventory Admission契約を利用する。Industry output、Extraction output、Cargo unloading、Market buyによるownership transfer等をcompatible Storage poolのPhysical / Usable Capacity契約へ接続する。
+Operational Nodeへ物理Resourceが増加するすべての経路は共通Inventory Admission契約を利用する。Industry output、Extraction output、Cargo unloading、Market buyによるownership transfer等はInventoryの一つのAdmission契約を使う。明示特殊poolを必要とするResourceに限ってPhysical / Usable Capacityを適用する。
 
-Local executionからのoutput admissionはExecution Requirement Bundle内のStock admission requirementとして当tick Allocationへ参加する。すでに過去tickでdispatchされて到着したCargoはBoundary settlementで先にadmissionを試み、入庫不能量はarrival waitingとしてLogistics側へ残す。
+特殊保管を必要とするLocal executionのoutput admissionはExecution Requirement Bundle内のStock admission requirementとして当tick Allocationへ参加する。すでに過去tickでdispatchされて到着したCargoはBoundary settlementで先にadmissionを試み、入庫不能量はarrival waitingとしてLogistics側へ残す。
 
-Usable Storage Capacityが既存stock量を下回った場合は既存在庫を即時消去せずover-capacity stateとして保持する。新規admission可能量、成立していない保管条件やService、blocker等をApplicationへ公開する。
+特殊Storage poolのUsable Capacityが既存stock量を下回った場合は既存在庫を即時消去せずover-capacity stateとして保持する。新規admission可能量、成立していない保管条件やService、blocker等をApplicationへ公開する。
 
 ## 8. Industry / Extractionモデル
 
@@ -1124,7 +1124,7 @@ Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存
 - Eligibility判定だけで有限Serviceを消費扱いにせず、同じServiceを複数Activityが共通Allocationで競合する。
 - PriorityLevelが5段階ordinal bandとして機能し、同順位結果が登録順に依存しない。
 - Supply Planningが現地用途と同じInventory / Transport Capacityを二重利用せず、Inbound Cargoを重複dispatchしない。
-- 通常物理Resourceがdefaultまたは明示special Storage poolを通じて有限Storage accountingへ参加し、pool未指定を通常Resourceのunlimited escape hatchにしない。
+- 通常Resourceに倉庫容量上限を課さず、特殊保管Resourceだけ明示の有限Storage poolへ参加させる。
 - 通常Supply RequirementはTarget Stock未設定でも補給され、Target Stockは追加備蓄需要だけを生成しInventory ReservationとしてStockを隔離しない。
 - routing hard constraintがない通常状態では、成立済みNetwork内のsource / pathをlatency・運用Resource・handoff・利用可能capacity等から決定論的に選択する。hard constraintが成立しない場合は別戦略へfallbackせず、auto-routingがTransport AllocationやFleet等を変更しない。
 - Cargo arrival / direct handoff / Inventory admission / arrival waitingが有限constraintとResource ownershipを一貫して扱う。

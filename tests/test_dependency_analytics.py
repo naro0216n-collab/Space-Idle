@@ -268,7 +268,7 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
 
     sim = app._simulation
     project_id = sim.projects.plan_build(
-        ids.CARGO_WAREHOUSE, LEO, 3, "standard_wait", day=sim.day
+        ids.ORBITAL_HEAVY_CARGO_TERMINAL, LEO, 3, "standard_wait", day=sim.day
     )
     sim.projects.advance_procurement(sim.day)
 

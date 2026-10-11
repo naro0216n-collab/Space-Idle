@@ -22,12 +22,12 @@ def test_facility_placement_scope_controls_cell_ownership_and_environment_contex
     sim = build_game_application()._simulation
 
     project_id = sim.projects.plan_build(
-        ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait"
+        ids.CRYOGENIC_STORAGE, ids.EARTH, 3, "standard_wait"
     )
     assert sim.projects.projects[project_id].site_cell_id is None
     with pytest.raises(ValueError, match="must not specify"):
         sim.projects.plan_build(
-            ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait",
+            ids.CRYOGENIC_STORAGE, ids.EARTH, 3, "standard_wait",
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
 

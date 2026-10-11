@@ -61,7 +61,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         for storage_pool_key, delta in sorted(
             self._storage_delta_per_scale(process, inventory).items()
         ):
-            if delta > 1e-12:
+            if delta > 1e-12 and inventory.is_finite_storage_pool(storage_pool_key):
                 requirements.append(
                     StockOrPoolAdmissionRequirement(storage_pool_key, delta)
                 )

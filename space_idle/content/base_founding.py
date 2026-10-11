@@ -10,8 +10,8 @@ def _r(resource_id, amount):
 
 
 def build_deployment_recipes() -> dict:
-    # Founding carries fully paid physical hardware, not a discounted bundle
-    # of operational warehouses, power plants and cargo terminals. Each
+    # Founding carries fully paid physical hardware rather than a discounted
+    # bundle of full-scale power, assembly, and cargo facilities. Each
     # compact outpost provides just enough service for regular follow-up
     # construction and inbound supply. It supplies no unearned resource stock.
     surface = DeploymentRecipe(

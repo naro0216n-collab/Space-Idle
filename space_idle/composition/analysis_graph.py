@@ -21,7 +21,6 @@ from ..execution_requirements import (
     PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
 )
 from ..power import FixedGeneration, SolarGeneration
-from ..inventory import DEFAULT_STORAGE_POOL_KEY
 from ..simulation import Simulation
 from . import analysis_context_contributors as context_contributors
 
@@ -102,8 +101,9 @@ def build_definition_dependency_graph(
         if sim.survey is not None:
             services.update(sim.survey.service_capacity_types())
         resource_pools = {
-            resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY
+            resource.storage_pool_key
             for resource in catalog.resources.values()
+            if resource.storage_pool_key is not None
         }
         for provider in sim.storage.providers.values():
             resource_pools.update(provider.capacity_t_by_pool)
@@ -117,9 +117,10 @@ def build_definition_dependency_graph(
                _node("capacity_pool", "fleet_units"), _node("capacity_pool", "population")),
             tuple(DependencyRelation(
                 "uses_storage_pool", _node("resource", resource.id),
-                _node("storage_pool", resource.storage_pool_key or DEFAULT_STORAGE_POOL_KEY),
+                _node("storage_pool", resource.storage_pool_key),
                 f"resource:{resource.id}:storage_pool_key",
-            ) for resource in catalog.resources.values()),
+            ) for resource in catalog.resources.values()
+              if resource.storage_pool_key is not None),
         )
 
     registry.register("catalog", resources, relation_kinds={"uses_storage_pool"},

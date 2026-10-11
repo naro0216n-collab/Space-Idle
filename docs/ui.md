@@ -306,7 +306,7 @@ Global Attentionはlogや全warning一覧ではなく、Player設定に対して
 - Player判断がなければ進まないblocker
 - active Project / Research / Survey等の停止
 - significant unmet demand
-- Capacity / Storage / Cargo arrival等の継続的な詰まり
+- Capacity / 特殊保管 / Cargo arrival等の継続的な詰まり
 - Fleet不足によるtarget未達
 - Market Orderの成立条件不一致
 - Founding / Construction等の準備完了
@@ -340,7 +340,7 @@ Location Inspectorは次の固定カテゴリから、そのLocationで意味の
 - Resource不足 / excess
 - Service Capacity不足
 - active Project
-- Storage / Cargo問題
+- 特殊保管 / Cargo問題
 - Facility低稼働
 - external dependency
 
@@ -380,7 +380,7 @@ Facility Inspectorでは次を安定配置する。
 - Resource requirement
 - Service Capacity requirement
 - maintenance demand / fulfillment
-- output admission / Storage constraint
+- 特殊Resourceのoutput admission / Storage constraint
 - Activity Priority
 - blocker / limiting factor
 - Upgrade / Pause / Resume / Decommission
@@ -467,7 +467,7 @@ Survey Inspectorではselected scope、Resource scope、goal、completed / remai
 
 科学活動の実行可否はRequirementとFleet・Crew実在状態から示す。確率的成功率・事故率ではなく、進行量・Crew充足・船内Resourceと帰還blockerを判断地点で公開する。
 
-帰還後に船内Resourceの荷卸し待ちとなった場合は、Crewの降機済み状態とFleetのResource保管blockerを別々に示す。
+帰還後に船内Resourceの荷卸し待ちとなった場合は、Crewの降機済み状態とFleetの特殊Resource保管blockerを別々に示す。
 
 同じContextでtarget / mission、phase、science progress、RP budget / admission、Fleet commitment、Movement / return、Pause / Abort / Return / completion dispositionを確認する。Fleet数量だけの設定画面にしない。
 
@@ -647,7 +647,7 @@ UI実装は、内部概念をPlayer-facing名称へ正面から対応付けるte
 | hard constraint | 固定条件 | 自動選択をPlayerが意図的に制限する場合だけ表示・操作する。 |
 | Execution Requirement Bundle | 稼働要件 | Bundle名そのものは通常表示せず、Resource / Service /受入条件とfulfillmentを判断地点で示す。 |
 | commitment | 割当済み / 使用中 / 回収中 | 所有Domainの意味に合わせて具体状態を表示し、genericな`commitment`だけをPlayerへ見せない。 |
-| admission | 受入条件 / 受入余力 | Storage、RP Pool等の具体的な受入先と残余Capacityとして表示する。 |
+| admission | 受入条件 / 受入余力 | 特殊Storage、RP Pool等の実際に有限な受入先と残余Capacityだけ表示する。通常Resourceには空容量を表示しない。 |
 | Projected Material Readiness | 資材準備見込み | 建設・Projectの開始判断地点で見込み時期として表示する。 |
 | Transport Capacity | 輸送能力 | Target / Nominal / Available / Used / Spareを区別して表示する。 |
 | Cargo Flow | 輸送中貨物 / 貨物流れ | 通常dispatchをPlayer入力にせず、量、rate、latency、arrival waitingを可視化する。 |

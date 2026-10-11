@@ -322,13 +322,10 @@ def build_construction_recipes() -> dict:
             ids.VACUUM_MINERAL_HARVESTER, 4, 5, 1, 28,
             technologies=frozenset({ids.RP_RESOURCE_CHAIN_02}),
         ),
-        ids.WATER_STORAGE: req._surface_recipe(ids.WATER_STORAGE, 2.5, 1, 0.2, 12),
         ids.CRYOGENIC_STORAGE: req._surface_recipe(
             ids.CRYOGENIC_STORAGE, 3, 2, 0.8, 22,
             technologies=frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_02}),
         ),
-        ids.BULK_STORAGE: req._surface_recipe(ids.BULK_STORAGE, 2, 1, 0.1, 10),
-        ids.CARGO_WAREHOUSE: req._surface_recipe(ids.CARGO_WAREHOUSE, 3, 1, 0.2, 14),
         ids.VACUUM_CARGO_HANDLING_TERMINAL: ConstructionRecipe(
             ids.VACUUM_CARGO_HANDLING_TERMINAL,
             (req._structure_resource(18.0), req._machinery_resource(14.0),

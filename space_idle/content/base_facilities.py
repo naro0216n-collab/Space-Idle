@@ -166,8 +166,8 @@ def build_facility_definitions() -> dict:
         ),
         ids.VEHICLE_ASSEMBLY_FACILITY: FacilityDef(ids.VEHICLE_ASSEMBLY_FACILITY, "宇宙輸送機製造・組立設備", req._capabilities("vehicle_assembly"), surface, surface, service_capacity_supplies=req._services(vehicle_assembly=1.0)),
         # Deployment-ready autonomous outposts only bootstrap a location. They
-        # do not grant the full capacity of separate warehouses, shipyards,
-        # cargo terminals or reactors; subsequent growth uses normal builds.
+        # do not grant the capacity of full-scale power, shipyard, or cargo
+        # facilities; subsequent growth uses normal builds.
         ids.AUTONOMOUS_SURFACE_OUTPOST: FacilityDef(
             ids.AUTONOMOUS_SURFACE_OUTPOST, "自律地表初期拠点",
             req._capabilities("surface_survey", "compact_surface_prospecting_kit",
@@ -202,10 +202,7 @@ def build_facility_definitions() -> dict:
         ),
         ids.VOLATILE_PROCESSING: FacilityDef(ids.VOLATILE_PROCESSING, "揮発性成分回収設備", req._capabilities("volatile_processing"), surface, surface),
         ids.VACUUM_MINERAL_HARVESTER: FacilityDef(ids.VACUUM_MINERAL_HARVESTER, "真空粒状鉱物採掘設備", req._capabilities("granular_mineral_extraction"), surface, req.VACUUM_SURFACE_SITE, extraction_capacity_t_per_day=8.0),
-        ids.WATER_STORAGE: FacilityDef(ids.WATER_STORAGE, "水貯蔵タンク", req._capabilities("water_storage"), surface, surface),
         ids.CRYOGENIC_STORAGE: FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備", req._capabilities("cryogenic_storage", "vehicle_refueling"), surface, surface),
-        ids.BULK_STORAGE: FacilityDef(ids.BULK_STORAGE, "バルク原料置場", req._capabilities("bulk_storage"), surface, surface),
-        ids.CARGO_WAREHOUSE: FacilityDef(ids.CARGO_WAREHOUSE, "一般貨物倉庫", req._capabilities("cargo_storage"), surface, surface),
         ids.VACUUM_CARGO_HANDLING_TERMINAL: FacilityDef(
             ids.VACUUM_CARGO_HANDLING_TERMINAL,
             "低圧地表貨物係留・着陸船整備ターミナル",

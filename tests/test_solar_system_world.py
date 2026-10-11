@@ -461,12 +461,12 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     # nominally small storage number that cannot hold the first required
     # recipe would strand the player indefinitely at the founding stage.
     platform = sim.projects.recipes[ids.ORBITAL_CONSTRUCTION_PLATFORM]
-    initial_storage_t = sim.inventory.physical_storage_capacity_t[(target, "default")]
+    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
     for requirement in platform.resources:
         deficit = max(0.0, requirement.amount_t + 0.15 - sim.inventory.amount(target, requirement.resource_id))
         if deficit:
             sim.inventory.add(target, requirement.resource_id, deficit)
-    assert sim.inventory.stored_in_pool(target, "default") <= initial_storage_t + 1e-9
+    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
     sim.technology.completed.update(platform.prerequisite_technologies)
     result = app.execute(PlanBuild(str(target), str(ids.ORBITAL_CONSTRUCTION_PLATFORM), procurement_policy="immediate"))
     assert result.created_id is not None
@@ -474,7 +474,7 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     assert ids.ORBITAL_CONSTRUCTION_PLATFORM in {
         facility.definition_id for facility in sim.facilities.all_at(target)
     }
-    assert sim.inventory.physical_storage_capacity_t[(target, "default")] == pytest.approx(initial_storage_t)
+    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
 

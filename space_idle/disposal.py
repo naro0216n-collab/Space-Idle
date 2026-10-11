@@ -39,7 +39,8 @@ def salvage_admission_requirements(
     by_pool: dict[StoragePoolKey, float] = {}
     for resource_id, amount in _normalized_potential(recovery_potential):
         pool_key = inventory.storage_pool_for_resource(resource_id)
-        by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
+        if inventory.is_finite_storage_pool(pool_key):
+            by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
     return tuple(
         StockOrPoolAdmissionRequirement(pool_key, amount)
         for pool_key, amount in sorted(by_pool.items())
@@ -62,7 +63,8 @@ def project_salvage_recovery(
     by_pool: dict[StoragePoolKey, float] = {}
     for resource_id, amount in potential:
         pool_key = inventory.storage_pool_for_resource(resource_id)
-        by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
+        if inventory.is_finite_storage_pool(pool_key):
+            by_pool[pool_key] = by_pool.get(pool_key, 0.0) + amount
     fraction = 1.0
     for pool_key, amount in by_pool.items():
         if amount <= _EPS:

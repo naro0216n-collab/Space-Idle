@@ -54,11 +54,10 @@ class LocationProjectorMixin:
             reserved = sim.inventory.reserved_total(location_id, resource_id)
             admission = sim.inventory.admission_state(location_id, resource_id)
             storage_pool_key = admission.storage_pool_key
-            physical_capacity = admission.physical_capacity_t
-            usable_capacity = admission.usable_capacity_t
-            free = admission.admission_capacity_t
-            if amount <= 1e-12 and reserved <= 1e-12 and physical_capacity in (None, 0.0):
-                continue
+            finite_storage = sim.inventory.is_finite_storage_pool(storage_pool_key)
+            physical_capacity = admission.physical_capacity_t if finite_storage else None
+            usable_capacity = admission.usable_capacity_t if finite_storage else None
+            free = admission.admission_capacity_t if finite_storage else None
             definition = self._catalog.resources.get(resource_id)
             rows.append(
                 InventoryRow(
@@ -72,7 +71,7 @@ class LocationProjectorMixin:
                     physical_capacity,
                     usable_capacity,
                     free,
-                    admission.admission_capacity_t,
+                    free,
                     admission.over_capacity_t,
                     constraints_from_codes(
                         admission.blockers,
@@ -99,6 +98,8 @@ class LocationProjectorMixin:
             key for key in sim.inventory.usable_storage_capacity_t if key[0] == location_id
         }
         for loc, storage_pool_key in sorted(keys, key=lambda row: (str(row[0]), row[1])):
+            if not sim.inventory.is_finite_storage_pool(storage_pool_key):
+                continue
             physical = sim.inventory.physical_storage_capacity_t.get((loc, storage_pool_key), 0.0)
             usable = sim.inventory.usable_storage_capacity_t.get((loc, storage_pool_key), 0.0)
             stock = sum(

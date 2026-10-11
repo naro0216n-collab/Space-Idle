@@ -6,28 +6,19 @@ from . import base_ids as ids
 
 def build_storage_provider_specs() -> dict:
     return {
-        ids.ORBITAL_HEAVY_CARGO_TERMINAL: StorageProviderSpec(
-            ids.ORBITAL_HEAVY_CARGO_TERMINAL, {"default": 240.0},
-        ),
         ids.ORBITAL_PROPELLANT_DEPOT: StorageProviderSpec(
             ids.ORBITAL_PROPELLANT_DEPOT, {"cryogenic": 80.0}, frozenset({"cryogenic"}),
         ),
-        ids.ORBITAL_LOGISTICS_NODE: StorageProviderSpec(ids.ORBITAL_LOGISTICS_NODE, {"default": 16.0, "cryogenic": 4.0}),
+        ids.ORBITAL_LOGISTICS_NODE: StorageProviderSpec(ids.ORBITAL_LOGISTICS_NODE, {"cryogenic": 4.0}),
         ids.AUTONOMOUS_SURFACE_OUTPOST: StorageProviderSpec(
-            ids.AUTONOMOUS_SURFACE_OUTPOST, {"default": 4.0, "cryogenic": 0.8},
+            ids.AUTONOMOUS_SURFACE_OUTPOST, {"cryogenic": 0.8},
         ),
         ids.AUTONOMOUS_ORBITAL_OUTPOST: StorageProviderSpec(
-            ids.AUTONOMOUS_ORBITAL_OUTPOST, {"default": 10.0, "cryogenic": 1.0},
+            ids.AUTONOMOUS_ORBITAL_OUTPOST, {"cryogenic": 1.0},
         ),
-        ids.ROBOTIC_SURVEY_PACKAGE: StorageProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, {"default": 5.0, "cryogenic": 2.0}),
-        ids.VACUUM_CARGO_HANDLING_TERMINAL: StorageProviderSpec(
-            ids.VACUUM_CARGO_HANDLING_TERMINAL, {"default": 120.0},
-        ),
-        ids.WATER_STORAGE: StorageProviderSpec(ids.WATER_STORAGE, {"default": 40.0}),
+        ids.ROBOTIC_SURVEY_PACKAGE: StorageProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, {"cryogenic": 2.0}),
         ids.CRYOGENIC_STORAGE: StorageProviderSpec(ids.CRYOGENIC_STORAGE, {"cryogenic": 30.0}, frozenset({"cryogenic"})),
         ids.CRYOGENIC_PROPELLANT_TERMINAL: StorageProviderSpec(
             ids.CRYOGENIC_PROPELLANT_TERMINAL, {"cryogenic": 150.0}, frozenset({"cryogenic"}),
         ),
-        ids.BULK_STORAGE: StorageProviderSpec(ids.BULK_STORAGE, {"default": 200.0}),
-        ids.CARGO_WAREHOUSE: StorageProviderSpec(ids.CARGO_WAREHOUSE, {"default": 120.0}),
     }

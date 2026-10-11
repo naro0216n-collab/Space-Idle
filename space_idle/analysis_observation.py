@@ -114,7 +114,7 @@ def observe_state(
         storage_keys.update((node_id, inventory.storage_pool_for_resource(resource_id))
                             for _owner, node_id, resource_id in inventory.external_occupancy)
         for node_id, pool in sorted(storage_keys):
-            if not in_scope(node_id):
+            if not in_scope(node_id) or not inventory.is_finite_storage_pool(pool):
                 continue
             admission = inventory.admission_state_for_pool(node_id, pool)
             emit("storage_pool_occupied", pool, node_id,
@@ -124,11 +124,11 @@ def observe_state(
             emit("storage_pool_over_capacity", pool, node_id,
                  admission.over_capacity_t, "t", "inventory.admission_state_for_pool")
         for (node_id, pool), amount in inventory.physical_storage_capacity_t.items():
-            if in_scope(node_id):
+            if in_scope(node_id) and inventory.is_finite_storage_pool(pool):
                 emit("physical_storage_capacity", pool, node_id, amount, "t",
                      "inventory.physical_storage_capacity_t")
         for (node_id, pool), amount in inventory.usable_storage_capacity_t.items():
-            if in_scope(node_id):
+            if in_scope(node_id) and inventory.is_finite_storage_pool(pool):
                 emit("usable_storage_capacity", pool, node_id, amount, "t",
                      "inventory.usable_storage_capacity_t")
 

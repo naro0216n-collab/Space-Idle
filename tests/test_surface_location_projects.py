@@ -105,7 +105,7 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
     sim = app._simulation
     expected = (
         (ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, ids.AUTONOMOUS_SURFACE_OUTPOST,
-         ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.CARGO_WAREHOUSE),
+         ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.SURFACE_DISTRIBUTION_HUB),
         (ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE, ids.AUTONOMOUS_ORBITAL_OUTPOST,
          ids.MARS_ORBIT, ids.ORBITAL_HEAVY_CARGO_TERMINAL),
     )
@@ -121,8 +121,8 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
         assert deployment.investment_totals() == pytest.approx({
             row.resource_id: row.amount_t for row in build.resources
         })
-        assert sim.storage.providers[facility_id].capacity_t_by_pool["default"] < (
-            sim.storage.providers[mature_id].capacity_t_by_pool["default"]
+        assert sim.facilities.definitions[facility_id].service_capacity_supplies != (
+            sim.facilities.definitions[mature_id].service_capacity_supplies
         )
         row = app._founding_deployed_facility_rows(recipe, context_id)[0]
         generation, load = sim.power.nominal_for_definition_at_context(
@@ -153,14 +153,14 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
     assert {row.definition_id for row in sim.facilities.all_at(location)} == {
         ids.AUTONOMOUS_SURFACE_OUTPOST
     }
-    initial_capacity = sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).admission_capacity_t
-    for row in sim.projects.recipes[ids.BULK_STORAGE].resources:
+    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).blockers == ()
+    for row in sim.projects.recipes[ids.SURFACE_DISTRIBUTION_HUB].resources:
         sim.inventory.add(location, row.resource_id, row.amount_t)
-    result = app.execute(PlanBuild(str(location), str(ids.BULK_STORAGE)))
+    result = app.execute(PlanBuild(str(location), str(ids.SURFACE_DISTRIBUTION_HUB), site_cell_id=str(cell)))
     assert result.created_id
-    app.execute(AdvanceTime(110))
-    assert ids.BULK_STORAGE in {row.definition_id for row in sim.facilities.all_at(location)}
-    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).admission_capacity_t > initial_capacity
+    app.execute(AdvanceTime(300))
+    assert ids.SURFACE_DISTRIBUTION_HUB in {row.definition_id for row in sim.facilities.all_at(location)}
+    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).blockers == ()
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
 
@@ -516,7 +516,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert outpost.facility_definition_id == str(ids.AUTONOMOUS_SURFACE_OUTPOST)
     assert outpost.construction_work_per_day > 0
     assert outpost.nominal_power_generation_mw > outpost.nominal_power_load_mw
-    assert dict(outpost.storage_capacity_t)["default"] < 120.0
+    assert "default" not in dict(outpost.storage_capacity_t)
     assert option.payload_t > 0
     assert 0 < option.payload_t_per_unit <= option.payload_t
     assert option.required_units > 0

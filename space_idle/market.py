@@ -537,7 +537,8 @@ class MarketService:
                 continue
             requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
             pool_key = inventory.storage_pool_for_resource(commitment.resource_id)
-            requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
+            if inventory.is_finite_storage_pool(pool_key):
+                requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
             rows.append(ExecutionRequirementBundle(
                 id=self.buy_boundary_execution_id(commitment.id),
                 owner_kind="market_buy_boundary",

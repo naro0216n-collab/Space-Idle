@@ -867,24 +867,19 @@ def test_crewed_exploration_keeps_population_and_onboard_resources_until_physica
     returning = sim.transport.movement_execution_snapshot(state.movement_execution_id)
     assert returning is not None
     assert sim.population.free_count_at(ids.LEO) == 0
-    # Occupy the actual shared Inventory pool before landing. Crew can
-    # disembark, but the Fleet and its leftover physical Resource must stay
-    # committed until that pool can receive the cabin provisions.
-    pool = sim.inventory.storage_pool_for_resource(ids.WATER)
-    fill_amount = sim.inventory.admission_state_for_pool(ids.LEO, pool).admission_capacity_t
-    sim.inventory.add(ids.LEO, ids.MINERAL_FEEDSTOCK, fill_amount)
+    # Ordinary cabin provisions have no warehouse-size admission obstacle;
+    # crew, leftover stock, and the Fleet all settle when movement completes.
     app.execute(AdvanceTime(returning.completion_day - sim.day))
-    assert state.phase.value == 'recovering'
+    assert state.phase.value == 'complete'
     assert sim.population.free_count_at(ids.LEO) == 2
-    assert state.fleet_commitment_id is not None
-    assert sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id).onboard_resources
-    waiting_row = next(row for row in app.query(GetScientificExplorations()).items if row.id == str(mission))
-    assert any(blocker.code == 'onboard_resource_admission' for blocker in waiting_row.blockers)
+    assert sim.transport.fleet_free_units(craft, ids.LEO) >= 1
+    assert not any(blocker.code == 'onboard_resource_admission'
+                   for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(mission) for blocker in row.blockers)
     recovery_path = tmp_path / 'crewed-recovery.json'
     save_game(app, recovery_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     recovery_loaded, _ = load_game(recovery_path, build_game_application_for_load)
     assert capture_state(recovery_loaded._simulation) == capture_state(sim)
-    sim.inventory.consume_allocated(ids.LEO, ids.MINERAL_FEEDSTOCK, 1.0)
     app.execute(AdvanceTime(1))
     assert state.phase.value == 'complete'
     assert sim.population.free_count_at(ids.LEO) == 2
@@ -911,11 +906,7 @@ def test_crewed_exploration_keeps_population_and_onboard_resources_until_physica
             loaded._simulation.inventory.add(node_id, resource, amount)
     loaded.execute(AdvanceTime(2))
     back = loaded._simulation.transport.movement_execution_snapshot(loaded_mission.movement_execution_id)
-    loaded_pool = loaded._simulation.inventory.storage_pool_for_resource(ids.WATER)
-    loaded_fill = loaded._simulation.inventory.admission_state_for_pool(ids.LEO, loaded_pool).admission_capacity_t
-    loaded._simulation.inventory.add(ids.LEO, ids.MINERAL_FEEDSTOCK, loaded_fill)
     loaded.execute(AdvanceTime(back.completion_day - loaded._simulation.day))
-    assert loaded_mission.phase.value == 'recovering'
-    loaded._simulation.inventory.consume_allocated(ids.LEO, ids.MINERAL_FEEDSTOCK, 1.0)
+    assert loaded_mission.phase.value == 'complete'
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(sim)

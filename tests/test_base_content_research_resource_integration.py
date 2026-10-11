@@ -457,13 +457,13 @@ def test_physical_content_can_be_reused_across_bodies_without_name_based_excepti
     assert sim.survey.providers[ids.ORBITAL_RESOURCE_MAPPING_PROVIDER].observation_modes
 
     # Physical eligibility is tested above; now settle real Resource ownership
-    # at unlike Worlds using the same Extraction and finite infrastructure.
+    # at unlike Worlds using the same Extraction and physical infrastructure.
     from dataclasses import replace
     from space_idle import AdvanceTime, GetOperationalNode
     from space_idle.bootstrap import build_game_application_for_scenario
     from space_idle.content.base_scenario import build_standard_scenario_definition
     from space_idle.scenario import (
-        ScenarioSurfaceLocation, ScenarioFacility, ScenarioStorageInfrastructure,
+        ScenarioSurfaceLocation, ScenarioFacility,
     )
     from space_idle.shared import SpatialNodeId, CelestialBodyId
     base = build_standard_scenario_definition()
@@ -483,9 +483,6 @@ def test_physical_content_can_be_reused_across_bodies_without_name_based_excepti
                 ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, location),
                 ScenarioFacility(ids.SURFACE_DISTRIBUTION_HUB, location, cell),
                 ScenarioFacility(ids.VOLATILE_EXTRACTOR, location, cell),
-            ),
-            storage_infrastructure=base.storage_infrastructure + (
-                ScenarioStorageInfrastructure(location, 'default', 100.0),
             ),
             known_surface_resources=base.known_surface_resources + (
                 (cell, ids.VOLATILE_BEARING_MATERIAL),

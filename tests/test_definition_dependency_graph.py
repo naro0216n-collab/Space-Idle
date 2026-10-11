@@ -479,9 +479,14 @@ def test_installed_power_storage_and_external_market_remain_typed_nominal_depend
             assert edges("nominal_power_load", power, source)[0].quantity == spec.load_mw
 
     for resource in app._catalog.resources.values():
-        storage = resource.storage_pool_key or "default"
-        assert edges("uses_storage_pool", DependencyNode("resource", str(resource.id)),
-                     DependencyNode("storage_pool", storage))
+        expected = () if resource.storage_pool_key is None else edges(
+            "uses_storage_pool", DependencyNode("resource", str(resource.id)),
+            DependencyNode("storage_pool", resource.storage_pool_key))
+        if resource.storage_pool_key is None:
+            assert not any(edge.kind == "uses_storage_pool" and edge.source == DependencyNode("resource", str(resource.id))
+                           for edge in graph.relations)
+        else:
+            assert expected
 
     for facility_id, spec in sim.storage.providers.items():
         for pool, capacity in spec.capacity_t_by_pool.items():

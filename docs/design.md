@@ -140,17 +140,13 @@ Fundsは組織全体のResource売買決済通貨とする。Research、Construc
 
 Resourceの不足や供給依存は操作・計画に対する観測値であり、改善の義務や戦略的な優劣を意味しない。UIは現在値・変化率・量・必要時期・輸送状態と制約を示し、何を増産・移送・延期するかの選択をプレイヤーに残す。
 
-### 5.2 在庫・倉庫
+### 5.2 Inventoryと特殊保管
 
-各Operational Nodeでは最低限、現在在庫、予約済み在庫、入庫フロー、出庫フロー、輸送待ち、輸送中、到着待機、保管容量を区別する。
+Operational Nodeは物理Resourceの現在在庫、予約済み在庫、入出庫フロー、輸送待ち・輸送中・到着待機を区別する。通常Resourceの在庫量には倉庫容量による上限を設けない。通常在庫に対して倉庫・置場の先行建設を要求せず、生産・建設・市場購入・輸送の制約は実Resource、電力、施工・荷役等の有限Service Capacity、Fleet、時間によって成立させる。
 
-通常の物理Resourceは共通の通常Storage Capacityを利用する。Resource種類が増えるたびに一般貨物、バルク、液体、精密部品等の分類とPlayer設定を増殖させない。保管方式そのものが技術・Infrastructure・運用上の独立した判断を生むResourceだけ、Content Definitionが特殊なStorage pool / compatibilityを要求できる。Generic Coreは具体的なStorage分類一覧を固定しない。
+保冷・特殊容器・設備の通電等が運用上の独立した制約となるResourceだけ、Content Definitionが明示的な特殊Storage poolを指定できる。特殊poolについてのみPhysical Storage CapacityとUsable Storage Capacityを設備・Infrastructureの供給から導出し、Inventory Admissionの有限Stock制約として扱う。Generic Coreに具体的な物質名の特例や一般貨物分類を置かない。Research Point等の別Domain所有Stockは各所有契約に従う。
 
-ある時点で保持できる量は `Physical Storage Capacity` と、電力・保冷・Facility状態等の成立条件を反映して現在安全に利用できる `Usable Storage Capacity` というStock Capacityとして扱う。保管状態を成立させる条件はUsable Capacityへ反映する。荷役、充填、移送等の一定時間あたり処理量それ自体が有限競合になる場合だけ、目的の明確なService Capacityとして表現する。
-
-通常Inventoryに属する物理Resourceは有限Storage accountingを迂回しない。Research PointやKnowledge等、通常貨物Inventoryとは別Stateで所有するものはこのStorage契約の対象外とする。
-
-輸送中貨物は到着先倉庫容量を事前予約しない。実到着時にInventory Admissionを行い、容量不足分はLogistics側のarrival waitingとして残す。
+輸送中の貨物は目的地の保管容量を予約しない。到着後、通常Resourceは荷役Serviceの処理量に従ってInventoryへ移管する。特殊保管を要するResourceは荷役Serviceと特殊poolの入庫余力の双方を要し、未受入貨物はLogistics所有のarrival waitingに残す。arrival waitingは無償の追加在庫ではなく、物流回転と荷役に影響する。
 
 ### 5.3 CapabilityとService Capacity
 
@@ -266,7 +262,7 @@ DecommissionはConstruction系のwork / Resource allocationを利用してよい
 
 既に開始済みで、そのFacilityの現存を前提に安全にsettleしなければならない不可逆commitmentを破壊する状態遷移は開始できず、Applicationはblockerを示す。一方、将来の反復ProcessやTransport intentがそのFacility能力へ依存するだけなら撤去自体を禁止せず、能力喪失後は通常のblockerとして扱う。
 
-Storage Facilityでは、不可逆解体開始後に通常利用できなくなる容量を除いた残存Physical / Usable Storage Capacityで現在のPlayer-owned stockを安全に保持できない場合、Inventoryを消去・宙づりにせず撤去開始をblockする。この既存在庫保全と、解体後に得られるsalvageの受入余力は別の問題として扱う。
+特殊保管Facilityでは、不可逆解体開始後に残る特殊Storage poolのPhysical / Usable Storage Capacityで現在のPlayer-owned stockを安全に保持できない場合、Inventoryを消去・宙づりにせず撤去開始をblockする。この既存在庫保全と、解体後に得られるsalvageの受入余力は別の問題として扱う。
 
 解体でResourceを回収する場合は累積投入ResourceとContent側のrecovery定義から `recovery potential` を導出する。完了settlementでは、全salvage Resourceがcompatible Inventory Admissionを共有する一つの回収executionとして競合し、0..1の共通recoverable fractionを決める。そのfractionを全salvage Resourceへ比例適用し、実際にadmissionできる量だけPlayer-owned Resourceとして生成する。未回収potentialはPlayer Inventoryへ生成した後で消去するのではなく、Resource ownershipを取得しない。
 
@@ -358,7 +354,7 @@ Location設立前のSurface CellはInventoryや通常物流のNodeではない�
 
 Deployment Recipeも、展開Facilityへの投資分と持込初期在庫を合わせて、staging側から要求するResource種類数を最大3種類とする。複数Facilityを含むPackageであっても投入種類数を際限なく増やさず、事前組立や専門Componentの工程を用いて準備する。
 
-初期拠点設立で展開するFacilityは、実際に輸送・投資したResourceに対応する物理資産とする。展開時点では小容量の電源・Storage・荷役・施工等を併せ持つ初期拠点を利用できるが、複数の完成済み本格Facilityを低負担で一括取得する経路とはしない。新拠点の産業・研究・居住・物流容量は通常の建設・輸送・設備運用により拡張する。Founding候補では展開するFacility、公称能力、投入資材に応じた維持負担を提示し、展開能力を無条件に実効能力とみなさない。
+初期拠点設立で展開するFacilityは、実際に輸送・投資したResourceに対応する物理資産とする。展開時点では小規模な電源・特殊保管・荷役・施工等を併せ持つ初期拠点を利用できるが、複数の完成済み本格Facilityを低負担で一括取得する経路とはしない。新拠点の産業・研究・居住・物流容量は通常の建設・輸送・設備運用により拡張する。Founding候補では展開するFacility、公称能力、投入資材に応じた維持負担を提示し、展開能力を無条件に実効能力とみなさない。
 
 Deployment開始時にprepared Resource / Fleetをsource側の物理Stateからone-shot Movement payload / commitmentへ移し、成功時だけRecipeに従って初期Storage、Facility、Inventory、必要なFleet等へ変換する。Definitionだけを根拠にtarget側へResource、Fleet、Facilityを無償生成しない。失敗・取消可能境界・帰還dispositionもMovement / commitment契約で明示する。
 
@@ -471,7 +467,7 @@ Surface Cell自体はInventory Nodeや通常物流Nodeにはしない。成立�
 
 通常物流では個別のVehicle便を主要な管理対象とせず、Fleetの反復運用から方向別の定常Transport Capacityを導出する。Transport Serviceは少なくともPayload / Transport Capacity、Cargo latency、往復・回収を含むcycle、Propellantやservicing等の運用要求を持つ。
 
-長距離輸送の戦略性は、有限Fleet、有限capacity、大きなlatency、運用Resource、Storage、Cargo Handling、先行備蓄から生じる。Playerの主要判断は個々の出発時刻ではなく、どのVehicleをどの拠点間輸送へ投入するか、どの程度のcapacityを用意するか、どのResourceやProjectを優先するか、どこへ在庫を前置きするか、中継・補給・積替えInfrastructureを整備するかに置く。
+長距離輸送の戦略性は、有限Fleet、有限capacity、大きなlatency、運用Resource、特殊保管、Cargo Handling、先行備蓄から生じる。Playerの主要判断は個々の出発時刻ではなく、どのVehicleをどの拠点間輸送へ投入するか、どの程度のcapacityを用意するか、どのResourceやProjectを優先するか、どこへ在庫を前置きするか、中継・補給・積替えInfrastructureを整備するかに置く。
 
 Transport Allocationのauthoritative targetはforward / reverseを区別する方向別定常Capacityとする。必要Fleet数はVehicle性能と成立するMovement / Service Planから導出する。UIはFleet unit数を判断材料や入力補助として利用でき、その入力はApplication境界で方向別Target Capacityへ変換する。Domain Stateは方向別Target Capacityだけをauthoritativeに保持する。
 
@@ -505,11 +501,11 @@ Routing constraint変更は未dispatchの将来Planningへ作用し、既dispatc
 
 Resourceはsource Inventoryからdispatchされた時点でLogistics上の輸送中Cargoとなる。通常物流では大量の個別便を生成せず、同じsource、destination、Resource、Transport Service、latency、dispatch rate等の条件が続く期間をCargo Flowとしてまとめて扱う。
 
-別Fleetへ直接積み替えられる場合は、Cargo Handling等の必要条件を満たした上でStorageへ一旦入庫せず次のTransport Serviceへhandoffできる。一旦中継Operational Nodeへ荷卸しする場合は、その時点で物理Resourceのauthoritative ownershipをInventoryへ戻してStorage Capacityを使用し、次Legへ確保する必要があれば通常のReservation / commitmentを利用する。
+別Fleetへ直接積み替えられる場合は、Cargo Handling等の必要条件を満たした上でStorageへ一旦入庫せず次のTransport Serviceへhandoffできる。一旦中継Operational Nodeへ荷卸しする場合は、その時点で物理Resourceのauthoritative ownershipをInventoryへ戻し、特殊Resourceに限りStorage Capacityを使用し、次Legへ確保する必要があれば通常のReservation / commitmentを利用する。
 
-最終目的地でも同じInventory admission契約を利用する。到着時に荷役・Storage条件が成立していないCargoはarrival waitingとなり、輸送完了前の物理量としてLogistics側へ残る。arrival waitingはCargo Handling / arrival holdingと反復利用可能Transport Capacityへbackpressureを発生させ、無制限の無料Storageとして機能しない。
+最終目的地でも同じInventory admission契約を利用する。到着時に荷役・必要な特殊保管条件が成立していないCargoはarrival waitingとなり、輸送完了前の物理量としてLogistics側へ残る。arrival waitingはCargo Handling / arrival holdingと反復利用可能Transport Capacityへbackpressureを発生させ、無制限の無料Storageとして機能しない。
 
-輸送中Cargoは目的地Storageを事前予約しない。既に同じSupply Requirementへ割り当て済み・輸送中のCargoは未充足見込みから控除し、重複発送を防ぐ。
+輸送中Cargoは目的地の特殊Storageを事前予約しない。既に同じSupply Requirementへ割り当て済み・輸送中のCargoは未充足見込みから控除し、重複発送を防ぐ。
 
 ### 9.5 End-to-End輸送
 
@@ -837,7 +833,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 テストは暫定バランス数値や過去の内部構造を固定せず、少なくとも次の構造的不変条件を優先する。
 
 - Resource / Cargo / Funds / Fleetが負にならず、authoritative ownershipを二重保存しない。
-- 通常物理ResourceがStorage accountingを迂回せず、特殊保管が必要なResourceだけcompatible poolを要求する。
+- 通常Resourceの在庫は保管容量でblockせず、特殊保管が必要なResourceだけcompatible finite poolを要求する。
 - Inventory / Reservation / Logistics-owned Cargo / Market Commitmentの保存とatomic settlementが成立する。
 - Execution Requirement Bundleが複数Resource / Service / output admissionを同じexecution fulfillmentでsettleする。
 - Eligibility判定だけで有限Serviceを消費済みにせず、Allocationで競合させる。
@@ -976,9 +972,9 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 本作のバランス調整では、Definition間の研究解禁・能力供給・投入/産出・製造/建設の依存関係を開発用の読取分析として把握する。静的な連接があることと、Playerの特定Scenarioで現に成立すること、実際に流れた量は区別する。単一の最適攻略順や総合評価値を正解とせず、異なる投資・輸送・研究・生産手段の成立条件とtrade-offを比較する。分析のために新しいプレイ中のStateや無償供給を追加しない。 比較実験ではWorld・Scenario・Player方針・観測範囲・期間の差を明示し、実Commandが拒否された場合も記録する。純在庫変動から生産・消費・輸送の内訳を推定したとみなさず、異なる初期条件と方針による差を区別する。
 
-現在の評価では、最終仕様や全Contentの数値を固定しない。ただしPlayer判断の種類だけを満たす最小のContent集合では、Idleゲームの長期成長は評価できない。採掘・生産・加工・電力・研究・建設・物流それぞれについて、複数規模と設備世代を実際の投入物量・能力・継続運転・維持負担へ接続し、増産によって発生する上流供給不足、Power・Storage・Transportの限界、建設投資と稼働成果の時間差を実測比較する。
+現在の評価では、最終仕様や全Contentの数値を固定しない。ただしPlayer判断の種類だけを満たす最小のContent集合では、Idleゲームの長期成長は評価できない。採掘・生産・加工・電力・研究・建設・物流それぞれについて、複数規模と設備世代を実際の投入物量・能力・継続運転・維持負担へ接続し、増産によって発生する上流供給不足、Power・特殊保管・Transportの限界、建設投資と稼働成果の時間差を実測比較する。
 
-産業と設備の性能・建設Recipeを調整するときは、Facilityを一台ずつ独立採算で評価しない。各Resourceについて、すべての生産・加工工程の投入と産出、Facilityの建設・Upgrade・維持・撤去、Vehicle製造・運用、研究・探査、人口、物流、Market、拠点設立・開発を同じ系の需要と供給として把握する。現在の同時稼働台数、稼働率、立地と輸送能力、保有Stockに加え、増設後の設備群・Fleet・研究基盤が発生させる需要を異なるScenarioとして比較する。DefinitionやRecipeの件数は需要量そのものではない。中間材の増産が最終的な建設・輸送・研究能力へ接続しなければ、単一工程の産出倍率だけで設備の性能・Resourceコストを確定しない。得られる物量増加、必要な上流能力と設備投資、時間、Power、Maintenance、Storage、物流制約を一連のcanonical進行で検証し、固定の最適解や生産倍率をCore仕様にしない。
+産業と設備の性能・建設Recipeを調整するときは、Facilityを一台ずつ独立採算で評価しない。各Resourceについて、すべての生産・加工工程の投入と産出、Facilityの建設・Upgrade・維持・撤去、Vehicle製造・運用、研究・探査、人口、物流、Market、拠点設立・開発を同じ系の需要と供給として把握する。現在の同時稼働台数、稼働率、立地と輸送能力、保有Stockに加え、増設後の設備群・Fleet・研究基盤が発生させる需要を異なるScenarioとして比較する。DefinitionやRecipeの件数は需要量そのものではない。中間材の増産が最終的な建設・輸送・研究能力へ接続しなければ、単一工程の産出倍率だけで設備の性能・Resourceコストを確定しない。得られる物量増加、必要な上流能力と設備投資、時間、Power、Maintenance、特殊保管、物流制約を一連のcanonical進行で検証し、固定の最適解や生産倍率をCore仕様にしない。
 
 Content拡充とTechnologyの技術的評価は反復的に行う。最初に活動・産業・研究・輸送の必要性と量的発展の全体像を捉え、物理Assetや工程とその前提Technologyを整合させる。登録済みTechnologyの出口件数や現在の未接続一覧をもって削除・統合の決定を先行させない。未登録Contentによる未接続は開発用の棚卸し情報とし、目録を読むだけで判明する不足を新しい汎用検出器へ置き換えない。比較実験と診断は、実際の量的収支・有限能力・依存閉路・実行blocker等、目録照合だけでは分からない問題に集中する。
 
@@ -1007,7 +1003,7 @@ Content拡充とTechnologyの技術的評価は反復的に行う。最初に活
 - Transport AllocationからのTransport Capacity自動生成
 - Nominal / Available / Used / Spare Capacityとlimiting factor
 - 発電・配電・部分稼働
-- 在庫・倉庫・Physical / Usable Storage Capacity・必要な有限荷役Service
+- 在庫・特殊保管のPhysical / Usable Storage Capacity・必要な有限荷役Service
 - Celestial Bodyごとに可変数のSurface Cellを持つ天体マップ
 - Surface拠点なしの軌道SurveyからKnowledge Requirementを満たし、typed Founding targetとDeployment Recipe manifestで任意地点へ最初のLocationを設立し、隣接Cellを開発する一連の進行
 - Resource Potential / soft saturation採掘

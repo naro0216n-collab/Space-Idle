@@ -16,6 +16,7 @@ from space_idle.content import base_ids as ids
 from space_idle.content.base_market import EARTH_MARKET_INTERFACE
 from space_idle.execution_requirements import allocate_execution_requirements
 from space_idle.inventory import InventoryBook
+from space_idle.catalog import ResourceDef
 from space_idle.market import (
     FundsState,
     MarketAvailabilityDef,
@@ -133,8 +134,8 @@ def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for
     commitment = next(iter(market.buy_commitments.values()))
     market.update_order(order_id, priority=5)
 
-    inventory = InventoryBook()
-    inventory.set_capacity_snapshot({(node_id, "default"): 1.0}, {(node_id, "default"): 1.0})
+    inventory = InventoryBook({resource: ResourceDef(resource, "Special purchase", storage_pool_key="cryogenic")})
+    inventory.set_capacity_snapshot({(node_id, "cryogenic"): 1.0}, {(node_id, "cryogenic"): 1.0})
     bundles = market.buy_boundary_bundles(1, inventory)
     bundle = next(row for row in bundles if row.owner_id == commitment.id)
     assert int(bundle.priority) == 5
@@ -169,6 +170,7 @@ def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for
     assert market.funds.balance == pytest.approx(9.0)
     assert market.provider_states[provider_id].supply_available_t[resource] == pytest.approx(9.0)
     assert commitment.remaining_quantity_t == pytest.approx(1.0)
+
 
 
 def test_sell_funds_cannot_finance_same_tick_buy():

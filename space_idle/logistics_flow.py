@@ -1280,7 +1280,8 @@ class LogisticsFlowMixin:
             requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
             if not waiting.remaining_legs:
                 pool_key = self.inventory.storage_pool_for_resource(waiting.resource_id)
-                requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
+                if self.inventory.is_finite_storage_pool(pool_key):
+                    requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
             rows.append(ExecutionRequirementBundle(
                 id=self._handoff_request_id(waiting.id, "arrival"),
                 owner_kind="cargo_handoff", owner_id=waiting.id, purpose="arrival_handling",

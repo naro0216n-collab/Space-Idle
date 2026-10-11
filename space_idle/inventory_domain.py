@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
+from math import isfinite
 
 from .domain import DomainExtension, StateCodec, decode_float, decode_list, decode_str, require_fields
 from .validation_support import ValidationContext, require as _require
 from .shared import DefinitionId, EntityId, SpatialNodeId
+from .inventory import DEFAULT_STORAGE_POOL_KEY
 
 
 def capture_inventory(sim: Any) -> dict[str, Any]:
@@ -80,7 +82,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for resource_id, definition in sim.inventory.resource_definitions.items():
         _require(resource_id == definition.id, f"inventory resource definition key mismatch: {resource_id}")
         if definition.storage_pool_key is not None:
-            _require(bool(definition.storage_pool_key), f"empty storage pool key for resource: {resource_id}")
+            _require(bool(definition.storage_pool_key) and definition.storage_pool_key != DEFAULT_STORAGE_POOL_KEY,
+                     f"invalid special storage pool key for resource: {resource_id}")
     for (operational_node_id, pool_key), amount in sim.inventory.physical_storage_capacity_t.items():
         _require(operational_node_id in ctx.operational_nodes, f"storage capacity references unknown location: {operational_node_id}")
         _require(bool(pool_key), f"empty storage pool key at {operational_node_id}")
@@ -96,7 +99,7 @@ def validate_runtime(sim: Any) -> None:
         _require(resource_id in sim.inventory.resource_definitions,
                  f"inventory stock references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"inventory references unknown location: {operational_node_id}")
-        _require(amount >= -1e-9, f"negative inventory: {operational_node_id}/{resource_id}")
+        _require(isfinite(amount) and amount >= -1e-9, f"nonfinite or negative inventory: {operational_node_id}/{resource_id}")
         reserved = sim.inventory.reserved_total(operational_node_id, resource_id)
         _require(reserved >= -1e-9, f"negative reservation: {operational_node_id}/{resource_id}")
         _require(reserved <= amount + 1e-8, f"reservations exceed stock: {operational_node_id}/{resource_id}")
@@ -104,18 +107,20 @@ def validate_runtime(sim: Any) -> None:
         _require(resource_id in sim.inventory.resource_definitions,
                  f"inventory reservation references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"reservation references unknown location: {operational_node_id}/{resource_id}")
-        _require(amount >= -1e-9, f"negative reservation row: {operational_node_id}/{resource_id}")
+        _require(isfinite(amount) and amount >= -1e-9, f"nonfinite or negative reservation row: {operational_node_id}/{resource_id}")
     for (_owner, operational_node_id, resource_id), amount in sim.inventory.external_occupancy.items():
         _require(resource_id in sim.inventory.resource_definitions,
                  f"storage occupancy references unknown Resource: {operational_node_id}/{resource_id}")
         _require(sim.graph.has_operational_node(operational_node_id), f"external storage occupancy references unknown operational node: {operational_node_id}/{resource_id}")
-        _require(amount >= -1e-9, f"negative external storage occupancy: {operational_node_id}/{resource_id}")
+        _require(isfinite(amount) and amount >= -1e-9, f"nonfinite or negative external storage occupancy: {operational_node_id}/{resource_id}")
     for (operational_node_id, pool_key), capacity in sim.inventory.physical_storage_capacity_t.items():
         _require(sim.graph.has_operational_node(operational_node_id), f"storage capacity references unknown operational node: {operational_node_id}/{pool_key}")
+        _require(pool_key != DEFAULT_STORAGE_POOL_KEY and isfinite(capacity) and capacity >= 0,
+                 f"invalid special storage capacity: {operational_node_id}/{pool_key}")
         stored = sim.inventory.stored_in_pool(operational_node_id, pool_key)
         _require(stored <= capacity + 1e-8, f"physical storage capacity exceeded: {operational_node_id}/{pool_key}")
         usable = sim.inventory.usable_storage_capacity_t.get((operational_node_id, pool_key), 0.0)
-        _require(0 <= usable <= capacity + 1e-8, f"invalid usable storage capacity: {operational_node_id}/{pool_key}")
+        _require(isfinite(usable) and 0 <= usable <= capacity + 1e-8, f"invalid usable storage capacity: {operational_node_id}/{pool_key}")
 
 
 DOMAIN_EXTENSION = DomainExtension(
