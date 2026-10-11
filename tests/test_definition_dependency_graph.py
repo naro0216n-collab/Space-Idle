@@ -40,6 +40,30 @@ def test_registered_definition_graph_reuses_real_content_without_gameplay_side_e
         filtered = graph.subset((relation.target,))
         assert relation in filtered.relations
 
+    # Vehicle construction costs are not sufficient to describe continuing
+    # industrial demand. Physical refueling and finite route-dependent fuel
+    # must appear as typed operational dependencies, without a fixed OD table.
+    for vehicle in sim.transport.vehicle_definitions():
+        operation = DependencyNode("vehicle_operation_method", str(vehicle.id))
+        partial = graph.subset((operation,), downstream=False)
+        assert any(edge.kind == "uses_asset_definition" and edge.target == operation
+                   for edge in partial.relations)
+        assert {edge.source.id for edge in graph.relations if edge.kind == "requires_operation"
+                and edge.target == operation} == {
+                    capability.operation_type for capability in vehicle.performance.operation_capabilities
+                }
+        fuel = [edge for edge in partial.relations
+                if edge.kind == "consumes_resource" and edge.target == operation]
+        if vehicle.propellant_resource_id is not None and vehicle.propellant_t_per_total_t_per_km_s > 0:
+            assert len(fuel) == 1
+            assert fuel[0].source == DependencyNode("resource", str(vehicle.propellant_resource_id))
+            assert fuel[0].quantity == vehicle.propellant_t_per_total_t_per_km_s
+            assert fuel[0].time_basis == "per_movement_mass_delta_v"
+            assert any(edge.kind == "requires_capability" and edge.target == operation
+                       for edge in partial.relations)
+        else:
+            assert not fuel
+
     # A new Definition participates without extending a Core ID table.
     extra = DefinitionId("test.process.unlisted")
     missing_resource = DefinitionId("test.resource.missing")

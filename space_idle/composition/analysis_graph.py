@@ -43,6 +43,13 @@ def build_definition_dependency_graph(
             all_capabilities.update(supply.id for supply in facility.capability_supplies)
         for vehicle in sim.transport.vehicle_definitions():
             all_capabilities.update(vehicle.generic_capabilities)
+            all_capabilities.update(
+                req.capability_id for req in vehicle.operation_support_requirements
+            )
+            for req in vehicle.resource_support_requirements:
+                all_capabilities.add(req.infrastructure_capability_id)
+                if req.vehicle_capability_id is not None:
+                    all_capabilities.add(req.vehicle_capability_id)
         for process in sim.industry.processes.values():
             all_capabilities.update(process.required_capabilities)
         if sim.extraction is not None:
@@ -617,6 +624,52 @@ def build_definition_dependency_graph(
                     "supplies_capability", owner, _node("capability", capability),
                     f"vehicle:{vehicle.id}:capabilities",
                 ))
+            # Operation is an actual recurring demand, not the one-time
+            # production/turnaround recipe. Its fuel consumption depends on the
+            # route delta-v, vehicle mass and cargo; no invented fixed/day rate.
+            # Reuse the authoritative physical Vehicle Definition and let the
+            # canonical Movement planner determine actual eligibility and flow.
+            operation = _node("vehicle_operation_method", vehicle.id)
+            nodes.append(operation)
+            relations.append(DependencyRelation(
+                "uses_asset_definition", owner, operation,
+                f"vehicle:{vehicle.id}:performance",
+            ))
+            for capability in vehicle.performance.operation_capabilities:
+                relations.append(DependencyRelation(
+                    "requires_operation", _node("transport_operation", capability.operation_type), operation,
+                    f"vehicle:{vehicle.id}:performance.operation_capabilities:{capability.operation_type}",
+                    condition="vehicle_can_perform_operation;route_site_and_delta_v_remain_dynamic",
+                ))
+            for requirement in vehicle.operation_support_requirements:
+                relations.append(DependencyRelation(
+                    "requires_capability", _node("capability", requirement.capability_id), operation,
+                    f"vehicle:{vehicle.id}:operation_support:{requirement.operation_type}:"
+                    f"{requirement.location.value}:{requirement.capability_id}",
+                    condition=f"operation:{requirement.operation_type};location:{requirement.location.value}",
+                ))
+            for requirement in vehicle.resource_support_requirements:
+                relations.append(DependencyRelation(
+                    "requires_capability", _node("capability", requirement.infrastructure_capability_id), operation,
+                    f"vehicle:{vehicle.id}:resource_support:{requirement.resource_id}:infrastructure",
+                    condition=f"resource:{requirement.resource_id};refill_at_physical_endpoint",
+                ))
+                if requirement.vehicle_capability_id is not None:
+                    relations.append(DependencyRelation(
+                        "requires_capability", _node("capability", requirement.vehicle_capability_id), operation,
+                        f"vehicle:{vehicle.id}:resource_support:{requirement.resource_id}:vehicle_interface",
+                        condition=f"resource:{requirement.resource_id};installed_on_vehicle",
+                    ))
+            if vehicle.propellant_resource_id is not None and vehicle.propellant_t_per_total_t_per_km_s > 0:
+                relations.append(DependencyRelation(
+                    "consumes_resource", _node("resource", vehicle.propellant_resource_id), operation,
+                    f"vehicle:{vehicle.id}:performance.propellant_t_per_total_t_per_km_s",
+                    vehicle.propellant_t_per_total_t_per_km_s, "t/(t*km/s)",
+                    "per_movement_mass_delta_v",
+                    condition=f"dry_mass_t:{vehicle.dry_mass_t:g};"
+                    f"fuel_tank_capacity_t:{vehicle.propellant_capacity_t:g};"
+                    "actual_consumption_depends_on_route_and_cargo",
+                ))
             for resource_id, amount in vehicle.production.resources:
                 relations.append(DependencyRelation(
                     "consumes_resource", _node("resource", resource_id), production,
@@ -707,6 +760,7 @@ def build_definition_dependency_graph(
         "produces_vehicle", "supplies_capability", "consumes_resource", "unlocks_method",
         "requires_service_capacity", "uses_asset_definition", "retires_vehicle",
         "recovers_resource", "nominal_passenger_seats", "nominal_life_support_supply",
+        "requires_operation", "requires_capability",
     })
 
     def observations() -> DependencyFragment:

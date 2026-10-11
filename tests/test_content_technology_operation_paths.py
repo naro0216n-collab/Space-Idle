@@ -1389,6 +1389,27 @@ def test_electric_propulsion_research_to_cross_node_resource_transport(tmp_path)
                for _node_id, resource_id, quantity in active.operational_supply)
     assert not any(resource_id == str(ids.PROPELLANT)
                    for _node_id, resource_id, _quantity in active.operational_supply)
+    # The same physical operating-resource demand must be present in the
+    # opt-in Definition graph, for comparison with Production and Research.
+    # It remains a coefficient, not an invented static route flow or a second
+    # transport feasibility solver. The Application above proves real usage.
+    from space_idle.composition.analysis_graph import build_definition_dependency_graph
+    from space_idle.analysis_graph import DependencyNode
+    dependency_graph = build_definition_dependency_graph(sim, app._catalog)
+    assert not dependency_graph.diagnostics
+    for ship, fuel_id in (
+        (ids.HALL_ELECTRIC_CARGO_TUG, ids.HYDROGEN),
+        (ids.REUSABLE_ORBITAL_CARGO_TUG, ids.PROPELLANT),
+        (ids.NUCLEAR_THERMAL_CARGO_SHIP, ids.HYDROGEN),
+    ):
+        operation = DependencyNode("vehicle_operation_method", str(ship))
+        physical = sim.transport.vehicle_defs[ship]
+        edges = [r for r in dependency_graph.relations
+                 if r.target == operation and r.kind == "consumes_resource"]
+        assert len(edges) == 1
+        assert edges[0].source == DependencyNode("resource", str(fuel_id))
+        assert edges[0].quantity == physical.propellant_t_per_total_t_per_km_s
+        assert edges[0].time_basis == "per_movement_mass_delta_v"
     # A remote-sensing compatible ion probe remains a single physical Fleet
     # unit even when dedicated to a Survey provider instead of transport.
     assert sim.survey.source_is_compatible(
