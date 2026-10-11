@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .ui_reports import DecisionConstraintRow
 from .location_views import EnvironmentFacetRow
 from .ui_reports import ComparisonAxisRow, ComparisonValueRow
-from .project_views import BuildProcessOptionRow, BuildResearchCapacityRow
+from .project_views import BuildProcessOptionRow, BuildResearchCapacityRow, BuildSurveyProviderRow
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,7 @@ class SurfaceFacilityPlacementOption:
     extraction_nominal_capacity_t_per_day: float | None = None
     maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
     research_capacity: BuildResearchCapacityRow | None = None
+    survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
 
 
 @dataclass(frozen=True)

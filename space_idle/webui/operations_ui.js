@@ -921,10 +921,15 @@
     }).join('');
     const research=o.research_capacity;
     const researchCapacity=research?`<div class="detail-card"><div class="mode-title"><span>研究能力</span><strong>Tier ${fmt(research.provider_tier,0)}</strong></div><div class="cell-sub">公称RP生成 ${fmt(research.generation_points_per_day,2)} RP/日 · 貯蔵 ${fmt(research.storage_capacity_points,1)} RP</div><div class="cell-sub">研究実行 ${fmt(research.execution_work_per_day,2)} work/日${research.crew_person_days_per_research_point>0?` · Crew ${fmt(research.crew_person_days_per_research_point,3)} 人日/RP`:''}</div></div>`:'';
-    const enables=capabilityCards+serviceCards+processCards+researchCapacity||'<div class="empty-state">追加される能力情報なし</div>';
+    const surveyCards=(o.survey_providers||[]).map((provider)=>{
+      const modes=(provider.observation_modes||[]).map((mode)=>`<div class="cell-sub">${esc(mode.display_name)} · 観測進捗 ${fmt(mode.survey_rate,2)}/能力単位 · 到達Knowledge Lv ${fmt(mode.max_knowledge_level,0)}</div>`).join('');
+      return `<div class="detail-card"><div class="mode-title"><span>資源調査・観測能力</span><strong>${fmt(provider.capacity_units_per_source_per_day,2)} 能力単位/日</strong></div>${modes}</div>`;
+    }).join('');
+    const enables=capabilityCards+serviceCards+processCards+researchCapacity+surveyCards||'<div class="empty-state">追加される能力情報なし</div>';
     return section('設備の機能・工程候補',enables+
       (o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+
-      (o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
+      (o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':'')+
+      (o.survey_providers?.length?'<div class="cell-sub">観測値は装備の公称値です。実観測はModeの必要条件、所在・環境、Powerと有限能力の配分に依存します。</div>':''))+
       section('建設後の維持Resource需要（Level 1公称）',
         (o.maintenance_rates_per_day||[]).map(([resource,rate])=>`<div class="cell-sub">${esc(resourceName(resource))}: ${fmt(rate,4)} t/日</div>`).join('')||'<div class="empty-state">追加の維持Resource需要なし</div>');
   }

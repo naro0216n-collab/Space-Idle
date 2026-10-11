@@ -46,6 +46,20 @@ class BuildResearchCapacityRow:
 
 
 @dataclass(frozen=True)
+class BuildSurveyModeRow:
+    display_name: str
+    survey_rate: float
+    max_knowledge_level: int
+
+
+@dataclass(frozen=True)
+class BuildSurveyProviderRow:
+    provider_id: str
+    capacity_units_per_source_per_day: float
+    observation_modes: tuple[BuildSurveyModeRow, ...]
+
+
+@dataclass(frozen=True)
 class BuildOptionRow:
     facility_definition_id: str | None
     display_name: str
@@ -67,6 +81,7 @@ class BuildOptionRow:
     # actual allocation remains subject to competing activities.
     maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
     research_capacity: BuildResearchCapacityRow | None = None
+    survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
 
 
 @dataclass(frozen=True)

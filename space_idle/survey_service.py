@@ -114,12 +114,21 @@ class SurveyService:
         return tuple(sorted((row.id for row in self.transport.vehicle_definitions()
             if provider.required_source_capabilities.issubset(set(row.generic_capabilities))), key=str))
 
+    def source_supports_mode(
+        self, provider: SurveyProviderSpec, mode: SurveyObservationModeSpec,
+        source_definition_id: DefinitionId,
+    ) -> bool:
+        """Check one physical source against a Survey Provider/Mode contract."""
+        return self.source_is_compatible(provider, source_definition_id) and not self._source_capability_failures(
+            provider, mode, source_definition_id
+        )
+
     def compatible_mode_source_definition_ids(
         self, provider: SurveyProviderSpec, mode: SurveyObservationModeSpec,
     ) -> tuple[DefinitionId, ...]:
         """Definition-level compatibility, without current Fleet or Facility state."""
         return tuple(source_id for source_id in self.compatible_source_definition_ids(provider)
-                     if not self._source_capability_failures(provider, mode, source_id))
+                     if self.source_supports_mode(provider, mode, source_id))
 
     def source_is_compatible(self, provider: SurveyProviderSpec, source_definition_id: DefinitionId) -> bool:
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:

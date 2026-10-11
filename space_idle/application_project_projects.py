@@ -6,6 +6,7 @@ from .application_constraints import constraints_from_pairs, limiting_factors_fr
 from .application_views import (
     BuildResourceOption,
     BuildOptionRow, BuildProcessOptionRow, BuildResearchCapacityRow,
+    BuildSurveyModeRow, BuildSurveyProviderRow,
     BuildOptionsView,
     FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
@@ -18,6 +19,7 @@ from .construction.models import (
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
 from .facilities import FacilityPlacementScope
+from .survey import SurveyProviderSourceKind
 from .disposal import project_salvage_recovery
 from .shared import EntityId, SpatialNodeId
 from .supply import SupplyRequirement
@@ -638,6 +640,26 @@ class ProjectProjectorMixin:
                 execution_work_per_day=level.research_execution_per_day,
                 crew_person_days_per_research_point=provider.crew_person_days_per_research_point,
             )
+        survey_providers = ()
+        if sim.survey is not None:
+            survey_providers = tuple(
+                BuildSurveyProviderRow(
+                    provider_id=str(provider.id),
+                    capacity_units_per_source_per_day=provider.capacity_units_per_source_per_day,
+                    observation_modes=tuple(
+                        BuildSurveyModeRow(
+                            display_name=mode.display_name or mode.id,
+                            survey_rate=mode.survey_rate,
+                            max_knowledge_level=int(mode.max_knowledge_level),
+                        )
+                        for mode in provider.observation_modes
+                        if sim.survey.source_supports_mode(provider, mode, recipe.facility_def_id)
+                    ),
+                )
+                for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id))
+                if provider.source_kind is SurveyProviderSourceKind.FACILITY
+                and sim.survey.source_is_compatible(provider, recipe.facility_def_id)
+            )
         nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
             recipe.facility_def_id, context_id, sim.day,
         )
@@ -666,6 +688,7 @@ class ProjectProjectorMixin:
                 for resource_id, rate in sorted(upkeep.items(), key=lambda item: str(item[0]))
             ),
             research_capacity=research_capacity,
+            survey_providers=survey_providers,
         )
 
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:

@@ -288,6 +288,15 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert option.research_capacity.provider_tier == provider.tier
     assert option.research_capacity.generation_points_per_day == provider.level_spec(1).generation_points_per_day
     assert option.research_capacity.storage_capacity_points == provider.level_spec(1).storage_capacity_points
+    survey = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION]
+    assert len(option.survey_providers) == 1
+    assert option.survey_providers[0].provider_id == str(survey.id)
+    assert option.survey_providers[0].capacity_units_per_source_per_day == survey.capacity_units_per_source_per_day
+    assert tuple((mode.display_name, mode.survey_rate, mode.max_knowledge_level)
+                 for mode in option.survey_providers[0].observation_modes) == tuple(
+        (mode.display_name or mode.id, mode.survey_rate, int(mode.max_knowledge_level))
+        for mode in survey.observation_modes
+    )
     assert (option.power_nominal_generation_mw, option.power_nominal_load_mw) == pytest.approx(
         sim.power.nominal_for_definition_at_context(recipe.facility_def_id, ids.EARTH_CELL_INDUSTRIAL, sim.day)
     )
@@ -305,6 +314,25 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         row for row in catalog.facilities if row.id == str(ids.ROBOTIC_GEOLOGY_STATION)
     )
     assert robotic.placement_scope == "SURFACE_CELL"
+    # Capability-compatible new Content receives the same Research/Survey
+    # preview without adding a Facility ID branch to Application/UI.
+    from dataclasses import replace
+    peer_id = DefinitionId("test.facility.geology_survey_peer")
+    sim.facilities.definitions[peer_id] = replace(
+        sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION],
+        id=peer_id, display_name="追加地質観測所",
+    )
+    sim.industry.facility_defs[peer_id] = sim.facilities.definitions[peer_id]
+    sim.projects.recipes[peer_id] = replace(recipe, facility_def_id=peer_id)
+    with_peer = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    peer = next(
+        candidate for cell in with_peer.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL)
+        for candidate in cell.facility_placement_options
+        if candidate.facility_definition_id == str(peer_id)
+    )
+    assert peer.research_capacity == option.research_capacity
+    assert peer.survey_providers == option.survey_providers
+    assert peer.maintenance_rates_per_day == option.maintenance_rates_per_day
 
 
 def test_process_interface_can_be_shared_by_a_differently_named_higher_throughput_facility():
