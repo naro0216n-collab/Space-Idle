@@ -89,7 +89,9 @@ Publish Gateway workflowを変更する際は、Publish control maintenanceに�
 
 ### Connectorの一時ファイル管理
 
-通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。Executorは、ChatGPT Libraryの`/temp/`を用意し、transaction IDに対応する残存ファイルを回収してから、indexと原本packetを一時登録・読取する。各入力の使用後に登録ファイルを削除し、当該transactionの一時ファイルが空であることを確認してからGitHub書込へ進む。Library上の削除はゴミ箱への移動である。
+通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。`execution_index`の親ディレクトリ名はpacket件数を、ファイル名はtransaction IDを示し、Executorは原本indexと全packetのパスを登録前に確定できる。ChatGPT Libraryの`/temp/`作成と原本入力の一括登録を同じ操作へ統合し、登録結果のIDで直接読取・原本照合する。検証済み入力は削除の成功応答を確認してからGitHubへ書き込む。Library上の削除はゴミ箱への移動である。
+
+通常の成功経路でLibrary一覧や削除後の全件再列挙は行わない。再試行時の既存登録は同じtransactionの決定論的なパスだけ上書きし、登録・読取・削除の応答が失敗または不確定となった場合は、transactionに限定した一覧・回収を行い、回収を確認できなければGitHubへ書き込まない。無関係なLibraryファイルや別transactionのファイルを操作しない。
 
 Executorの登録・読取・削除が完了した後、同じ実行の中でGitHub transportのtree生成、commit作成、`publish` ref更新を行う。中断または一時ファイル操作の失敗時は、保存済みtransactionを使用して「中断・失敗時の再開」から続ける。通常publishの実行者が扱う入力は`execution_index`と固定Launcherのsourceであり、packet数やpayload規模にかかわらず同じ手順を使う。
 

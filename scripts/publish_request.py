@@ -703,6 +703,8 @@ def _write_execution_packets(
     assert isinstance(plan, dict)
     batches = plan["batches"]
     assert isinstance(batches, list)
+    packet_dir = _connector_dir(repo) / f"inputs-{len(batches) + 1:03d}"
+    packet_dir.mkdir(exist_ok=False)
     tree_packets: list[str] = []
     tree_call_bytes: list[int] = []
     for index, batch in enumerate(batches):
@@ -713,7 +715,7 @@ def _write_execution_packets(
         call_bytes = _connector_call_bytes(packet)
         if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
             raise PublishStateError("generated create_tree call exceeds Connector hard ceiling")
-        path = _connector_dir(repo) / f"tree-batch-{index:03d}.json"
+        path = packet_dir / f"tree-batch-{index:03d}.json"
         path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         tree_packets.append(str(path))
         tree_call_bytes.append(call_bytes)
@@ -728,7 +730,7 @@ def _write_execution_packets(
             "parent_sha": state["publish_base_head"],
         },
     }
-    commit_path = _connector_dir(repo) / "create-transport-commit.json"
+    commit_path = packet_dir / "create-transport-commit.json"
     commit_path.write_text(json.dumps(commit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return tree_packets, tree_call_bytes, str(commit_path)
 
@@ -865,7 +867,9 @@ def _write_execution_index(repo: Path, state: dict[str, object]) -> str:
     """Index the original verified Connector packet files, without copying their contents."""
     _verified_execution_packets(repo, state)
     paths = [*state["tree_packets"], state["commit_packet"]]
-    directory = _connector_dir(repo)
+    directory = Path(str(paths[0])).parent
+    if directory.resolve() != (_connector_dir(repo) / f"inputs-{len(paths):03d}").resolve():
+        raise PublishStateError("Connector packet directory does not encode the input count")
     entries: list[dict[str, object]] = []
     for path in paths:
         file = Path(str(path))

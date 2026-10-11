@@ -404,7 +404,7 @@ const events = [], registered=new Map(), reads=new Map();
 let treeIndex=0, tempExists=false, nextId=0;
 const prefix='/temp/space-idle-publish-' + index.request_id + '-';
 if(mode==='stale') {
-  registered.set('stale', {path:null,name:prefix+'99.json'});
+  registered.set('stale', {path:null,name:prefix+'0.json'});
   registered.set('other', {path:null,name:'/temp/unrelated.json'});
   registered.set('other-transaction', {path:null,name:'/temp/space-idle-publish-'+'f'.repeat(32)+'-0.json'});
 }
@@ -435,6 +435,12 @@ const tools = {
      if(op.operation==='upload') {
        if(!tempExists || !op.destination_path.startsWith(prefix))
          throw Error('upload outside current transaction');
+       for(const [oldId,entry] of registered) {
+         if(entry.name===op.destination_path) {
+           if(op.overwrite!==true) throw Error('registered input collision');
+           registered.delete(oldId);
+         }
+       }
        const id='file-'+(nextId++);
        registered.set(id,{path:op.container_path,name:op.destination_path});
        if(mode==='upload-throws-partial') throw Error('Upload timed out after registration');
@@ -514,24 +520,27 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     ok = _execute_original_packets(index_path)
     assert ok.returncode == 0, ok.stderr
     assert index_path.name == f"execution-index-{index['request_id']}.json"
+    assert index_path.parent.name == f"inputs-{len(index['packets']):03d}"
     trimmed = _execute_original_packets(index_path, "trim-newline")
     stale = _execute_original_packets(index_path, "stale")
     assert stale.returncode == 0, stale.stderr
     stale_actions = [event["type"] for event in json.loads(stale.stdout)]
-    assert stale_actions.index("delete") < stale_actions.index("upload")
+    assert 'list' not in stale_actions  # the known input name is replaced, not enumerated
     assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
     # An ordinary one-tree transaction must fit the Connector call budget,
     # including Files visibility retries, without omitting the cleanup or writes.
-    assert len(actions) <= 14
+    assert len(actions) <= 8
     assert actions[0] == "fetch-source"
     assert actions[1] == "create_folder"
     assert actions.count("create_folder") == 1
+    assert actions.count("read") == 2  # deliberately simulated first-read invisibility
+    assert "list" not in actions  # no normal-path Library enumeration
     assert actions[-3:] == ["tree", "commit", "ref"]
     assert actions.count("tree") == summary["tree_call_count"]
     assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
 
-    for mode in ("source-unavailable", "folder-fails", "upload-fails", "upload-without-id", "upload-throws-partial", "delete-fails", "list-fails", "unreadable", "tampered"):
+    for mode in ("source-unavailable", "folder-fails", "upload-fails", "upload-without-id", "upload-throws-partial", "delete-fails", "unreadable", "tampered"):
         rejected = _execute_original_packets(index_path, mode)
         assert rejected.returncode != 0, (mode, rejected.stderr)
         rejected_events = json.loads(rejected.stdout)
@@ -539,6 +548,9 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
         if mode != "delete-fails":
             current_prefix = "/temp/space-idle-publish-" + index["request_id"] + "-"
             assert not any(path.startswith(current_prefix) for path in rejected_events[-1]["paths"]), mode
+    no_inventory = _execute_original_packets(index_path, "list-fails")
+    assert no_inventory.returncode == 0, no_inventory.stderr
+    assert "list" not in [a["type"] for a in json.loads(no_inventory.stdout)]
     mismatch = _execute_original_packets(index_path, "tree-mismatch")
     assert mismatch.returncode != 0
     assert [a["type"] for a in json.loads(mismatch.stdout)][-2:] == ["tree", "residual"]
@@ -569,4 +581,4 @@ def test_direct_packet_registration_large_multi_batch(tmp_path: Path) -> None:
     assert actions.count("tree") == summary["tree_call_count"]
     assert actions[-2:] == ["commit", "ref"]
     assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
-    assert len([a for a in actions if a == "upload"]) >= 1
+    assert len([a for a in actions if a == "create_folder"]) == 1
