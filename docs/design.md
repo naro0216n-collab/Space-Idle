@@ -358,6 +358,8 @@ Location設立前のSurface CellはInventoryや通常物流のNodeではない�
 
 Deployment Recipeも、展開Facilityへの投資分と持込初期在庫を合わせて、staging側から要求するResource種類数を最大3種類とする。複数Facilityを含むPackageであっても投入種類数を際限なく増やさず、事前組立や専門Componentの工程を用いて準備する。
 
+初期拠点設立で展開するFacilityは、実際に輸送・投資したResourceに対応する物理資産とする。展開時点では小容量の電源・Storage・荷役・施工等を併せ持つ初期拠点を利用できるが、複数の完成済み本格Facilityを低負担で一括取得する経路とはしない。新拠点の産業・研究・居住・物流容量は通常の建設・輸送・設備運用により拡張する。Founding候補では展開するFacility、公称能力、投入資材に応じた維持負担を提示し、展開能力を無条件に実効能力とみなさない。
+
 Deployment開始時にprepared Resource / Fleetをsource側の物理Stateからone-shot Movement payload / commitmentへ移し、成功時だけRecipeに従って初期Storage、Facility、Inventory、必要なFleet等へ変換する。Definitionだけを根拠にtarget側へResource、Fleet、Facilityを無償生成しない。失敗・取消可能境界・帰還dispositionもMovement / commitment契約で明示する。
 
 Surface Locationは一点座標ではなく、Operational Nodeとしての経済・産業・物流機能と、連続して開発したSurface Cell群の双方を持つ。設立Cellは `core cell` として領域の成立起点・連結性のanchorになるが、Location全体の代表Environment、代表Movement endpoint、無料Surface Infrastructure endpoint、Resource Opportunity特権にはならない。

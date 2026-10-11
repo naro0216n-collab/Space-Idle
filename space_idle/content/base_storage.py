@@ -13,6 +13,12 @@ def build_storage_provider_specs() -> dict:
             ids.ORBITAL_PROPELLANT_DEPOT, {"cryogenic": 80.0}, frozenset({"cryogenic"}),
         ),
         ids.ORBITAL_LOGISTICS_NODE: StorageProviderSpec(ids.ORBITAL_LOGISTICS_NODE, {"default": 16.0, "cryogenic": 4.0}),
+        ids.AUTONOMOUS_SURFACE_OUTPOST: StorageProviderSpec(
+            ids.AUTONOMOUS_SURFACE_OUTPOST, {"default": 4.0, "cryogenic": 0.8},
+        ),
+        ids.AUTONOMOUS_ORBITAL_OUTPOST: StorageProviderSpec(
+            ids.AUTONOMOUS_ORBITAL_OUTPOST, {"default": 10.0, "cryogenic": 1.0},
+        ),
         ids.ROBOTIC_SURVEY_PACKAGE: StorageProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, {"default": 5.0, "cryogenic": 2.0}),
         ids.VACUUM_CARGO_HANDLING_TERMINAL: StorageProviderSpec(
             ids.VACUUM_CARGO_HANDLING_TERMINAL, {"default": 120.0},

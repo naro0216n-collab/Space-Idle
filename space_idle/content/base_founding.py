@@ -10,56 +10,43 @@ def _r(resource_id, amount):
 
 
 def build_deployment_recipes() -> dict:
-    recipe = DeploymentRecipe(
+    # Founding carries fully paid physical hardware, not a discounted bundle
+    # of operational warehouses, power plants and cargo terminals. Each
+    # compact outpost provides just enough service for regular follow-up
+    # construction and inbound supply. It supplies no unearned resource stock.
+    surface = DeploymentRecipe(
         id=ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE,
-        display_name="Robotic Surface Outpost Founding Package",
-        deployed_facilities=(
-            FoundingFacilityDeployment(
-                ids.ROBOTIC_SURVEY_PACKAGE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5), _r(ids.CONSTRUCTION_EQUIPMENT, 0.2)),
-            ),
-            FoundingFacilityDeployment(
-                ids.CARGO_WAREHOUSE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
-            ),
-            FoundingFacilityDeployment(
-                ids.SURFACE_DISTRIBUTION_HUB,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.9), _r(ids.MACHINERY, 0.4), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
-            ),
-            FoundingFacilityDeployment(
-                ids.CRYOGENIC_STORAGE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.3), _r(ids.MACHINERY, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
-            ),
-        ),
-        preparation_work=3.0,
+        display_name="自律地表初期拠点展開",
+        deployed_facilities=(FoundingFacilityDeployment(
+            ids.AUTONOMOUS_SURFACE_OUTPOST,
+            (_r(ids.STRUCTURAL_COMPONENTS, 2.7),
+             _r(ids.MACHINERY, 1.5),
+             _r(ids.CONSTRUCTION_EQUIPMENT, 0.5)),
+        ),),
+        preparation_work=12.0,
         preparation_service_type="cargo_transfer",
+        initial_inventory=(_r(ids.STRUCTURAL_COMPONENTS, 0.25),
+                           _r(ids.MACHINERY, 0.20),
+                           _r(ids.CONSTRUCTION_EQUIPMENT, 0.05)),
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.ROBOTIC_OUTPOST_SURFACE_SITE,
-        knowledge_requirements=(),
         required_units=1,
     )
     orbital = DeploymentRecipe(
         id=ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE,
-        display_name="Robotic Orbital Logistics Outpost Package",
-        deployed_facilities=(
-            FoundingFacilityDeployment(
-                ids.ORBITAL_LOGISTICS_NODE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5)),
-            ),
-            FoundingFacilityDeployment(
-                ids.ORBITAL_FISSION_POWER,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.6)),
-            ),
-        ),
-        preparation_work=3.0,
+        display_name="自律軌道初期拠点展開",
+        deployed_facilities=(FoundingFacilityDeployment(
+            ids.AUTONOMOUS_ORBITAL_OUTPOST,
+            (_r(ids.STRUCTURAL_COMPONENTS, 3.4),
+             _r(ids.MACHINERY, 1.9)),
+        ),),
+        preparation_work=10.0,
         preparation_service_type="cargo_transfer",
         staging_requirements=req.ORBIT_SITE,
         target_requirements=req.ORBIT_SITE,
-        initial_inventory=(
-            _r(ids.PROPELLANT, 3.0),
-            _r(ids.STRUCTURAL_COMPONENTS, 1.0),
-            _r(ids.MACHINERY, 0.8),
-        ),
+        initial_inventory=(_r(ids.PROPELLANT, 0.8),
+                           _r(ids.STRUCTURAL_COMPONENTS, 0.4),
+                           _r(ids.MACHINERY, 0.5)),
         required_units=1,
     )
-    return {row.id: row for row in (recipe, orbital)}
+    return {row.id: row for row in (surface, orbital)}

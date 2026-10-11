@@ -9,6 +9,7 @@ from space_idle import (
     AdvanceTime,
     ApplicationError,
     CancelBuild,
+    PlanBuild,
     CancelFounding,
     DevelopSurfaceCell,
     PlanOperationalNodeFounding,
@@ -94,6 +95,74 @@ def _found_command(name: str, cell_id):
         deployment_recipe_id=str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE),
         vehicle_definition_id=str(ids.REUSABLE_SURFACE_CARGO_LANDER),
     )
+
+
+
+
+def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_before_launch():
+    """A founding deployment buys a limited foothold, not a mature base bundle."""
+    app = build_game_application()
+    sim = app._simulation
+    expected = (
+        (ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, ids.AUTONOMOUS_SURFACE_OUTPOST,
+         ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.CARGO_WAREHOUSE),
+        (ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE, ids.AUTONOMOUS_ORBITAL_OUTPOST,
+         ids.MARS_ORBIT, ids.ORBITAL_HEAVY_CARGO_TERMINAL),
+    )
+    for recipe_id, facility_id, context_id, mature_id in expected:
+        recipe = sim.founding.deployment_recipes[recipe_id]
+        assert len(recipe.deployed_facilities) == 1
+        deployment = recipe.deployed_facilities[0]
+        assert deployment.facility_def_id == facility_id
+        assert len(recipe.payload_resources) <= 3
+        # Founding is not an acquisition discount: the outpost investment is
+        # exactly the material cost of building the same compact facility.
+        build = sim.projects.recipes[facility_id]
+        assert deployment.investment_totals() == pytest.approx({
+            row.resource_id: row.amount_t for row in build.resources
+        })
+        assert sim.storage.providers[facility_id].capacity_t_by_pool["default"] < (
+            sim.storage.providers[mature_id].capacity_t_by_pool["default"]
+        )
+        row = app._founding_deployed_facility_rows(recipe, context_id)[0]
+        generation, load = sim.power.nominal_for_definition_at_context(
+            facility_id, context_id, sim.day
+        )
+        assert row.nominal_power_generation_mw == pytest.approx(generation)
+        assert row.nominal_power_load_mw == pytest.approx(load)
+        assert dict(row.storage_capacity_t) == sim.storage.providers[facility_id].capacity_t_by_pool
+        assert row.construction_work_per_day == pytest.approx(
+            sim.projects.construction_providers[facility_id].work_per_day
+        )
+        assert row.maintenance_fraction_per_year == pytest.approx(
+            sim.facilities.definitions[facility_id].maintenance_fraction_per_year
+        )
+        assert any(name == "cargo_transfer" and rate < 1.0
+                   for name, rate in row.service_capacity_per_day)
+        assert not any(facility.facility_def_id == mature_id
+                       for facility in recipe.deployed_facilities)
+
+    # The outpost must still be able to bootstrap normally, without a grant
+    # of additional full-size facilities or a special first-build pathway.
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    _stage_founding_resources(sim)
+    result = app.execute(_found_command("Autonomous settlement", cell))
+    project = next(p for p in sim.founding.projects.values() if str(p.id) == result.created_id)
+    _advance_founding_to_completion(app, project)
+    location = sim.founding.target_operational_node_id(project.target_spec)
+    assert {row.definition_id for row in sim.facilities.all_at(location)} == {
+        ids.AUTONOMOUS_SURFACE_OUTPOST
+    }
+    initial_capacity = sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).admission_capacity_t
+    for row in sim.projects.recipes[ids.BULK_STORAGE].resources:
+        sim.inventory.add(location, row.resource_id, row.amount_t)
+    result = app.execute(PlanBuild(str(location), str(ids.BULK_STORAGE)))
+    assert result.created_id
+    app.execute(AdvanceTime(110))
+    assert ids.BULK_STORAGE in {row.definition_id for row in sim.facilities.all_at(location)}
+    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).admission_capacity_t > initial_capacity
+    from space_idle.validation import validate_runtime_state
+    validate_runtime_state(sim)
 
 
 def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowledge():
@@ -442,6 +511,12 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
         and row.deployment_recipe_id == str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE)
         and row.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
     )
+    assert len(option.deployed_facilities) == 1
+    outpost = option.deployed_facilities[0]
+    assert outpost.facility_definition_id == str(ids.AUTONOMOUS_SURFACE_OUTPOST)
+    assert outpost.construction_work_per_day > 0
+    assert outpost.nominal_power_generation_mw > outpost.nominal_power_load_mw
+    assert dict(outpost.storage_capacity_t)["default"] < 120.0
     assert option.payload_t > 0
     assert 0 < option.payload_t_per_unit <= option.payload_t
     assert option.required_units > 0

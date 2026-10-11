@@ -352,7 +352,7 @@ def test_martian_surface_founding_creates_operational_site_only_after_long_trans
     assert all(node_id != destination_id for node_id, _ in sim.inventory.stock)
 
     # Project preparation and dispatched Movement each have their own owner.
-    for _ in range(10):
+    for _ in range(max(10, int(recipe.preparation_work) + 5)):
         if project.movement_execution_id is not None:
             break
         app.execute(AdvanceTime(1))
@@ -383,7 +383,7 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     """A physical orbit is not a logistics endpoint until founded and supplied."""
     from space_idle import (
         AdvanceTime, CreateTransportAllocation, NonSurfaceOperationalNodeFoundingTarget,
-        PlanOperationalNodeFounding, SetTargetStock,
+        PlanBuild, PlanOperationalNodeFounding, SetTargetStock,
     )
 
     app = build_game_application()
@@ -449,7 +449,32 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
     days = first_arrival - sim.day + 1
     app.execute(AdvanceTime(days))
     assert sim.inventory.amount(target, ids.MACHINERY) > machinery_before_delivery
+    # The compact founding outpost has finite receiving throughput. Waiting
+    # cargo is expected at the first arrival, and must remain owned by
+    # Logistics until it is admitted by the normal Storage/handling contract.
+    app.execute(AdvanceTime(25))
     assert not sim.logistics.arrival_waiting
+    assert sim.inventory.amount(target, ids.MACHINERY) >= machinery_before_delivery
+
+    # A founding outpost must allow the first ordinary orbital investment.
+    # Reservation holds materials in the finite pool until construction; a
+    # nominally small storage number that cannot hold the first required
+    # recipe would strand the player indefinitely at the founding stage.
+    platform = sim.projects.recipes[ids.ORBITAL_CONSTRUCTION_PLATFORM]
+    initial_storage_t = sim.inventory.physical_storage_capacity_t[(target, "default")]
+    for requirement in platform.resources:
+        deficit = max(0.0, requirement.amount_t + 0.15 - sim.inventory.amount(target, requirement.resource_id))
+        if deficit:
+            sim.inventory.add(target, requirement.resource_id, deficit)
+    assert sim.inventory.stored_in_pool(target, "default") <= initial_storage_t + 1e-9
+    sim.technology.completed.update(platform.prerequisite_technologies)
+    result = app.execute(PlanBuild(str(target), str(ids.ORBITAL_CONSTRUCTION_PLATFORM), procurement_policy="immediate"))
+    assert result.created_id is not None
+    app.execute(AdvanceTime(2))
+    assert ids.ORBITAL_CONSTRUCTION_PLATFORM in {
+        facility.definition_id for facility in sim.facilities.all_at(target)
+    }
+    assert sim.inventory.physical_storage_capacity_t[(target, "default")] == pytest.approx(initial_storage_t)
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
 

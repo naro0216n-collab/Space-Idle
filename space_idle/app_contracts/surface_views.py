@@ -48,6 +48,18 @@ class SurfaceFacilityPlacementOption:
 
 
 @dataclass(frozen=True)
+class FoundingDeployedFacilityRow:
+    facility_definition_id: str
+    display_name: str
+    nominal_power_generation_mw: float
+    nominal_power_load_mw: float
+    storage_capacity_t: tuple[tuple[str, float], ...]
+    service_capacity_per_day: tuple[tuple[str, float], ...]
+    construction_work_per_day: float
+    maintenance_fraction_per_year: float
+
+
+@dataclass(frozen=True)
 class FoundingOption:
     staging_node_id: str
     deployment_recipe_id: str
@@ -65,6 +77,7 @@ class FoundingOption:
     active_project_id: str | None = None
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
+    deployed_facilities: tuple[FoundingDeployedFacilityRow, ...] = ()
 
 
 @dataclass(frozen=True)

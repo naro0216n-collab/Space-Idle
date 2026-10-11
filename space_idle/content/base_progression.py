@@ -115,6 +115,10 @@ def build_survey_providers() -> dict:
                 display_name="軌道レーダー地下探査",
             ),),
         ),
+        ids.AUTONOMOUS_SURFACE_OUTPOST: SurveyProviderSpec(
+            ids.AUTONOMOUS_SURFACE_OUTPOST, SurveyProviderSourceKind.FACILITY,
+            frozenset({"surface_survey", "compact_surface_prospecting_kit"}), (local_robotic,),
+        ),
         ids.ROBOTIC_SURVEY_PACKAGE: SurveyProviderSpec(
             ids.ROBOTIC_SURVEY_PACKAGE, SurveyProviderSourceKind.FACILITY,
             frozenset({"surface_survey", "robotic_prospecting_kit"}), (local_robotic,),

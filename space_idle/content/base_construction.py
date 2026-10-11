@@ -286,6 +286,17 @@ def build_construction_recipes() -> dict:
             frozenset({ids.LM_LOGISTICS_MAINTENANCE_01, ids.CR_CRYOGENIC_STORAGE_TRANSFER_03}),
             True,
         ),
+        ids.AUTONOMOUS_SURFACE_OUTPOST: ConstructionRecipe(
+            ids.AUTONOMOUS_SURFACE_OUTPOST,
+            (req._structure_resource(2.7), req._machinery_resource(1.5),
+             BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 0.5)),
+            18.0, req.ROBOTIC_OUTPOST_SURFACE_SITE,
+        ),
+        ids.AUTONOMOUS_ORBITAL_OUTPOST: ConstructionRecipe(
+            ids.AUTONOMOUS_ORBITAL_OUTPOST,
+            (req._structure_resource(3.4), req._machinery_resource(1.9)),
+            19.0, req.ORBIT_SITE,
+        ),
         ids.ROBOTIC_SURVEY_PACKAGE: req._surface_recipe(
             ids.ROBOTIC_SURVEY_PACKAGE, 2.0, 3.0, 1.5, 0.0,
             technologies=frozenset({ids.SS_SENSING_04}), capabilities=frozenset(), self_deploying=True,
@@ -486,6 +497,8 @@ def build_construction_providers() -> dict:
     # owned Construction Equipment stock instead of duplicating this service.
     return {
         ids.ORBITAL_CONSTRUCTION_PLATFORM: ConstructionProviderSpec(ids.ORBITAL_CONSTRUCTION_PLATFORM, 0.7),
+        ids.AUTONOMOUS_SURFACE_OUTPOST: ConstructionProviderSpec(ids.AUTONOMOUS_SURFACE_OUTPOST, 0.12),
+        ids.AUTONOMOUS_ORBITAL_OUTPOST: ConstructionProviderSpec(ids.AUTONOMOUS_ORBITAL_OUTPOST, 0.11),
         ids.ROBOTIC_SURVEY_PACKAGE: ConstructionProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, 0.35),
         ids.CONSTRUCTION_YARD: ConstructionProviderSpec(ids.CONSTRUCTION_YARD, 0.8),
     }

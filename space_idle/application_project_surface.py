@@ -3,6 +3,7 @@ from __future__ import annotations
 from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .app_contracts.ui_reports import ComparisonValueRow
+from .app_contracts.surface_views import FoundingDeployedFacilityRow
 from .application_views import (
     SurfaceCellDevelopmentOption, FoundingOption, SurfaceCellRow, SurfaceFacilityPlacementOption,
     SurfaceLocationTerritoryRow, NonSurfaceFoundingContextRow, NonSurfaceFoundingView,
@@ -15,6 +16,33 @@ from .shared import CelestialBodyId
 
 
 class SurfaceProjectorMixin:
+    def _founding_deployed_facility_rows(self, recipe, context_id) -> tuple[FoundingDeployedFacilityRow, ...]:
+        """Show the actual paid physical assets and finite nominal capacities.
+
+        This is a definition projection, not an outcome forecast or an extra
+        power/storage allocator. Operating conditions still apply at settlement.
+        """
+        sim = self._simulation
+        rows = []
+        for deployment in recipe.deployed_facilities:
+            facility_id = deployment.facility_def_id
+            definition = sim.facilities.definitions[facility_id]
+            generation, load = sim.power.nominal_for_definition_at_context(
+                facility_id, context_id, sim.day,
+            )
+            storage = sim.storage.providers.get(facility_id)
+            provider = sim.projects.construction_providers.get(facility_id)
+            rows.append(FoundingDeployedFacilityRow(
+                str(facility_id), definition.display_name, generation, load,
+                () if storage is None else tuple(sorted(storage.capacity_t_by_pool.items())),
+                tuple(sorted((row.service_type, row.nominal_rate)
+                             for row in definition.service_capacity_supplies)),
+                0.0 if provider is None else provider.work_per_day,
+                definition.maintenance_fraction_per_year,
+            ))
+        return tuple(rows)
+
+
     def _non_surface_founding_view(self, body_id: CelestialBodyId, *, founding_context_id: str = "") -> NonSurfaceFoundingView:
         """Scoped physical orbital targets; economic state exists only after founding."""
         sim = self._simulation
@@ -52,6 +80,7 @@ class SurfaceProjectorMixin:
                                 staging_node_id=str(staging_id),
                                 deployment_recipe_id=str(recipe.id),
                                 recipe_display_name=recipe.display_name,
+                                deployed_facilities=self._founding_deployed_facility_rows(recipe, node.id),
                                 vehicle_definition_id=str(vehicle.id),
                                 vehicle_display_name=vehicle.display_name,
                                 preparation_work=recipe.preparation_work,
@@ -305,6 +334,7 @@ class SurfaceProjectorMixin:
                                 staging_node_id=str(staging_id),
                                 deployment_recipe_id=str(recipe.id),
                                 recipe_display_name=recipe.display_name,
+                                deployed_facilities=self._founding_deployed_facility_rows(recipe, cell.id),
                                 vehicle_definition_id=str(vehicle.id),
                                 vehicle_display_name=vehicle.display_name,
                                 preparation_work=recipe.preparation_work,
