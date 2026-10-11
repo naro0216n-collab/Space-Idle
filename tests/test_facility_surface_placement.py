@@ -94,11 +94,24 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
     )
     assert candidate.placement_scope == definition.placement_scope.value
-    assert candidate.process_options == tuple(
+    assert tuple((option.process_id, option.display_name) for option in candidate.process_options) == tuple(
         (str(process.id), process.display_name)
         for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
         if process in sim.industry.compatible_processes(definition.id)
     )
+    assert candidate.process_nominal_throughput_per_day == (
+        definition.process_throughput_per_day if candidate.process_options else None
+    )
+    for option in candidate.process_options:
+        process = sim.industry.processes[DefinitionId(option.process_id)]
+        assert dict(option.input_rates_per_day) == {
+            str(resource_id): rate * definition.process_throughput_per_day
+            for resource_id, rate in process.inputs_per_day.items()
+        }
+        assert dict(option.output_rates_per_day) == {
+            str(resource_id): rate * definition.process_throughput_per_day
+            for resource_id, rate in process.outputs_per_day.items()
+        }
     assert build_options.comparison_axes
     assert any(axis.differs for axis in build_options.comparison_axes)
     assert {axis.key for axis in build_options.comparison_axes} == {
@@ -108,6 +121,8 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         "capability_count",
         "service_type_count",
         "process_count",
+        "process_throughput_per_day",
+        "extraction_capacity_t_per_day",
         "self_deploying",
         "power_generation_mw",
         "power_load_mw",
@@ -124,6 +139,26 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         sum(resource.required_t for resource in candidate.resources)
     )
     assert comparison_values["self_deploying"].text_value in {"自己展開", "通常施工"}
+    assert comparison_values["process_throughput_per_day"].number_value == (
+        definition.process_throughput_per_day if candidate.process_options else None
+    )
+    expected_extraction = definition.extraction_capacity_t_per_day or None
+    assert candidate.extraction_nominal_capacity_t_per_day == expected_extraction
+    assert comparison_values["extraction_capacity_t_per_day"].number_value == expected_extraction
+    rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
+    # Existing and advanced fabricators expose the resulting rates for the
+    # *same* downstream Process. The comparison must reflect material flow,
+    # not just a list of available Process names.
+    base = rows_by_id[ids.FABRICATION_WORKSHOP]
+    advanced = rows_by_id[ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE]
+    assert advanced.process_nominal_throughput_per_day > base.process_nominal_throughput_per_day
+    common_process = str(ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS)
+    base_flows = next(option for option in base.process_options if option.process_id == common_process)
+    advanced_flows = next(option for option in advanced.process_options if option.process_id == common_process)
+    resource = str(ids.STRUCTURAL_COMPONENTS)
+    assert dict(advanced_flows.output_rates_per_day)[resource] > dict(base_flows.output_rates_per_day)[resource]
+    assert (rows_by_id[ids.AUTONOMOUS_ORE_MINE].extraction_nominal_capacity_t_per_day
+            > rows_by_id[ids.METAL_ORE_MINE].extraction_nominal_capacity_t_per_day)
     assert candidate.projected_material_readiness_day == sim.day
     for resource in candidate.resources:
         assert resource.available_t == pytest.approx(

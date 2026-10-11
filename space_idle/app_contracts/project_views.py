@@ -27,6 +27,16 @@ class BuildResourceOption:
 
 
 @dataclass(frozen=True)
+class BuildProcessOptionRow:
+    process_id: str
+    display_name: str
+    # Nominal mass flows at the candidate facility's installed throughput.
+    # Actual execution remains bounded by allocation, upkeep and storage.
+    input_rates_per_day: tuple[tuple[str, float], ...]
+    output_rates_per_day: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True)
 class BuildOptionRow:
     facility_definition_id: str | None
     display_name: str
@@ -37,13 +47,15 @@ class BuildOptionRow:
     can_plan: bool
     capabilities: tuple[str, ...] = ()
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
-    process_options: tuple[tuple[str, str], ...] = ()
+    process_options: tuple[BuildProcessOptionRow, ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
     projected_material_readiness_day: int | None = None
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
     power_nominal_generation_mw: float = 0.0
     power_nominal_load_mw: float = 0.0
+    process_nominal_throughput_per_day: float | None = None
+    extraction_nominal_capacity_t_per_day: float | None = None
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ from .app_contracts.catalog_views import (
     ServiceCapacityDefinitionRow, CatalogView, OperationalNodeSummary, WorldView,
 )
 from .app_contracts.project_views import (
-    ProjectResourceRow, BuildResourceOption, BuildOptionRow, FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
+    ProjectResourceRow, BuildResourceOption, BuildOptionRow, BuildProcessOptionRow, FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     BuildOptionsView, ProjectKnowledgeRequirementRow, ProjectRow, ProjectsView,
 )
 from .app_contracts.location_views import (

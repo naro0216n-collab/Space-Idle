@@ -7,7 +7,7 @@ from .application_constraints import constraints_from_pairs, limiting_factors_fr
 from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
-    BuildOptionRow,
+    BuildOptionRow, BuildProcessOptionRow,
     BuildOptionsView,
     FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
@@ -610,9 +610,31 @@ class ProjectProjectorMixin:
                     key=str,
                 )
             ) + tuple((failure.code, failure.detail) for failure in site_failures)
+            # Use the same ProcessSpec and installed throughput as live Industry.
+            # A build candidate shows physical nominal rates, not an eligibility
+            # or execution forecast that would duplicate Domain allocations.
+            compatible = sim.industry.compatible_processes(recipe.facility_def_id)
+            process_throughput = (
+                definition.process_throughput_per_day if compatible else None
+            )
+            extraction_capacity = (
+                definition.extraction_capacity_t_per_day
+                if definition.extraction_capacity_t_per_day > 0 else None
+            )
             process_options = tuple(
-                (str(process.id), process.display_name)
-                for process in sim.industry.compatible_processes(recipe.facility_def_id)
+                BuildProcessOptionRow(
+                    process_id=str(process.id),
+                    display_name=process.display_name,
+                    input_rates_per_day=tuple(
+                        (str(resource), rate * definition.process_throughput_per_day)
+                        for resource, rate in sorted(process.inputs_per_day.items(), key=lambda pair: str(pair[0]))
+                    ),
+                    output_rates_per_day=tuple(
+                        (str(resource), rate * definition.process_throughput_per_day)
+                        for resource, rate in sorted(process.outputs_per_day.items(), key=lambda pair: str(pair[0]))
+                    ),
+                )
+                for process in compatible
             )
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
@@ -646,6 +668,12 @@ class ProjectProjectorMixin:
                     axis_key="process_count", number_value=float(len(process_options))
                 ),
                 ComparisonValueRow(
+                    axis_key="process_throughput_per_day", number_value=process_throughput
+                ),
+                ComparisonValueRow(
+                    axis_key="extraction_capacity_t_per_day", number_value=extraction_capacity
+                ),
+                ComparisonValueRow(
                     axis_key="self_deploying",
                     text_value="自己展開" if recipe.self_deploying else "通常施工",
                 ),
@@ -674,6 +702,8 @@ class ProjectProjectorMixin:
                 comparison_values=comparison_values,
                 power_nominal_generation_mw=nominal_generation,
                 power_nominal_load_mw=nominal_load,
+                process_nominal_throughput_per_day=process_throughput,
+                extraction_nominal_capacity_t_per_day=extraction_capacity,
             ))
         comparison_axes = project_comparison_axes(
             (
@@ -683,6 +713,8 @@ class ProjectProjectorMixin:
                 ("capability_count", "追加能力", "integer", "種"),
                 ("service_type_count", "追加サービス", "integer", "種"),
                 ("process_count", "利用可能工程", "integer", "種"),
+                ("process_throughput_per_day", "工程公称実行量", "number", "回/日"),
+                ("extraction_capacity_t_per_day", "採掘設備公称能力", "number", "t/日"),
                 ("self_deploying", "施工方式", "text", None),
                 ("power_generation_mw", "現在環境での発電公称値", "number", "MW"),
                 ("power_load_mw", "稼働時のPower需要", "number", "MW"),
