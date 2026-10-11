@@ -253,6 +253,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         if resource.available_t + 1e-9 < resource.required_t
     ]
     assert shortages
+    assert all(row.shortage_t == pytest.approx(row.required_t - row.available_t) for row in shortages)
     assert remote_candidate.projected_material_readiness_day == max(
         resource.projected_arrival_day for resource in shortages
     )
@@ -274,6 +275,17 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
     assert option.procurement_policy_options == build_options.procurement_policy_options
+    assert {row.resource_id: row.required_t for row in option.resources} == {
+        str(req.resource_id): req.amount_t for req in recipe.resources
+    }
+    for resource in option.resources:
+        assert resource.available_t == pytest.approx(
+            sim.inventory.available(ids.EARTH, resource.resource_id)
+        )
+        assert resource.shortage_t == pytest.approx(
+            max(0.0, resource.required_t - resource.available_t)
+        )
+    assert option.projected_material_readiness_day == sim.day
     # Surface placement is a physical Facility investment like node construction:
     # project the same actual upkeep, research and power contracts at the Cell.
     invested = {req.resource_id: req.amount_t for req in recipe.resources}
@@ -333,6 +345,8 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert peer.research_capacity == option.research_capacity
     assert peer.survey_providers == option.survey_providers
     assert peer.maintenance_rates_per_day == option.maintenance_rates_per_day
+    assert peer.resources == option.resources
+    assert peer.projected_material_readiness_day == option.projected_material_readiness_day
 
 
 def test_process_interface_can_be_shared_by_a_differently_named_higher_throughput_facility():

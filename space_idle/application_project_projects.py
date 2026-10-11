@@ -151,6 +151,7 @@ class ProjectProjectorMixin:
             BuildResourceOption(
                 row["resource_id"],
                 float(row["required_t"]),
+                shortage_t=float(row["shortage_t"]),
                 available_t=float(row["available_t"]),
                 projected_source_id=row["source_id"],
                 projected_arrival_day=row["arrival_day"],

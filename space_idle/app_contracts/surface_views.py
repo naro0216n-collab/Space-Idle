@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from .ui_reports import DecisionConstraintRow
 from .location_views import EnvironmentFacetRow
 from .ui_reports import ComparisonAxisRow, ComparisonValueRow
-from .project_views import BuildProcessOptionRow, BuildResearchCapacityRow, BuildSurveyProviderRow
+from .project_views import BuildResourceOption, BuildProcessOptionRow, BuildResearchCapacityRow, BuildSurveyProviderRow
 
 
 @dataclass(frozen=True)
@@ -27,10 +27,11 @@ class SurfaceFacilityPlacementOption:
     location_id: str
     construction_required: float
     self_deploying: bool
-    resources: tuple[tuple[str, float], ...]
+    resources: tuple[BuildResourceOption, ...]
     blockers: tuple[DecisionConstraintRow, ...]
     can_plan: bool
     procurement_policy_options: tuple[str, ...] = ()
+    projected_material_readiness_day: int | None = None
     capabilities: tuple[str, ...] = ()
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
     process_options: tuple[BuildProcessOptionRow, ...] = ()

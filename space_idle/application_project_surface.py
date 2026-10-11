@@ -103,6 +103,10 @@ class SurfaceProjectorMixin:
         )
         rows: list[SurfaceCellRow] = []
         founding_comparison_values: list[tuple[ComparisonValueRow, ...]] = []
+        # Materials belong to the Operational Node, not each Surface Cell.
+        # Several Cell candidates at the same owner share one preview; local
+        # physical effects and site blockers still use the selected Cell.
+        placement_materials = {}
         for cell in cells:
             owner = sim.graph.owner_of_cell(cell.id)
             owner_state = None if owner is None else sim.graph.locations[owner]
@@ -198,30 +202,37 @@ class SurfaceProjectorMixin:
             facility_placement_options = ()
             if owner is not None:
                 power = powers[owner]
-                facility_placement_options = tuple(
-                    SurfaceFacilityPlacementOption(
+                candidates = []
+                for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id)):
+                    if sim.facilities.definitions[recipe.facility_def_id].placement_scope is not FacilityPlacementScope.SURFACE_CELL:
+                        continue
+                    material_key = (owner, recipe.facility_def_id)
+                    if material_key not in placement_materials:
+                        placement_materials[material_key] = self._construction_resource_options(
+                            recipe, owner, decision.allocations.transport
+                        )
+                    materials, readiness_day = placement_materials[material_key]
+                    blockers = tuple(
+                        ("technology", str(technology))
+                        for technology in sorted(
+                            recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
+                            key=str,
+                        )
+                    ) + tuple(
+                        (failure.code, failure.detail)
+                        for failure in sim.projects.site_failures(
+                            recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
+                        )
+                    )
+                    candidates.append(SurfaceFacilityPlacementOption(
                         facility_definition_id=str(recipe.facility_def_id),
                         display_name=sim.facilities.definitions[recipe.facility_def_id].display_name,
                         location_id=str(owner),
                         construction_required=recipe.construction_work,
                         self_deploying=recipe.self_deploying,
-                        resources=tuple((str(req.resource_id), req.amount_t) for req in recipe.resources),
+                        resources=materials,
                         blockers=constraints_from_pairs(
-                            (
-                                tuple(
-                                    ("technology", str(technology))
-                                    for technology in sorted(
-                                        recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
-                                        key=str,
-                                    )
-                                )
-                                + tuple(
-                                    (failure.code, failure.detail)
-                                    for failure in sim.projects.site_failures(
-                                        recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
-                                    )
-                                )
-                            ),
+                            blockers,
                             affected_action="plan_surface_facility",
                             related_entity_kind="facility_definition",
                             related_entity_id=str(recipe.facility_def_id),
@@ -230,11 +241,10 @@ class SurfaceProjectorMixin:
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
+                        projected_material_readiness_day=readiness_day,
                         **self._prospective_facility_effects(recipe, cell.id),
-                    )
-                    for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
-                    if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL
-                )
+                    ))
+                facility_placement_options = tuple(candidates)
             foundation_options = ()
             movement_accessible = None
             minimum_transit_days = None

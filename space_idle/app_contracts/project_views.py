@@ -20,6 +20,7 @@ class ProjectResourceRow:
 class BuildResourceOption:
     resource_id: str
     required_t: float
+    shortage_t: float
     available_t: float = 0.0
     projected_source_id: str | None = None
     projected_arrival_day: int | None = None
