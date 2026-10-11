@@ -688,27 +688,13 @@ def run(browser) -> dict[str, object]:
             _assert("建設後に利用可能" in build_option_inspector_text, "construction candidate inspector must expose Application-projected capabilities and services")
             _assert("資材準備見込み" in build_option_inspector_text, "construction candidate inspector must expose projected material readiness at the decision point")
             _assert("現地利用可能" in build_option_inspector_text, "construction candidate inspector must expose current local material availability")
-            construction_candidates = page.locator('[data-inspect="build-option"]')
-            first_construction_pin = page.locator('#inspectorContent [data-construction-compare-pin]')
-            if first_construction_pin.count() > 0:
-                _assert(construction_candidates.count() >= 2, "strategic Construction comparison requires at least two projected candidates in this browser fixture")
-                _assert(first_construction_pin.count() == 1, "Construction candidate inspector must expose Comparison pin")
-                first_construction_pin.click()
-                construction_candidates.nth(1).click()
-                page.locator('#inspectorContent [data-construction-compare-pin]').click()
-                page.wait_for_function(
-                    "() => document.querySelectorAll('#inspectorContent .comparison-surface .comparison-candidate-heading').length === 2",
-                    timeout=10000,
-                )
-                construction_comparison = page.locator('#inspectorContent .comparison-surface')
-                _assert(
-                    construction_comparison.locator('.comparison-axis-row.is-different').count() > 0,
-                    "Construction Comparison must highlight Application-projected differences",
-                )
-                _assert(
-                    construction_comparison.locator('.comparison-blocker-cell').count() == 2,
-                    "Construction Comparison must keep blocker state beside each candidate",
-                )
+            # Build options have unrelated engineering purposes. Their individual
+            # capabilities, materials and blockers must not become a pinned
+            # cross-purpose score comparison.
+            _assert(
+                page.locator('#inspectorContent [data-construction-compare-pin]').count() == 0,
+                "Construction candidates must expose physical details without a cross-purpose pin comparison",
+            )
 
             # Process selection is a Direct Action. A facility with a process
             # option keeps the choices visible and does not require a second Apply.
@@ -718,6 +704,10 @@ def run(browser) -> dict[str, object]:
             ).click()
             _assert(page.locator('#inspectorContent [data-facility-process]').count() > 0,
                     "Application process options must reach the Facility Inspector")
+            _assert(
+                page.locator('#inspectorContent [data-process-compare-pin]').count() == 0,
+                "Process options must not require a redundant pinned comparison",
+            )
             _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
                     "current process must remain visibly selected")
 
@@ -840,8 +830,6 @@ def run(browser) -> dict[str, object]:
             )
             comparison_text = research_comparison.inner_text()
             for label in (
-                "研究Fleet拘束",
-                "現地Resource不足",
                 "Service供給による実行能力",
                 "現在条件での参考所要日数",
                 "試作Resource",
@@ -1284,7 +1272,7 @@ def run(browser) -> dict[str, object]:
             comparison_surface.locator('[data-survey-candidate-detail]').first.click()
             _assert_inspector_section_order(
                 page,
-                ["観測手段の状態", "現在の制約", "操作", "比較軸の詳細"],
+                ["観測手段の状態", "現在の制約", "操作", "観測手段の性能・必要条件"],
                 "Comparison detail must preserve the canonical Inspector hierarchy",
             )
             page.locator('#inspectorContent [data-inspect="survey-campaign"]').click()
