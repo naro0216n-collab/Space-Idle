@@ -77,14 +77,14 @@ def build_construction_recipes() -> dict:
             ids.SURFACE_ROVER_SERVICE_DEPOT, 4.0, 5.0, 1.0, 23.0,
             technologies=frozenset({ids.research_id("SM-SURFACE-MOBILITY-01")}),
         ),
-        ids.EARTH_RESEARCH_LAB: req._surface_recipe(
-            ids.EARTH_RESEARCH_LAB, 12, 10, 8, 55,
+        ids.GENERAL_RESEARCH_LAB: req._surface_recipe(
+            ids.GENERAL_RESEARCH_LAB, 12, 10, 8, 55,
         ),
         ids.GRID_POWER_SUPPLY: req._surface_recipe(
             ids.GRID_POWER_SUPPLY, 8, 6, 0, 36,
         ),
-        ids.EARTH_LAUNCH_SUPPORT: req._surface_recipe(
-            ids.EARTH_LAUNCH_SUPPORT, 10, 8, 2, 54,
+        ids.SURFACE_LAUNCH_SUPPORT: req._surface_recipe(
+            ids.SURFACE_LAUNCH_SUPPORT, 10, 8, 2, 54,
         ),
         ids.CARGO_LAUNCH_INTEGRATION_PAD: req._surface_recipe(
             ids.CARGO_LAUNCH_INTEGRATION_PAD, 26.0, 20.0, 7.0, 190.0,
@@ -100,7 +100,7 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(5), req._machinery_resource(4)),
             28.0, SiteRequirements(), frozenset(), True,
         ),
-        ids.EARTH_LIFE_SUPPORT: req._surface_recipe(ids.EARTH_LIFE_SUPPORT, 6, 4, 1, 30),
+        ids.BREATHABLE_SURFACE_LIFE_SUPPORT: req._surface_recipe(ids.BREATHABLE_SURFACE_LIFE_SUPPORT, 6, 4, 1, 30),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ConstructionRecipe(
             ids.MICROGRAVITY_EXPERIMENT_PLATFORM,
             (req._structure_resource(2.0), req._machinery_resource(1.5), req._electronics_resource(1.5)),
@@ -194,6 +194,13 @@ def build_construction_recipes() -> dict:
         ),
         ids.BULK_STORAGE: req._surface_recipe(ids.BULK_STORAGE, 2, 1, 0.1, 10),
         ids.CARGO_WAREHOUSE: req._surface_recipe(ids.CARGO_WAREHOUSE, 3, 1, 0.2, 14),
+        ids.VACUUM_CARGO_HANDLING_TERMINAL: ConstructionRecipe(
+            ids.VACUUM_CARGO_HANDLING_TERMINAL,
+            (req._structure_resource(18.0), req._machinery_resource(14.0),
+             req._electronics_resource(5.0)),
+            110.0, req.VACUUM_SURFACE_SITE,
+            frozenset({ids.research_id("LM-LOGISTICS-MAINTENANCE-14")}),
+        ),
         ids.SURFACE_DISTRIBUTION_HUB: req._surface_recipe(
             ids.SURFACE_DISTRIBUTION_HUB, 5, 4, 1, 28
         ),
@@ -296,7 +303,7 @@ def build_construction_recipes() -> dict:
             ids.MOLTEN_OXIDE_ELECTROLYZER,
             (BuildResourceRequirement(ids.FABRICATED_STRUCTURE, 8.0),
              req._machinery_resource(7.0), req._electronics_resource(2.5)),
-            95.0, req.VACUUM_SURFACE_SITE,
+            95.0, req.SURFACE_SITE,
             frozenset({ids.RP_RESOURCE_CHAIN_16}),
         ),
         ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
@@ -314,7 +321,7 @@ def build_construction_recipes() -> dict:
 def build_facility_upgrade_recipes() -> dict:
     recipes = (
         FacilityUpgradeRecipe(
-            ids.EARTH_RESEARCH_LAB,
+            ids.GENERAL_RESEARCH_LAB,
             2,
             (
                 req._structure_resource(1.5),
@@ -326,7 +333,7 @@ def build_facility_upgrade_recipes() -> dict:
             frozenset(),
         ),
         FacilityUpgradeRecipe(
-            ids.EARTH_RESEARCH_LAB,
+            ids.GENERAL_RESEARCH_LAB,
             3,
             (
                 req._structure_resource(2.5),

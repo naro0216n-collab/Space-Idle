@@ -104,7 +104,7 @@ def _make_nontrivial_state():
     )
     app.execute(SetFacilityProcess(str(process_facility.id), str(selected_process.id)))
 
-    survey_provider_id = ids.LUNAR_FLEET_SURVEY_PROVIDER
+    survey_provider_id = ids.ORBITAL_RESOURCE_MAPPING_PROVIDER
     survey_mode_id = "remote_orbital_spectrometry"
     survey_goal = 2
     survey_cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
@@ -341,7 +341,7 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
         resource_ids=(str(ids.MINERAL_FEEDSTOCK),),
         goal_knowledge_level=1,
         provider_constraint=SurveyProviderConstraintInput(
-            str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT)
+            str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT)
         ),
         observation_mode_constraint="remote_orbital_spectrometry",
     )).created_id
@@ -505,11 +505,11 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
     survey_app = build_game_application()
     survey_sim = survey_app._simulation
     survey_sim.transport.add_fleet_units(
-        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=survey_sim.day
+        ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=survey_sim.day
     )
     survey_assignment_id = survey_app.execute(SetSurveyProviderFleetQuantity(
-        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
-        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
+        str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 1
     )).created_id
     assert survey_assignment_id is not None
     survey_assignment = survey_sim.survey.provider_assignments[survey_assignment_id]
@@ -602,11 +602,11 @@ def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
     app = _make_nontrivial_state()
     sim = app._simulation
     sim.transport.add_fleet_units(
-        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
+        ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
     )
     app.execute(SetSurveyProviderFleetQuantity(
-        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
-        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
+        str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 1,
     ))
     baseline_path = tmp_path / "baseline.json"
     save_game(app, baseline_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))

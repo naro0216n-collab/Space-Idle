@@ -26,7 +26,7 @@ VACUUM_ENV = (
         AtmosphereField, "pressure_pa", "environment:low_pressure", "低圧環境が必要", maximum=1000.0
     ),
 )
-COLD_VOLATILE_ENV = VACUUM_ENV + (
+COLD_VOLATILE_ENV = (
     FacetValueRange(
         ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0
     ),
@@ -77,6 +77,16 @@ VACUUM_SURFACE_SITE = SiteRequirements(
 )
 COLD_VOLATILE_SURFACE_SITE = SiteRequirements(
     environment=COLD_VOLATILE_ENV,
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+# Deployed off-the-shelf robotic outpost hardware has a finite thermal envelope;
+# a solid surface is not sufficient to survive a hot planetary environment.
+# The envelope is an equipment property, never a planet-name allowlist.
+ROBOTIC_OUTPOST_SURFACE_SITE = SiteRequirements(
+    environment=(FacetValueRange(
+        ThermalField, "nominal_temperature_k", "environment:robotic_thermal_limit",
+        "初期ロボット拠点設備の熱環境上限を超過", maximum=400.0,
+    ),),
     spatial_classification_requirements=SURFACE_CLASSIFICATION,
 )
 

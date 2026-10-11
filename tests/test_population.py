@@ -61,7 +61,7 @@ def test_population_life_support_and_resource_allocation_share_the_normal_day():
 def test_housing_is_physical_and_facility_removal_cannot_evict_people():
     app = build_game_application()
     sim = app._simulation
-    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.EARTH_LIFE_SUPPORT)
+    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.BREATHABLE_SURFACE_LIFE_SUPPORT)
     blockers = sim.projects.facility_lifecycle_registry.decommission_blockers(housing.id)
     assert any(row.code == 'population_housing' for row in blockers)
     before = sim.population.count_at(ids.EARTH)
@@ -76,7 +76,7 @@ def test_housing_is_physical_and_facility_removal_cannot_evict_people():
 
     # An ambient oxygen provider is eligible by the physical atmosphere, not
     # by a planet ID; an artificial pressurized habitat supplies the alternative.
-    ambient = sim.facilities.definitions[ids.EARTH_LIFE_SUPPORT]
+    ambient = sim.facilities.definitions[ids.BREATHABLE_SURFACE_LIFE_SUPPORT]
     assert not evaluate_physical_site_requirements(
         ambient.operating_requirements, ids.EARTH, sim.day, sim.environment,
     )
@@ -127,7 +127,7 @@ def test_population_targets_sources_and_deprivation_are_single_save_state(tmp_pa
     app.execute(ClearPopulationTarget(node))
     assert app.query(GetOperationalNode(node)).population.desired_count is None
     app.execute(SetPopulationTarget(node, original + quota + 6))
-    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.EARTH_LIFE_SUPPORT)
+    housing = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.BREATHABLE_SURFACE_LIFE_SUPPORT)
     app.execute(PauseFacility(str(housing.id)))
     prior_count = sim.population.count_at(ids.EARTH)
     sim.advance_days(1)

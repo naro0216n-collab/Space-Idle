@@ -142,7 +142,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
     # Research generation and storage are first-class idle scale: the
     # prospective Facility uses the same provider as the installed asset.
-    for facility_id in (ids.EARTH_RESEARCH_LAB, ids.VACUUM_REGOLITH_PROCESS_LABORATORY):
+    for facility_id in (ids.GENERAL_RESEARCH_LAB, ids.VACUUM_REGOLITH_PROCESS_LABORATORY):
         assert facility_id in rows_by_id
         provider = sim.research.facility_provider_for_definition(facility_id)
         assert provider is not None
@@ -441,7 +441,7 @@ def test_scenario_facilities_have_the_same_normal_construction_contract_as_later
             assert str(asset.definition_id) in cell_options
 
     # A new instance follows the same public Project command/persistence path.
-    project_id = app.execute(PlanBuild(str(ids.EARTH), str(ids.EARTH_RESEARCH_LAB))).created_id
+    project_id = app.execute(PlanBuild(str(ids.EARTH), str(ids.GENERAL_RESEARCH_LAB))).created_id
     assert project_id is not None
     assert any(row.id == project_id for row in app.query(GetProjects(str(ids.EARTH))).items)
     path = tmp_path / 'construction.json'

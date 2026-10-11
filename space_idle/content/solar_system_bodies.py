@@ -188,8 +188,13 @@ def register_solar_system_environment(graph: SpatialGraph, facets: StaticFacetSt
 # are met. Sparse topology can be extended without changing Core.
 # body, region key, label, latitude, longitude, illumination availability,
 # mineral potential, metal potential, volatile-bearing potential
+_SURFACE_THERMAL_OVERLAYS = {
+    # Regional cold traps depart from the body-wide nominal thermal field.
+    ("mercury", "polar"): 110.0,
+}
+
 _SURFACE_REGIONS = (
-    ("mercury", "polar", "北極陰影縁", 86.0, 20.0, 0.12, 26.0, 9.0, 0.6),
+    ("mercury", "polar", "極域永久影クレーター", 86.0, 20.0, 0.02, 26.0, 9.0, 0.6),
     ("mercury", "equator", "赤道高地", 2.0, 145.0, 0.68, 42.0, 14.0, 0.0),
     ("venus", "highland", "高地岩盤域", 20.0, 95.0, 0.24, 30.0, 13.0, 0.0),
     ("venus", "lowland", "低地平原", -12.0, -95.0, 0.12, 38.0, 11.0, 0.0),
@@ -244,3 +249,5 @@ def register_solar_system_regions(graph: SpatialGraph, facets: StaticFacetStore)
         flux = graph.representative_solar_flux_w_m2(body_id)
         if flux is not None:
             facets.set(cell_id, IlluminationField(flux, availability))
+        if (slug, region) in _SURFACE_THERMAL_OVERLAYS:
+            facets.set(cell_id, ThermalField(_SURFACE_THERMAL_OVERLAYS[(slug, region)]))

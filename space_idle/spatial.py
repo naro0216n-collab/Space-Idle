@@ -815,8 +815,8 @@ class SpatialGraph:
                 if body_id == root_id:
                     continue
                 root = self.bodies[root_id]
-                moon = self.bodies[body_id]
-                radius = moon.parent_orbit_semimajor_axis_km
+                satellite = self.bodies[body_id]
+                radius = satellite.parent_orbit_semimajor_axis_km
                 gravity = root.representative_gravity_m_s2
                 if radius is None or gravity is None:
                     raise ValueError("satellite departure/arrival baseline is incomplete")

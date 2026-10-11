@@ -292,7 +292,7 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
     graph.found_location(venus_node, "Venus base", graph.surface_cells[venus_cell].body_id, venus_cell)
     sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, venus_node, site_cell_id=venus_cell)
     assert not sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
-    sim.facilities.install(ids.EARTH_LAUNCH_SUPPORT, venus_node, site_cell_id=venus_cell)
+    sim.facilities.install(ids.SURFACE_LAUNCH_SUPPORT, venus_node, site_cell_id=venus_cell)
     assert sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
     assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
                 if rule.body_id == CelestialBodyId("base.body.venus")) == "launch_operations"
@@ -328,7 +328,7 @@ def test_martian_surface_founding_creates_operational_site_only_after_long_trans
 
     app = build_game_application()
     sim = app._simulation
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     origin = ids.LUNAR_ORBIT  # An existing operational staging node with Cargo Transfer.
     initial_nodes = frozenset(sim.graph.operational_node_ids())
     for resource in recipe.payload_resources:

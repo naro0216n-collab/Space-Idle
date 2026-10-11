@@ -71,7 +71,7 @@ def build_process_specs() -> dict:
             {ids.CERAMICS_GLASS: 0.60, ids.METAL_FEEDSTOCK: 0.25, ids.WATER: 0.15},
             {ids.PRECISION_ELECTRONICS: 0.20},
         ),
-        # Molten-oxide electrolysis is a distinct vacuum/high-power route to
+        # Molten-oxide electrolysis is a distinct high-power enclosed process for
         # oxygen and metallurgical feedstock from common mineral feedstock.
         # Neither Water nor a planet-specific Resource identity is invented.
         ids.PROCESS_MOLTEN_OXIDE_ELECTROLYSIS: ProcessSpec(

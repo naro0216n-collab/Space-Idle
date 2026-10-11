@@ -233,7 +233,7 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
                         "body_id": str(ids.MOON),
                         "core_cell_id": str(ids.MOON_CELL_FARSIDE_HIGHLANDS),
                     },
-                    "deployment_recipe_id": str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE),
+                    "deployment_recipe_id": str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE),
                     "vehicle_definition_id": str(ids.REUSABLE_SURFACE_CARGO_LANDER),
                 },
             },
@@ -264,7 +264,7 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
                     "resource_ids": [str(ids.VOLATILE_BEARING_MATERIAL)],
                     "goal_knowledge_level": 1,
                     "provider_constraint": {
-                        "provider_definition_id": str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
+                        "provider_definition_id": str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER),
                         "operational_node_id": str(ids.LUNAR_ORBIT),
                     },
                     "observation_mode_constraint": "remote_orbital_spectrometry",
@@ -285,7 +285,7 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
         assert campaign["resource_ids"] == [str(ids.VOLATILE_BEARING_MATERIAL)]
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
-        assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_FLEET_SURVEY_PROVIDER)
+        assert campaign["projected_provider_definition_id"] == str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)
         assert campaign["projected_provider_display_name"]
         assert "base." not in campaign["projected_provider_display_name"]
 

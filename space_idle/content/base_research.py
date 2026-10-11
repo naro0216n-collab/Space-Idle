@@ -139,8 +139,8 @@ def build_research_providers() -> dict:
             frozenset({"deep_space_tracking_equipment"}), tier=2,
             levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 0.8),),
         ),
-        ids.EARTH_RESEARCH_LAB: ResearchProviderSpec(
-            ids.EARTH_RESEARCH_LAB,
+        ids.GENERAL_RESEARCH_LAB: ResearchProviderSpec(
+            ids.GENERAL_RESEARCH_LAB,
             ResearchProviderSourceKind.FACILITY,
             frozenset({"general_research_equipment"}),
             tier=1,

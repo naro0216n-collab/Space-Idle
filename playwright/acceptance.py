@@ -214,7 +214,7 @@ def run(browser) -> dict[str, object]:
     founding_fixture_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     founding_comparison_cell = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
     founding_recipe = fixture_sim.founding.deployment_recipes[
-        ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE
+        ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE
     ]
     for target_cell_id in (founding_fixture_cell, founding_comparison_cell):
         for requirement in founding_recipe.knowledge_requirements:

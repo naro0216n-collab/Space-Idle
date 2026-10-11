@@ -209,6 +209,7 @@ RESEARCH_DAG_ROWS = (
     ('LM-LOGISTICS-MAINTENANCE-10', 4, 'logistics_maintenance', 'logistics_maintenance', '無人貨物移載時荷重・位置閉ループ制御', ('LM-LOGISTICS-MAINTENANCE-03', 'AR-AUTONOMY-ROBOTICS-09', 'GN-NAVIGATION-10'), 3000.0),
     ('LM-LOGISTICS-MAINTENANCE-11', 4, 'logistics_maintenance', 'logistics_maintenance', '故障設備切離し・交換後機能検証', ('LM-LOGISTICS-MAINTENANCE-09', 'CP-COMPUTING-RELIABILITY-09'), 3000.0),
     ('LM-LOGISTICS-MAINTENANCE-12', 4, 'logistics_maintenance', 'logistics_maintenance', '保守履歴に基づく点検間隔適応', ('LM-LOGISTICS-MAINTENANCE-08', 'LM-LOGISTICS-MAINTENANCE-11'), 3000.0),
+    ('LM-LOGISTICS-MAINTENANCE-14', 4, 'logistics_maintenance', 'logistics_maintenance', '低圧地表貨物係留時の粉塵封止・反力制御', ('LM-LOGISTICS-MAINTENANCE-10', 'SM-SURFACE-MOBILITY-05'), 3000.0),
     ('LM-LOGISTICS-MAINTENANCE-13', 4, 'logistics_maintenance', 'logistics_maintenance', '大型軌道貨物係留・移載荷重管理', ('LM-LOGISTICS-MAINTENANCE-04', 'GN-NAVIGATION-07'), 3000.0),
     ('LS-ATMOSPHERE-WATER-WASTE-01', 1, 'life_support', 'atmosphere_water_waste', '船内圧力・酸素分圧制御', ('PD-STORAGE-DISTRIBUTION-02', 'SS-SENSING-03'), 180.0),
     ('LS-ATMOSPHERE-WATER-WASTE-02', 1, 'life_support', 'atmosphere_water_waste', '飲用水貯蔵・微生物汚染監視', (), 180.0),

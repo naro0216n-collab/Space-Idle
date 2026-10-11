@@ -14,6 +14,9 @@ def build_storage_provider_specs() -> dict:
         ),
         ids.ORBITAL_LOGISTICS_NODE: StorageProviderSpec(ids.ORBITAL_LOGISTICS_NODE, {"default": 16.0, "cryogenic": 4.0}),
         ids.ROBOTIC_SURVEY_PACKAGE: StorageProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, {"default": 5.0, "cryogenic": 2.0}),
+        ids.VACUUM_CARGO_HANDLING_TERMINAL: StorageProviderSpec(
+            ids.VACUUM_CARGO_HANDLING_TERMINAL, {"default": 120.0},
+        ),
         ids.WATER_STORAGE: StorageProviderSpec(ids.WATER_STORAGE, {"default": 40.0}),
         ids.CRYOGENIC_STORAGE: StorageProviderSpec(ids.CRYOGENIC_STORAGE, {"cryogenic": 30.0}, frozenset({"cryogenic"})),
         ids.CRYOGENIC_PROPELLANT_TERMINAL: StorageProviderSpec(

@@ -65,7 +65,7 @@ def build_facility_definitions() -> dict:
             req._capabilities("rover_maintenance"), surface, surface,
             service_capacity_supplies=req._services(surface_vehicle_servicing=1.2),
         ),
-        ids.EARTH_RESEARCH_LAB: FacilityDef(ids.EARTH_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab", "general_research_equipment"), surface, surface),
+        ids.GENERAL_RESEARCH_LAB: FacilityDef(ids.GENERAL_RESEARCH_LAB, "総合研究所", req._capabilities("research_lab", "general_research_equipment"), surface, surface),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: FacilityDef(ids.MICROGRAVITY_EXPERIMENT_PLATFORM, "微小重力実験プラットフォーム", req._capabilities("research_lab", "microgravity_experiment_equipment"), orbit, orbit),
         ids.CREWED_ORBITAL_LABORATORY: FacilityDef(ids.CREWED_ORBITAL_LABORATORY, "有人軌道研究所", req._capabilities("research_lab", "crewed_orbital_research_equipment"), orbit, req.SiteRequirements(environment=req.LOW_RADIATION_ENV, spatial_classification_requirements=req.ORBIT_CLASSIFICATION)),
         ids.ROBOTIC_GEOLOGY_STATION: FacilityDef(ids.ROBOTIC_GEOLOGY_STATION, "ロボット地質調査ステーション", req._capabilities("research_lab", "robotic_geology_equipment", "surface_survey", "robotic_operations"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL),
@@ -78,7 +78,7 @@ def build_facility_definitions() -> dict:
         ),
         ids.ORBITAL_FISSION_POWER: FacilityDef(ids.ORBITAL_FISSION_POWER, "軌道核分裂電源", req._capabilities("orbital_power_supply", "fission_reactor_control_instrumentation"), orbit, orbit),
         ids.ORBITAL_LOGISTICS_NODE: FacilityDef(ids.ORBITAL_LOGISTICS_NODE, "軌道物流・整備ノード", req._capabilities("cargo_transfer", "vehicle_refueling", "spacecraft_servicing"), orbit, orbit, service_capacity_supplies=req._services(cargo_transfer=1.0, spacecraft_servicing=1.0)),
-        ids.EARTH_LAUNCH_SUPPORT: FacilityDef(ids.EARTH_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations", "surface_access_anchor"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
+        ids.SURFACE_LAUNCH_SUPPORT: FacilityDef(ids.SURFACE_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations", "surface_access_anchor"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
         ids.CARGO_LAUNCH_INTEGRATION_PAD: FacilityDef(
             ids.CARGO_LAUNCH_INTEGRATION_PAD, "貨物ロケット地上統合・再使用整備射場",
             req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing",
@@ -92,13 +92,30 @@ def build_facility_definitions() -> dict:
         ids.SURFACE_POWER_GRID: FacilityDef(ids.SURFACE_POWER_GRID, "地表太陽光発電・配電設備", req._capabilities("power_grid"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL),
         ids.INDUSTRIAL_POWER_BLOCK: FacilityDef(ids.INDUSTRIAL_POWER_BLOCK, "核分裂電源ユニット", req._capabilities("industrial_power", "fission_reactor_control_instrumentation"), surface, surface),
         ids.CONSTRUCTION_YARD: FacilityDef(ids.CONSTRUCTION_YARD, "建設ヤード", req._capabilities("construction_yard"), surface, surface),
-        ids.VOLATILE_EXTRACTOR: FacilityDef(ids.VOLATILE_EXTRACTOR, "揮発性原料採取設備", req._capabilities("volatile_extraction"), surface, req.COLD_VOLATILE_SURFACE_SITE, extraction_capacity_t_per_day=6.0),
+        ids.VOLATILE_EXTRACTOR: FacilityDef(
+            ids.VOLATILE_EXTRACTOR, "揮発性原料採取設備",
+            req._capabilities("volatile_extraction"),
+            req.COLD_VOLATILE_SURFACE_SITE, req.COLD_VOLATILE_SURFACE_SITE,
+            placement_scope=FacilityPlacementScope.SURFACE_CELL,
+            extraction_capacity_t_per_day=6.0,
+        ),
         ids.VOLATILE_PROCESSING: FacilityDef(ids.VOLATILE_PROCESSING, "揮発性成分回収設備", req._capabilities("volatile_processing"), surface, surface),
         ids.VACUUM_MINERAL_HARVESTER: FacilityDef(ids.VACUUM_MINERAL_HARVESTER, "真空粒状鉱物採掘設備", req._capabilities("granular_mineral_extraction"), surface, req.VACUUM_SURFACE_SITE, extraction_capacity_t_per_day=8.0),
         ids.WATER_STORAGE: FacilityDef(ids.WATER_STORAGE, "水貯蔵タンク", req._capabilities("water_storage"), surface, surface),
         ids.CRYOGENIC_STORAGE: FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備", req._capabilities("cryogenic_storage", "vehicle_refueling"), surface, surface),
         ids.BULK_STORAGE: FacilityDef(ids.BULK_STORAGE, "バルク原料置場", req._capabilities("bulk_storage"), surface, surface),
         ids.CARGO_WAREHOUSE: FacilityDef(ids.CARGO_WAREHOUSE, "一般貨物倉庫", req._capabilities("cargo_storage"), surface, surface),
+        ids.VACUUM_CARGO_HANDLING_TERMINAL: FacilityDef(
+            ids.VACUUM_CARGO_HANDLING_TERMINAL,
+            "低圧地表貨物係留・着陸船整備ターミナル",
+            req._capabilities("surface_distribution", "surface_access_anchor", "cargo_transfer",
+                              "spacecraft_servicing", "vehicle_refueling"),
+            req.VACUUM_SURFACE_SITE, req.VACUUM_SURFACE_SITE,
+            placement_scope=FacilityPlacementScope.SURFACE_CELL,
+            service_capacity_supplies=req._services(surface_distribution=3.5,
+                                                     cargo_transfer=3.0,
+                                                     spacecraft_servicing=2.4),
+        ),
         ids.SURFACE_DISTRIBUTION_HUB: FacilityDef(
             ids.SURFACE_DISTRIBUTION_HUB,
             "地表物流・配給ハブ",
@@ -159,7 +176,7 @@ def build_facility_definitions() -> dict:
         ids.MOLTEN_OXIDE_ELECTROLYZER: FacilityDef(
             ids.MOLTEN_OXIDE_ELECTROLYZER, "溶融酸化物電解製錬設備",
             req._capabilities("molten_oxide_electrolysis"),
-            req.VACUUM_SURFACE_SITE, req.VACUUM_SURFACE_SITE,
+            surface, surface,
             process_throughput_per_day=2.0,
         ),
         ids.INDUSTRIAL_WATER_INTAKE: FacilityDef(ids.INDUSTRIAL_WATER_INTAKE, "工業用水取水・処理設備", req._capabilities("industrial_water_supply"), surface, surface, 0.08, extraction_capacity_t_per_day=1.0),
@@ -183,8 +200,8 @@ def build_facility_definitions() -> dict:
     )
     # Environmental eligibility and net replenishment are Content, not Core
     # exceptions keyed to the planet name.
-    definitions[ids.EARTH_LIFE_SUPPORT] = FacilityDef(
-        ids.EARTH_LIFE_SUPPORT, '地上居住・生活供給設備', housing_capacity=160,
+    definitions[ids.BREATHABLE_SURFACE_LIFE_SUPPORT] = FacilityDef(
+        ids.BREATHABLE_SURFACE_LIFE_SUPPORT, '地上居住・生活供給設備', housing_capacity=160,
         installation_requirements=req.BREATHABLE_SURFACE_SITE,
         operating_requirements=req.BREATHABLE_SURFACE_SITE,
         life_support=LifeSupportSpec(160, ((ids.FOOD, 0.001), (ids.WATER, 0.002))),

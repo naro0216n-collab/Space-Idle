@@ -1308,7 +1308,7 @@ def test_independent_exploration_founding_and_market_variants_use_existing_domai
                      "source_id": str(source), "id": target}
                     for kind, source, target in (
                         ('scientific_exploration', ids.CISLUNAR_SCIENCE_EXPLORATION, new_science),
-                        ('founding', ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE, new_founding),
+                        ('founding', ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, new_founding),
                         ('market_provider', EARTH_MARKET_PROVIDER, new_provider),
                     )) + (
                         {"kind": "scientific_exploration", "id": new_science,
@@ -1478,14 +1478,14 @@ def test_independent_exploration_founding_and_market_variants_use_existing_domai
     new_survey = 'experiment.provider.survey'
     survey_changes = changes + ({'operation': 'add', 'kind': 'survey_provider',
                                  'id': new_survey,
-                                 'source_id': str(ids.LUNAR_FLEET_SURVEY_PROVIDER)},)
+                                 'source_id': str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)},)
     multi_owner_scenario = scenario_variant(scenario, {
         'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
-                   'vehicle_definition_id': str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 'units': 2}],
+                   'vehicle_definition_id': str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 'units': 2}],
         'survey_fleet_assignments': [{
             'provider_definition_id': new_survey,
             'operational_node_id': str(ids.LUNAR_ORBIT),
-            'vehicle_definition_id': str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 'units': 1,
+            'vehicle_definition_id': str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 'units': 1,
         }],
         'external_population_sources': [{
             'id': 'experiment.population.earth',

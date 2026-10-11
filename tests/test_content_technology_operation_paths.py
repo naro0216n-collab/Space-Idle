@@ -618,7 +618,7 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
     assert capture_state(loaded._simulation) == capture_state(extended._simulation)
 
 
-def test_vacuum_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisition_contracts(tmp_path):
+def test_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisition_contracts(tmp_path):
     """Industrial expansion must change regional oxygen and transport inputs,
     not synthesize fuel or Fleet through a new Core operation or Research buff.
     """
@@ -666,16 +666,17 @@ def test_vacuum_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisit
     sim = app._simulation
     process = sim.industry.processes[ids.PROCESS_MOLTEN_OXIDE_ELECTROLYSIS]
     research = build_research_definitions()[ids.RP_RESOURCE_CHAIN_16]
-    assert len(research.stage_specs) > 1  # vacuum prototype actually consumes material and work
+    assert len(research.stage_specs) > 1  # physical prototype consumes material and work
     assert process.prerequisite_technologies == {ids.RP_RESOURCE_CHAIN_16}
 
-    # The same Definition is a physical option across all surface sites, but
-    # a breathable Earth surface is not suitable for vacuum molten processing.
+    # High-temperature oxide electrolysis is an enclosed industrial process;
+    # local power and prerequisites, not outside atmospheric vacuum, govern it.
     def build_option(node):
         return next(row for row in app.query(GetBuildOptions(str(node))).items
                     if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER))
 
-    assert {b.kind for b in build_option(ids.EARTH).blockers} >= {"environment", "technology"}
+    assert {b.kind for b in build_option(ids.EARTH).blockers} >= {"technology"}
+    assert not any(b.kind == "environment" for b in build_option(ids.EARTH).blockers)
     assert {b.kind for b in build_option(moon_node).blockers} >= {"technology"}
     facility = next(row for row in app.query(GetOperationalNode(str(moon_node))).industry
                     if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER))
@@ -727,7 +728,7 @@ def test_vacuum_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisit
     sim.technology.completed.update({ids.RP_RESOURCE_CHAIN_16}
                                     | craft.production.prerequisite_technologies)
     assert not any(b.kind == "technology" for b in build_option(moon_node).blockers)
-    assert any(b.kind == "environment" for b in build_option(ids.EARTH).blockers)
+    assert not any(b.kind in {"technology", "environment"} for b in build_option(ids.EARTH).blockers)
     app.execute(SetFacilityProcess(facility.facility_id, str(process.id)))
     assert sim.inventory.amount(moon_node, ids.OXYGEN) == before[ids.OXYGEN]
     assert app.execute(ProduceVehicle(str(craft.id), str(ids.EARTH))).created_id

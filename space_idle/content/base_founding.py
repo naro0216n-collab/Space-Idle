@@ -11,8 +11,8 @@ def _r(resource_id, amount):
 
 def build_deployment_recipes() -> dict:
     recipe = DeploymentRecipe(
-        id=ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
-        display_name="Robotic Lunar Outpost Founding Package",
+        id=ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE,
+        display_name="Robotic Surface Outpost Founding Package",
         deployed_facilities=(
             FoundingFacilityDeployment(
                 ids.ROBOTIC_SURVEY_PACKAGE,
@@ -34,7 +34,7 @@ def build_deployment_recipes() -> dict:
         preparation_work=3.0,
         preparation_service_type="cargo_transfer",
         staging_requirements=req.ORBIT_SITE,
-        target_requirements=req.VACUUM_SURFACE_SITE,
+        target_requirements=req.ROBOTIC_OUTPOST_SURFACE_SITE,
         knowledge_requirements=(),
         required_units=1,
     )

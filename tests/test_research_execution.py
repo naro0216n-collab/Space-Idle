@@ -449,9 +449,9 @@ def test_research_source_capabilities_enable_alternative_vehicle_without_duplica
 def test_research_source_capabilities_enable_alternative_facility_definition():
     app = build_game_application()
     sim = app._simulation
-    provider_id = ids.EARTH_RESEARCH_LAB
+    provider_id = ids.GENERAL_RESEARCH_LAB
     alternative_id = DefinitionId("test.facility.alternative_research_laboratory")
-    original = sim.facilities.definitions[ids.EARTH_RESEARCH_LAB]
+    original = sim.facilities.definitions[ids.GENERAL_RESEARCH_LAB]
     sim.facilities.definitions[alternative_id] = replace(
         original, id=alternative_id, display_name="Alternative research laboratory"
     )

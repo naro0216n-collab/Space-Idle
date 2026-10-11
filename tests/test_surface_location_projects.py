@@ -77,7 +77,7 @@ def _advance_founding_to_completion(app, project):
 
 
 def _stage_founding_resources(sim):
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     for req in recipe.payload_resources:
         sim.inventory.add(ids.LUNAR_ORBIT, req.resource_id, req.amount_t + 1.0)
     sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
@@ -91,7 +91,7 @@ def _found_command(name: str, cell_id):
         target_spec=SurfaceLocationFoundingTarget(
             "surface_location", str(ids.MOON), str(cell_id)
         ),
-        deployment_recipe_id=str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE),
+        deployment_recipe_id=str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE),
         vehicle_definition_id=str(ids.REUSABLE_SURFACE_CARGO_LANDER),
     )
 
@@ -109,7 +109,7 @@ def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowl
     assert not any(failure.code == "knowledge" for failure in development_failures)
 
     lunar_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     for resource_id in (
         ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.VOLATILE_BEARING_MATERIAL
     ):
@@ -204,7 +204,7 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
 def test_founding_transport_path_and_site_requirements_follow_staging_and_target_contexts():
     app = build_game_application()
     sim = app._simulation
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     _survey_cell_to_l2(sim, cell)
 
@@ -230,7 +230,8 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, ids.EARTH_CELL_COASTAL), recipe.id,
         ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
-    assert any(row.code == "target:environment:low_pressure" for row in earth_target)
+    assert not any(row.code.startswith("target:") for row in earth_target)
+    assert any(row.code.startswith("deployment_vehicle") for row in earth_target)
 
 
 
@@ -263,7 +264,7 @@ def test_surface_cell_claim_registry_enforces_exclusivity_across_builtin_and_ext
         str(ids.EARTH), str(cell), procurement_policy="immediate"
     )).created_id
     assert development_id is not None
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     builtin_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, cell),
         recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
@@ -283,7 +284,7 @@ def test_surface_cell_claim_registry_enforces_exclusivity_across_builtin_and_ext
         for row in development_failures
     )
 
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, cell),
         recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
@@ -435,7 +436,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     option = next(
         row for row in cell.foundation_options
         if row.staging_node_id == str(ids.LUNAR_ORBIT)
-        and row.deployment_recipe_id == str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE)
+        and row.deployment_recipe_id == str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE)
         and row.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
     )
     assert option.payload_t > 0
@@ -448,7 +449,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     expected_resources = {
         str(row.resource_id): row.amount_t
         for row in app._simulation.founding.resource_requirements_for(
-            ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
+            ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE,
             ids.REUSABLE_SURFACE_CARGO_LANDER,
                 ids.LUNAR_ORBIT,
                 _surface_target(app._simulation, ids.MOON, cell_id),
@@ -482,7 +483,7 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
     def factory(*, for_load: bool = False):
         current = build_game_application_for_load() if for_load else build_game_application()
         current_sim = current._simulation
-        base = current_sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+        base = current_sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
         first_deployment = base.deployed_facilities[0]
         duplicated_investment = replace(
             first_deployment,
