@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, GetOperationalNode, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -131,7 +131,11 @@ def run(browser) -> None:
             assert '補給と輸送中貨物' in scoped_inspector.inner_text()
             scoped_inspector.locator(f'[data-open-location="{LEO}"]').click()
             assert page.locator('#operationsView').is_visible()
-            assert page.locator('#inspectorTitle').inner_text() == page.evaluate('id => window.SpaceIdleApp.resourceName(id)', requirement_resource)
+            expected_resource_name = next(
+                row.display_name for row in runtime.query(GetOperationalNode(LEO)).data.inventory
+                if row.resource_id == requirement_resource
+            )
+            assert page.locator('#inspectorTitle').inner_text() == expected_resource_name
             # Project-owned supply uses the same decision identity even when
             # reached from the construction Inspector rather than Transport.
             page.locator('[data-section-tab="location"][data-tab="construction"]').click()
@@ -149,8 +153,8 @@ def run(browser) -> None:
             # connection. The spatial canvas must remain available even when
             # there is no allocated service for this requirement.
             assert page.locator("#systemMapStage [data-system-node-id]").count() > 0
-            assert page.locator("#systemMapRelations [data-system-allocation-id]").count() == page.evaluate(
-                "() => window.SpaceIdleApp.state.transportAllocations?.items?.length || 0"
+            assert page.locator("#systemMapRelations [data-system-allocation-id]").count() == len(
+                runtime.query(GetLogistics()).data.allocations
             )
             # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
@@ -230,9 +234,10 @@ def run(browser) -> None:
             fleet_pool.locator('[data-fleet-map-node]').click()
             assert page.locator('#systemMapResourceFilter').input_value() == ''
             assert page.locator(f'#systemMapStage [data-system-node-id="{pool.operational_node_id}"]').get_attribute('aria-pressed') == 'true'
-            assert page.locator('#movementPlanInspectorTitle').inner_text() == page.evaluate(
-                'id => window.SpaceIdleApp.locationName(id)', pool.operational_node_id
-            )
+            expected_node_name = runtime.query(
+                GetOperationalNode(pool.operational_node_id)
+            ).data.display_name
+            assert page.locator('#movementPlanInspectorTitle').inner_text() == expected_node_name
             # An explicit Resource choice is carried between entrances; the
             # earlier Fleet decision intentionally cleared the stale filter.
             page.locator('#systemMapResourceFilter').select_option(requirement_resource)
