@@ -685,7 +685,8 @@ def run(browser) -> dict[str, object]:
             _assert("利用可能になる機能" in build_option.inner_text(), "construction candidate card must summarize what it enables")
             build_option.click()
             build_option_inspector_text = page.locator('#inspectorContent').inner_text()
-            _assert("建設後に利用可能" in build_option_inspector_text, "construction candidate inspector must expose Application-projected capabilities and services")
+            _assert("設備の機能・工程候補" in build_option_inspector_text, "construction candidate inspector must expose Application-projected physical effects")
+            _assert("建設後の維持Resource需要" in build_option_inspector_text, "construction candidate inspector must expose recurring material demand")
             _assert("資材準備見込み" in build_option_inspector_text, "construction candidate inspector must expose projected material readiness at the decision point")
             _assert("現地利用可能" in build_option_inspector_text, "construction candidate inspector must expose current local material availability")
             # Build options have unrelated engineering purposes. Their individual

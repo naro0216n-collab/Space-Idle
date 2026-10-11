@@ -910,11 +910,7 @@
     setInspector(p.display_name||p.facility_display_name||(foundingProject?'拠点設立案件':'建設案件'),section('案件',kv(targetRows))+section('主な制約',limitingHtml(p.limiting_factors||[]))+section('実行条件',(p.blockers||[]).length?`<div class="issue-stack">${p.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">なし</span>')+section('操作',projectControls)+foundingDecision+disposalDecision+section('必要資源 / 調達',resourceRows||'<div class="empty-state">追加資源なし</div>')+section('補給需要',requirementHtml));
     return true;
   }
-  function renderBuildOptionInspector(id){
-    const o=state.buildOptions?.items?.find((x)=>x.facility_definition_id===id);if(!o)return false;
-    const plan=planningOptionState(o,'建設計画可');
-    const planOptions=state.buildOptions||{};
-    const planControls=constructionPlanControls('buildPlan',{draftScope:`facility-build:${o.facility_definition_id}`,policyOptions:planOptions.procurement_policy_options||[],disabled:plan.disabled});
+  function prospectiveFacilityEffectsHtml(o){
     const capabilityCards=(o.capabilities||[]).map((id)=>`<div class="detail-card"><div class="mode-title"><span>能力</span><strong>${esc(capabilityName(id))}</strong></div></div>`).join('');
     const serviceCards=(o.service_capacity_supplies||[]).map(([service,rate])=>`<div class="detail-card"><div class="mode-title"><span>サービス</span><strong>${esc(serviceName(service))}</strong></div><div class="cell-sub">基準供給 ${fmt(rate,2)}</div></div>`).join('');
     const processCards=(o.process_options||[]).map((option)=>{
@@ -926,16 +922,25 @@
     const research=o.research_capacity;
     const researchCapacity=research?`<div class="detail-card"><div class="mode-title"><span>研究能力</span><strong>Tier ${fmt(research.provider_tier,0)}</strong></div><div class="cell-sub">公称RP生成 ${fmt(research.generation_points_per_day,2)} RP/日 · 貯蔵 ${fmt(research.storage_capacity_points,1)} RP</div><div class="cell-sub">研究実行 ${fmt(research.execution_work_per_day,2)} work/日${research.crew_person_days_per_research_point>0?` · Crew ${fmt(research.crew_person_days_per_research_point,3)} 人日/RP`:''}</div></div>`:'';
     const enables=capabilityCards+serviceCards+processCards+researchCapacity||'<div class="empty-state">追加される能力情報なし</div>';
+    return section('設備の機能・工程候補',enables+
+      (o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+
+      (o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
+      section('建設後の維持Resource需要（Level 1公称）',
+        (o.maintenance_rates_per_day||[]).map(([resource,rate])=>`<div class="cell-sub">${esc(resourceName(resource))}: ${fmt(rate,4)} t/日</div>`).join('')||'<div class="empty-state">追加の維持Resource需要なし</div>');
+  }
+  function renderBuildOptionInspector(id){
+    const o=state.buildOptions?.items?.find((x)=>x.facility_definition_id===id);if(!o)return false;
+    const plan=planningOptionState(o,'建設計画可');
+    const planOptions=state.buildOptions||{};
+    const planControls=constructionPlanControls('buildPlan',{draftScope:`facility-build:${o.facility_definition_id}`,policyOptions:planOptions.procurement_policy_options||[],disabled:plan.disabled});
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
       section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),...(o.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(o.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(o.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(o.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
-      section('設備の機能・工程候補',enables+(o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+(o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
       section('必要資源',resourceCards(o.resources))+
-      section('建設後の維持Resource需要（Level 1公称）',
-        (o.maintenance_rates_per_day||[]).map(([resource,rate])=>`<div class="cell-sub">${esc(resourceName(resource))}: ${fmt(rate,4)} t/日</div>`).join('')||'<div class="empty-state">追加の維持Resource需要なし</div>')
+      prospectiveFacilityEffectsHtml(o)
     );
     return true;
   }
@@ -1217,7 +1222,7 @@
 
     const facilities=(cell.facility_placement_options||[]).map((option)=>{
       const plan=planningOptionState(option,'建設可'),blockers=plan.blockers,disabled=plan.disabled;
-      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'}</div><div class="cell-sub">出発拠点で必要な資源</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域へ建設案件を作成</button></div>`;
+      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'}</div><div class="cell-sub">所属拠点で必要な建設資材</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${section('建設後の公称能力（この地域の環境）',kv([...(Number(option.power_nominal_generation_mw)>0?[['発電公称値',`${fmt(option.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(option.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(option.power_nominal_load_mw,2)} MW`]]:[]),...(option.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(option.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(option.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(option.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[])]))}${prospectiveFacilityEffectsHtml(option)}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域へ建設案件を作成</button></div>`;
     }).join('')||'<div class="empty-state">この地域へ配置可能な位置依存設備はありません。</div>';
 
     const foundationSection=cell.developed?'':section('新拠点設立',foundation);

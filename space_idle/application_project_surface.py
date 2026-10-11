@@ -230,6 +230,7 @@ class SurfaceProjectorMixin:
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
+                        **self._prospective_facility_effects(recipe, cell.id),
                     )
                     for recipe in sorted(sim.projects.recipes.values(), key=lambda row: str(row.facility_def_id))
                     if sim.facilities.definitions[recipe.facility_def_id].placement_scope is FacilityPlacementScope.SURFACE_CELL

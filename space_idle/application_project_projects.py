@@ -590,6 +590,84 @@ class ProjectProjectorMixin:
                 ))
         return tuple(rows)
 
+    def _prospective_facility_effects(self, recipe, context_id) -> dict[str, object]:
+        """Nominal Level 1 effects of a new Facility at its actual physical site.
+
+        Construction and Surface Cell placement share the same Domain sources.
+        These are *not* executable flow forecasts; resource/service allocation
+        still determines actual production and upkeep after construction.
+        """
+        sim = self._simulation
+        definition = sim.facilities.definitions[recipe.facility_def_id]
+        compatible = sim.industry.compatible_processes(recipe.facility_def_id)
+        process_options = tuple(
+            BuildProcessOptionRow(
+                process_id=str(process.id),
+                display_name=process.display_name,
+                input_rates_per_day=tuple(
+                    (str(resource), rate * definition.process_throughput_per_day)
+                    for resource, rate in sorted(process.inputs_per_day.items(), key=lambda pair: str(pair[0]))
+                ),
+                output_rates_per_day=tuple(
+                    (str(resource), rate * definition.process_throughput_per_day)
+                    for resource, rate in sorted(process.outputs_per_day.items(), key=lambda pair: str(pair[0]))
+                ),
+                missing_technology_ids=tuple(
+                    str(technology) for technology in sim.industry.missing_process_technologies(process)
+                ),
+            )
+            for process in compatible
+        )
+        invested = {}
+        for resource in recipe.resources:
+            invested[resource.resource_id] = invested.get(resource.resource_id, 0.0) + resource.amount_t
+        upkeep = sim.facilities.maintenance_requirements_for_investment(
+            recipe.facility_def_id, invested
+        )
+        provider = (
+            None if sim.research is None else
+            sim.research.facility_provider_for_definition(recipe.facility_def_id)
+        )
+        research_capacity = None
+        if provider is not None:
+            level = provider.level_spec(1)
+            research_capacity = BuildResearchCapacityRow(
+                provider_tier=provider.tier,
+                generation_points_per_day=level.generation_points_per_day,
+                storage_capacity_points=level.storage_capacity_points,
+                execution_work_per_day=level.research_execution_per_day,
+                crew_person_days_per_research_point=provider.crew_person_days_per_research_point,
+            )
+        nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
+            recipe.facility_def_id, context_id, sim.day,
+        )
+        services = [
+            (supply.service_type, supply.nominal_rate)
+            for supply in definition.service_capacity_supplies
+        ]
+        construction_provider = sim.projects.construction_providers.get(recipe.facility_def_id)
+        if construction_provider is not None:
+            services.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
+        return dict(
+            capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
+            service_capacity_supplies=tuple(sorted(services)),
+            process_options=process_options,
+            power_nominal_generation_mw=nominal_generation,
+            power_nominal_load_mw=nominal_load,
+            process_nominal_throughput_per_day=(
+                definition.process_throughput_per_day if compatible else None
+            ),
+            extraction_nominal_capacity_t_per_day=(
+                definition.extraction_capacity_t_per_day
+                if definition.extraction_capacity_t_per_day > 0 else None
+            ),
+            maintenance_rates_per_day=tuple(
+                (str(resource_id), rate)
+                for resource_id, rate in sorted(upkeep.items(), key=lambda item: str(item[0]))
+            ),
+            research_capacity=research_capacity,
+        )
+
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
         decision = self._tick_decision_projection()
@@ -612,76 +690,9 @@ class ProjectProjectorMixin:
                     key=str,
                 )
             ) + tuple((failure.code, failure.detail) for failure in site_failures)
-            # Use the same ProcessSpec and installed throughput as live Industry.
-            # A build candidate shows physical nominal rates, not an eligibility
-            # or execution forecast that would duplicate Domain allocations.
-            compatible = sim.industry.compatible_processes(recipe.facility_def_id)
-            process_throughput = (
-                definition.process_throughput_per_day if compatible else None
-            )
-            extraction_capacity = (
-                definition.extraction_capacity_t_per_day
-                if definition.extraction_capacity_t_per_day > 0 else None
-            )
-            process_options = tuple(
-                BuildProcessOptionRow(
-                    process_id=str(process.id),
-                    display_name=process.display_name,
-                    input_rates_per_day=tuple(
-                        (str(resource), rate * definition.process_throughput_per_day)
-                        for resource, rate in sorted(process.inputs_per_day.items(), key=lambda pair: str(pair[0]))
-                    ),
-                    output_rates_per_day=tuple(
-                        (str(resource), rate * definition.process_throughput_per_day)
-                        for resource, rate in sorted(process.outputs_per_day.items(), key=lambda pair: str(pair[0]))
-                    ),
-                    missing_technology_ids=tuple(
-                        str(technology) for technology in sim.industry.missing_process_technologies(process)
-                    ),
-                )
-                for process in compatible
-            )
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
             )
-            invested = {}
-            for resource in recipe.resources:
-                invested[resource.resource_id] = invested.get(resource.resource_id, 0.0) + resource.amount_t
-            maintenance_rates = sim.facilities.maintenance_requirements_for_investment(
-                recipe.facility_def_id, invested
-            )
-            provider = (
-                None if sim.research is None else
-                sim.research.facility_provider_for_definition(recipe.facility_def_id)
-            )
-            research_capacity = None
-            if provider is not None:
-                level = provider.level_spec(1)
-                research_capacity = BuildResearchCapacityRow(
-                    provider_tier=provider.tier,
-                    generation_points_per_day=level.generation_points_per_day,
-                    storage_capacity_points=level.storage_capacity_points,
-                    execution_work_per_day=level.research_execution_per_day,
-                    crew_person_days_per_research_point=provider.crew_person_days_per_research_point,
-                )
-            # Build options include blocked sites; querying a prospective
-            # generator must not require that placement already be eligible.
-            nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
-                recipe.facility_def_id, location_id, sim.day,
-            )
-            capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
-            # Construction Work is supplied by the Construction Domain, not
-            # FacilityDef.service_capacity_supplies. Include its owned nominal
-            # service in the same candidate effect display; a factory producing
-            # Equipment stock must not claim this direct service as well.
-            service_supplies = [
-                (supply.service_type, supply.nominal_rate)
-                for supply in definition.service_capacity_supplies
-            ]
-            construction_provider = sim.projects.construction_providers.get(recipe.facility_def_id)
-            if construction_provider is not None:
-                service_supplies.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
-            service_capacity_supplies = tuple(sorted(service_supplies))
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
                 display_name=definition.display_name,
@@ -695,20 +706,9 @@ class ProjectProjectorMixin:
                     related_entity_id=str(recipe.facility_def_id),
                 ),
                 can_plan=not plan_failures,
-                capabilities=capabilities,
-                service_capacity_supplies=service_capacity_supplies,
-                process_options=process_options,
                 placement_scope=definition.placement_scope.value,
                 projected_material_readiness_day=material_readiness_day,
-                power_nominal_generation_mw=nominal_generation,
-                power_nominal_load_mw=nominal_load,
-                process_nominal_throughput_per_day=process_throughput,
-                extraction_nominal_capacity_t_per_day=extraction_capacity,
-                maintenance_rates_per_day=tuple(
-                    (str(resource_id), rate)
-                    for resource_id, rate in sorted(maintenance_rates.items(), key=lambda item: str(item[0]))
-                ),
-                research_capacity=research_capacity,
+                **self._prospective_facility_effects(recipe, location_id),
             ))
         return BuildOptionsView(
             str(location_id),

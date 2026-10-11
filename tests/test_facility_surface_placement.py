@@ -274,6 +274,31 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
     assert option.procurement_policy_options == build_options.procurement_policy_options
+    # Surface placement is a physical Facility investment like node construction:
+    # project the same actual upkeep, research and power contracts at the Cell.
+    invested = {req.resource_id: req.amount_t for req in recipe.resources}
+    expected_upkeep = sim.facilities.maintenance_requirements_for_investment(
+        recipe.facility_def_id, invested
+    )
+    assert dict(option.maintenance_rates_per_day) == {
+        str(resource): rate for resource, rate in expected_upkeep.items()
+    }
+    provider = sim.research.facility_provider_for_definition(recipe.facility_def_id)
+    assert provider is not None
+    assert option.research_capacity.provider_tier == provider.tier
+    assert option.research_capacity.generation_points_per_day == provider.level_spec(1).generation_points_per_day
+    assert option.research_capacity.storage_capacity_points == provider.level_spec(1).storage_capacity_points
+    assert (option.power_nominal_generation_mw, option.power_nominal_load_mw) == pytest.approx(
+        sim.power.nominal_for_definition_at_context(recipe.facility_def_id, ids.EARTH_CELL_INDUSTRIAL, sim.day)
+    )
+    assert option.capabilities == tuple(sorted(
+        supply.id for supply in sim.facilities.definitions[recipe.facility_def_id].capability_supplies
+    ))
+    # Planning eligibility does not hide physical investment effects when a
+    # Technology is missing; nor does preview create a new Facility or State.
+    facility_count = len(sim.facilities.facilities)
+    assert app.query(GetSurfaceMap(str(ids.EARTH_BODY))) == surface
+    assert len(sim.facilities.facilities) == facility_count
 
     catalog = app.query(GetCatalog())
     robotic = next(
