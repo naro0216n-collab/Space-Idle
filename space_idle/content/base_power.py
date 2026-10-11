@@ -47,6 +47,7 @@ def build_power_specs() -> dict:
         ids.SURFACE_DISTRIBUTION_HUB: PowerSpec(None, 0.08),
         ids.ELECTROLYSIS_PLANT: PowerSpec(None, 0.22),
         ids.PROPELLANT_PLANT: PowerSpec(None, 0.16),
+        ids.CRYOGENIC_PROPELLANT_TERMINAL: PowerSpec(None, 1.20, standby_load_mw=0.35),
         ids.MINERAL_SINTERING: PowerSpec(None, 0.30),
         ids.ORE_PROCESSING: PowerSpec(None, 0.35),
         ids.METALLURGY: PowerSpec(None, 0.60),

@@ -92,6 +92,11 @@ def build_facility_definitions() -> dict:
         ),
         ids.ELECTROLYSIS_PLANT: FacilityDef(ids.ELECTROLYSIS_PLANT, "工業電解設備", req._capabilities("industrial_electrolysis"), surface, surface),
         ids.PROPELLANT_PLANT: FacilityDef(ids.PROPELLANT_PLANT, "推進剤調製設備", req._capabilities("propellant_production"), surface, surface),
+        ids.CRYOGENIC_PROPELLANT_TERMINAL: FacilityDef(
+            ids.CRYOGENIC_PROPELLANT_TERMINAL, "極低温推進剤液化・充填ターミナル",
+            req._capabilities("propellant_production", "cryogenic_storage", "vehicle_refueling"),
+            surface, surface, process_throughput_per_day=4.5,
+        ),
         ids.MINERAL_SINTERING: FacilityDef(ids.MINERAL_SINTERING, "鉱物焼結設備", req._capabilities("mineral_sintering"), surface, surface),
         ids.ORE_PROCESSING: FacilityDef(ids.ORE_PROCESSING, "鉱石処理設備", req._capabilities("ore_processing"), surface, surface),
         ids.METALLURGY: FacilityDef(ids.METALLURGY, "金属精錬設備", req._capabilities("metallurgy"), surface, surface),

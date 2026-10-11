@@ -805,3 +805,96 @@ def test_vacuum_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisit
     loaded.execute(AdvanceTime(1))
     app.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_high_volume_propellant_terminal_links_process_power_storage_and_fleet_refueling(tmp_path):
+    """An equipped cryogenic terminal is more than a nominal output multiplier.
+
+    Its power load, active fuel transfer capability, construction requirement
+    and usable cryogenic stock are still owned by the usual separate Domains.
+    An equally fueled comparison must consume more real oxygen and hydrogen.
+    """
+    from space_idle import GetBuildOptions
+    from space_idle.scenario import ScenarioSurfaceLocation, ScenarioStorageInfrastructure
+    from space_idle.shared import SpatialNodeId
+
+    lunar = SpatialNodeId("test.location.fuel_terminal")
+    base = build_standard_scenario_definition()
+    low_tech = build_game_application_for_scenario(base)
+    locked = next(row for row in low_tech.query(GetBuildOptions(str(ids.EARTH))).items
+                  if row.facility_definition_id == str(ids.CRYOGENIC_PROPELLANT_TERMINAL))
+    assert {b.subject_id for b in locked.blockers if b.kind == "technology"} == {
+        str(ids.CR_CRYOGENIC_STORAGE_TRANSFER_04),
+        "CR-CRYOGENIC-STORAGE-TRANSFER-07",
+    }
+    fuels = (
+        ScenarioInventoryStock(lunar, ids.OXYGEN, 180.0),
+        ScenarioInventoryStock(lunar, ids.HYDROGEN, 40.0),
+    )
+    common = replace(
+        base,
+        surface_locations=base.surface_locations + (
+            ScenarioSurfaceLocation(lunar, "推進剤製造拠点", ids.MOON,
+                                    ids.MOON_CELL_SOUTH_POLAR_RIDGE),
+        ),
+        facilities=base.facilities + (
+            ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, lunar),
+        ),
+        inventory_stock=base.inventory_stock + fuels,
+        storage_infrastructure=base.storage_infrastructure + (
+            ScenarioStorageInfrastructure(lunar, "default", 600.0),
+            ScenarioStorageInfrastructure(lunar, "cryogenic", 500.0),
+        ),
+        completed_technologies=(
+            ids.CR_CRYOGENIC_STORAGE_TRANSFER_04,
+            ids.research_id("CR-CRYOGENIC-STORAGE-TRANSFER-07"),
+        ),
+    )
+    ordinary = build_game_application_for_scenario(replace(
+        common, facilities=common.facilities + (ScenarioFacility(ids.PROPELLANT_PLANT, lunar),),
+    ))
+    improved = build_game_application_for_scenario(replace(
+        common, facilities=common.facilities +
+        (ScenarioFacility(ids.CRYOGENIC_PROPELLANT_TERMINAL, lunar),),
+    ))
+    base_view = ordinary.query(GetOperationalNode(str(lunar)))
+    expanded_view = improved.query(GetOperationalNode(str(lunar)))
+    base_store = next(row for row in base_view.storage if row.storage_pool_key == "cryogenic")
+    expanded_store = next(row for row in expanded_view.storage if row.storage_pool_key == "cryogenic")
+    assert expanded_store.physical_capacity_t > base_store.physical_capacity_t
+    assert expanded_store.usable_capacity_t > base_store.usable_capacity_t
+    expanded_plant = next(row for row in expanded_view.facilities
+                          if row.definition_id == str(ids.CRYOGENIC_PROPELLANT_TERMINAL))
+    assert "vehicle_refueling" in expanded_plant.capabilities
+    assert "cryogenic_storage" in expanded_plant.capabilities
+    assert {row.process_id for row in expanded_view.industry} == {str(ids.PROCESS_PROPELLANT_BLEND)}
+    for app in (ordinary, improved):
+        app.execute(AdvanceTime(1))
+    old = ordinary._simulation.inventory
+    new = improved._simulation.inventory
+    assert new.amount(lunar, ids.PROPELLANT) > old.amount(lunar, ids.PROPELLANT)
+    assert new.amount(lunar, ids.OXYGEN) < old.amount(lunar, ids.OXYGEN)
+    assert new.amount(lunar, ids.HYDROGEN) < old.amount(lunar, ids.HYDROGEN)
+    assert new.amount(lunar, ids.PROPELLANT) < (180.0 + 40.0)
+
+    # A paused operation does not magically delete cold storage or erase its
+    # real standby power requirement. Save/Load rederives usable capacity.
+    from space_idle import PauseFacility
+    active_power_demand = improved.query(GetOperationalNode(str(lunar))).power_demand_mw
+    improved.execute(PauseFacility(expanded_plant.id))
+    improved.execute(AdvanceTime(1))
+    paused_view = improved.query(GetOperationalNode(str(lunar)))
+    assert 0 < paused_view.power_demand_mw < active_power_demand
+    paused_storage = next(row for row in paused_view.storage
+                          if row.storage_pool_key == "cryogenic")
+    assert paused_storage.physical_capacity_t == expanded_store.physical_capacity_t
+    assert paused_storage.usable_capacity_t > base_store.usable_capacity_t
+    path = tmp_path / "cryogenic-terminal.json"
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save_game(improved, path, saved_at=now)
+    loaded, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(improved._simulation)
+    loaded.execute(AdvanceTime(1))
+    improved.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(improved._simulation)

@@ -204,6 +204,14 @@ def build_construction_recipes() -> dict:
             req.SURFACE_SITE,
             frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_04}),
         ),
+        ids.CRYOGENIC_PROPELLANT_TERMINAL: ConstructionRecipe(
+            ids.CRYOGENIC_PROPELLANT_TERMINAL,
+            (req._structure_resource(12.0), req._machinery_resource(11.0),
+             req._electronics_resource(4.0)),
+            125.0, req.SURFACE_SITE,
+            frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_04,
+                       ids.research_id("CR-CRYOGENIC-STORAGE-TRANSFER-07")}),
+        ),
         ids.MINERAL_SINTERING: req._surface_recipe(
             ids.MINERAL_SINTERING, 8, 6, 2, 55,
             technologies=frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_10}),
