@@ -103,11 +103,12 @@ METAL_ORE_MINE = DefinitionId("base.facility.metal_ore_mine")
 INDUSTRIAL_WATER_INTAKE = DefinitionId("base.facility.industrial_water_intake")
 BASIC_STRUCTURAL_MATERIAL_PLANT = DefinitionId("base.facility.basic_structural_material_plant")
 BASIC_MACHINERY_WORKS = DefinitionId("base.facility.basic_machinery_works")
-# Integrated scale-up of mining, concentration and metal reduction.
+# Production assets differentiated by their physical extraction, separation and fabrication interfaces.
 AUTONOMOUS_ORE_MINE = DefinitionId("base.facility.autonomous_ore_mine")
 CONTINUOUS_ORE_CONCENTRATOR = DefinitionId("base.facility.continuous_ore_concentrator")
 CONTINUOUS_REDUCTION_FURNACE = DefinitionId("base.facility.continuous_reduction_furnace")
 AUTOMATED_STRUCTURAL_FABRICATION_LINE = DefinitionId("base.facility.automated_structural_fabrication_line")
+INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.facility.industrial_machinery_assembly")
 
 # Physically motivated space-support assets; their rules are ordinary definitions.
 ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
@@ -137,6 +138,8 @@ PROCESS_BASIC_MACHINING = DefinitionId("base.process.basic_machining")
 PROCESS_HEAVY_EQUIPMENT = DefinitionId("base.process.heavy_equipment_assembly")
 PROCESS_BASIC_STRUCTURAL_MATERIAL = DefinitionId("base.process.basic_structural_material")
 PROCESS_BASIC_MACHINERY = DefinitionId("base.process.basic_machinery")
+PROCESS_STANDARD_STRUCTURAL_COMPONENTS = DefinitionId("base.process.standard_structural_components")
+PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.process.industrial_machinery_assembly")
 
 # Research DAG IDs are Content Definition IDs. Progression stage/category/series
 # are metadata on ResearchDefinition, not implicit gates.

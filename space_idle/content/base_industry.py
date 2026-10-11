@@ -46,8 +46,22 @@ def build_process_specs() -> dict:
             frozenset({ids.RP_RESOURCE_CHAIN_15}),
         ),
         ids.PROCESS_STRUCTURAL_FABRICATION: ProcessSpec(ids.PROCESS_STRUCTURAL_FABRICATION, "構造部材加工", frozenset({"structural_fabrication"}), {ids.BULK_STRUCTURE: 0.65}, {ids.FABRICATED_STRUCTURE: 0.55}),
+        # Downstream fabrication supplies the same construction commodities as
+        # opening industry. Both routes consume physical stock; no substitution
+        # of Resource identity takes place inside Construction or Vehicle Core.
+        ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS: ProcessSpec(
+            ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS, "規格構造部材成形・接合",
+            frozenset({"structural_fabrication"}),
+            {ids.BULK_STRUCTURE: 0.70}, {ids.STRUCTURAL_COMPONENTS: 0.55},
+        ),
         ids.PROCESS_BASIC_MACHINING: ProcessSpec(ids.PROCESS_BASIC_MACHINING, "基礎機械加工", frozenset({"basic_machine_shop"}), {ids.BULK_STRUCTURE: 0.4}, {ids.BASIC_MACHINE_PARTS: 0.25}),
         ids.PROCESS_PRECISION_COMPONENTS: ProcessSpec(ids.PROCESS_PRECISION_COMPONENTS, "精密部品加工", frozenset({"basic_machine_shop", "precision_machining"}), {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.PRECISION_COMPONENTS: 0.22}),
+        ids.PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY: ProcessSpec(
+            ids.PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY, "産業機械モジュール組立",
+            frozenset({"industrial_machinery_assembly"}),
+            {ids.BASIC_MACHINE_PARTS: 0.32, ids.PRECISION_ELECTRONICS: 0.06},
+            {ids.MACHINERY: 0.27},
+        ),
         ids.PROCESS_HEAVY_EQUIPMENT: ProcessSpec(ids.PROCESS_HEAVY_EQUIPMENT, "建設機械組立", frozenset({"heavy_equipment_assembly"}), {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.CONSTRUCTION_EQUIPMENT: 0.25}),
         # Deliberately low-throughput opening industry. These are ordinary
         # ProcessSpecs and can operate at any site where their facility and

@@ -410,3 +410,142 @@ def test_industrial_scale_up_reuses_methods_and_changes_actual_mass_flow(tmp_pat
     restored.execute(AdvanceTime(3))
     new.execute(AdvanceTime(3))
     assert capture_state(restored._simulation) == capture_state(new_sim)
+
+
+def test_industrial_material_chain_supplies_common_construction_and_vehicle_inputs(tmp_path):
+    """Compare actual shared demands, not a facility's isolated nominal rate.
+
+    Lower-grade opening industry remains available while material fabrication and
+    machinery assembly can supply the *same* physical end-product stock used by
+    maintenance, construction and Vehicle Production. Supply competition remains
+    in canonical execution; no conversion is performed by consuming Domains.
+    """
+    from space_idle import (
+        GetBuildOptions, GetFlowReport, PlanBuild, ProduceVehicle, PauseFacility,
+    )
+    from space_idle.content.base_research import build_research_definitions
+
+    base = build_standard_scenario_definition()
+    required = {
+        ids.research_id("AR-AUTONOMY-ROBOTICS-07"),
+        ids.research_id("CH-COMBUSTION-01"),
+        ids.research_id("GN-NAVIGATION-01"),
+    }
+    research = build_research_definitions()
+    completed = set(required)
+    frontier = list(required)
+    while frontier:
+        for ancestor in research[frontier.pop()].prerequisites:
+            if ancestor not in completed:
+                completed.add(ancestor)
+                frontier.append(ancestor)
+
+    facilities = base.facilities + (
+        ScenarioFacility(ids.ORE_PROCESSING, ids.EARTH,
+                         selected_process_id=ids.PROCESS_ORE_PROCESS),
+        ScenarioFacility(ids.METALLURGY, ids.EARTH,
+                         selected_process_id=ids.PROCESS_METALLURGY),
+        ScenarioFacility(ids.FABRICATION_WORKSHOP, ids.EARTH,
+                         selected_process_id=ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS),
+        *(ScenarioFacility(ids.MACHINE_SHOP, ids.EARTH,
+                           selected_process_id=ids.PROCESS_BASIC_MACHINING)
+          for _ in range(3)),
+        ScenarioFacility(ids.INDUSTRIAL_MACHINERY_ASSEMBLY, ids.EARTH,
+                         selected_process_id=ids.PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY),
+    )
+    # Scarce construction commodities coexist with opening Industry and
+    # Population/Maintenance demand. Other intermediate stocks are independent
+    # initial capital to isolate downstream production rather than presume a
+    # fixed single-site gameplay solution.
+    stock = tuple(
+        row for row in base.inventory_stock
+        if not (row.operational_node_id == ids.EARTH and row.resource_id in
+                (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY))
+    ) + (
+        ScenarioInventoryStock(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 12.0),
+        ScenarioInventoryStock(ids.EARTH, ids.MACHINERY, 10.0),
+        ScenarioInventoryStock(ids.EARTH, ids.METAL_ORE, 500.0),
+        ScenarioInventoryStock(ids.EARTH, ids.MINERAL_FEEDSTOCK, 400.0),
+        ScenarioInventoryStock(ids.EARTH, ids.METAL_FEEDSTOCK, 250.0),
+        ScenarioInventoryStock(ids.EARTH, ids.BULK_STRUCTURE, 250.0),
+        ScenarioInventoryStock(ids.EARTH, ids.BASIC_MACHINE_PARTS, 150.0),
+    )
+    scenario = replace(base, facilities=facilities, inventory_stock=stock,
+                       completed_technologies=tuple(sorted(completed)))
+    locked = build_game_application_for_scenario(base)
+    assembly_option = next(
+        row for row in locked.query(GetBuildOptions(str(ids.EARTH))).items
+        if row.facility_definition_id == str(ids.INDUSTRIAL_MACHINERY_ASSEMBLY)
+    )
+    assert any(row.subject_id == str(ids.research_id("AR-AUTONOMY-ROBOTICS-07"))
+               for row in assembly_option.blockers)
+    assert any(
+        unlock.kind == "facility" and unlock.id == str(ids.INDUSTRIAL_MACHINERY_ASSEMBLY)
+        for research_item in locked.query(GetResearch()).items
+        for unlock in research_item.unlocks
+    )
+    baseline = build_game_application_for_scenario(scenario)
+    extended = build_game_application_for_scenario(scenario)
+    baseline_rows = baseline.query(GetOperationalNode(str(ids.EARTH))).industry
+    fabrication = next(
+        row for row in baseline_rows
+        if row.facility_definition_id == str(ids.FABRICATION_WORKSHOP)
+    )
+    assert {str(ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS),
+            str(ids.PROCESS_STRUCTURAL_FABRICATION)} <= {
+                option.process_id for option in fabrication.process_options
+            }
+    baseline.execute(SetFacilityProcess(
+        fabrication.facility_id, str(ids.PROCESS_STRUCTURAL_FABRICATION),
+    ))
+    assembly = next(
+        row for row in baseline_rows
+        if row.facility_definition_id == str(ids.INDUSTRIAL_MACHINERY_ASSEMBLY)
+    )
+    baseline.execute(PauseFacility(assembly.facility_id))
+
+    for _ in range(22):
+        baseline.execute(AdvanceTime(1))
+        extended.execute(AdvanceTime(1))
+    def end_product_flow(app, resource_id):
+        return next(
+            row for row in app.query(GetFlowReport(str(ids.EARTH))).resources
+            if row.resource_id == str(resource_id)
+        )
+    for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY):
+        ordinary_flow = end_product_flow(baseline, product)
+        extended_flow = end_product_flow(extended, product)
+        assert extended_flow.local_production_per_day > ordinary_flow.local_production_per_day
+        assert extended._simulation.inventory.amount(ids.EARTH, product) > (
+            baseline._simulation.inventory.amount(ids.EARTH, product)
+        )
+
+    # Both systems commit the same real projects and finite material demand;
+    # downstream Construction/Vehicle Domains have no new material exceptions.
+    for app in (baseline, extended):
+        app.execute(PlanBuild(str(ids.EARTH), str(ids.MINERAL_QUARRY),
+                              procurement_policy="immediate"))
+        app.execute(ProduceVehicle(str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH)))
+    before = {
+        product: extended._simulation.inventory.amount(ids.EARTH, product)
+        for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY)
+    }
+    for _ in range(4):
+        baseline.execute(AdvanceTime(1))
+        extended.execute(AdvanceTime(1))
+    assert any(extended._simulation.inventory.amount(ids.EARTH, product) < amount
+               for product, amount in before.items())
+    for product in before:
+        assert extended._simulation.inventory.amount(ids.EARTH, product) > (
+            baseline._simulation.inventory.amount(ids.EARTH, product)
+        )
+
+    path = tmp_path / "integrated-industrial-materials.json"
+    saved_at = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save_game(extended, path, saved_at=saved_at)
+    loaded, offline = load_game(path, build_game_application_for_load, now=saved_at)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(extended._simulation)
+    loaded.execute(AdvanceTime(1))
+    extended.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(extended._simulation)

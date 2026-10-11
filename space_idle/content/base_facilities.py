@@ -100,28 +100,33 @@ def build_facility_definitions() -> dict:
         ids.HEAVY_EQUIPMENT_ASSEMBLY: FacilityDef(ids.HEAVY_EQUIPMENT_ASSEMBLY, "重機組立設備", req._capabilities("heavy_equipment_assembly"), surface, surface),
         ids.MINERAL_QUARRY: FacilityDef(ids.MINERAL_QUARRY, "露天鉱物採掘場", req._capabilities("mineral_extraction"), surface, surface, 0.10, extraction_capacity_t_per_day=2.4),
         ids.METAL_ORE_MINE: FacilityDef(ids.METAL_ORE_MINE, "露天金属鉱山", req._capabilities("metal_ore_extraction"), surface, surface, 0.10, extraction_capacity_t_per_day=1.7),
-        # Installed machinery and continuous material handling increase the
-        # sustained mass flow. These use the same geological opportunity and
-        # extraction/processing methods as the first-generation equipment.
+        # These industrial assets use ordinary Extraction/Process interfaces.
+        # Their measured throughput, energy and investment differ; their names
+        # describe installed physical functions rather than a generic tier.
         ids.AUTONOMOUS_ORE_MINE: FacilityDef(
-            ids.AUTONOMOUS_ORE_MINE, "連続採掘・自動搬送鉱山",
+            ids.AUTONOMOUS_ORE_MINE, "自律掘削・鉱石搬送鉱山",
             req._capabilities("metal_ore_extraction"), surface, surface,
             extraction_capacity_t_per_day=8.0,
         ),
         ids.CONTINUOUS_ORE_CONCENTRATOR: FacilityDef(
-            ids.CONTINUOUS_ORE_CONCENTRATOR, "連続式鉱石選別プラント",
+            ids.CONTINUOUS_ORE_CONCENTRATOR, "多段破砕・品位選別プラント",
             req._capabilities("ore_processing"), surface, surface,
             process_throughput_per_day=3.5,
         ),
         ids.CONTINUOUS_REDUCTION_FURNACE: FacilityDef(
-            ids.CONTINUOUS_REDUCTION_FURNACE, "連続還元・金属精錬炉",
+            ids.CONTINUOUS_REDUCTION_FURNACE, "原料組成制御型還元精錬炉",
             req._capabilities("metallurgy"), surface, surface,
             process_throughput_per_day=3.0,
         ),
         ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE: FacilityDef(
-            ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE, "自動連続構造材加工ライン",
+            ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE, "自動寸法補正構造材加工工場",
             req._capabilities("structural_fabrication"), surface, surface,
             process_throughput_per_day=4.0,
+        ),
+        ids.INDUSTRIAL_MACHINERY_ASSEMBLY: FacilityDef(
+            ids.INDUSTRIAL_MACHINERY_ASSEMBLY, "産業機械モジュール組立工場",
+            req._capabilities("industrial_machinery_assembly"), surface, surface,
+            process_throughput_per_day=2.2,
         ),
         ids.INDUSTRIAL_WATER_INTAKE: FacilityDef(ids.INDUSTRIAL_WATER_INTAKE, "工業用水取水・処理設備", req._capabilities("industrial_water_supply"), surface, surface, 0.08, extraction_capacity_t_per_day=1.0),
         ids.BASIC_STRUCTURAL_MATERIAL_PLANT: FacilityDef(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, "基礎構造材工場", req._capabilities("basic_structural_material"), surface, surface, 0.09),

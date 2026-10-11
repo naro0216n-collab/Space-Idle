@@ -255,6 +255,10 @@ def build_construction_recipes() -> dict:
             ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE, 30, 22, 12, 180,
             technologies=frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09")}),
         ),
+        ids.INDUSTRIAL_MACHINERY_ASSEMBLY: req._surface_recipe(
+            ids.INDUSTRIAL_MACHINERY_ASSEMBLY, 17, 16, 5, 105,
+            technologies=frozenset({ids.research_id("AR-AUTONOMY-ROBOTICS-07")}),
+        ),
         ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
             ids.INDUSTRIAL_WATER_INTAKE, 5, 5, 0, 30,
         ),
