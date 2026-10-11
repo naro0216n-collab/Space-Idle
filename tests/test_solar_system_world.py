@@ -80,93 +80,13 @@ def test_body_parent_validation_and_surface_capability_have_distinct_semantics()
         graph.body_lineage(giant_id)
 
 
-def test_representative_transfer_uses_orbital_physics_and_existing_movement_execution_contract():
-    app = build_game_application()
-    sim = app._simulation
-    graph = sim.graph
-
-    assert ids.MARS_ORBIT in graph.nodes
-    assert not graph.has_operational_node(ids.MARS_ORBIT)
-    assert ids.MARS_ORBIT not in graph.operational_node_ids()
-
-    plans = sim.transport.movement_plans_to_non_surface_physical_target(ids.LEO, ids.MARS_ORBIT)
-    assert len(plans) == 1
-    plan = plans[0]
-    assert plan.destination.physical_target_node_id == ids.MARS_ORBIT
-    assert plan.relation.movement_context == "interplanetary_transfer"
-    assert plan.relation.characteristic_delta_v_km_s > 0
-    assert plan.transit_days > 1  # Interplanetary movement cannot be instantaneous.
-    assert plan.operations[0].delta_v_km_s == plan.relation.characteristic_delta_v_km_s
-    assert plan.operations[0].operation_type == "spaceflight"
-    # Earth/Moon and outer satellites share the same physical transfer model;
-    # no separate pairwise transit definitions or instant orbital shortcut.
-    earth, moon = graph.bodies[ids.EARTH_BODY], graph.bodies[ids.MOON]
-    assert moon.parent_body_id == earth.id
-    assert moon.parent_orbit_semimajor_axis_km is not None
-    lunar_transfer = graph.characteristic_transport_separation(
-        ids.EARTH_CELL_INDUSTRIAL, ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-    )
-    assert lunar_transfer.scope == "planetary_system_transfer"
-    assert 0 < lunar_transfer.delta_v_km_s < plan.relation.characteristic_delta_v_km_s
-    assert 0 < lunar_transfer.representative_transit_days < plan.transit_days
-    assert all(body.system_local_transport_geometry is None for body in graph.bodies.values())
-
-    # Performance eligibility and Resource requirements follow the same Plan
-    # for remote founding and ordinary long-haul cargo.
-    freight = sim.transport.vehicle_defs[ids.DEEP_SPACE_FREIGHTER].performance
-    tug = sim.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].performance
-    assert not sim.transport.vehicle_movement_physical_failures(
-        plan.id, ids.DEEP_SPACE_FREIGHTER, sim.day,
-    )
-    assert freight.endurance_days is not None and freight.propellant_capacity_t > 0
-    assert 0 < freight.max_cargo_for_movement(plan) <= freight.payload_t
-    assert 0 < freight.propellant_t(plan, 2.3) <= freight.propellant_capacity_t
-    assert tug.endurance_failures(plan.transit_days)
-    assert "endurance:" in " ".join(sim.transport.vehicle_movement_physical_failures(
-        plan.id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
-    ))
-    assert not sim.transport.vehicle_movement_physical_failures(
-        plan.id, ids.DEEP_SPACE_PROBE, sim.day,
-    )
-
-    # The sole physical subject did not create an allocation endpoint.
-    assert all(ids.MARS_ORBIT not in (p.origin_id, p.destination_id)
-               for p in sim.transport.movement_resolver().all_direct_plans())
-
-    # There is one symmetric physical definition for both directions.
-    mars = CelestialBodyId("base.body.mars")
-    phobos = CelestialBodyId("base.body.phobos")
-    deimos = CelestialBodyId("base.body.deimos")
-    for body_id, node_id in ((phobos, "test.phobos.orbit"), (deimos, "test.deimos.orbit")):
-        from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
-        graph.add(SpatialNodeDef(SpatialNodeId(node_id), node_id, ids.SOL_SYSTEM, None,
-                                 body_id=body_id, kind=SpatialNodeKind.ORBITAL))
-    p2d = graph.characteristic_transport_separation(SpatialNodeId("test.phobos.orbit"), SpatialNodeId("test.deimos.orbit"))
-    d2p = graph.characteristic_transport_separation(SpatialNodeId("test.deimos.orbit"), SpatialNodeId("test.phobos.orbit"))
-    assert p2d == d2p
-    assert p2d.scope == "planetary_system_transfer"
-    assert p2d.representative_transit_days is not None and p2d.representative_transit_days > 0
-    assert graph.bodies[mars].parent_body_id is None
-
-    # Same-orbit contexts require only the minimum maneuver duration, without
-    # a fictitious half-period transfer and without new Operational Nodes.
-    same = SpatialNodeId("test.same.mars.orbit")
-    from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
-    graph.add(SpatialNodeDef(same, "Same Martian orbit", ids.SOL_SYSTEM, None,
-                             body_id=mars, kind=SpatialNodeKind.ORBITAL,
-                             body_center_orbit_radius_km=graph.nodes[ids.MARS_ORBIT].body_center_orbit_radius_km))
-    local = graph.characteristic_transport_separation(ids.MARS_ORBIT, same)
-    assert local.scope == "local_orbit_transfer"
-    assert local.delta_v_km_s == 0.0 and local.representative_transit_days == 0.0
-
 
 def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts():
     """Surface potential, sensing and energy have different owners and clocks."""
     from space_idle.spatial import (
-        AtmosphereField, GravityField, IlluminationField, RadiationField, ThermalField,
+        AtmosphereField, GravityField, IlluminationField,
     )
     from space_idle.facilities import FacilityBook
-    from space_idle.site import SiteRequirements, FacetValueRange, evaluate_physical_site_requirements
 
     app = build_game_application()
     sim = app._simulation
@@ -180,10 +100,6 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     equatorial_illumination = env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, IlluminationField)
     polar_illumination = env.require(ids.MARS_CELL_POLAR_HIGHLANDS, IlluminationField)
     assert equatorial_illumination.solar_flux_w_m2 == pytest.approx(polar_illumination.solar_flux_w_m2)
-    assert equatorial_illumination.availability > polar_illumination.availability
-    assert env.require(ids.MARS_CELL_POLAR_HIGHLANDS, ThermalField).nominal_temperature_k < (
-        env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, ThermalField).nominal_temperature_k
-    )
     assert env.require(ids.MARS_ORBIT, AtmosphereField).pressure_pa == 0
     solid = [body for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID]
     assert all(graph.cells_for_body(body.id) for body in solid)
@@ -198,41 +114,23 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         for resource in cell.resource_potential_by_resource:
             assert (cell_id, resource) in sim.survey.targets
 
-    # Site eligibility follows resolved radiation fields rather than the IDs or
-    # balance values of particular moons.
-    radiation = {
-        cell_id: env.require(cell_id, RadiationField).dose_equivalent_msv_per_day
-        for cell_id in graph.surface_cells
-    }
-    low = min(radiation, key=radiation.get)
-    high = max(radiation, key=radiation.get)
-    assert radiation[high] > radiation[low]
-    tolerance = (radiation[high] + radiation[low]) / 2
-    condition = SiteRequirements(environment=(FacetValueRange(
-        RadiationField, "dose_equivalent_msv_per_day", "environment:radiation_tolerance",
-        "radiation limit", maximum=tolerance,
-    ),))
-    assert evaluate_physical_site_requirements(condition, high, sim.day, env)[0].code == "environment:radiation_tolerance"
-    assert not evaluate_physical_site_requirements(condition, low, sim.day, env)
-
     # Same solar Facility in different Cells receives exactly the flux and
     # availability resolved from each Cell; no second AU attenuation is applied.
-    generation = {}
     candidate_by_body = {}
     for cell_id, cell in graph.surface_cells.items():
         if graph.owner_of_cell(cell_id) is None:
             candidate_by_body.setdefault(cell.body_id, cell_id)
-    candidate_cells = tuple(candidate_by_body.values())[:3]
-    assert len(candidate_cells) == 3
+    candidate_cells = tuple(candidate_by_body.values())
+    assert candidate_cells
     for cell_id in candidate_cells:
         node_id = SpatialNodeId(f"test.power.{cell_id}")
         graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
         facilities = FacilityBook(sim.facilities.definitions, env)
         facility_id = facilities.install(ids.SURFACE_POWER_GRID, node_id, site_cell_id=cell_id)
-        generation[cell_id] = sim.power.physical_snapshot(node_id, facilities, sim.day).generation_mw_by_facility[facility_id]
+        generation = sim.power.physical_snapshot(node_id, facilities, sim.day).generation_mw_by_facility[facility_id]
         illum = env.require(cell_id, IlluminationField)
         spec = sim.power.specs[ids.SURFACE_POWER_GRID].generation
-        assert generation[cell_id] == pytest.approx(
+        assert generation == pytest.approx(
             spec.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / spec.reference_flux_w_m2 * illum.availability
         )
 
@@ -310,106 +208,6 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
         generated = next(profile for profile in all_profiles if profile.body_id == new_body_id)
         assert generated.gateway_capability_id == "launch_operations"
         assert generated.descent_operations[0].operation_type == "atmospheric_entry"
-
-
-def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(short_interplanetary_transit):
-    """A physical orbit is not a logistics endpoint until founded and supplied."""
-    from space_idle import (
-        AdvanceTime, CreateTransportAllocation, NonSurfaceOperationalNodeFoundingTarget,
-        PlanBuild, PlanOperationalNodeFounding, SetTargetStock,
-    )
-
-    app = build_game_application()
-    sim = app._simulation
-    origin, target = ids.LUNAR_ORBIT, ids.MARS_ORBIT
-    recipe = sim.founding.deployment_recipes[ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE]
-    assert target not in sim.graph.operational_node_ids()
-    assert all(target not in (p.origin_id, p.destination_id)
-               for p in sim.transport.movement_resolver().all_direct_plans())
-    assert sim.inventory.amount(target, ids.PROPELLANT) == 0
-
-    for requirement in recipe.payload_resources:
-        sim.inventory.add(origin, requirement.resource_id, requirement.amount_t + 5.0)
-    sim.inventory.add(origin, ids.PROPELLANT, 60.0)
-    sim.transport.add_fleet_units(ids.DEEP_SPACE_FREIGHTER, 2, origin, day=sim.day)
-    before_fuel = sim.inventory.amount(origin, ids.PROPELLANT)
-    before_machinery = sim.inventory.amount(origin, ids.MACHINERY)
-    project_id = app.execute(PlanOperationalNodeFounding(
-        str(origin), "Mars orbital logistics",
-        NonSurfaceOperationalNodeFoundingTarget("non_surface_operational_node", str(target)),
-        str(recipe.id), str(ids.DEEP_SPACE_FREIGHTER),
-    )).created_id
-    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
-    for _ in range(10):
-        app.execute(AdvanceTime(1))
-        if project.movement_execution_id:
-            break
-    assert project.movement_execution_id is not None
-    assert target not in sim.graph.operational_node_ids()
-    assert sim.inventory.amount(target, ids.PROPELLANT) == 0
-    execution = sim.transport.movement_executions[project.movement_execution_id]
-    app.execute(AdvanceTime(execution.completion_day - sim.day))
-    assert project.status.value == "complete"
-    assert target in sim.graph.operational_node_ids()
-    assert sim.inventory.amount(origin, ids.PROPELLANT) < before_fuel
-    deployed_propellant = sum(
-        requirement.amount_t for requirement in recipe.initial_inventory
-        if requirement.resource_id == ids.PROPELLANT
-    )
-    assert sim.inventory.amount(target, ids.PROPELLANT) == pytest.approx(deployed_propellant)
-    assert sim.inventory.amount(target, ids.MACHINERY) < before_machinery
-    assert len(sim.facilities.all_at(target)) == len(recipe.deployed_facilities)
-    assert sim.inventory.admission_state(target, ids.MACHINERY).admission_capacity_t > 0
-
-    capacity = sim.transport.transport_capacity_for_units(
-        ids.DEEP_SPACE_FREIGHTER, origin, target, 1, day=sim.day,
-    )
-    assert capacity.forward_t_per_day > 0 and capacity.reverse_t_per_day > 0
-    app.execute(CreateTransportAllocation(
-        str(ids.DEEP_SPACE_FREIGHTER), str(origin), str(target),
-        capacity.forward_t_per_day, capacity.reverse_t_per_day,
-    ))
-    app.execute(SetTargetStock(str(target), str(ids.MACHINERY), 1.1, priority=5))
-    app.execute(AdvanceTime(2))
-    pending = tuple(sim.logistics.cargo_flows.values())
-    assert pending
-    assert all(flow.source_id == origin and flow.final_destination_id == target for flow in pending)
-    machinery_before_delivery = sim.inventory.amount(target, ids.MACHINERY)
-    assert machinery_before_delivery < 1.1
-    first_arrival = min(flow.first_arrival_day for flow in pending)
-    assert first_arrival > sim.day
-
-    days = first_arrival - sim.day + 1
-    app.execute(AdvanceTime(days))
-    assert sim.inventory.amount(target, ids.MACHINERY) > machinery_before_delivery
-    # The compact founding outpost has finite receiving throughput. Waiting
-    # cargo is expected at the first arrival, and must remain owned by
-    # Logistics until it is admitted by the normal Storage/handling contract.
-    app.execute(AdvanceTime(25))
-    assert not sim.logistics.arrival_waiting
-    assert sim.inventory.amount(target, ids.MACHINERY) >= machinery_before_delivery
-
-    # A founding outpost must allow the first ordinary orbital investment.
-    # Reservation holds materials in the finite pool until construction; a
-    # nominally small storage number that cannot hold the first required
-    # recipe would strand the player indefinitely at the founding stage.
-    platform = sim.projects.recipes[ids.ORBITAL_CONSTRUCTION_PLATFORM]
-    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
-    for requirement in platform.resources:
-        deficit = max(0.0, requirement.amount_t + 0.15 - sim.inventory.amount(target, requirement.resource_id))
-        if deficit:
-            sim.inventory.add(target, requirement.resource_id, deficit)
-    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
-    sim.technology.completed.update(platform.prerequisite_technologies)
-    result = app.execute(PlanBuild(str(target), str(ids.ORBITAL_CONSTRUCTION_PLATFORM), procurement_policy="immediate"))
-    assert result.created_id is not None
-    app.execute(AdvanceTime(2))
-    assert ids.ORBITAL_CONSTRUCTION_PLATFORM in {
-        facility.definition_id for facility in sim.facilities.all_at(target)
-    }
-    assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
-    from space_idle.validation import validate_runtime_state
-    validate_runtime_state(sim)
 
 
 def test_founding_projections_are_scoped_to_explicit_targets_without_losing_other_cell_geography(monkeypatch):

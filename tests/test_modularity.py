@@ -15,20 +15,28 @@ def _module_import_targets(path: Path) -> set[str]:
     targets: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                targets.add(alias.name)
+            targets.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                base = module_parts[:-1]
-                trim = max(0, node.level - 1)
-                if trim:
-                    base = base[:-trim]
+                # ImportFrom.level counts the current package as one level.
+                parent = module_parts[:-node.level]
+                module = "space_idle" + ("." + ".".join(parent) if parent else "")
                 if node.module:
-                    base += node.module.split(".")
-                targets.add("space_idle." + ".".join(base))
-            elif node.module:
-                targets.add(node.module)
+                    module += "." + node.module
+            else:
+                module = node.module
+            if module:
+                targets.add(module)
+                # `from space_idle import persistence` imports the same outer
+                # layer as `import space_idle.persistence`.
+                targets.update(module + "." + alias.name for alias in node.names
+                               if alias.name != "*")
     return targets
+
+
+def _matches_dependency(target: str, prohibited: tuple[str, ...]) -> bool:
+    return any(target == prefix or target.startswith(prefix + ".")
+               for prefix in prohibited)
 
 
 def test_transport_and_logistics_state_ownership_boundaries():
@@ -91,12 +99,7 @@ def test_transport_and_logistics_state_ownership_boundaries():
         offenders = sorted(
             target
             for target in targets
-            if target.startswith(
-                (
-                    "space_idle.logistics",
-                    "space_idle.transport",
-                )
-            )
+            if _matches_dependency(target, ("space_idle.logistics", "space_idle.transport"))
         )
         assert not offenders, (
             f"{path.relative_to(PACKAGE)} bypasses Supply Requirement / Execution Claim boundary: {offenders}"
@@ -112,62 +115,47 @@ def test_layer_dependency_direction_is_enforced():
         "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
     )
 
+    # Each module is classified once; its allowed dependency direction is a
+    # layer contract, independent of how many files exist in that layer.
+    layer_forbidden = {
+        "content": (
+            "space_idle.application", "space_idle.app_contracts", "space_idle.composition",
+            "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
+        ),
+        "composition": (
+            "space_idle.application", "space_idle.app_contracts", "space_idle.bootstrap",
+            "space_idle.persistence", "space_idle.api",
+        ),
+        "application": (
+            "space_idle.content", "space_idle.composition", "space_idle.bootstrap",
+            "space_idle.persistence", "space_idle.api",
+        ),
+        "api": ("space_idle.content", "space_idle.composition", "space_idle.bootstrap"),
+    }
     for path in PACKAGE.rglob("*.py"):
         rel = path.relative_to(PACKAGE)
-        if path.name == "__init__.py":
-            continue
-        # Development experiment and publish tooling must not become runtime
-        # dependencies of Game/Content/Composition/Application code.
+        targets = _module_import_targets(path)
         assert not any(target == "scripts" or target.startswith("scripts.")
-                       for target in _module_import_targets(path)), (
-            f"{rel} imports development-only scripts"
-        )
-        parts = rel.parts
-        name = rel.name
+                       for target in targets), f"{rel} imports development-only scripts"
 
-        if parts[0] in {"content", "composition", "app_contracts", "api"}:
+        if rel.name == "__init__.py":
             continue
-        if name == "bootstrap.py" or name == "persistence.py" or name.startswith("application"):
+        if rel.parts[0] in ("content", "composition", "app_contracts"):
+            layer = "application" if rel.parts[0] == "app_contracts" else rel.parts[0]
+        elif rel.parts[0] == "api":
+            if rel.name == "__main__.py":
+                continue
+            layer = "api"
+        elif rel.name.startswith("application"):
+            layer = "application"
+        elif rel.name in ("bootstrap.py", "persistence.py"):
             continue
+        else:
+            layer = "core"
 
-        targets = _module_import_targets(path)
-        offenders = sorted(target for target in targets if target.startswith(forbidden_outer))
+        forbidden = layer_forbidden.get(layer, forbidden_outer)
+        offenders = sorted(target for target in targets if _matches_dependency(target, forbidden))
         assert not offenders, f"{rel} imports outer layer(s): {offenders}"
-
-    for path in (PACKAGE / "content").glob("*.py"):
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.application", "space_idle.app_contracts", "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
-
-    for path in (PACKAGE / "composition").glob("*.py"):
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.application", "space_idle.app_contracts", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
-
-    application_files = list(PACKAGE.glob("application*.py")) + list((PACKAGE / "app_contracts").glob("*.py"))
-    for path in application_files:
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.content", "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
-
-    for path in (PACKAGE / "api").glob("*.py"):
-        if path.name in {"__init__.py", "__main__.py"}:
-            continue
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.content", "space_idle.composition", "space_idle.bootstrap"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
 
     core_files = [
         path for path in PACKAGE.rglob("*.py")

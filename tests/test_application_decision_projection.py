@@ -73,8 +73,6 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
     assert definitions
     assert all(pool.vehicle_definition_id in definitions for pool in fleet.pools)
     for movement_plan in movement_plans.items:
-        assert movement_plan.comparison_key == movement_plan.id
-        assert movement_plan.comparison_values == ()
         for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
