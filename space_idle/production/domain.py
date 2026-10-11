@@ -23,9 +23,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(bool(process.required_capabilities), f"process has no required capability: {process_id}")
         _require(all(isinstance(cap, str) and cap for cap in process.required_capabilities),
                  f"invalid process capability: {process_id}")
-        _require(bool(sim.industry.service_capacity_provider_definition_ids(
-            sim.industry.process_service_type(process_id))),
-            f"process has no compatible facility: {process_id}")
+        # A valid material transformation can precede hardware that implements
+        # its entire physical interface. Source absence is Content coverage,
+        # not a corrupt reference; no installed Facility can run this Process.
         _require(all(v >= 0 for v in process.inputs_per_day.values()), f"negative process input: {process_id}")
         _require(all(v >= 0 for v in process.outputs_per_day.values()), f"negative process output: {process_id}")
         _require(any(v > 0 for v in process.outputs_per_day.values()), f"process has no positive output: {process_id}")

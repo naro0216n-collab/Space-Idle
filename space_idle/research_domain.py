@@ -242,7 +242,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         )
         if provider.source_kind is ResearchProviderSourceKind.FACILITY:
             matching_facilities = sim.research.compatible_facility_definition_ids(provider_id)
-            _require(bool(matching_facilities), f"research provider has no compatible Facility source: {provider_id}")
             for definition_id in matching_facilities:
                 _require(
                     definition_id not in facility_provider_sources,
@@ -254,7 +253,6 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 not requires_surface_cell_context(provider.site_requirements),
                 f"Fleet Research Provider cannot require a surface-cell execution context: {provider_id}",
             )
-            _require(bool(sim.research.compatible_vehicle_definitions(provider_id)), f"research provider has no compatible Fleet source: {provider_id}")
             _require(
                 len(provider.levels) == 1 and provider.levels[0].level == 1,
                 f"Fleet research provider must define one per-unit level: {provider_id}",

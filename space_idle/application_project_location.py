@@ -576,7 +576,7 @@ class LocationProjectorMixin:
             }
             for facility in sorted(sim.facilities.all_at(location_id), key=lambda item: str(item.id)):
                 methods = sim.extraction.compatible_methods(facility.definition_id)
-                if not methods:
+                if sim.extraction.nominal_capacity(facility) <= 1e-12:
                     continue
                 selected = sim.extraction.method_for_facility(facility)
                 snap = snapshots_by_facility.get(facility.id)
@@ -605,7 +605,8 @@ class LocationProjectorMixin:
                     ))
                 reasons = (
                     snap.limiting_factors if snap is not None
-                    else ("extraction:unselected",)
+                    else (("extraction:no_compatible_method",) if not methods
+                          else ("extraction:unselected",))
                 )
                 extraction.append(ExtractionRow(
                     str(facility.id), str(facility.definition_id),
@@ -622,9 +623,10 @@ class LocationProjectorMixin:
                     limiting_factors_from_codes(
                         reasons, affected_action="run_extraction",
                         related_entity_kind="facility", related_entity_id=str(facility.id),
+                        message=("対応する採掘方式が登録されていません" if not methods else None),
                     ),
                     None if selected is None else str(selected.id),
-                    tuple(options), len(methods) > 1 and selected is None,
+                    tuple(options), selected is None,
                 ))
             extraction_resources.extend(
                 ExtractionResourceRow(

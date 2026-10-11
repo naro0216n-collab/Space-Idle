@@ -435,8 +435,62 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
         graph, owned_assets, acquisitions, physical_suppliers, method_inputs,
         method_techs, downstream_technologies, research_stages,
     ))
+    findings.extend(_inspect_incomplete_method_sources(graph))
     findings.extend(inspect_definition_alternatives(graph))
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
+
+
+def _inspect_incomplete_method_sources(
+    graph: DependencyDefinitionGraph,
+) -> tuple[DefinitionCoverageFinding, ...]:
+    """Check *joint* physical source compatibility, not independent cap edges.
+
+    A definition may reference two individually supplied capabilities without
+    any one asset that provides both. That is a Content coverage gap, not a
+    dangling symbol or evidence that a future asset cannot exist. Extraction
+    method compatibility already has its own installed-capacity diagnostic;
+    do not emit a second finding for the same unavailable physical method.
+    Survey modes must use the sources of their own Provider.
+    """
+    supplies: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    required: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    sources: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
+    mode_provider: dict[DependencyNode, DependencyNode] = {}
+    for relation in graph.relations:
+        if (relation.kind == "supplies_capability" and
+                relation.source.kind in ("facility", "vehicle") and
+                relation.target.kind == "capability"):
+            supplies[relation.source].add(relation.target)
+        elif relation.kind == "requires_capability" and relation.source.kind == "capability":
+            required[relation.target].add(relation.source)
+        elif relation.kind == "uses_asset_definition" and relation.source.kind in ("facility", "vehicle"):
+            sources[relation.target].add(relation.source)
+        elif relation.kind == "provides_mode":
+            mode_provider[relation.target] = relation.source
+
+    findings: list[DefinitionCoverageFinding] = []
+    for method in sorted(required):
+        capabilities = required[method]
+        if not capabilities:
+            continue
+        if method.kind == "process":
+            candidates = (asset for asset in supplies if asset.kind == "facility")
+            has_source = any(capabilities <= supplies[asset] for asset in candidates)
+        elif method in mode_provider:
+            candidates = sources.get(mode_provider[method], set())
+            has_source = any(capabilities <= supplies[asset] for asset in candidates)
+        else:
+            continue
+        if has_source:
+            continue
+        findings.append(DefinitionCoverageFinding(
+            "method_without_registered_compatible_asset", method,
+            (
+                "scope:registered_capability_combinations_only;future_asset_and_site_conditions_unknown",
+                *(f"required_capability:{cap.id}" for cap in sorted(capabilities)),
+            ),
+        ))
+    return tuple(findings)
 
 
 def _resource_acquisition_cycles(

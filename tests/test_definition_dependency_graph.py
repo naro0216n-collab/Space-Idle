@@ -760,10 +760,16 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
                            "process:test.process:required_capabilities"),
     ), ())
     gaps = inspect_definition_coverage(missing)
-    assert len(gaps) == 1
-    assert gaps[0].code == "required_capability_without_definition_supplier"
-    assert gaps[0].evidence == ("process:test.process:required_capabilities",)
-    assert gaps[0].to_json_data()["subject"]["id"] == "test.unavailable"
+    by_code = {row.code: row for row in gaps}
+    assert set(by_code) == {
+        "required_capability_without_definition_supplier",
+        "method_without_registered_compatible_asset",
+    }
+    assert by_code["required_capability_without_definition_supplier"].evidence == (
+        "process:test.process:required_capabilities",
+    )
+    assert by_code["required_capability_without_definition_supplier"].to_json_data()["subject"]["id"] == "test.unavailable"
+    assert by_code["method_without_registered_compatible_asset"].subject == consumer
 
     connected = DependencyDefinitionGraph((capability, consumer, DependencyNode("facility", "supplier")), (
         *missing.relations,
@@ -1173,3 +1179,161 @@ def test_research_stage_supply_dependencies_preserve_alternative_sources_and_tec
     # Missing sources have their own diagnostics and must never be described
     # as a closed cycle: initial Content/Scenario coverage is unknown.
     assert risks(tuple(row for row in base if row.kind != "produces_resource")) == []
+
+
+def test_unconnected_physical_methods_and_providers_are_diagnostic_not_ghost_supply(tmp_path):
+    """Incomplete authored Content is distinct from a corrupt reference.
+
+    A future physical asset may be introduced without its operating method;
+    similarly, a provider can require real capabilities which existing assets
+    only supply *separately*. Neither generates free capacity or becomes a
+    runnable player option until a compatible source really exists.
+    """
+    from datetime import datetime, timezone
+
+    import pytest
+
+    from space_idle import AdvanceTime, ApplicationError, GetOperationalNode, SetFacilityExtractionMethod
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    from space_idle.bootstrap import build_game_application_for_load, build_game_application_for_scenario
+    from space_idle.content import base_ids as ids
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.facilities import FacilityDef, CapabilitySupply
+    from space_idle.research import ResearchProviderSpec, ResearchProviderSourceKind, ResearchProviderLevelSpec
+    from space_idle.survey import SurveyProviderSpec, SurveyProviderSourceKind, SurveyObservationModeSpec, SurveyReachSpec, SurveyReachScope, KnowledgeLevel
+    from space_idle.scenario import ScenarioFacility
+    from space_idle.persistence import capture_state, save_game, load_game
+    from space_idle.power import PowerSpec
+
+    future_facility = DefinitionId("test.future.miner")
+    future_research = DefinitionId("test.future.research_provider")
+    future_survey = DefinitionId("test.future.survey_provider")
+    future_survey_mode = DefinitionId("test.future.survey_mode_provider")
+    future_extraction_method = DefinitionId("test.future.extraction_method")
+    future_process = DefinitionId("test.future.process")
+    # Each source capability is individually known, but no *single* physical
+    # research or survey source contains the required combination.
+    def add_future_content(sim, _catalog):
+        sim.facilities.definitions[future_facility] = FacilityDef(
+            future_facility, "Unconfigured ore plant", (CapabilitySupply("research_lab"),),
+            extraction_capacity_t_per_day=4.0,
+        )
+        sim.power.specs[future_facility] = PowerSpec(None, 0.1)
+        sim.extraction.specs[future_extraction_method] = replace(
+            sim.extraction.specs[ids.EXTRACTION_CRUST_ORE],
+            id=future_extraction_method,
+            required_capabilities=frozenset(("research_lab", "metal_ore_extraction")),
+        )
+        process = next(iter(sim.industry.processes.values()))
+        sim.industry.processes[future_process] = replace(
+            process, id=future_process,
+            required_capabilities=frozenset(("research_lab", "metal_ore_extraction")),
+        )
+        sim.research.providers[future_research] = ResearchProviderSpec(
+            future_research, ResearchProviderSourceKind.FACILITY,
+            frozenset(("general_research_equipment", "propulsion_test_equipment")),
+            tier=2, levels=(ResearchProviderLevelSpec(1, 4.0, 100.0, 1.0),),
+        )
+        # This Provider has a real sensor-carrying source, but the new mode
+        # needs an additional instrument not installed on that same Vehicle.
+        sim.survey.providers[future_survey_mode] = SurveyProviderSpec(
+            future_survey_mode, SurveyProviderSourceKind.FLEET,
+            frozenset(("survey_sensor",)),
+            (SurveyObservationModeSpec(
+                "future_radar", 4.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
+                KnowledgeLevel.PRESENCE_PROBABILITY, 0.5, 0.1,
+                required_source_capabilities=frozenset(("radar_sounder",)),
+            ),),
+        )
+        sim.survey.providers[future_survey] = SurveyProviderSpec(
+            future_survey, SurveyProviderSourceKind.FLEET,
+            frozenset(("robotic_prospecting_sensor", "radar_sounder")),
+            (SurveyObservationModeSpec(
+                "future_mapping", 4.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
+                KnowledgeLevel.PRESENCE_PROBABILITY, 0.5, 0.1,
+                required_source_capabilities=frozenset(("radar_sounder",)),
+            ),),
+        )
+
+    scenario = replace(build_standard_scenario_definition(), facilities=(
+        *build_standard_scenario_definition().facilities,
+        ScenarioFacility(future_facility, ids.EARTH),
+    ))
+    app = build_game_application_for_scenario(scenario, definition_transform=add_future_content)
+    sim = app._simulation
+    assert sim.extraction.compatible_methods(future_facility) == ()
+    future_row = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).extraction
+                      if row.facility_definition_id == str(future_facility))
+    assert future_row.output_t_per_day == 0
+    assert not future_row.method_options
+    assert any("no_compatible_method" in item.code and item.message
+               for item in future_row.limiting_factors)
+    with pytest.raises(ApplicationError):
+        app.execute(SetFacilityExtractionMethod(future_row.facility_id, str(ids.EXTRACTION_CRUST_ORE)))
+    assert not sim.industry.service_capacity_provider_definition_ids(
+        sim.industry.process_service_type(future_process))
+    assert not sim.research.compatible_facility_definition_ids(future_research)
+    assert not sim.survey.compatible_source_definition_ids(sim.survey.providers[future_survey])
+    assert sim.survey.compatible_source_definition_ids(sim.survey.providers[future_survey_mode])
+    assert not any(not sim.survey._source_capability_failures(
+        sim.survey.providers[future_survey_mode],
+        sim.survey.providers[future_survey_mode].observation_modes[0], vehicle,
+    ) for vehicle in sim.survey.compatible_source_definition_ids(
+        sim.survey.providers[future_survey_mode]))
+
+    graph = build_definition_dependency_graph(sim, app._catalog)
+    assert graph.diagnostics == ()
+    findings = inspect_definition_coverage(graph)
+    assert {(row.code, row.subject.id) for row in findings} >= {
+        ("provider_without_registered_compatible_asset", str(future_research)),
+        ("provider_without_registered_compatible_asset", str(future_survey)),
+        ("extraction_method_without_registered_compatible_facility", str(future_extraction_method)),
+        ("method_without_registered_compatible_asset", str(future_process)),
+        ("method_without_registered_compatible_asset", f"{future_survey_mode}/future_radar"),
+    }
+    original = capture_state(sim)
+    app.execute(AdvanceTime(1))
+    future_after = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).extraction
+                        if row.facility_definition_id == str(future_facility))
+    assert future_after.output_t_per_day == 0
+    assert future_after.method_id is None
+    save_path = tmp_path / "unconnected.json"
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save_game(app, save_path, saved_at=now)
+    loaded, offline = load_game(
+        save_path, lambda: build_game_application_for_load(
+            scenario=scenario, definition_transform=add_future_content,
+        ), now=now,
+    )
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    assert capture_state(sim) != original
+
+    # A different Facility Definition with the compatible physical interface
+    # joins the same method, Application choice, installed capacity and actual
+    # finite production without any Core ID-specific code or manual reindexing.
+    def add_compatible_source(sim, catalog):
+        add_future_content(sim, catalog)
+        sim.facilities.definitions[future_facility] = replace(
+            sim.facilities.definitions[future_facility],
+            capability_supplies=(CapabilitySupply("metal_ore_extraction"),),
+        )
+
+    connected = build_game_application_for_scenario(
+        scenario, definition_transform=add_compatible_source,
+    )
+    assert tuple(method.id for method in connected._simulation.extraction.compatible_methods(
+        future_facility
+    )) == (ids.EXTRACTION_CRUST_ORE,)
+    connected_row = next(row for row in connected.query(GetOperationalNode(str(ids.EARTH))).extraction
+                         if row.facility_definition_id == str(future_facility))
+    assert connected_row.method_id == str(ids.EXTRACTION_CRUST_ORE)
+    assert connected_row.output_t_per_day > 0
+    connected_graph = build_definition_dependency_graph(connected._simulation, connected._catalog)
+    assert any(relation.kind == "nominal_extraction_capacity" and
+               relation.source.id == str(future_facility) and
+               relation.target.id == str(ids.EXTRACTION_CRUST_ORE)
+               for relation in connected_graph.relations)
+    before_ore = connected._simulation.inventory.amount(ids.EARTH, ids.METAL_ORE)
+    connected.execute(AdvanceTime(1))
+    assert connected._simulation.inventory.amount(ids.EARTH, ids.METAL_ORE) > before_ore

@@ -269,12 +269,12 @@ def test_extraction_method_requires_physical_capability_and_explicit_selection_w
     source = sim.facilities.definitions[ids.METAL_ORE_MINE]
     method = sim.extraction.compatible_methods(source.id)[0]
     unqualified = replace(source, id=DefinitionId("test.unqualified"), capability_supplies=())
-    with pytest.raises(ValueError, match="no compatible extraction method"):
-        ExtractionService(
-            sim.extraction.specs, sim.graph, sim.environment,
-            sim.surface_infrastructure, sim.survey,
-            {unqualified.id: unqualified},
-        )
+    without_method = ExtractionService(
+        sim.extraction.specs, sim.graph, sim.environment,
+        sim.surface_infrastructure, sim.survey,
+        {unqualified.id: unqualified},
+    )
+    assert without_method.compatible_methods(unqualified.id) == ()
     second = replace(method, id=DefinitionId("test.equivalent_method"))
     service = ExtractionService(
         {method.id: method, second.id: second}, sim.graph, sim.environment,

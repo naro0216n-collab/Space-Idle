@@ -223,7 +223,6 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(provider_id == provider.id, f"survey provider key mismatch: {provider_id}")
         _require(provider.capacity_units_per_source_per_day > 0, f"non-positive survey provider capacity: {provider_id}")
         sources = sim.survey.compatible_source_definition_ids(provider)
-        _require(bool(sources), f"Survey provider has no compatible physical source: {provider_id}")
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:
             for source_id in sources:
                 prior = facility_owners.setdefault(source_id, provider_id)
@@ -236,8 +235,6 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
             _require(mode.prerequisite_technologies.issubset(ctx.known_technologies),
                      f"Survey mode references unknown technology: {provider_id}/{mode.id}")
             validate_site_requirements(mode.site_requirements, ctx.known_capabilities, f"survey:{provider_id}/{mode.id}")
-            _require(any(not sim.survey._source_capability_failures(provider, mode, source_id) for source_id in sources),
-                     f"Survey mode has no compatible source: {provider_id}/{mode.id}")
             if mode.reach.required_operation_types:
                 _require(provider.source_kind is SurveyProviderSourceKind.FLEET,
                          f"Survey movement operations require Fleet-backed provider: {provider_id}/{mode.id}")

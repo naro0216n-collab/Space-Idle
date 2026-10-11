@@ -22,6 +22,12 @@ def _compose_base_application(*, apply_scenario: bool, scenario: ScenarioDefinit
         # Definitions are configured before Scenario State is instantiated, then
         # validated through the normal Composition and reference contracts.
         definition_transform(simulation, catalog)
+        # Capability / method membership is a derived Composition index, not
+        # authoritative State. Recompose it before validation and Scenario
+        # application so new Facility or Extraction Definitions behave like
+        # existing ones without caller-specific refresh instructions.
+        if simulation.extraction is not None:
+            simulation.extraction.refresh_definition_compatibility()
 
     # Static World / Content definitions must be valid independently of any
     # Scenario-owned runtime State.  This same validated composition is used

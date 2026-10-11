@@ -411,7 +411,7 @@
     const blockerText=(row)=>A.constraintSummary(row);
     const cards=(state.operationalNode?.facilities||[]).map((facility)=>{
       const industry=industryByFacility[facility.id],extraction=extractionByFacility[facility.id];
-      const primary=industry?.process_display_name||(extraction?`${extraction.method_id?resourceName(extraction.resource_id):'方式未選択'} 採掘`:(facility.capabilities||[]).map(capabilityName)[0])||'生産工程';
+      const primary=industry?.process_display_name||(extraction?`${extraction.method_id?resourceName(extraction.resource_id):(extraction.method_options?.length?'方式未選択':'方式未登録')} 採掘`:(facility.capabilities||[]).map(capabilityName)[0])||'生産工程';
       const blockers=facility.operating_blockers||facility.activation_blockers||[];
       const mainBlocker=blockers.length?blockerText(blockers[0]):'';
       const utilization=Math.max(0,Math.min(1,Number(facility.operational_utilization||0)));
@@ -814,7 +814,7 @@
         const selected=option.method_id===extraction.method_id;
         return `<div class="detail-card ${selected?'is-usable':''}"><div class="mode-title"><strong>${esc(option.display_name)}</strong><span class="badge ${selected?'ok':option.can_select?'':'warn'}">${selected?'現在の方式':option.can_select?'切替候補':'解禁条件不足'}</span></div><div class="cell-sub">対象: ${esc(option.resource_name)} / 産出: ${esc(option.output_resource_name)}</div><div class="cell-sub">有効採掘機会: ${fmt(option.potential_opportunity,3)} / 基準見込み: ${fmt(option.nominal_output_t_per_day,3)} t/日（有限配分前）</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row"><button type="button" data-facility-extraction="${esc(extraction.facility_id)}" data-extraction-method="${esc(option.method_id)}" ${selected||!option.can_select?'disabled':''}>${selected?'選択中':'この方式へ切替'}</button></div></div>`;
       }).join('');
-      productionSection+=section('採掘',kv([['対象資源',extraction.method_id?esc(extraction.resource_name):'未選択'],['方式選択',extraction.selection_required?'選択が必要':'確定'],['基準能力',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['有効採掘機会',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',extraction.method_id?esc(extraction.output_resource_name):'未選択'],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<div class="choice-section"><div class="choice-label">採掘方式を選択</div><div class="choice-grid">${methodOptions||'<div class="empty-state">候補なし</div>'}</div></div><h4>主な制約</h4>${limitingHtml(extraction.limiting_factors)}`);
+      productionSection+=section('採掘',kv([['対象資源',extraction.method_id?esc(extraction.resource_name):'未選択'],['方式選択',!extraction.method_options?.length?'対応方式なし':(extraction.selection_required?'選択が必要':'確定')],['基準能力',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['有効採掘機会',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',extraction.method_id?esc(extraction.output_resource_name):'未選択'],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<div class="choice-section"><div class="choice-label">採掘方式を選択</div><div class="choice-grid">${methodOptions||'<div class="empty-state">候補なし</div>'}</div></div><h4>主な制約</h4>${limitingHtml(extraction.limiting_factors)}`);
     }
     if(!productionSection)productionSection=section('生産・採掘','<div class="empty-state">この設備には現在の生産・採掘工程がありません。</div>');
     let upgradeSection='';

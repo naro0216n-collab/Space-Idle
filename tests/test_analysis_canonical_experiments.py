@@ -1239,8 +1239,19 @@ def test_independent_survey_definition_requires_a_real_compatible_vehicle(tmp_pa
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(variant._simulation)
     assert candidate(loaded).committed_units == 1
-    with pytest.raises(ValueError):
-        factory(edits[2:])  # No compatible physical source for the new provider.
+    # A future provider may be authored before its physical Vehicle exists.
+    # It is diagnosable incomplete Content, not an invalid reference or a free
+    # ghost Fleet. The same Definition becomes usable when its Vehicle is added.
+    unconnected = factory(edits[2:])
+    from space_idle.analysis_coverage import inspect_definition_coverage
+    graph = build_definition_dependency_graph(unconnected._simulation, unconnected._catalog)
+    assert not graph.diagnostics
+    assert any(row.code == 'provider_without_registered_compatible_asset'
+               and row.subject.id == added_provider for row in inspect_definition_coverage(graph))
+    assert unconnected._simulation.survey.compatible_source_definition_ids(
+        unconnected._simulation.survey.providers[DefinitionId(added_provider)]) == ()
+    assert not any(row.provider_definition_id == added_provider
+                   for row in unconnected.query(GetSurveys(str(node_id))).provider_fleet)
 
 
 def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_without_stock_inference():

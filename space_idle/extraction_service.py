@@ -57,8 +57,9 @@ class ExtractionService:
                 method for method in self.specs.values()
                 if method.required_capabilities <= supplied
             ), key=lambda method: str(method.id)))
-            if not compatible:
-                raise ValueError(f"facility {definition_id} has no compatible extraction method")
+            # A physically installed extraction interface may have no currently
+            # registered method.  It supplies no extraction until Content adds a
+            # compatible method; this is a coverage gap, not an invalid asset.
             methods[definition_id] = compatible
         self._methods_by_facility = methods
 
