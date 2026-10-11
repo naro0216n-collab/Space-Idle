@@ -107,7 +107,7 @@ jobs:
         env:
           SPACE_IDLE_BROWSER: chromium
           NO_PROXY: 127.0.0.1,localhost
-        run: python playwright/run_suite.py acceptance interaction_continuity logistics_ui
+        run: python playwright/run_suite.py smoke
 
   status-rollup:
     name: Fast CI status
