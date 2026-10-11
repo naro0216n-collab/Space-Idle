@@ -2,12 +2,12 @@
 
 ## 作業の前提
 
-- `main`：ユーザー承認済みの正準branch。明示的な承認なしに更新しない。
 - `develop`：通常開発の共有正本。検証済みの責務単位をpublishする。
-- `publish`：Publish Gateway専用のtransport control branch。ゲーム開発には使わない。
-- `temp`：ユーザー指定時、またはworkflow・publish経路自体を隔離検証するときだけ使う。
+- `main`：ユーザーが承認した成果を統合する正準branch。
+- `publish`：Publish Gatewayがtransportを受け取るcontrol branch。
+- `temp`：ユーザー指定またはworkflow・publish経路の隔離検証に用いるbranch。
 
-通常の実装・検索・テスト・commitはローカルrepoの`develop`で行う。通常開発で追加branch・worktreeを作らず、publishのために成立済みcommitをrebase・resetしない。ゲーム本体version変更および`develop`から`main`への統合は、ユーザー承認後だけ行う。
+実装・検索・テスト・commitは、通常、単一のローカルrepoの`develop`で行う。成立したlocal commitを保持したまま、責務単位のcheckpointを`develop`へpublishする。ゲーム本体versionの更新と`develop`から`main`への統合は、ユーザー承認後に実施する。
 
 作業開始時に`docs/README.md`、`docs/development-principles.md`、変更に関係する`docs/design.md`、`docs/architecture.md`を読む。UI変更には`docs/ui.md`も参照する。仕様判断では現行コード・既存テスト・fixture・暫定Contentより正準文書を優先する。
 
@@ -25,7 +25,7 @@ cd space-idle-local
 python scripts/publish_request.py init
 ```
 
-`init`がartifactの基点を記録し、repo-local Git identityとpublish基点を設定する。復元に失敗したら別の取得・復元方式に切り替えず、source-snapshotの生成・取得経路を解決する。最新のローカル環境が構築済みなら継続利用する。
+`init`がartifactの基点を記録し、repo-local Git identityとpublish基点を設定する。復元が失敗した場合は、`source-snapshot`の生成・取得経路を修復し、同じ復元手順を再実行する。最新のローカル環境が構築済みなら継続利用する。
 
 ### 依存関係を導入する
 
@@ -48,7 +48,7 @@ python -m playwright install chromium
 
 ### 実装・ローカル検証
 
-DomainからApplication、Persistence、Content、UIまで、変更した責務に必要な層を接続して検証する。テストの選定・改廃は`docs/development-principles.md` §6に従い、現在の不変条件・状態遷移・保存則を優先する。個別修正ごとにテストやpublishを細分化しない。
+DomainからApplication、Persistence、Content、UIまで、変更した責務に必要な層を接続して検証する。テストの選定・改廃は`docs/development-principles.md` §6に従い、現在の不変条件・状態遷移・保存則を優先する。検証とpublishは、整合した責務のcheckpointを単位とする。
 
 ```bash
 git diff --check
@@ -56,9 +56,17 @@ python scripts/local_test_run.py start -- -q --durations=20
 python scripts/local_test_run.py status <startで返されたrun_id>
 ```
 
-ローカルpytestは`scripts/local_test_run.py`から実行する。`start`や実行ツールのtimeoutをpytestの終了結果と解釈しない。`status`で実際の終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。
+ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-Publish Gateway、helper、CI/E2E harnessの変更はゲームの通常テストと分離した`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等はGitHub CIで検証し、ローカル実行不可を理由に必要な検証を除外しない。
+Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
+
+### 作業ファイルと成果物
+
+実装中の試行用スクリプト、単発のGameplay検証、分析用JSON、patch、ログ、実行途中の出力は、ローカル作業環境の一時領域で作成・実行・整理する。検証を継続的に使う場合は、正準契約に基づくテストとしてrepoに組み込み、関連検証とcommitへ進める。必要な検証結果は報告本文、commit済みファイル、またはGitHub CI artifactとして残す。
+
+ChatGPT Libraryには、ユーザーが保存・再利用する完成成果物を登録する。Projectに紐づくファイルはProjectの資料管理として扱う。ローカル作業の一時出力を共有する必要がある場合は、用途を終えた時点で利用可能な管理経路から回収する。既存の残存ファイルが報告された際は、保存目的と登録先を確認し、通常LibraryのファイルはそのLibrary IDを指定して削除し、Project所属のファイルはProject側の管理機能で整理する。Libraryの削除操作はゴミ箱への移動として扱う。
+
+通常publishに必要な例外的なLibrary中継は、以下の固定LauncherとExecutorに一元化する。
 
 ## `develop`へのpublish
 
@@ -70,49 +78,46 @@ Publish Gateway、helper、CI/E2E harnessの変更はゲームの通常テスト
 | `.github/workflows/**`だけの変更 | `scripts/workflow_maintenance.py` | `develop` |
 | Publish Gateway control planeの変更 | `scripts/publish_control_maintenance.py` | `publish` |
 
-Publish Gateway workflow自体を変更するときは、control planeの更新を先に完了する。その他のworkflow変更と通常変更は責務ごとにcommitを分けて反映する。helperが出力する手順とpacketを記載順に使い、独自の操作順変更・代替transport・手動照合を追加しない。
+Publish Gateway workflowを変更する際は、Publish control maintenanceによるcontrol plane更新を先に完了する。その他のworkflow変更と通常変更は責務単位でcommitを分け、表に示したhelperを使用する。各helperが出力したpacketは、その順序で適用する。
 
-### 一時ファイルの配置
+### Connectorの一時ファイル管理
 
-**通常publishのConnector受け渡しに使用する一時ファイルは、必ずChatGPT Libraryの`/temp/`フォルダで扱う。** ローカルrepo内の`temp`ディレクトリやGitの`temp` branchとは異なる。
+通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。Executorは、ChatGPT Libraryの`/temp/`を用意し、indexと原本packetを一時登録・読取して、登録したファイルをGitHub書込前に削除する。Library上の削除はゴミ箱への移動である。
 
-固定Launcherが呼び出すExecutorが、必要な`/temp/`フォルダの作成、原本packetの一時登録・読取、登録ファイルの削除（Libraryのゴミ箱への移動）を自動実行する。**一時ファイルはGitHub更新前に削除される。** 実行者がLibraryへ手動登録したり、別フォルダへ中継したり、手動転記・ハッシュ照合したりしない。登録・読取・削除のいずれかが失敗した場合は、GitHub更新を進めず、保持したtransactionを規定の手順で再開する。
-
-ローカルのartifact、Git bundle、`.git/`内に保持するtransaction記録は、このLibrary一時ファイルとは別の作業データである。
+Executorの登録・読取・削除が完了した後、同じ実行の中でGitHub transportのtree生成、commit作成、`publish` ref更新を行う。中断または一時ファイル操作の失敗時は、保存済みtransactionを使用して「中断・失敗時の再開」から続ける。通常publishの実行者が扱う入力は`execution_index`と固定Launcherのsourceであり、packet数やpayload規模にかかわらず同じ手順を使う。
 
 ### 通常publishの手順
 
-1. 責務単位の関連検証を完了し、ローカル`develop`へcommitする。
-2. `python scripts/publish_request.py prepare`を実行する。
-3. **publish直前に**GitHubのheads一覧を1回取得し、その時点の`develop`と`publish`のHEADを`connector-plan`へ渡す。
-4. `connector-plan`が返す`execution_index`の絶対パスを`INDEX_PATH`へ指定し、`scripts/publish_connector_launch.js`の固定sourceを**改変せず1回の`functions.exec`で実行**する。Libraryの一時ファイル管理とGitHub transportはLauncher/Executorに委ねる。
-5. 返却されたtransport commitに紐づくPublish Gatewayの`completed / success`を確認し、transport commit SHA、run ID、結論を`record`へ渡す。Gateway未完了の間はtransactionを保持し、独立したローカル作業は進めてよい。
-6. **次のpublish直前に**前回Fast CIの結果を確認する。失敗している場合は原因を修正してから次のpublishを行う。
+1. 責務単位の関連検証を完了し、ローカル`develop`にcommitする。
+2. `python scripts/publish_request.py prepare`でpublish requestを作成する。
+3. publish直前にGitHubのheads一覧を1回取得し、観測した`develop`と`publish`のHEADを`connector-plan`に指定する。
+4. 返された`execution_index`の絶対パスを`INDEX_PATH`に指定し、`scripts/publish_connector_launch.js`の固定sourceをそのまま1回の`functions.exec`で実行する。Launcher／ExecutorがLibrary中継とGitHub transportを完了する。
+5. 返却されたtransport commitに対応するPublish Gateway runが`completed / success`になったことを確認し、transport commit SHA、run ID、結論を`record`へ渡す。runの完了までtransactionを保持し、その間は独立したローカル作業を進めてよい。
+6. 次のpublishを始める際に直前Fast CIの結果を確認する。Fast CIが失敗していれば原因を修正したcheckpointで次のpublishへ進む。
 
 ```bash
 python scripts/publish_request.py prepare
 python scripts/publish_request.py connector-plan \
   --develop-head <current-develop-head> \
   --publish-head <current-publish-head>
-# connector-planのexecution_indexをINDEX_PATHへ渡し、
-# scripts/publish_connector_launch.jsをfunctions.execで1回実行
+# execution_indexの絶対パスをINDEX_PATHへ指定して固定Launcherをfunctions.execで実行
 python scripts/publish_request.py record \
   --gateway-transport-commit <transport-commit> \
   --gateway-run-id <gateway-run-id> \
   --gateway-conclusion success
 ```
 
-`functions.exec`では、`const INDEX_PATH = '<execution_index>';`を先に定義してから、`scripts/publish_connector_launch.js`の内容をそのまま実行する。入力sourceやpacketの内容を手動展開・修正・再構築しない。ファイル数やtransaction規模で手順を変えない。
+`functions.exec`では先頭に`const INDEX_PATH = '<execution_index>';`を定義し、その後に`scripts/publish_connector_launch.js`の内容を続けて実行する。Launcherのsourceはローカルrepoから取得し、ExecutorのsourceはLauncherが共有`develop`から取得する。
 
 ### 中断・失敗時の再開
 
-| 状態 | 対応 |
+| 到達状態 | 続行手順 |
 |---|---|
-| `publish` ref更新前に中断 | 保存済みtransactionの`execution_index`で固定Launcherを再実行する。検証不成立なら原因を解消し、同じtransactionを保持する。 |
-| `publish` ref更新済み | 該当transport commitのGateway結果を確認する。成功なら`record`する。Gatewayの一時的障害は同じrunの再実行で扱う。 |
-| `record`済み | 次のpublishへ進める。直前Fast CIの結果は次のpublish判断時に確認する。 |
+| `publish` ref更新前 | 保存済みtransactionの`execution_index`で固定Launcherを再実行する。入力や回収処理の問題は原因を解消したうえで同じtransactionから続ける。 |
+| `publish` ref更新済み | 該当transport commitのPublish Gateway runを確認する。成功時は`record`し、Gateway側の一時的な障害は同じrunの再実行で扱う。 |
+| `record`済み | ローカル開発を続行する。次のpublish判断時に前回Fast CIの結果を確認する。 |
 
-ref更新前のtransactionを取り消す場合だけ、最新の`develop`・`publish` HEADを取得して`cancel`へ渡す。helperが取消を拒否した場合は、独自のref更新や履歴の作り直しで迂回しない。
+ref更新前のtransactionを取り消す際は、最新の`develop`と`publish`のHEADを取得して`cancel`へ渡す。helperが取消条件を満たさないと判定した場合は、その状態を維持し、標準recoveryの適用条件を解消する。
 
 ```bash
 python scripts/publish_request.py cancel \
@@ -156,12 +161,12 @@ python scripts/publish_control_maintenance.py record-update \
   --result success
 ```
 
-Maintenanceのpacket実行・照合が失敗した場合は、そのtransactionの規定手順で再実行する。ref競合やGateway検証失敗では、原因を解消するまで次の更新を行わない。
+Maintenanceのpacket実行・照合に失敗した場合は、同じtransactionの手順から再実行する。ref競合やGateway検証失敗の原因を解消してから、次の更新へ進む。
 
 ## CI
 
-- **Fast CI**：`develop`へのpublish後、Unit / architecture、clean package install、Chromium direct HTTP smoke、次回復元用`source-snapshot`を検証する。Fast CIは承認ゲートではない。同一runを継続pollせず、次のpublish判断に必要なときに結果を見る。
-- **Full Validation**：`main`反映候補、ユーザー要求、Persistence schema変更、Simulation Orchestrator処理順変更、package / server / launcher変更、Fast CIで扱わないOS・ブラウザ検証に使用する。Gameplay、Windows、WebKitを通常Fast CIへ常設しない。
+- **Fast CI**：`develop`へのpublish後、Unit / architecture、clean package install、Chromium direct HTTP smoke、次回復元用`source-snapshot`を検証する。run結果は次のpublish判断に必要な時点で確認する。
+- **Full Validation**：`main`反映候補、ユーザー要求、Persistence schema変更、Simulation Orchestrator処理順変更、package / server / launcher変更、Fast CIの範囲外となるOS・ブラウザ検証に使用する。Gameplay、Windows、WebKitは該当変更の検証時に実行する。
 
 Browser E2Eは`playwright/run_suite.py <scenario...>`へ対象Scenarioを明示して実行する。各Scenarioは独立したBrowserContext、GameRuntime、保存用一時ディレクトリ、HTTP serverを使用し、状態を共有しない。
 
