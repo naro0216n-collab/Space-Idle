@@ -10,7 +10,6 @@ from collections import defaultdict
 from collections.abc import Iterable
 
 from .analysis_graph import DependencyDefinitionGraph, DependencyNode
-from .analysis_technology_outlets import classify_technology_outlets
 
 
 @dataclass(frozen=True)
@@ -34,41 +33,32 @@ class DefinitionCoverageFinding:
 
 
 def inspect_definition_alternatives(graph: DependencyDefinitionGraph) -> tuple[DefinitionCoverageFinding, ...]:
-    """Surface conditional, relation-level alternatives from *all* Contributors.
+    """Compare quantitative Process alternatives when they share real inputs/outputs.
 
-    This is not a semantic deduplicator. The graph may omit physical parameters,
-    acquisition availability and actual finite Allocation. Never declare that
-    two Definitions are interchangeable or silently delete one from Content.
-    Both inbound requirements and outbound effects must be considered; comparing
-    a method's outputs alone would erase important Player tradeoffs.
+    The registered graph deliberately omits physical performance of many other
+    Definitions (Vehicle, Facility, Provider, etc). Treating their identical
+    graph neighbourhoods as equivalent creates unactionable catalogue warnings.
+    This is an offline Process screening, not an eligibility or removal rule.
     """
-    # World, geographical and resource identities are not competing authored
-    # methods. All other registered Definition kinds participate without an
-    # analyzer-specific list of future Facility / Provider / Vehicle IDs.
-    contextual_kinds = {
-        "resource", "capability", "service_capacity", "capacity_pool", "storage_pool",
-        "site_condition", "spatial_classification", "body", "surface_cell",
-        "spatial_node", "star_system", "survey_target", "survey_parameter",
-        "survey_knowledge_level", "survey_reach_scope", "activity_kind",
-        "experience_category", "research_point_pool", "opportunity_factor",
-        "movement_parameter", "founding_parameter", "exploration_parameter",
-    }
     # Exact multiset signatures, including quantity, unit, time and conditions.
     # Relation provenance is evidence of authorship, not a physical parameter;
     # omitting it allows separately-authored Definitions to be compared.
     signatures: dict[DependencyNode, list[tuple]] = defaultdict(list)
     for relation in graph.relations:
+        if relation.source.kind != "process" and relation.target.kind != "process":
+            continue
         attributes = (relation.kind, relation.quantity, relation.unit,
                       relation.time_basis, relation.condition)
-        signatures[relation.source].append(("out", relation.target, *attributes))
-        if relation.target != relation.source:
+        if relation.source.kind == "process":
+            signatures[relation.source].append(("out", relation.target, *attributes))
+        if relation.target.kind == "process" and relation.target != relation.source:
             signatures[relation.target].append(("in", relation.source, *attributes))
 
     def stable(rows: Iterable[tuple]) -> tuple:
         return tuple(sorted(rows, key=repr))
 
     candidates = [node for node in graph.nodes
-                  if node.kind not in contextual_kinds and signatures[node]]
+                  if node.kind == "process" and signatures[node]]
     groups: dict[tuple, list[DependencyNode]] = defaultdict(list)
     for node in candidates:
         groups[(node.kind, node.scope, stable(signatures[node]))].append(node)
@@ -92,7 +82,7 @@ def inspect_definition_alternatives(graph: DependencyDefinitionGraph) -> tuple[D
                  *relation_evidence),
             ))
 
-    # An additional narrow Pareto check: a production Process that asks for no
+    # A narrow Pareto check: a production Process that asks for no
     # less of any *identical* input but yields no more of any *identical* output
     # may be dominated. Every other authored relation must match exactly,
     # including eligibility, service and technology requirements. This is only
@@ -225,21 +215,9 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             findings.append(DefinitionCoverageFinding(
                 missing_supply_codes[node.kind], node, tuple(sorted(evidence)),
             ))
-    # A Research prerequisite edge by itself is not a usable outlet. Reuse the
-    # full typed Technology reachability projection, distinguishing a terminal
-    # definition from a chain whose registered descendants also lack methods.
-    # These are Content-scope gaps, never claims about technical importance.
-    for outlet in classify_technology_outlets(graph):
-        if outlet.classification not in ("no_downstream_outlet", "research_only_no_method"):
-            continue
-        code = ("technology_without_declared_downstream_outlet"
-                if outlet.classification == "no_downstream_outlet"
-                else "technology_research_chain_without_registered_method")
-        findings.append(DefinitionCoverageFinding(code, outlet.technology, (
-            "scope:registered_definition_methods_only;future_content_unknown",
-            f"technology:{outlet.technology.id}:reachable_method_count:0",
-            *(f"downstream_technology:{row.id}" for row in outlet.downstream_technologies),
-        )))
+    # Per-Technology direct/reachable/unconnected categories belong in the
+    # opt-in Technology inventory projection. Repeating every terminal entry as
+    # a coverage warning floods the report without indicating a balance defect.
     # A method can require independent research results (AND), but directly
     # naming an ancestor *and* its descendant cannot add any acquisition
     # constraint. The DAG is a declaration, not an assertion about an already

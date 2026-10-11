@@ -98,8 +98,7 @@ def observe_application_decisions(
              current_stage=research.current_stage_id,
              stage_progress=research.stage_progress,
              stage_required=research.stage_required,
-             rp_requested=research.rp_requested, rp_allocated=research.rp_allocated,
-             registered_outlet_status=research.registered_outlet_status)
+             rp_requested=research.rp_requested, rp_allocated=research.rp_allocated)
     for exploration in app.query(GetScientificExplorations()).items:
         if exploration.origin_id not in node_scope:
             continue

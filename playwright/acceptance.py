@@ -764,10 +764,6 @@ def run(browser) -> dict[str, object]:
             unlock_inspector_text = page.locator('#inspectorContent').inner_text()
             _assert("解禁内容" in unlock_inspector_text, "research inspector must prioritize projected unlock consequences")
             _assert(
-                "登録Contentでの接続" in unlock_inspector_text,
-                "research inspector must expose whether its chain reaches any registered usable method",
-            )
-            _assert(
                 unlock_fixture.unlocks[0].display_name in unlock_inspector_text,
                 "research unlock text must come from the Application projection",
             )

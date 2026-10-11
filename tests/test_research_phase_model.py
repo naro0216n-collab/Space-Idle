@@ -203,11 +203,6 @@ def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_
     available = _research_row(app, unlock_source)
     assert available.status == "available"
     assert available.current_blockers == () and available.primary_blocker is None
-    # Authoritative Application distinguishes a real direct method from a
-    # research-only path. Neither classification asserts present Eligibility.
-    assert available.registered_outlet_status == "direct_method"
-    assert _research_row(app, other_prerequisite).registered_outlet_status == "research_only_no_method"
-    assert _research_row(app, immediate_child).registered_outlet_status == "no_downstream_outlet"
 
 
 def _remove_research_site_service(sim):

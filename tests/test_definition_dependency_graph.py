@@ -730,17 +730,16 @@ def test_comparison_accepts_distinct_validated_scenario_definitions_without_muta
     assert build_standard_scenario_definition() == initial
 
 
-def test_definition_coverage_distinguishes_missing_supply_from_terminal_technology():
+def test_definition_coverage_reports_missing_suppliers_without_classifying_technology_value():
     from space_idle.analysis_coverage import inspect_definition_coverage
 
     app = build_game_application()
     graph = build_definition_dependency_graph(app._simulation, app._catalog)
     findings = inspect_definition_coverage(graph)
     assert not any(row.code == "required_capability_without_definition_supplier" for row in findings)
-    terminal = tuple(row for row in findings if row.code == "technology_without_declared_downstream_outlet")
-    assert terminal
-    assert all(row.significance == "informational" and row.evidence for row in terminal)
-    assert all(row.subject.kind == "technology" for row in terminal)
+    # Absence of a declared outlet is an inventory classification, not
+    # an automatic balance defect for every Technology.
+    assert not any(row.code.startswith("technology_") for row in findings)
     assert inspect_definition_coverage(graph) == findings
 
     # A known capability node is not proof that any physical Definition
@@ -836,29 +835,10 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
     assert classified["d"].classification == "direct_method"
     assert classified["e"].classification == "research_only_no_method"
     assert classified["f"].classification == "no_downstream_outlet"
-    # The normal player Query uses the same declaration-only classification,
-    # without building the global Definition Graph on every UI refresh.
-    from space_idle import GetResearch, build_game_application
-    from space_idle.composition.analysis_graph import build_definition_dependency_graph
-    app = build_game_application()
-    methods_by_id = {
-        row.technology.id: row.classification
-        for row in classify_technology_outlets(
-            build_definition_dependency_graph(app._simulation, app._catalog)
-        )
-    }
-    assert {row.id: row.registered_outlet_status for row in app.query(GetResearch()).items} == methods_by_id
-    # Coverage must distinguish a terminal orphan from an entire descendant
-    # research chain that never reaches an executable registered method.
+    # Classification remains available as a deliberate audit, not as
+    # hundreds of automatic coverage warnings in ordinary output.
     from space_idle.analysis_coverage import inspect_definition_coverage
-    coverage = inspect_definition_coverage(graph)
-    assert any(row.code == "technology_research_chain_without_registered_method"
-               and row.subject == e
-               and f"downstream_technology:{f.id}" in row.evidence for row in coverage)
-    assert any(row.code == "technology_without_declared_downstream_outlet"
-               and row.subject == f for row in coverage)
-    assert all(row.subject not in (a, b, c, d) for row in coverage
-               if row.code.startswith("technology_"))
+    assert not any(row.code.startswith("technology_") for row in inspect_definition_coverage(graph))
     assert classify_technology_outlets(DependencyDefinitionGraph(tuple(reversed(nodes)),
                                                                 tuple(reversed(relations)), ())) == rows
     # Independently necessary branches of a research DAG are not redundant;

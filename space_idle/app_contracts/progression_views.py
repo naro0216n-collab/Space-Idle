@@ -147,7 +147,6 @@ class ResearchRow:
     category: str | None = None
     series: str | None = None
     unlocks: tuple[ResearchUnlockRow, ...] = ()
-    registered_outlet_status: str = "no_downstream_outlet"
 
 
 @dataclass(frozen=True)

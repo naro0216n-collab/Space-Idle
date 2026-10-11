@@ -35,10 +35,10 @@ def _idle(_app, _day):
 
 
 def test_registered_definition_alternatives_require_shared_inputs_and_physical_conditions():
-    """A Contributor's new method kind participates without ID-specific rules.
+    """Only comparable authored Process alternatives are screened.
 
-    Matching authored relations produce *candidates*, never actual eligibility
-    or automatic Content removal. Process Pareto reasoning retains AND gates.
+    Other Definition kinds may have physical performance outside the graph;
+    a matching neighbourhood alone is not evidence of interchangeability.
     """
     from space_idle.analysis_coverage import inspect_definition_alternatives
 
@@ -98,9 +98,7 @@ def test_registered_definition_alternatives_require_shared_inputs_and_physical_c
     assert "candidate:process:process.3" in by_subject[
         ("possible_equivalent_relation_contract", "process.0")
     ]
-    assert "candidate:future_operation_method:new.1" in by_subject[
-        ("possible_equivalent_relation_contract", "new.0")
-    ]
+    assert ("possible_equivalent_relation_contract", "new.0") not in by_subject
     assert "possible_dominator:process:process.0" in by_subject[
         ("possible_dominated_process", "process.1")
     ]
