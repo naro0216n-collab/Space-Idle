@@ -67,7 +67,7 @@ Facility、Construction、Inventory、Location dependency等は選択Locationを
 
 - ボトルネックを発見し、改善対象を選ぶ。
 - Facilityが低稼働な理由を確認し、Process、Priority、供給側等を調整する。
-- 建設候補を比較し、必要条件と準備時期を確認して開始する。
+- 建設候補を用途別に選び、個別の性能・資材投入・建設条件・準備時期を確認して開始する。
 - Research候補と現在Stageの条件を確認し、必要なExecution Contextを選ぶ。
 - Survey対象をMapで選択し、戦略差がある場合だけProvider差を比較する。
 - 新Location候補をMapで比較し、Founding blockerを解消する。
@@ -362,7 +362,7 @@ Facility InspectorはHousing人数容量、Life Support Providerの人日/日供
 
 ## 9. Facility
 
-Facility一覧は比較用途として、各Facilityの次の状態を短く表示する。
+Facility一覧は各Facilityの用途と稼働状態を横断把握するため、次の状態を短く表示する。異種設備の能力数や産出量を同一の優劣指標へ換算しない。
 
 - lifecycle / pause
 - selected Process / primary function
@@ -407,6 +407,8 @@ Process候補に戦略差がある場合だけ、primary input / output、Capabi
 6. 開始する。
 
 候補では「何を可能にするか」、主要input / outputまたはCapability、Build Resource、必要Service / placement condition、current availability、Inboundを含む準備状況、Projected Material Readiness、blockerを確認できるようにする。
+
+建設候補は用途が異なるFacilityを含む一覧とし、異種の設備を資材総質量・Resource種類数・Capability数・Process数などの単一比較軸へ載せない。建設候補同士をPinして横並びに比較する専用機能は設けず、用途・個別の投入Resource・公称産出・有限能力・建設条件を各候補のInspectorで把握する。用途・産出単位が共通する設備も、数値の大小を一般的な優劣や推奨に換算しない。
 
 ### 10.2 Upgrade
 
@@ -600,7 +602,7 @@ DraftはStructured Decisionで必要な場合だけ使用する。active Draft�
 
 ## 19. Comparison
 
-Comparisonは戦略的に異なる複数候補が存在するときだけ用いる。
+Comparisonは、同じ判断目的の代替候補間に、解釈可能な共通物理軸があり、戦略的に異なるときだけ用いる。異種Resourceの投入・産出を合計して成果や優劣を評価せず、種類数や候補数の大小を代替の価値指標にしない。共通軸が成立しない一覧では個別InspectorとResource別の数値・blocker表示を使う。
 
 代表対象:
 
@@ -609,7 +611,6 @@ Comparisonは戦略的に異なる複数候補が存在するときだけ用い�
 - Research Execution Context
 - Survey provider / observation mode
 - Movement候補
-- Construction候補
 
 共通Componentは2〜4候補のPin、共通比較軸、差分強調、blocker表示、Inspector展開を提供できる。候補が一意またはゲーム上同等ならComparisonを要求せず、Coreの決定論的選択を利用する。
 

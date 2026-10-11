@@ -325,11 +325,12 @@ def build_facility_decommission_recipes(facility_definition_ids) -> dict:
 
 
 def build_construction_providers() -> dict:
+    # Construction yards provide site work. An equipment factory produces
+    # owned Construction Equipment stock instead of duplicating this service.
     return {
         ids.ORBITAL_CONSTRUCTION_PLATFORM: ConstructionProviderSpec(ids.ORBITAL_CONSTRUCTION_PLATFORM, 0.7),
         ids.ROBOTIC_SURVEY_PACKAGE: ConstructionProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, 0.35),
         ids.CONSTRUCTION_YARD: ConstructionProviderSpec(ids.CONSTRUCTION_YARD, 0.8),
-        ids.HEAVY_EQUIPMENT_ASSEMBLY: ConstructionProviderSpec(ids.HEAVY_EQUIPMENT_ASSEMBLY, 1.5),
     }
 
 

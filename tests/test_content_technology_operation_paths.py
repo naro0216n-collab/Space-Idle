@@ -456,6 +456,8 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
                          selected_process_id=ids.PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY),
         ScenarioFacility(ids.MICROELECTRONICS_FAB, ids.EARTH,
                          selected_process_id=ids.PROCESS_MICROELECTRONICS_FABRICATION),
+        ScenarioFacility(ids.HEAVY_EQUIPMENT_ASSEMBLY, ids.EARTH,
+                         selected_process_id=ids.PROCESS_HEAVY_EQUIPMENT),
         ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
     )
     # Scarce construction commodities coexist with opening Industry and
@@ -525,6 +527,25 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         if row.facility_definition_id == str(ids.MICROELECTRONICS_FAB)
     )
     baseline.execute(PauseFacility(microelectronics.facility_id))
+    equipment_factory = next(
+        row for row in baseline_rows
+        if row.facility_definition_id == str(ids.HEAVY_EQUIPMENT_ASSEMBLY)
+    )
+    baseline.execute(PauseFacility(equipment_factory.facility_id))
+
+    # Producing construction equipment does not also grant the factory a
+    # construction-yard service. Its finite stock contributes only after an
+    # ordinary Process has actually manufactured and admitted the equipment.
+    def node(app):
+        return app.query(GetOperationalNode(str(ids.EARTH)))
+
+    def stock(app, resource_id):
+        return next(row.amount for row in node(app).inventory
+                    if row.resource_id == str(resource_id))
+
+    before_work = node(baseline).construction_capacity_per_day
+    leo_before_work = baseline.query(GetOperationalNode(str(ids.LEO))).construction_capacity_per_day
+    assert node(extended).construction_capacity_per_day == pytest.approx(before_work)
 
     for _ in range(22):
         baseline.execute(AdvanceTime(1))
@@ -541,6 +562,13 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         assert extended._simulation.inventory.amount(ids.EARTH, product) > (
             baseline._simulation.inventory.amount(ids.EARTH, product)
         )
+
+    # Equipment assembly contributes to construction only through its produced
+    # and admitted Equipment stock, without a second provider on the factory.
+    assert stock(extended, ids.CONSTRUCTION_EQUIPMENT) > stock(baseline, ids.CONSTRUCTION_EQUIPMENT)
+    assert node(extended).construction_capacity_per_day > node(baseline).construction_capacity_per_day
+    assert (extended.query(GetOperationalNode(str(ids.LEO))).construction_capacity_per_day
+            == pytest.approx(leo_before_work))
 
     # Both systems commit the same real projects and finite material demand;
     # downstream Construction/Vehicle Domains have no new material exceptions.

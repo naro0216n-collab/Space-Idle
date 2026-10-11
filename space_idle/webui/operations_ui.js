@@ -160,22 +160,6 @@
     ];
     return enables[0]||'拠点能力を追加';
   }
-  function constructionComparisonScope(){return `construction:${state.buildOptions?.operational_node_id||state.operationalNodeId||''}`;}
-  function constructionComparisonCandidates(){return state.buildOptions?.items||[];}
-  function constructionComparisonPinnedKeys(){return comparisonPinnedKeys(constructionComparisonScope(),constructionComparisonCandidates());}
-  function constructionComparisonHtml(){
-    const candidates=constructionComparisonCandidates();
-    return comparisonSurfaceHtml({
-      scopeKey:constructionComparisonScope(),
-      axes:state.buildOptions?.comparison_axes||[],
-      candidates,
-      emptyText:'現在の建設候補には、比較が必要な戦略差はありません。',
-      promptText:'建設候補から2〜4候補を比較に追加すると、必要工数・資源負担・追加機能の規模を共通軸で確認できます。',
-      headingHtml:(row)=>`<strong>${esc(row.display_name)}</strong><span>${esc(buildOptionPrimaryEnable(row))}</span><small>${row.can_plan?'計画可能':'条件不足'}</small>`,
-      detailButtonHtml:(row)=>`<button type="button" data-inspect="build-option" data-id="${esc(row.facility_definition_id)}">詳細</button>`,
-      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
-    });
-  }
   function processComparisonScope(industry){return `process:${industry.facility_id}`;}
   function processComparisonHtml(industry){
     return comparisonSurfaceHtml({
@@ -957,17 +941,11 @@
     }).join('');
     const enables=capabilityCards+serviceCards+processCards||'<div class="empty-state">追加される能力情報なし</div>';
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
-    const comparisonAvailable=(state.buildOptions?.comparison_axes||[]).length>0;
-    const pinnedKeys=new Set(constructionComparisonPinnedKeys());
-    const pinned=pinnedKeys.has(o.comparison_key);
-    const pinDisabled=comparisonAvailable&&!pinned&&pinnedKeys.size>=4;
-    const compareAction=comparisonAvailable?`<button type="button" data-construction-compare-pin="${esc(o.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
       section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),...(o.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(o.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(o.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(o.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
-      section('操作',`<div class="action-stack">${compareAction}${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
-      (comparisonAvailable?section('建設候補比較',constructionComparisonHtml()):'')+
+      section('操作',`<div class="action-stack">${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
       section('建設後に利用可能',enables+(o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+(o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
       section('必要資源',resourceCards(o.resources))
     );
@@ -1362,7 +1340,6 @@
     const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell'){render();await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));}else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
     const foundingCandidateDetail=event.target.closest('[data-founding-candidate-detail]');if(foundingCandidateDetail){state.inspector={type:'founding-candidate',id:foundingCandidateDetail.dataset.foundingCandidateDetail};renderInspector();return;}
     const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));renderInspector();return;}
-    const constructionComparePin=event.target.closest('[data-construction-compare-pin]');if(constructionComparePin){toggleComparisonPin(constructionComparisonScope(),constructionComparisonCandidates(),constructionComparePin.dataset.constructionComparePin);renderInspector();return;}
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const cellId=surfaceDevelop.dataset.cellId,plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:cellId,...plan});await A.completeActiveDraft(`development:${cellId}:${surfaceDevelop.dataset.surfaceDevelop}`);preserveSurfaceDecision(cellId);banner('地表地域の開発案件を作成しました');}catch{}return;}

@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
-from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
@@ -51,8 +50,6 @@ class BuildOptionRow:
     process_options: tuple[BuildProcessOptionRow, ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
     projected_material_readiness_day: int | None = None
-    comparison_key: str = ""
-    comparison_values: tuple[ComparisonValueRow, ...] = ()
     power_nominal_generation_mw: float = 0.0
     power_nominal_load_mw: float = 0.0
     process_nominal_throughput_per_day: float | None = None
@@ -85,7 +82,6 @@ class BuildOptionsView:
     operational_node_id: str
     procurement_policy_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
-    comparison_axes: tuple[ComparisonAxisRow, ...] = ()
 
 
 @dataclass(frozen=True)

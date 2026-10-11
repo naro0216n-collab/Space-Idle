@@ -403,8 +403,6 @@ class LocationProjectorMixin:
                 key=str,
             ))
             process_axis_definitions = [
-                ("input_total_t", "投入量合計", "number", "t/日"),
-                ("output_total_t", "産出量合計", "number", "t/日"),
                 ("storage_burden_t", "保管負荷", "number", "t/日"),
             ]
             process_axis_definitions.extend(
@@ -447,14 +445,6 @@ class LocationProjectorMixin:
                                 f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution * throughput:g}"
                             )
                 comparison_values = (
-                    ComparisonValueRow(
-                        axis_key="input_total_t",
-                        number_value=sum(option_process.inputs_per_day.values()) * throughput,
-                    ),
-                    ComparisonValueRow(
-                        axis_key="output_total_t",
-                        number_value=sum(option_process.outputs_per_day.values()) * throughput,
-                    ),
                     ComparisonValueRow(
                         axis_key="storage_burden_t", number_value=storage_burden
                     ),

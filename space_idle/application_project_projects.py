@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from math import ceil
 
-from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
-from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
     BuildOptionRow, BuildProcessOptionRow,
@@ -15,6 +13,7 @@ from .application_views import (
     ProjectRow,
 )
 from .construction.models import (
+    CONSTRUCTION_SERVICE_TYPE,
     FacilityUpgradeTarget, FacilityDecommissionTarget, NewFacilityTarget,
     ProjectStatus, SurfaceCellDevelopmentTarget,
 )
@@ -648,41 +647,18 @@ class ProjectProjectorMixin:
                 recipe.facility_def_id, location_id, sim.day,
             )
             capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
-            service_capacity_supplies = tuple(
-                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
-            )
-            comparison_values = (
-                ComparisonValueRow(axis_key="construction_work", number_value=recipe.construction_work),
-                ComparisonValueRow(
-                    axis_key="resource_total_t",
-                    number_value=sum(resource.required_t for resource in build_resources),
-                ),
-                ComparisonValueRow(
-                    axis_key="resource_type_count", number_value=float(len(build_resources))
-                ),
-                ComparisonValueRow(
-                    axis_key="capability_count", number_value=float(len(capabilities))
-                ),
-                ComparisonValueRow(
-                    axis_key="service_type_count",
-                    number_value=float(len(service_capacity_supplies)),
-                ),
-                ComparisonValueRow(
-                    axis_key="process_count", number_value=float(len(process_options))
-                ),
-                ComparisonValueRow(
-                    axis_key="process_throughput_per_day", number_value=process_throughput
-                ),
-                ComparisonValueRow(
-                    axis_key="extraction_capacity_t_per_day", number_value=extraction_capacity
-                ),
-                ComparisonValueRow(
-                    axis_key="self_deploying",
-                    text_value="自己展開" if recipe.self_deploying else "通常施工",
-                ),
-                ComparisonValueRow(axis_key="power_generation_mw", number_value=nominal_generation),
-                ComparisonValueRow(axis_key="power_load_mw", number_value=nominal_load),
-            )
+            # Construction Work is supplied by the Construction Domain, not
+            # FacilityDef.service_capacity_supplies. Include its owned nominal
+            # service in the same candidate effect display; a factory producing
+            # Equipment stock must not claim this direct service as well.
+            service_supplies = [
+                (supply.service_type, supply.nominal_rate)
+                for supply in definition.service_capacity_supplies
+            ]
+            construction_provider = sim.projects.construction_providers.get(recipe.facility_def_id)
+            if construction_provider is not None:
+                service_supplies.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
+            service_capacity_supplies = tuple(sorted(service_supplies))
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
                 display_name=definition.display_name,
@@ -701,32 +677,13 @@ class ProjectProjectorMixin:
                 process_options=process_options,
                 placement_scope=definition.placement_scope.value,
                 projected_material_readiness_day=material_readiness_day,
-                comparison_key=str(recipe.facility_def_id),
-                comparison_values=comparison_values,
                 power_nominal_generation_mw=nominal_generation,
                 power_nominal_load_mw=nominal_load,
                 process_nominal_throughput_per_day=process_throughput,
                 extraction_nominal_capacity_t_per_day=extraction_capacity,
             ))
-        comparison_axes = project_comparison_axes(
-            (
-                ("construction_work", "必要工数", "number", None),
-                ("resource_total_t", "必要資源量", "number", "t"),
-                ("resource_type_count", "必要資源種", "integer", "種"),
-                ("capability_count", "追加能力", "integer", "種"),
-                ("service_type_count", "追加サービス", "integer", "種"),
-                ("process_count", "利用可能工程", "integer", "種"),
-                ("process_throughput_per_day", "工程公称実行量", "number", "回/日"),
-                ("extraction_capacity_t_per_day", "採掘設備公称能力", "number", "t/日"),
-                ("self_deploying", "施工方式", "text", None),
-                ("power_generation_mw", "現在環境での発電公称値", "number", "MW"),
-                ("power_load_mw", "稼働時のPower需要", "number", "MW"),
-            ),
-            (row.comparison_values for row in rows),
-        )
         return BuildOptionsView(
             str(location_id),
             tuple(sim.projects.procurement_policy_options()),
             tuple(rows),
-            comparison_axes,
         )

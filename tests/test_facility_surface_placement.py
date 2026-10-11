@@ -115,40 +115,25 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         assert option.missing_technology_ids == tuple(
             str(technology) for technology in sim.industry.missing_process_technologies(process)
         )
-    assert build_options.comparison_axes
-    assert any(axis.differs for axis in build_options.comparison_axes)
-    assert {axis.key for axis in build_options.comparison_axes} == {
-        "construction_work",
-        "resource_total_t",
-        "resource_type_count",
-        "capability_count",
-        "service_type_count",
-        "process_count",
-        "process_throughput_per_day",
-        "extraction_capacity_t_per_day",
-        "self_deploying",
-        "power_generation_mw",
-        "power_load_mw",
-    }
     nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
         definition.id, ids.EARTH, sim.day,
     )
     assert candidate.power_nominal_generation_mw == pytest.approx(nominal_generation)
     assert candidate.power_nominal_load_mw == pytest.approx(nominal_load)
-    comparison_values = {value.axis_key: value for value in candidate.comparison_values}
-    assert candidate.comparison_key == candidate.facility_definition_id
-    assert set(comparison_values) == {axis.key for axis in build_options.comparison_axes}
-    assert comparison_values["resource_total_t"].number_value == pytest.approx(
-        sum(resource.required_t for resource in candidate.resources)
-    )
-    assert comparison_values["self_deploying"].text_value in {"自己展開", "通常施工"}
-    assert comparison_values["process_throughput_per_day"].number_value == (
-        definition.process_throughput_per_day if candidate.process_options else None
-    )
     expected_extraction = definition.extraction_capacity_t_per_day or None
     assert candidate.extraction_nominal_capacity_t_per_day == expected_extraction
-    assert comparison_values["extraction_capacity_t_per_day"].number_value == expected_extraction
+    # Unlike build inputs, heterogeneous facility effects have no shared
+    # comparison score or comparison pinning contract.
+    assert not hasattr(build_options, "comparison_axes")
+    assert not hasattr(candidate, "comparison_values")
     rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
+    # The build decision includes Construction-owned site work as a nominal
+    # service, but not the manufacturing of finite Construction Equipment.
+    from space_idle.construction.models import CONSTRUCTION_SERVICE_TYPE
+    yard = rows_by_id[ids.CONSTRUCTION_YARD]
+    assert (CONSTRUCTION_SERVICE_TYPE, sim.projects.construction_providers[ids.CONSTRUCTION_YARD].work_per_day) in yard.service_capacity_supplies
+    equipment = rows_by_id[ids.HEAVY_EQUIPMENT_ASSEMBLY]
+    assert all(service != CONSTRUCTION_SERVICE_TYPE for service, _ in equipment.service_capacity_supplies)
     # Existing and advanced fabricators expose the resulting rates for the
     # *same* downstream Process. The comparison must reflect material flow,
     # not just a list of available Process names.
@@ -212,6 +197,12 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     )
     assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
     assert {value.axis_key for value in primary_option.comparison_values} == {
+        axis.key for axis in unresolved.process_comparison_axes
+    }
+    # Different Resource kinds are not interchangeable throughput. Each
+    # process retains its own per-Resource material flows instead of a
+    # total mass "better/worse" comparison score.
+    assert not {"input_total_t", "output_total_t"} & {
         axis.key for axis in unresolved.process_comparison_axes
     }
 

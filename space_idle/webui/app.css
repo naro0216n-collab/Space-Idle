@@ -310,7 +310,7 @@ tbody tr.is-context-target { background: #163249; outline: 1px solid var(--accen
 .capacity-quad strong { display: block; margin-top: 3px; font-size: 15px; }
 .compact-issues { padding: 0 10px 10px; }
 
-/* Facility decision surface: touchable comparison cards instead of a desktop data table. */
+/* Facility decision surface: per-asset status cards with contextual inspection. */
 .facility-decision-surface { display: grid; gap: 12px; }
 .decision-surface-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .decision-surface-heading h2 { margin: 2px 0 0; font-size: 20px; }
