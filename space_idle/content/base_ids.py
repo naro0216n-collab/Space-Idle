@@ -77,6 +77,7 @@ GRID_POWER_SUPPLY = DefinitionId("base.facility.grid_power_supply")
 ORBITAL_LOGISTICS_NODE = DefinitionId("base.facility.orbital_logistics_node")
 ORBITAL_FISSION_POWER = DefinitionId("base.facility.orbital_fission_power")
 EARTH_LAUNCH_SUPPORT = DefinitionId("base.facility.earth_launch_support")
+CARGO_LAUNCH_INTEGRATION_PAD = DefinitionId("base.facility.cargo_launch_integration_pad")
 VEHICLE_ASSEMBLY_FACILITY = DefinitionId("base.facility.vehicle_assembly")
 ROBOTIC_SURVEY_PACKAGE = DefinitionId("base.facility.robotic_survey_package")
 SURFACE_POWER_GRID = DefinitionId("base.facility.surface_solar_power_grid")
@@ -187,6 +188,7 @@ EXPERIENCE_MANUFACTURING_OPERATIONS = "base.experience.manufacturing_operations"
 # Transport assets are reusable physical assets. Route eligibility is derived
 # from performance and endpoint environment, not purpose/category labels.
 REUSABLE_LAUNCH_VEHICLE = DefinitionId("base.vehicle.reusable_launch_vehicle")
+MODULAR_CARGO_LAUNCHER = DefinitionId("base.vehicle.modular_cargo_launcher")
 REUSABLE_ORBITAL_CARGO_TUG = DefinitionId("base.vehicle.reusable_orbital_cargo_tug")
 ORBITAL_OBSERVATION_SPACECRAFT = DefinitionId("base.vehicle.orbital_observation_spacecraft")
 ORBITAL_OBSERVATION_RESEARCH_PROVIDER = DefinitionId("base.research_provider.orbital_observation")

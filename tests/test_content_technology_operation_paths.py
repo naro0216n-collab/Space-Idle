@@ -898,3 +898,102 @@ def test_high_volume_propellant_terminal_links_process_power_storage_and_fleet_r
     loaded.execute(AdvanceTime(1))
     improved.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(improved._simulation)
+
+
+def test_modular_cargo_launch_system_connects_site_services_fleet_and_orbital_stock(tmp_path):
+    """More terrestrial factory output reaches orbit only by committed Fleet.
+
+    The cargo launcher is differentiated by actual ascent, propellant, service
+    turnaround and manufacture. Its launch site is ordinary finite installed
+    infrastructure, not a location-specific Transport special case.
+    """
+    from space_idle import (
+        CreateTransportAllocation, GetFleet, GetTransportAllocationOptions,
+        GetTransportAllocations, PlanBuild, ProduceVehicle, SetTargetStock,
+    )
+    from space_idle.scenario import ScenarioFacility
+
+    base = build_standard_scenario_definition()
+    locked = build_game_application_for_scenario(base)
+    with pytest.raises(ApplicationError, match="technology"):
+        locked.execute(ProduceVehicle(str(ids.MODULAR_CARGO_LAUNCHER), str(ids.EARTH)))
+    from space_idle import GetSurfaceMap
+    core = next(cell for cell in locked.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells
+                if cell.id == str(ids.EARTH_CELL_INDUSTRIAL))
+    pad = next(option for option in core.facility_placement_options
+               if option.facility_definition_id == str(ids.CARGO_LAUNCH_INTEGRATION_PAD))
+    # The project may be queued before Research; operation blockers remain
+    # visible even when the planning Command itself is available.
+    assert any(blocker.kind == "technology" for blocker in pad.blockers)
+
+    completed = tuple(ids.research_id(name) for name in (
+        "CH-COMBUSTION-09", "MC-MANUFACTURING-CONSTRUCTION-09",
+        "GN-NAVIGATION-06", "LM-LOGISTICS-MAINTENANCE-07",
+    ))
+    app = build_game_application_for_scenario(replace(
+        base,
+        completed_technologies=completed,
+        facilities=base.facilities + (
+            ScenarioFacility(ids.CONSTRUCTION_YARD, ids.EARTH),
+            # Arrival handling is a real receiving asset; an orbital context
+            # without one must not silently admit an incoming cargo shipment.
+            ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
+        ),
+    ))
+    sim = app._simulation
+    options = app.query(GetTransportAllocationOptions(str(ids.EARTH), str(ids.LEO))).options
+    by_vehicle = {row.vehicle_definition_id: row for row in options}
+    ordinary = by_vehicle[str(ids.REUSABLE_LAUNCH_VEHICLE)]
+    modular = by_vehicle[str(ids.MODULAR_CARGO_LAUNCHER)]
+    assert modular.nominal_capacity.forward_t_per_day > ordinary.nominal_capacity.forward_t_per_day
+    assert (sim.transport.vehicle_defs[ids.MODULAR_CARGO_LAUNCHER].production.resources
+            != sim.transport.vehicle_defs[ids.REUSABLE_LAUNCH_VEHICLE].production.resources)
+    assert (sim.transport.vehicle_defs[ids.MODULAR_CARGO_LAUNCHER].maintenance.turnaround_days
+            > sim.transport.vehicle_defs[ids.REUSABLE_LAUNCH_VEHICLE].maintenance.turnaround_days)
+    assert (modular.operational_supply_at_full_unit != ordinary.operational_supply_at_full_unit)
+
+    existing_launch = tuple(sim.facilities.all_at(ids.EARTH))
+    assert app.execute(PlanBuild(str(ids.EARTH), str(ids.CARGO_LAUNCH_INTEGRATION_PAD),
+                                 site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
+                                 procurement_policy="immediate")).created_id
+    assert app.execute(ProduceVehicle(str(ids.MODULAR_CARGO_LAUNCHER), str(ids.EARTH))).created_id
+    assert len(tuple(sim.facilities.all_at(ids.EARTH))) == len(existing_launch)
+    app.execute(AdvanceTime(40))
+    assert any(row.definition_id == ids.CARGO_LAUNCH_INTEGRATION_PAD
+               for row in sim.facilities.all_at(ids.EARTH))
+    fleet = next(row for row in app.query(GetFleet(str(ids.EARTH))).pools
+                 if row.vehicle_definition_id == str(ids.MODULAR_CARGO_LAUNCHER))
+    assert fleet.total_units == 1
+    launch_services = {
+        row.service_type: row.nominal
+        for row in app.query(GetOperationalNode(str(ids.EARTH))).service_capacities
+    }
+    assert launch_services["launch_vehicle_servicing"] > 1.0
+
+    target = modular.nominal_capacity.forward_t_per_day
+    allocation_id = app.execute(CreateTransportAllocation(
+        str(ids.MODULAR_CARGO_LAUNCHER), str(ids.EARTH), str(ids.LEO),
+        target_forward_t_per_day=target, target_reverse_t_per_day=0.0,
+    )).created_id
+    assert allocation_id is not None
+    before_orbit = sim.inventory.amount(ids.LEO, ids.STRUCTURAL_COMPONENTS)
+    before_surface = sim.inventory.amount(ids.EARTH, ids.PROPELLANT)
+    assert app.execute(SetTargetStock(
+        str(ids.LEO), str(ids.STRUCTURAL_COMPONENTS), before_orbit + 18.0,
+    )).created_id
+    app.execute(AdvanceTime(25))
+    assert sim.inventory.amount(ids.LEO, ids.STRUCTURAL_COMPONENTS) > before_orbit
+    assert sim.inventory.amount(ids.EARTH, ids.PROPELLANT) < before_surface
+    assert any(row.id == allocation_id for row in app.query(GetTransportAllocations()).items)
+    assert any(row.transport_units == 1 for row in app.query(GetFleet(str(ids.EARTH))).pools
+               if row.vehicle_definition_id == str(ids.MODULAR_CARGO_LAUNCHER))
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    path = tmp_path / "modular-launcher-transport.json"
+    save_game(app, path, saved_at=now)
+    loaded, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    loaded.execute(AdvanceTime(3))
+    app.execute(AdvanceTime(3))
+    assert capture_state(loaded._simulation) == capture_state(sim)

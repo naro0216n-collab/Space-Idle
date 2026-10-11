@@ -29,6 +29,7 @@ def build_power_specs() -> dict:
         ids.SAMPLE_ANALYSIS_LABORATORY: PowerSpec(None, 0.40),
         ids.VACUUM_REGOLITH_PROCESS_LABORATORY: PowerSpec(None, 0.85),
         ids.EARTH_LAUNCH_SUPPORT: PowerSpec(None, 0.08),
+        ids.CARGO_LAUNCH_INTEGRATION_PAD: PowerSpec(None, 0.55, standby_load_mw=0.06),
         ids.VEHICLE_ASSEMBLY_FACILITY: PowerSpec(None, 0.18),
         ids.GRID_POWER_SUPPLY: PowerSpec(FixedGeneration(20.0), 0.0),
         ids.ORBITAL_FISSION_POWER: PowerSpec(FixedGeneration(0.6), 0.03),

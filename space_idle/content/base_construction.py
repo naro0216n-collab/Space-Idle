@@ -74,6 +74,11 @@ def build_construction_recipes() -> dict:
         ids.EARTH_LAUNCH_SUPPORT: req._surface_recipe(
             ids.EARTH_LAUNCH_SUPPORT, 10, 8, 2, 54,
         ),
+        ids.CARGO_LAUNCH_INTEGRATION_PAD: req._surface_recipe(
+            ids.CARGO_LAUNCH_INTEGRATION_PAD, 26.0, 20.0, 7.0, 190.0,
+            technologies=frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09"),
+                                     ids.research_id("LM-LOGISTICS-MAINTENANCE-07")}),
+        ),
         ids.VEHICLE_ASSEMBLY_FACILITY: req._surface_recipe(
             ids.VEHICLE_ASSEMBLY_FACILITY, 10, 10, 3, 60,
         ),

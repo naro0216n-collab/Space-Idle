@@ -273,6 +273,46 @@ def build_vehicle_definitions() -> dict:
                 net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
             ),
         ),
+        ids.MODULAR_CARGO_LAUNCHER: VehicleDef(
+            id=ids.MODULAR_CARGO_LAUNCHER,
+            display_name="モジュール集成型貨物打上げ機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=160.0, payload_t=52.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=105.0,
+                propellant_t_per_total_t_per_km_s=0.021,
+                operation_capabilities=(PoweredAscentCapability(
+                    10.0, 10.0, 110000.0, 450.0, OperationAssetDisposition.ORIGIN,
+                ),),
+                operation_support_requirements=(OperationSupportRequirement(
+                    TransportOperationKind.POWERED_ASCENT,
+                    OperationSupportLocation.ORIGIN, "launch_operations",
+                ),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=14.0,
+                generic_capabilities=("refueling_interface",),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=24.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 42.0),
+                           (ids.MACHINERY, 18.0), (ids.PRECISION_ELECTRONICS, 6.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("CH-COMBUSTION-09"),
+                    ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09"),
+                    ids.research_id("GN-NAVIGATION-06"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=12.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 21.0),
+                                             (ids.MACHINERY, 9.0),
+                                             (ids.PRECISION_ELECTRONICS, 3.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(
+                service_type="launch_vehicle_servicing", turnaround_days=8.0,
+            ),
+        ),
         ids.REUSABLE_ORBITAL_CARGO_TUG: VehicleDef(
             id=ids.REUSABLE_ORBITAL_CARGO_TUG,
             display_name="再使用型軌道間貨物船",
