@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,7 +33,6 @@ PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
 PUBLISH_BRANCH = "publish"
 TARGET_BRANCH = "develop"
-ALLOWED_TRANSPORT_TARGETS = ("develop", "temp")
 TRUSTED_CONTROL_WORKFLOW = ".github/workflows/publish-gateway.yml"
 
 
@@ -512,8 +512,8 @@ def _tree_content_element(path: str, content: str) -> dict[str, object]:
     return {"path": path, "mode": "100644", "type": "blob", "content": content}
 
 
-def _tree_delete_element(path: str, *, mode: str = "100644", object_type: str = "blob") -> dict[str, object]:
-    return {"path": path, "mode": mode, "type": object_type, "sha": None}
+def _tree_delete_element(path: str) -> dict[str, object]:
+    return {"path": path, "mode": "100644", "type": "blob", "sha": None}
 
 
 def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index: int, expected_tree: str | None = None) -> dict[str, object]:
@@ -536,62 +536,6 @@ def _list_publish_paths(repo: Path, tree: str) -> list[str]:
     _require_object(repo, f"{tree}^{{tree}}", name="publish transport base tree")
     output = _git("ls-tree", "-r", "--name-only", tree, "--", ".publish", cwd=repo)
     return [line for line in output.splitlines() if line]
-
-
-def _direct_tree_entries(repo: Path, tree: str, directory: str) -> list[dict[str, str]]:
-    spec = f"{tree}:{directory}"
-    probe = subprocess.run(
-        ["git", "cat-file", "-e", spec], cwd=repo,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    if probe.returncode != 0:
-        return []
-    if _git("cat-file", "-t", spec, cwd=repo) != "tree":
-        raise PublishStateError(f"publish transport path must be a tree: {directory}")
-    output = _git("ls-tree", spec, cwd=repo)
-    entries: list[dict[str, str]] = []
-    for line in output.splitlines():
-        if not line:
-            continue
-        metadata, name = line.split("\t", 1)
-        mode, object_type, oid = metadata.split()
-        entries.append({"name": name, "mode": mode, "type": object_type, "oid": oid})
-    return entries
-
-
-def _compact_stale_delete_elements(
-    repo: Path, *, base_tree: str, target: str, stale: list[str],
-) -> list[dict[str, object]]:
-    deletes: list[dict[str, object]] = []
-    stale_set = set(stale)
-    for entry in _direct_tree_entries(repo, base_tree, ".publish"):
-        name = entry["name"]
-        path = f".publish/{name}"
-        if name != "transport":
-            deletes.append(
-                _tree_delete_element(path, mode=entry["mode"], object_type=entry["type"])
-            )
-            continue
-        if entry["type"] != "tree":
-            raise PublishStateError(".publish/transport must be a tree")
-        for transport_entry in _direct_tree_entries(repo, base_tree, ".publish/transport"):
-            branch = transport_entry["name"]
-            branch_path = f".publish/transport/{branch}"
-            if branch in ALLOWED_TRANSPORT_TARGETS:
-                if transport_entry["type"] != "tree":
-                    raise PublishStateError(f"publish transport slot must be a tree: {branch_path}")
-                if branch != target:
-                    continue
-                prefix = branch_path + "/"
-                for stale_path in sorted(path for path in stale_set if path.startswith(prefix)):
-                    deletes.append(_tree_delete_element(stale_path))
-                continue
-            deletes.append(
-                _tree_delete_element(
-                    branch_path, mode=transport_entry["mode"], object_type=transport_entry["type"]
-                )
-            )
-    return deletes
 
 
 def _write_blob(repo: Path, content: str) -> str:
@@ -629,23 +573,16 @@ def _desired_transport_elements(
     target = str(prepared["target_branch"])
     chunks = _payload_chunks(str(prepared["payload_b64"]), target_branch=target)
     desired_paths = {str(chunk["path"]) for chunk in chunks}
-    current_slot_prefix = f".publish/transport/{target}/"
-    allowed_other_prefixes = tuple(
-        f".publish/transport/{branch}/" for branch in ALLOWED_TRANSPORT_TARGETS if branch != target
-    )
+    slot_prefix = f".publish/transport/{target}/"
     stale: list[str] = []
     for path in _list_publish_paths(repo, base_tree):
-        if path in desired_paths:
-            continue
-        if path.startswith(current_slot_prefix):
+        # The transport tree contains only active fixed slots. An unexpected path
+        # is a control-plane inconsistency, not data for the next publish to erase.
+        if re.fullmatch(r"\.publish/transport/(develop|temp)/[0-9]{4}\.b64", path) is None:
+            raise PublishStateError(f"unsupported publish transport path: {path}")
+        if path.startswith(slot_prefix) and path not in desired_paths:
             stale.append(path)
-            continue
-        if any(path.startswith(prefix) for prefix in allowed_other_prefixes):
-            continue
-        stale.append(path)
-    deletes = _compact_stale_delete_elements(
-        repo, base_tree=base_tree, target=target, stale=stale
-    )
+    deletes = [_tree_delete_element(path) for path in sorted(stale)]
     elements = [
         *[_tree_content_element(str(chunk["path"]), str(chunk["content"])) for chunk in chunks],
         *deletes,
@@ -691,25 +628,14 @@ def _expected_tree_batches(
                         "update-index", "--add", "--cacheinfo", str(element["mode"]), oid, path,
                         cwd=repo, env=env,
                     )
-                elif element.get("sha") is None:
-                    if element.get("type") == "tree":
-                        indexed = _git("ls-files", "--cached", "--", path, cwd=repo, env=env).splitlines()
-                        for indexed_path in indexed:
-                            subprocess.run(
-                                ["git", "update-index", "--force-remove", "--", indexed_path],
-                                cwd=repo, env=env, check=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            )
-                    else:
-                        subprocess.run(
-                            ["git", "update-index", "--force-remove", "--", path], cwd=repo, env=env,
-                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        )
-                else:
-                    _git(
-                        "update-index", "--add", "--cacheinfo", str(element["mode"]), str(element["sha"]), path,
-                        cwd=repo, env=env,
+                elif element.get("sha") is None and element.get("type") == "blob":
+                    subprocess.run(
+                        ["git", "update-index", "--force-remove", "--", path],
+                        cwd=repo, env=env, check=True,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     )
+                else:
+                    raise PublishStateError(f"invalid fixed-slot transport element: {path}")
             expected_tree = _git("write-tree", cwd=repo, env=env)
             result.append({
                 "batch_index": batch_index,

@@ -193,6 +193,43 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
     }
 
 
+def test_transport_plan_replaces_only_its_fixed_slot(tmp_path: Path) -> None:
+    repo, _, _, _, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    manifest = prepared(repo)
+    root = repo / ".publish" / "transport"
+    for branch, parts in (("develop", ("0000.b64", "0001.b64", "0002.b64")),
+                          ("temp", ("0000.b64",))):
+        directory = root / branch
+        directory.mkdir(parents=True)
+        for name in parts:
+            (directory / name).write_text("abcd", encoding="ascii")
+    git(repo, "add", ".publish")
+    base_tree = git(repo, "write-tree")
+
+    chunks, elements, stale = PUBLISH_REQUEST._desired_transport_elements(
+        repo, manifest, base_tree=base_tree,
+    )
+    desired = {str(row["path"]) for row in chunks}
+    assert {str(row["path"]) for row in elements if "content" in row} == desired
+    assert set(stale) == {
+        f".publish/transport/develop/{index:04d}.b64"
+        for index in range(len(chunks), 3)
+    }
+    assert all(row["path"].startswith(".publish/transport/develop/") for row in elements)
+    assert all(row.get("type") == "blob" for row in elements)
+    assert PUBLISH_REQUEST._expected_tree_batches(repo, base_tree=base_tree, batches=[elements])
+
+    unknown = repo / ".publish" / "outdated"
+    unknown.mkdir(parents=True)
+    (unknown / "handoff.json").write_text("{}", encoding="utf-8")
+    git(repo, "add", ".publish")
+    with pytest.raises(PUBLISH_REQUEST.PublishStateError, match="unsupported publish transport path"):
+        PUBLISH_REQUEST._desired_transport_elements(
+            repo, manifest, base_tree=git(repo, "write-tree"),
+        )
+
+
 def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gateway_run(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     result = prepare_change(repo)
