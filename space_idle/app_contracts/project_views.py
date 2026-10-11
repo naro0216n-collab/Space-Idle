@@ -37,6 +37,15 @@ class BuildProcessOptionRow:
 
 
 @dataclass(frozen=True)
+class BuildResearchCapacityRow:
+    provider_tier: int
+    generation_points_per_day: float
+    storage_capacity_points: float
+    execution_work_per_day: float
+    crew_person_days_per_research_point: float
+
+
+@dataclass(frozen=True)
 class BuildOptionRow:
     facility_definition_id: str | None
     display_name: str
@@ -54,6 +63,10 @@ class BuildOptionRow:
     power_nominal_load_mw: float = 0.0
     process_nominal_throughput_per_day: float | None = None
     extraction_nominal_capacity_t_per_day: float | None = None
+    # Recurring material demand at Level 1 from this construction investment;
+    # actual allocation remains subject to competing activities.
+    maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
+    research_capacity: BuildResearchCapacityRow | None = None
 
 
 @dataclass(frozen=True)

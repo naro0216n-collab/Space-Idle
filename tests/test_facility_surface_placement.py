@@ -122,11 +122,38 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert candidate.power_nominal_load_mw == pytest.approx(nominal_load)
     expected_extraction = definition.extraction_capacity_t_per_day or None
     assert candidate.extraction_nominal_capacity_t_per_day == expected_extraction
+    # A new build's recurring Resource demand comes from the same Facility
+    # calculation used by runtime maintenance and Upgrade previews.
+    recipe = sim.projects.recipes[definition.id]
+    invested = {}
+    for requirement in recipe.resources:
+        invested[requirement.resource_id] = (
+            invested.get(requirement.resource_id, 0.0) + requirement.amount_t
+        )
+    predicted = dict(candidate.maintenance_rates_per_day)
+    installed = sim.facilities.maintenance_requirements_for_investment(definition.id, invested)
+    assert predicted == {str(resource): rate for resource, rate in installed.items()}
+    # The projection is a read-only calculation, not an extra maintenance owner.
+    assert all(rate >= 0 for rate in predicted.values())
     # Unlike build inputs, heterogeneous facility effects have no shared
     # comparison score or comparison pinning contract.
     assert not hasattr(build_options, "comparison_axes")
     assert not hasattr(candidate, "comparison_values")
     rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
+    # Research generation and storage are first-class idle scale: the
+    # prospective Facility uses the same provider as the installed asset.
+    for facility_id in (ids.EARTH_RESEARCH_LAB, ids.VACUUM_REGOLITH_PROCESS_LABORATORY):
+        assert facility_id in rows_by_id
+        provider = sim.research.facility_provider_for_definition(facility_id)
+        assert provider is not None
+        spec = provider.level_spec(1)
+        projected = rows_by_id[facility_id].research_capacity
+        assert projected is not None
+        assert projected.provider_tier == provider.tier
+        assert projected.generation_points_per_day == spec.generation_points_per_day
+        assert projected.storage_capacity_points == spec.storage_capacity_points
+        assert projected.execution_work_per_day == spec.research_execution_per_day
+        assert projected.crew_person_days_per_research_point == provider.crew_person_days_per_research_point
     # The build decision includes Construction-owned site work as a nominal
     # service, but not the manufacturing of finite Construction Equipment.
     from space_idle.construction.models import CONSTRUCTION_SERVICE_TYPE

@@ -20,21 +20,29 @@ from .research_models import ResearchProviderSourceKind
 class ResearchCapacityMixin:
     RESEARCH_POINT_POOL = "research_points"
 
-    def _facility_provider(self, facility_id):
-        facility = self.facilities.facilities[facility_id]
+    def facility_provider_for_definition(self, facility_definition_id: DefinitionId):
+        """Return the provider contract supported by a Facility definition.
+
+        Prospective construction and an installed Facility use the same
+        capability match; neither a specific Facility ID nor a temporary
+        installed asset is needed to describe nominal Research capacity.
+        """
+        definition = self.facilities.definitions[facility_definition_id]
         matches = tuple(
             provider
             for provider in self.providers.values()
             if provider.source_kind is ResearchProviderSourceKind.FACILITY
-            and provider.accepts_source(
-                row.id for row in self.facilities.definitions[facility.definition_id].capability_supplies
-            )
+            and provider.accepts_source(row.id for row in definition.capability_supplies)
         )
         if len(matches) > 1:
             raise RuntimeError(
-                f"multiple Research Providers match physical Facility capabilities: {facility.definition_id}"
+                f"multiple Research Providers match physical Facility capabilities: {facility_definition_id}"
             )
         return matches[0] if matches else None
+
+    def _facility_provider(self, facility_id):
+        facility = self.facilities.facilities[facility_id]
+        return self.facility_provider_for_definition(facility.definition_id)
 
     def compatible_vehicle_definitions(self, provider_definition_id: DefinitionId):
         provider = self.providers[provider_definition_id]

@@ -923,15 +923,19 @@
       const missing=option.missing_technology_ids||[];
       return `<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(option.display_name)}</strong>${missing.length?'<span class="badge warn">研究条件不足</span>':''}</div><div class="cell-sub">公称投入: ${esc(inputs)}</div><div class="cell-sub">公称産出: ${esc(outputs)}</div>${missing.length?`<div class="cell-sub">工程の解禁研究: ${esc(missing.map(definitionName).join(' / '))}</div>`:''}</div>`;
     }).join('');
-    const enables=capabilityCards+serviceCards+processCards||'<div class="empty-state">追加される能力情報なし</div>';
+    const research=o.research_capacity;
+    const researchCapacity=research?`<div class="detail-card"><div class="mode-title"><span>研究能力</span><strong>Tier ${fmt(research.provider_tier,0)}</strong></div><div class="cell-sub">公称RP生成 ${fmt(research.generation_points_per_day,2)} RP/日 · 貯蔵 ${fmt(research.storage_capacity_points,1)} RP</div><div class="cell-sub">研究実行 ${fmt(research.execution_work_per_day,2)} work/日${research.crew_person_days_per_research_point>0?` · Crew ${fmt(research.crew_person_days_per_research_point,3)} 人日/RP`:''}</div></div>`:'';
+    const enables=capabilityCards+serviceCards+processCards+researchCapacity||'<div class="empty-state">追加される能力情報なし</div>';
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
       section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),...(o.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(o.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(o.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(o.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
-      section('建設後に利用可能',enables+(o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+(o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
-      section('必要資源',resourceCards(o.resources))
+      section('設備の機能・工程候補',enables+(o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+(o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':''))+
+      section('必要資源',resourceCards(o.resources))+
+      section('建設後の維持Resource需要（Level 1公称）',
+        (o.maintenance_rates_per_day||[]).map(([resource,rate])=>`<div class="cell-sub">${esc(resourceName(resource))}: ${fmt(rate,4)} t/日</div>`).join('')||'<div class="empty-state">追加の維持Resource需要なし</div>')
     );
     return true;
   }

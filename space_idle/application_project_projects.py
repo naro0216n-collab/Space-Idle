@@ -5,7 +5,7 @@ from math import ceil
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
 from .application_views import (
     BuildResourceOption,
-    BuildOptionRow, BuildProcessOptionRow,
+    BuildOptionRow, BuildProcessOptionRow, BuildResearchCapacityRow,
     BuildOptionsView,
     FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
@@ -198,9 +198,12 @@ class ProjectProjectorMixin:
             target_investment = dict(facility.invested_resources)
             for requirement in recipe.resources:
                 target_investment[requirement.resource_id] = target_investment.get(requirement.resource_id, 0.0) + requirement.amount_t
-            for resource_id in sorted(set(current_maintenance) | set(target_investment), key=str):
+            target_maintenance = sim.facilities.maintenance_requirements_for_investment(
+                facility.definition_id, target_investment
+            )
+            for resource_id in sorted(set(current_maintenance) | set(target_maintenance), key=str):
                 current = current_maintenance.get(resource_id, 0.0)
-                target = target_investment.get(resource_id, 0.0) * maintenance_fraction / 365.0
+                target = target_maintenance.get(resource_id, 0.0)
                 if abs(target - current) > 1e-12:
                     rows.append(FacilityUpgradeDifferenceRow(
                         "maintenance", f"維持需要 · {self._resource_name(resource_id)}", current, target, "t/日"
@@ -641,6 +644,26 @@ class ProjectProjectorMixin:
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
             )
+            invested = {}
+            for resource in recipe.resources:
+                invested[resource.resource_id] = invested.get(resource.resource_id, 0.0) + resource.amount_t
+            maintenance_rates = sim.facilities.maintenance_requirements_for_investment(
+                recipe.facility_def_id, invested
+            )
+            provider = (
+                None if sim.research is None else
+                sim.research.facility_provider_for_definition(recipe.facility_def_id)
+            )
+            research_capacity = None
+            if provider is not None:
+                level = provider.level_spec(1)
+                research_capacity = BuildResearchCapacityRow(
+                    provider_tier=provider.tier,
+                    generation_points_per_day=level.generation_points_per_day,
+                    storage_capacity_points=level.storage_capacity_points,
+                    execution_work_per_day=level.research_execution_per_day,
+                    crew_person_days_per_research_point=provider.crew_person_days_per_research_point,
+                )
             # Build options include blocked sites; querying a prospective
             # generator must not require that placement already be eligible.
             nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
@@ -681,6 +704,11 @@ class ProjectProjectorMixin:
                 power_nominal_load_mw=nominal_load,
                 process_nominal_throughput_per_day=process_throughput,
                 extraction_nominal_capacity_t_per_day=extraction_capacity,
+                maintenance_rates_per_day=tuple(
+                    (str(resource_id), rate)
+                    for resource_id, rate in sorted(maintenance_rates.items(), key=lambda item: str(item[0]))
+                ),
+                research_capacity=research_capacity,
             ))
         return BuildOptionsView(
             str(location_id),

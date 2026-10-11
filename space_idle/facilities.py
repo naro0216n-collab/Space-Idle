@@ -362,16 +362,28 @@ class FacilityBook:
             scope[key] = tuple(active)
         return active
 
-    def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
-        facility = self.facilities[facility_id]
-        fraction = self.definitions[facility.definition_id].maintenance_fraction_per_year
+    def maintenance_requirements_for_investment(
+        self, definition_id: DefinitionId, invested_resources: Mapping[DefinitionId, float]
+    ) -> dict[DefinitionId, float]:
+        """Recurring demand from physical investment, including prospective builds.
+
+        The same calculation applies to installed Facility State and the
+        Application's read-only construction/upgrade previews.
+        """
+        fraction = self.definitions[definition_id].maintenance_fraction_per_year
         if fraction <= 1e-12:
             return {}
         return {
             resource_id: amount * fraction / 365.0
-            for resource_id, amount in facility.invested_resources.items()
+            for resource_id, amount in invested_resources.items()
             if amount > 1e-12
         }
+
+    def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
+        facility = self.facilities[facility_id]
+        return self.maintenance_requirements_for_investment(
+            facility.definition_id, facility.invested_resources
+        )
 
     @staticmethod
     def _definition_has_capability(definition: FacilityDef, capability_id: str) -> bool:

@@ -275,9 +275,6 @@ class SurfaceProjectorMixin:
                                 ComparisonValueRow(
                                     axis_key="preparation_work", number_value=recipe.preparation_work
                                 ),
-                                ComparisonValueRow(
-                                    axis_key="required_units", number_value=float(recipe.required_units)
-                                ),
                                 ComparisonValueRow(axis_key="payload_t", number_value=recipe.payload_t),
                                 ComparisonValueRow(
                                     axis_key="terrain_factor", number_value=cell.terrain.terrain_factor
@@ -362,7 +359,6 @@ class SurfaceProjectorMixin:
             (
                 ("transit_days", "移動時間", "integer", "日"),
                 ("preparation_work", "準備工数", "number", None),
-                ("required_units", "必要機数", "integer", "機"),
                 ("payload_t", "搭載量", "number", "t"),
                 ("terrain_factor", "地形係数", "number", None),
                 ("bearing_capacity_factor", "地盤支持力", "number", None),

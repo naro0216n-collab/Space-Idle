@@ -464,7 +464,6 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert {axis.key for axis in surface.founding_comparison_axes} == {
         "transit_days",
         "preparation_work",
-        "required_units",
         "payload_t",
         "terrain_factor",
         "bearing_capacity_factor",
