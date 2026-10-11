@@ -8,6 +8,11 @@ def build_power_specs() -> dict:
     return {
         ids.ORBITAL_CONSTRUCTION_PLATFORM: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.15),
         ids.ORBITAL_SOLAR_ARRAY: PowerSpec(SolarGeneration(4.0 / 0.62, 1361.0), 0.04),
+        # The tracking array trades more electronics, machinery and orbital
+        # construction work for greater solar output. The reactor trades a
+        # higher acquisition investment for generation independent of sunlight.
+        ids.TRACKING_ORBITAL_SOLAR_ARRAY: PowerSpec(SolarGeneration(10.0 / 0.62, 1361.0), 0.09),
+        ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER: PowerSpec(FixedGeneration(7.0), 0.20),
         ids.ORBITAL_PROPELLANT_DEPOT: PowerSpec(None, 0.20, standby_load_mw=0.20),
         ids.ORBITAL_ASSEMBLY_YARD: PowerSpec(None, 0.65),
         ids.ORBITAL_HABITAT: PowerSpec(None, 0.55),

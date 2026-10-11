@@ -617,6 +617,11 @@ class ProjectProjectorMixin:
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
             )
+            # Build options include blocked sites; querying a prospective
+            # generator must not require that placement already be eligible.
+            nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
+                recipe.facility_def_id, location_id, sim.day,
+            )
             capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
             service_capacity_supplies = tuple(
                 sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
@@ -644,6 +649,8 @@ class ProjectProjectorMixin:
                     axis_key="self_deploying",
                     text_value="自己展開" if recipe.self_deploying else "通常施工",
                 ),
+                ComparisonValueRow(axis_key="power_generation_mw", number_value=nominal_generation),
+                ComparisonValueRow(axis_key="power_load_mw", number_value=nominal_load),
             )
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
@@ -665,6 +672,8 @@ class ProjectProjectorMixin:
                 projected_material_readiness_day=material_readiness_day,
                 comparison_key=str(recipe.facility_def_id),
                 comparison_values=comparison_values,
+                power_nominal_generation_mw=nominal_generation,
+                power_nominal_load_mw=nominal_load,
             ))
         comparison_axes = project_comparison_axes(
             (
@@ -675,6 +684,8 @@ class ProjectProjectorMixin:
                 ("service_type_count", "追加サービス", "integer", "種"),
                 ("process_count", "利用可能工程", "integer", "種"),
                 ("self_deploying", "施工方式", "text", None),
+                ("power_generation_mw", "現在環境での発電公称値", "number", "MW"),
+                ("power_load_mw", "稼働時のPower需要", "number", "MW"),
             ),
             (row.comparison_values for row in rows),
         )

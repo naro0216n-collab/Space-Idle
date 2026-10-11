@@ -959,7 +959,7 @@
     const compareAction=comparisonAvailable?`<button type="button" data-construction-compare-pin="${esc(o.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
-      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+
+      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${compareAction}${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
       (comparisonAvailable?section('建設候補比較',constructionComparisonHtml()):'')+

@@ -247,6 +247,29 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             f"technology:{outlet.technology.id}:reachable_method_count:0",
             *(f"downstream_technology:{row.id}" for row in outlet.downstream_technologies),
         )))
+    # A method can require independent research results (AND), but directly
+    # naming an ancestor *and* its descendant cannot add any acquisition
+    # constraint. The DAG is a declaration, not an assertion about an already
+    # installed Asset or active State. Diagnose this as redundant Content, not
+    # as an invalid Definition or a reason to synthesize another method.
+    for method, gates in sorted(method_techs.items()):
+        if len(gates) < 2:
+            continue
+        for ancestor in sorted(gates):
+            reached = {ancestor}
+            frontier = [ancestor]
+            while frontier:
+                for child in sorted(downstream_technologies.get(frontier.pop(), ())):
+                    if child not in reached:
+                        reached.add(child)
+                        frontier.append(child)
+            for descendant in sorted((reached - {ancestor}) & gates):
+                findings.append(DefinitionCoverageFinding(
+                    "redundant_method_technology_requirement", method,
+                    ("scope:declared_technology_prerequisite_reachability_only",
+                     f"redundant_ancestor:technology:{ancestor.id}",
+                     f"required_descendant:technology:{descendant.id}"),
+                ))
     # A registered extraction method can be awaiting future hardware. This is
     # authoring coverage, not an invalid reference or a claim that the Scenario
     # cannot operate. Physical compatibility comes from the same Graph edges

@@ -16,6 +16,16 @@ def build_process_specs() -> dict:
         ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", frozenset({"mineral_sintering"}), {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}, frozenset({DefinitionId("MC-MANUFACTURING-CONSTRUCTION-10")})),
         ids.PROCESS_VOLATILE_WATER_RECOVERY: ProcessSpec(ids.PROCESS_VOLATILE_WATER_RECOVERY, "揮発性成分回収", frozenset({"volatile_processing"}), {ids.VOLATILE_BEARING_MATERIAL: 1.0}, {ids.WATER: 0.35}),
         ids.PROCESS_ORE_PROCESS: ProcessSpec(ids.PROCESS_ORE_PROCESS, "鉱石処理", frozenset({"ore_processing"}), {ids.METAL_ORE: 2.5}, {ids.METAL_FEEDSTOCK: 1.0}),
+        # Water-intensive wet separation offers improved recovery where water
+        # and storage are available; the dry method remains appropriate where
+        # those resources are limiting. Both use the same installed separator.
+        ids.PROCESS_WET_ORE_BENEFICIATION: ProcessSpec(
+            ids.PROCESS_WET_ORE_BENEFICIATION, "湿式鉱石選別・回収",
+            frozenset({"ore_processing"}),
+            {ids.METAL_ORE: 2.5, ids.WATER: 0.7},
+            {ids.METAL_FEEDSTOCK: 1.45},
+            frozenset({ids.research_id("RP-RESOURCE-CHAIN-10")}),
+        ),
         ids.PROCESS_METALLURGY: ProcessSpec(ids.PROCESS_METALLURGY, "金属精錬", frozenset({"metallurgy"}), {ids.METAL_FEEDSTOCK: 2.0}, {ids.BULK_STRUCTURE: 1.8}),
         # Explicit alternative operations on the same physical metallurgical
         # interface: recovered gas costs finite water, while variable-feed

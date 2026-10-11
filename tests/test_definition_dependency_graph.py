@@ -866,6 +866,24 @@ def test_technology_outlet_classification_follows_declared_research_edges_only()
                if row.code.startswith("technology_"))
     assert classify_technology_outlets(DependencyDefinitionGraph(tuple(reversed(nodes)),
                                                                 tuple(reversed(relations)), ())) == rows
+    # Independently necessary branches of a research DAG are not redundant;
+    # an ancestor repeated alongside its descendant on one method is. The
+    # finding is Content-only and must not suppress actual Application options.
+    overlapping = DependencyDefinitionGraph(nodes, (*relations,
+        DependencyRelation("unlocks_method", a, method, "production:duplicate_gate"),
+        DependencyRelation("unlocks_method", b, method, "production:duplicate_gate"),
+    ), ())
+    repeated_gates = [row for row in inspect_definition_coverage(overlapping)
+                      if row.code == "redundant_method_technology_requirement"]
+    assert {(row.subject, row.evidence[1], row.evidence[2]) for row in repeated_gates} == {
+        (method, "redundant_ancestor:technology:a", "required_descendant:technology:b"),
+        (method, "redundant_ancestor:technology:a", "required_descendant:technology:d"),
+        (method, "redundant_ancestor:technology:b", "required_descendant:technology:d"),
+    }
+    assert not any(row.evidence[1] == "redundant_ancestor:technology:c" for row in repeated_gates)
+    assert [row for row in inspect_definition_coverage(DependencyDefinitionGraph(
+        tuple(reversed(nodes)), tuple(reversed(overlapping.relations)), ()))
+        if row.code == "redundant_method_technology_requirement"] == repeated_gates
 
     # Real Content is classified through registered graph contributors, not by
     # hard-coded branch counts, names, or a fixed future gameplay progression.

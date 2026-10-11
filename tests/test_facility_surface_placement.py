@@ -109,7 +109,14 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         "service_type_count",
         "process_count",
         "self_deploying",
+        "power_generation_mw",
+        "power_load_mw",
     }
+    nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
+        definition.id, ids.EARTH, sim.day,
+    )
+    assert candidate.power_nominal_generation_mw == pytest.approx(nominal_generation)
+    assert candidate.power_nominal_load_mw == pytest.approx(nominal_load)
     comparison_values = {value.axis_key: value for value in candidate.comparison_values}
     assert candidate.comparison_key == candidate.facility_definition_id
     assert set(comparison_values) == {axis.key for axis in build_options.comparison_axes}

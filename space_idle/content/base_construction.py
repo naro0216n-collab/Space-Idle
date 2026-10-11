@@ -26,6 +26,18 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(3.0), req._machinery_resource(1.0), req._electronics_resource(1.2)),
             0.0, req.ORBIT_SITE, frozenset({ids.PG_SOLAR_POWER_02}), True,
         ),
+        ids.TRACKING_ORBITAL_SOLAR_ARRAY: ConstructionRecipe(
+            ids.TRACKING_ORBITAL_SOLAR_ARRAY,
+            (req._structure_resource(6.0), req._machinery_resource(3.5), req._electronics_resource(3.0)),
+            28.0, req.with_capabilities(req.ORBIT_SITE, "robotic_orbital_construction"),
+            frozenset({ids.research_id("PG-SOLAR-POWER-04"), ids.research_id("MC-MANUFACTURING-CONSTRUCTION-04")}),
+        ),
+        ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER: ConstructionRecipe(
+            ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER,
+            (req._structure_resource(9.0), req._machinery_resource(6.0), req._electronics_resource(3.5)),
+            44.0, req.with_capabilities(req.ORBIT_SITE, "robotic_orbital_construction"),
+            frozenset({ids.research_id("FP-REACTOR-POWER-04")}),
+        ),
         ids.ORBITAL_PROPELLANT_DEPOT: ConstructionRecipe(
             ids.ORBITAL_PROPELLANT_DEPOT,
             (req._structure_resource(7.0), req._machinery_resource(5.0), req._electronics_resource(2.0)),

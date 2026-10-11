@@ -19,6 +19,14 @@ def build_facility_definitions() -> dict:
             ids.ORBITAL_SOLAR_ARRAY, "軌道上太陽電池アレイ",
             req._capabilities("orbital_solar_generation"), orbit, orbit,
         ),
+        ids.TRACKING_ORBITAL_SOLAR_ARRAY: FacilityDef(
+            ids.TRACKING_ORBITAL_SOLAR_ARRAY, "軌道追尾式多接合太陽電池アレイ",
+            req._capabilities("orbital_solar_generation"), orbit, orbit,
+        ),
+        ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER: FacilityDef(
+            ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER, "軌道高出力核分裂電源",
+            req._capabilities("orbital_power_supply"), orbit, orbit,
+        ),
         ids.ORBITAL_PROPELLANT_DEPOT: FacilityDef(
             ids.ORBITAL_PROPELLANT_DEPOT, "軌道上推進剤貯蔵・補給所",
             req._capabilities("vehicle_refueling", "cryogenic_storage", "orbital_fuel_transfer"),
