@@ -46,18 +46,34 @@ class LogisticsStateProjectorMixin:
         location_id: str | None = None,
         vehicle_definition_id: str | None = None,
     ) -> tuple[FleetPoolRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("fleet_pool_rows", location_id, vehicle_definition_id)
+        if cache is not None and key in cache:
+            return cache[key]
         sim = self._simulation
+        commitments = sim.transport.fleet_commitment_snapshots()
         keys = set(sim.transport.fleet_pool_keys())
-        # Allocations/reservations can make a zero-total pool decision-relevant.
-        keys.update(
+        # A zero-unit pool key can remain in runtime memory after departure,
+        # but is not an owned asset and is not persisted. Retain a zero pool
+        # only when an actual allocation makes its provisioning a decision.
+        allocation_keys = {
             (row.vehicle_definition_id, row.anchor_node_id)
             for row in sim.transport.transport_allocation_snapshots()
-        )
+        }
+        keys.update(allocation_keys)
         keys.update(
             (row.vehicle_definition_id, row.operational_node_id)
-            for row in sim.transport.fleet_commitment_snapshots()
+            for row in commitments
             if row.operational_node_id is not None
         )
+        commitment_units_by_pool: dict[tuple[object, object], dict[str, int]] = {}
+        for commitment in commitments:
+            if commitment.operational_node_id is None:
+                continue
+            pool_key = (commitment.vehicle_definition_id, commitment.operational_node_id)
+            by_usage = commitment_units_by_pool.setdefault(pool_key, {})
+            usage_kind = self._fleet_usage_kind(commitment.owner_activity_ref.activity_type)
+            by_usage[usage_kind] = by_usage.get(usage_kind, 0) + commitment.quantity
         rows: list[FleetPoolRow] = []
         for definition_id, node_id in sorted(keys, key=lambda row: (str(row[0]), str(row[1]))):
             if location_id is not None and str(node_id) != location_id:
@@ -65,17 +81,9 @@ class LogisticsStateProjectorMixin:
             if vehicle_definition_id is not None and str(definition_id) != vehicle_definition_id:
                 continue
             snapshot = sim.transport.fleet_pool_snapshot(definition_id, node_id)
-            commitment_units_by_usage: dict[str, int] = {}
-            for commitment in sim.transport.fleet_commitment_snapshots():
-                if (
-                    commitment.vehicle_definition_id != definition_id
-                    or commitment.operational_node_id != node_id
-                ):
-                    continue
-                usage_kind = self._fleet_usage_kind(commitment.owner_activity_ref.activity_type)
-                commitment_units_by_usage[usage_kind] = (
-                    commitment_units_by_usage.get(usage_kind, 0) + commitment.quantity
-                )
+            if snapshot.total_units == 0 and (definition_id, node_id) not in allocation_keys:
+                continue
+            commitment_units_by_usage = commitment_units_by_pool.get((definition_id, node_id), {})
             research_units = commitment_units_by_usage.get("research", 0)
             survey_units = commitment_units_by_usage.get("survey", 0)
             founding_units = commitment_units_by_usage.get("founding", 0)
@@ -100,7 +108,10 @@ class LogisticsStateProjectorMixin:
                     releasing_units=snapshot.releasing_units,
                 )
             )
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _fleet_commitment_rows(
         self,
@@ -108,8 +119,13 @@ class LogisticsStateProjectorMixin:
         location_id: str | None = None,
         vehicle_definition_id: str | None = None,
     ) -> tuple[FleetCommitmentRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("fleet_commitment_rows", location_id, vehicle_definition_id)
+        if cache is not None and key in cache:
+            return cache[key]
         rows: list[FleetCommitmentRow] = []
-        for commitment in self._simulation.transport.fleet_commitment_snapshots():
+        sim = self._simulation
+        for commitment in sim.transport.fleet_commitment_snapshots():
             if location_id is not None and (
                 commitment.operational_node_id is None
                 or str(commitment.operational_node_id) != location_id
@@ -117,6 +133,12 @@ class LogisticsStateProjectorMixin:
                 continue
             if vehicle_definition_id is not None and str(commitment.vehicle_definition_id) != vehicle_definition_id:
                 continue
+            movement = (
+                None if commitment.movement_execution_id is None
+                else sim.transport.movement_execution_snapshot(commitment.movement_execution_id)
+            )
+            if commitment.movement_execution_id is not None and movement is None:
+                raise RuntimeError(f"Fleet commitment references missing Movement: {commitment.id}")
             rows.append(FleetCommitmentRow(
                 id=str(commitment.id),
                 owner_activity_type=commitment.owner_activity_ref.activity_type,
@@ -127,8 +149,37 @@ class LogisticsStateProjectorMixin:
                 quantity=commitment.quantity,
                 operational_node_id=None if commitment.operational_node_id is None else str(commitment.operational_node_id),
                 movement_execution_id=None if commitment.movement_execution_id is None else str(commitment.movement_execution_id),
+                movement_origin_id=(
+                    None if movement is None else str(
+                        movement.origin.operational_node_id or movement.origin.locator_id
+                    )
+                ),
+                movement_destination_id=(
+                    None if movement is None else str(
+                        movement.destination.operational_node_id or movement.destination.locator_id
+                    )
+                ),
+                movement_completion_day=None if movement is None else movement.completion_day,
+                location_kind=(
+                    "physical_target" if commitment.physical_target is not None
+                    else "in_transit" if commitment.movement_execution_id is not None
+                    else "operational_node"
+                ),
+                physical_target_kind=(
+                    None if commitment.physical_target is None else commitment.physical_target.locator_kind
+                ),
+                physical_target_id=(
+                    None if commitment.physical_target is None else commitment.physical_target.locator_id
+                ),
+                onboard_resources=tuple((str(resource), amount) for resource, amount in commitment.onboard_resources),
+                onboard_seat_capacity=(
+                    None if commitment.onboard_accommodation is None else commitment.onboard_accommodation.seats
+                ),
             ))
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _fleet_relocation_rows(
         self,
@@ -152,6 +203,8 @@ class LogisticsStateProjectorMixin:
                     if row.movement_execution_id is None
                     else sim.transport.movement_execution_snapshot(row.movement_execution_id).completion_day
                 ),
+                None if row.carrier_vehicle_definition_id is None else str(row.carrier_vehicle_definition_id),
+                row.carrier_units,
             )
             for row in sim.transport.fleet_relocation_snapshots()
             if (vehicle_definition_id is None or str(row.vehicle_definition_id) == vehicle_definition_id)
@@ -191,6 +244,10 @@ class LogisticsStateProjectorMixin:
         return tuple(rows)
 
     def _transport_allocation_rows(self) -> tuple[TransportAllocationRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = "transport_allocation_rows"
+        if cache is not None and key in cache:
+            return cache[key]
         sim = self._simulation
         decision = self._tick_decision_projection()
         rows: list[TransportAllocationRow] = []
@@ -255,9 +312,16 @@ class LogisticsStateProjectorMixin:
                     ),
                 )
             )
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _cargo_flow_rows(self) -> tuple[CargoFlowRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = "cargo_flow_rows"
+        if cache is not None and key in cache:
+            return cache[key]
         sim = self._simulation
         rows: list[CargoFlowRow] = []
         for flow in sorted(sim.logistics.cargo_flow_snapshots(), key=lambda row: str(row.id)):
@@ -301,7 +365,10 @@ class LogisticsStateProjectorMixin:
                 latency_days=waiting.arrival_leg.latency_days,
             ))
 
-        return tuple(sorted(rows, key=lambda row: row.id))
+        result = tuple(sorted(rows, key=lambda row: row.id))
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _vehicle_production_option_rows(self) -> tuple[VehicleProductionOptionRow, ...]:
         sim = self._simulation
@@ -320,6 +387,13 @@ class LogisticsStateProjectorMixin:
                 )
                 plan_failures = sim.transport.vehicle_production_plan_failures(
                     definition.id, node.id, day=sim.day
+                )
+                blockers = tuple(
+                    (failure.code, failure.detail) for failure in plan_failures
+                ) + tuple(
+                    (failure.code, failure.detail) for failure in sim.transport.vehicle_production_site_failures(
+                        definition.id, node.id, day=sim.day, power=power
+                    ) if failure.code.startswith("service:enabled")
                 )
                 rows.append(
                     VehicleProductionOptionRow(
@@ -473,6 +547,9 @@ class LogisticsStateProjectorMixin:
                 if query.movement_hard_constraint is None
                 else tuple(query.movement_hard_constraint)
             ),
+            carrier_vehicle_definition_id=(None if query.carrier_vehicle_definition_id is None
+                else DefinitionId(query.carrier_vehicle_definition_id)),
+            carrier_units=query.carrier_units,
             day=sim.day,
         )
         definition = self._vehicle_definition(plan.vehicle_definition_id)
@@ -498,6 +575,10 @@ class LogisticsStateProjectorMixin:
             ),
             infrastructure_requirements=infrastructure_requirement_rows(plan),
             feasible=plan.feasible,
+            carrier_vehicle_definition_id=(None if plan.carrier_vehicle_definition_id is None
+                else str(plan.carrier_vehicle_definition_id)),
+            carrier_units=plan.carrier_units,
+            payload_mass_t=plan.payload_mass_t,
             blockers=constraints_from_codes(
                 plan.blockers,
                 affected_action="relocate_fleet",

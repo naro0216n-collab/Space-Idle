@@ -42,6 +42,8 @@ class BuildOptionRow:
     projected_material_readiness_day: int | None = None
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
+    power_nominal_generation_mw: float = 0.0
+    power_nominal_load_mw: float = 0.0
 
 
 @dataclass(frozen=True)

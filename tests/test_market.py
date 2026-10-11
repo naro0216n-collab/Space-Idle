@@ -4,11 +4,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     CreateTradeOrder,
     GetMarket,
     build_game_application,
 )
+from space_idle.app_contracts.common import ApplicationError
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_market import EARTH_MARKET_INTERFACE
@@ -193,12 +195,84 @@ def test_sell_funds_cannot_finance_same_tick_buy():
     )).created_id
     assert sell_id and buy_id
 
-    sim.advance_days(1)
+    with observe_canonical_day(sim) as trace:
+        sim.advance_days(1)
+    assert any(row.activity_id.startswith('market_sell:')
+               and row.destination_owner.startswith('market_provider:')
+               and row.source_owner.startswith('inventory:')
+               for row in trace.activity_flows())
     assert sim.market.funds.balance > 0.0
     assert not [row for row in sim.market.buy_commitments.values() if str(row.order_id) == buy_id]
 
     sim.advance_days(1)
     assert [row for row in sim.market.buy_commitments.values() if str(row.order_id) == buy_id]
+
+
+
+def test_market_offer_eligibility_is_shared_by_candidates_and_order_commands():
+    app = build_game_application()
+    sim = app._simulation
+    candidates = app.query(GetMarket()).order_candidates
+    assert candidates
+    assert len(candidates) == len({(row.market_interface_id, row.direction, row.resource_id)
+                                    for row in candidates})
+    for row in candidates:
+        blockers = sim.market.order_offer_blockers(
+            direction=TradeDirection(row.direction),
+            resource_id=DefinitionId(row.resource_id),
+            market_interface_id=EntityId(row.market_interface_id),
+        )
+        assert row.can_create == (not blockers)
+        assert tuple(reason.code for reason in row.blockers) == blockers
+        command = CreateTradeOrder(
+            direction=row.direction, resource_id=row.resource_id,
+            market_interface_id=row.market_interface_id, priority=3,
+            control_mode="quantity", quantity_target_t=1.0,
+        )
+        if blockers:
+            with pytest.raises(ApplicationError):
+                app.execute(command)
+        else:
+            result = app.execute(command)
+            assert result.created_id in {str(order_id) for order_id in sim.market.orders}
+            sim.market.cancel_order(EntityId(result.created_id))
+
+    interface = sim.market.interfaces[EntityId(candidates[0].market_interface_id)]
+    interface.enabled = False
+    disabled = app.query(GetMarket()).order_candidates
+    assert all(not row.can_create and "market_interface_disabled" in
+               {blocker.code for blocker in row.blockers}
+               for row in disabled if row.market_interface_id == str(interface.id))
+    with pytest.raises(ApplicationError, match="interface"):
+        app.execute(CreateTradeOrder(
+            direction=candidates[0].direction, resource_id=candidates[0].resource_id,
+            market_interface_id=str(interface.id), priority=3,
+            control_mode="quantity", quantity_target_t=1.0,
+        ))
+
+    # Rejected target parameters must not consume an order ID or mutate Market.
+    market, _provider, interface_id, _node, resource_id = _market()
+    with pytest.raises(ValueError, match="QUANTITY order"):
+        market.create_order(
+            direction="buy", resource_id=resource_id,
+            market_interface_id=interface_id,
+            control_mode="quantity", quantity_target_t=None,
+        )
+    assert not market.orders and market._order_counter == 0
+    first_valid_id = market.create_order(
+        direction="buy", resource_id=resource_id,
+        market_interface_id=interface_id,
+        control_mode="quantity", quantity_target_t=1.0,
+    )
+    assert str(first_valid_id) == "trade.order.1"
+    market.cancel_order(first_valid_id)
+    assert market.order_offer_blockers(
+        direction="buy", resource_id=DefinitionId("test.resource.unlisted"),
+        market_interface_id=interface_id,
+    ) == ("offer_unavailable",)
+    assert market.order_offer_blockers(
+        direction="buy", resource_id=resource_id, market_interface_id=interface_id,
+    ) == ()
 
 
 def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
@@ -220,7 +294,15 @@ def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
 
-    sim.advance_days(3)
+    traces = []
+    for _ in range(3):
+        with observe_canonical_day(sim) as trace:
+            sim.advance_days(1)
+        traces.append(trace)
+    assert any(row.activity_id.startswith('market_buy:')
+               and row.source_owner.startswith('market_provider:')
+               and row.destination_owner.startswith('inventory:')
+               for trace in traces for row in trace.activity_flows())
     loaded._simulation.advance_days(3)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
     assert loaded.query(GetMarket()) == app.query(GetMarket())

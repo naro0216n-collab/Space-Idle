@@ -11,6 +11,8 @@ from .supply import (
     SupplyRoutingConstraintState,
     TargetStockPolicy,
 )
+from collections import defaultdict
+from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -22,7 +24,8 @@ class SupplyPlanningOptions:
     stocked_source_ids: tuple[SpatialNodeId, ...]
     path_candidates: tuple[tuple[SpatialNodeId, tuple[MovementPlanId, ...]], ...]
     blockers: tuple[str, ...]
-    earliest_confirmed_arrival_day: int | None
+    earliest_in_transit_arrival_day: int | None
+    latest_in_transit_arrival_day: int | None
     selected_source_id: SpatialNodeId | None = None
     selected_service_ids: tuple[str, ...] = ()
     selected_movement_plan_ids: tuple[MovementPlanId, ...] = ()
@@ -37,6 +40,35 @@ class SupplyPlanningOptions:
 
 class SupplyPlanningMixin:
     """Target Stock intent and sparse hard routing constraints."""
+
+    def unshipped_due_supply(
+        self,
+        day: int,
+        due_requirements: Iterable[SupplyRequirement],
+        external_requirements: Iterable[SupplyRequirement],
+        dispatched: Iterable[tuple[EntityId, float]],
+    ) -> tuple[tuple[SupplyRequirement, float], ...]:
+        """Unshipped portion of currently due supply, after actual dispatch allocation.
+
+        In-transit cargo is already credited by requirement_remaining_t.  A
+        future or Target Stock intent is not a current operational shortfall.
+        """
+        due_ids = {
+            requirement.id for requirement in due_requirements
+            if requirement.owner_kind != "target_stock"
+            and (requirement.forecast_requirement_day is None
+                 or requirement.forecast_requirement_day <= day)
+        }
+        shipped: dict[EntityId, float] = defaultdict(float)
+        for requirement_id, amount in dispatched:
+            shipped[requirement_id] += amount
+        return tuple(
+            (requirement, amount)
+            for requirement in external_requirements
+            if requirement.id in due_ids
+            if (amount := max(0.0, self.requirement_remaining_t(requirement)
+                             - shipped[requirement.id])) > 1e-9
+        )
 
     @staticmethod
     def _target_stock_id(

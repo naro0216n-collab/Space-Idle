@@ -108,6 +108,20 @@ class CargoFlowSegment:
     def last_arrival_day(self) -> int:
         return self.dispatch_end_day - 1 + self.latency_days
 
+    @property
+    def first_final_arrival_day(self) -> int:
+        """Earliest physical arrival at the final node using frozen dispatch legs.
+
+        This is a lower bound, not guaranteed inventory availability: a handoff
+        can wait for handling capacity, and admission can be blocked at arrival.
+        """
+        return self.first_arrival_day + sum(leg.latency_days for leg in self.remaining_legs)
+
+    @property
+    def last_final_arrival_day(self) -> int:
+        """Last planned physical arrival across this dispatch segment's slices."""
+        return self.last_arrival_day + sum(leg.latency_days for leg in self.remaining_legs)
+
 
 @dataclass
 class CargoArrivalWaiting:
@@ -149,3 +163,17 @@ class CargoArrivalWaiting:
     @property
     def next_leg(self) -> CargoServiceLeg | None:
         return None if not self.remaining_legs else self.remaining_legs[0]
+
+@dataclass(frozen=True)
+class CargoPositionSnapshot:
+    """Read-only physical whereabouts; destination does not imply Inventory admission."""
+    cargo_id: EntityId
+    resource_id: DefinitionId
+    amount_t: float
+    phase: str
+    current_node_id: SpatialNodeId | None
+    leg_source_id: SpatialNodeId | None
+    leg_destination_id: SpatialNodeId | None
+    final_destination_id: SpatialNodeId
+    owner_kind: str
+    owner_id: EntityId

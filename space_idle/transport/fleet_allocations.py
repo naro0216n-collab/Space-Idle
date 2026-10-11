@@ -21,7 +21,10 @@ from .models import (
     FleetActivityRef,
     FleetCommitmentSnapshot,
     FleetCommitmentState,
+    MovementEndpoint,
     OperationAssetDisposition,
+    PassengerAccommodation,
+    consume_onboard_life_support,
     OperationSupportLocation,
     TransportAllocation,
     TransportCapacitySnapshot,
@@ -75,6 +78,23 @@ class FleetAllocationMixin:
             pool = FleetPool(vehicle_definition_id, location_id, 0)
             self.fleet_pools[key] = pool
         return pool
+
+    def fleet_owned_units(self) -> int:
+        """Total physical units, including Movement and unoperated targets.
+
+        A commitment located at an Operational Node is already represented in
+        its FleetPool. During Movement or physical-target residence the same
+        units instead belong exclusively to a detached Fleet commitment.
+        This projection is read-only and is never persisted separately.
+        """
+        return (
+            sum(pool.total_units for pool in self.fleet_pools.values())
+            + sum(
+                commitment.quantity
+                for commitment in self.fleet_commitments.values()
+                if commitment.operational_node_id is None
+            )
+        )
 
     def add_fleet_units(
         self,
@@ -151,6 +171,9 @@ class FleetAllocationMixin:
             commitment.quantity,
             commitment.operational_node_id,
             commitment.movement_execution_id,
+            commitment.physical_target,
+            tuple(sorted(commitment.onboard_resources.items(), key=lambda row: str(row[0]))),
+            commitment.onboard_accommodation,
         )
 
     def fleet_commitment_snapshots(self) -> tuple[FleetCommitmentSnapshot, ...]:
@@ -162,6 +185,9 @@ class FleetAllocationMixin:
                 commitment.quantity,
                 commitment.operational_node_id,
                 commitment.movement_execution_id,
+                commitment.physical_target,
+                tuple(sorted(commitment.onboard_resources.items(), key=lambda row: str(row[0]))),
+                commitment.onboard_accommodation,
             )
             for commitment in sorted(
                 self.fleet_commitments.values(), key=lambda row: str(row.id)
@@ -323,6 +349,53 @@ class FleetAllocationMixin:
             operational_node_id=location_id,
         )
 
+    def provision_fleet_commitment(
+        self, commitment_id: EntityId, accommodation: PassengerAccommodation,
+        resources: dict[DefinitionId, float],
+    ) -> None:
+        """Take ownership of real embarked resources, already debited from Inventory."""
+        state = self.fleet_commitments[commitment_id]
+        if state.onboard_accommodation is not None or state.onboard_resources:
+            raise ValueError('Fleet commitment has already been provisioned')
+        if any(resource not in self.inventory.resource_definitions or not math.isfinite(amount) or amount < 0
+               for resource, amount in resources.items()):
+            raise ValueError('invalid embarked Resource')
+        state.onboard_accommodation = accommodation
+        state.onboard_resources = {resource: amount for resource, amount in resources.items() if amount > 1e-12}
+
+    def consume_fleet_life_support(self, commitment_id: EntityId, people: int) -> float:
+        """Consume shipboard Resource once per game day using Fleet-owned Stock."""
+        state = self.fleet_commitments[commitment_id]
+        spec = state.onboard_accommodation
+        if spec is None:
+            return 1.0 if people == 0 else 0.0
+        return consume_onboard_life_support(spec, state.onboard_resources, people, units=state.quantity)
+
+    def can_admit_fleet_provisions(self, commitment_id: EntityId, node_id: SpatialNodeId) -> bool:
+        """Assess atomic admission per shared physical Inventory storage pool."""
+        state = self.fleet_commitments[commitment_id]
+        return self.inventory.can_admit_resources(node_id, state.onboard_resources)
+
+    def recover_fleet_provisions(self, commitment_id: EntityId, node_id: SpatialNodeId) -> bool:
+        """Unload onboard Stock into real Inventory before Fleet is released."""
+        state = self.fleet_commitments[commitment_id]
+        if state.operational_node_id != node_id:
+            raise ValueError('cannot unload a Fleet at a different physical Node')
+        if not self.can_admit_fleet_provisions(commitment_id, node_id):
+            return False
+        for resource, amount in sorted(state.onboard_resources.items(), key=lambda row: str(row[0])):
+            if amount > 1e-12:
+                admission = self.inventory.admit(
+                    node_id, resource, amount,
+                    source_owner=f"fleet_commitment:{commitment_id}",
+                    activity_id=f"fleet_provisions_recovery:{commitment_id}",
+                )
+                if not admission.fully_admitted:
+                    raise RuntimeError("fleet provision admission changed after atomic storage check")
+        state.onboard_resources.clear()
+        state.onboard_accommodation = None
+        return True
+
     def release_fleet_commitment(
         self, commitment_id: EntityId, *, day: int = 0
     ) -> None:
@@ -331,6 +404,8 @@ class FleetAllocationMixin:
             raise KeyError(commitment_id)
         if commitment.operational_node_id is None:
             raise ValueError("in-movement Fleet commitment cannot be released")
+        if any(amount > 1e-12 for amount in commitment.onboard_resources.values()):
+            raise ValueError("Fleet must unload onboard Resource before release")
         del self.fleet_commitments[commitment_id]
         self.reconcile_fleet_allocations(day)
 
@@ -360,11 +435,22 @@ class FleetAllocationMixin:
             raise KeyError(commitment_id)
         source_id = commitment.operational_node_id
         if source_id is None:
-            raise ValueError("Fleet commitment is already in Movement")
+            if commitment.physical_target is None:
+                raise ValueError("Fleet commitment is already in Movement")
+            execution = self.movement_executions.get(execution_id)
+            if execution is None or commitment_id not in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id):
+                raise ValueError("MovementExecution Fleet commitment mismatch")
+            if execution.origin != commitment.physical_target:
+                raise ValueError("physical departure does not match Fleet position")
+            snapshot = self.fleet_commitment_snapshot(commitment_id)
+            assert snapshot is not None
+            commitment.physical_target = None
+            commitment.movement_execution_id = execution_id
+            return snapshot
         execution = self.movement_executions.get(execution_id)
         if execution is None:
             raise KeyError(execution_id)
-        if execution.fleet_commitment_id != commitment_id:
+        if commitment_id not in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id):
             raise ValueError("MovementExecution Fleet commitment mismatch")
         if execution.origin.operational_node_id != source_id:
             raise ValueError("MovementExecution origin does not match Fleet commitment")
@@ -378,6 +464,44 @@ class FleetAllocationMixin:
         commitment.movement_execution_id = execution_id
         self.reconcile_fleet_allocations(day)
         return snapshot
+
+    def receive_fleet_commitment_at_physical_target(
+        self, commitment_id: EntityId, *, execution_id: EntityId, day: int,
+    ) -> None:
+        """Keep one-shot Fleet physically present without inventing an Inventory/FleetPool."""
+        commitment = self.fleet_commitments[commitment_id]
+        if commitment.movement_execution_id != execution_id:
+            raise ValueError("Fleet commitment MovementExecution mismatch")
+        execution = self.movement_executions[execution_id]
+        if commitment_id not in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id):
+            raise ValueError("MovementExecution Fleet commitment mismatch")
+        if execution.completion_day > day:
+            raise ValueError("Fleet cannot settle before Movement completion")
+        if execution.final_asset_disposition is not OperationAssetDisposition.DESTINATION:
+            raise ValueError("physical settlement requires destination Fleet disposition")
+        endpoint = execution.destination
+        if endpoint.operational_node_id is not None:
+            raise ValueError("physical settlement requires a non-operational destination")
+        commitment.movement_execution_id = None
+        commitment.physical_target = endpoint
+
+    def _movement_endpoint_owns_node(
+        self, endpoint: MovementEndpoint, location_id: SpatialNodeId,
+    ) -> bool:
+        """Resolve a frozen physical arrival to its *actual* operational owner.
+
+        A previously unoperated physical target can become an Operational Node
+        while a founding payload is settled. The identity must be established
+        by the spatial graph, not by the caller's proposed FleetPool ID.
+        """
+        if endpoint.operational_node_id is not None:
+            return endpoint.operational_node_id == location_id
+        if endpoint.physical_target_node_id is not None:
+            return endpoint.physical_target_node_id == location_id
+        if endpoint.physical_target_cell_id is not None:
+            location = self.facilities.environment.graph.locations.get(location_id)
+            return location is not None and location.core_cell_id == endpoint.physical_target_cell_id
+        return False
 
     def receive_fleet_commitment(
         self,
@@ -399,11 +523,20 @@ class FleetAllocationMixin:
         execution = self.movement_executions.get(active_execution_id)
         if execution is None:
             raise RuntimeError("Fleet commitment references missing MovementExecution")
-        destination_id = execution.destination.operational_node_id
-        if destination_id is not None and destination_id != location_id:
-            raise ValueError("Fleet commitment arrival location mismatch")
+        if commitment_id not in (execution.fleet_commitment_id, execution.payload_fleet_commitment_id):
+            raise ValueError("MovementExecution Fleet commitment mismatch")
+        if execution.completion_day > day:
+            raise ValueError("Fleet cannot settle before Movement completion")
         if not self.facilities.environment.graph.has_operational_node(location_id):
             raise KeyError(location_id)
+        endpoint = (
+            execution.destination
+            if commitment_id == execution.payload_fleet_commitment_id
+            or execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
+            else execution.legs[-1].origin
+        )
+        if not self._movement_endpoint_owns_node(endpoint, location_id):
+            raise ValueError("Fleet commitment recovery location mismatch")
         pool = self.fleet_pool(commitment.vehicle_definition_id, location_id)
         pool.total_units += commitment.quantity
         commitment.operational_node_id = location_id
@@ -418,6 +551,7 @@ class FleetAllocationMixin:
         explicit_path: tuple[MovementPlanId, ...] | None = None,
         *,
         require_destination_disposition: bool = False,
+        required_payload_t_per_unit: float = 0.0,
     ) -> tuple[MovementPlanId, ...]:
         if explicit_path is not None:
             self.validate_movement_path_structure(source_id, destination_id, explicit_path)
@@ -431,6 +565,17 @@ class FleetAllocationMixin:
                     f"{movement_plan_id}:{','.join(reasons)}" for movement_plan_id, reasons in bad
                 )
                 raise ValueError(f"vehicle cannot operate explicit path: {detail}")
+            if required_payload_t_per_unit > 0:
+                under_capacity = tuple(plan_id for plan_id in explicit_path
+                    if self.vehicle_defs[vehicle_definition_id].max_cargo_for_movement(
+                        self.require_movement_plan(plan_id)) + 1e-9 < required_payload_t_per_unit)
+                if under_capacity:
+                    raise ValueError("fleet cargo exceeds Carrier payload on: " + ",".join(map(str, under_capacity)))
+            if not require_destination_disposition and len(explicit_path) > 1:
+                if any(self.vehicle_defs[vehicle_definition_id].movement_asset_disposition(
+                        self.require_movement_plan(plan_id)) is OperationAssetDisposition.ORIGIN
+                        for plan_id in explicit_path[:-1]):
+                    raise ValueError("Carrier must reach intermediate handoff Nodes")
             if require_destination_disposition:
                 bad_disposition = tuple(
                     movement_plan_id
@@ -457,10 +602,10 @@ class FleetAllocationMixin:
             for plan in self.outbound_movement_plans(node):
                 if self.vehicle_movement_physical_failures(plan.id, vehicle_definition_id, day):
                     continue
-                if (
-                    require_destination_disposition
-                    and definition.movement_asset_disposition(plan)
-                    is not OperationAssetDisposition.DESTINATION
+                if definition.max_cargo_for_movement(plan) + 1e-9 < required_payload_t_per_unit:
+                    continue
+                if (require_destination_disposition or plan.destination_id != destination_id) and (
+                    definition.movement_asset_disposition(plan) is not OperationAssetDisposition.DESTINATION
                 ):
                     continue
                 yield plan
@@ -1029,14 +1174,22 @@ class FleetAllocationMixin:
             if execution.completion_day > day:
                 continue
             self.receive_fleet_commitment(
-                relocation.fleet_commitment_id,
-                relocation.destination_id,
-                execution_id=execution_id,
-                day=day,
+                relocation.fleet_commitment_id, relocation.destination_id,
+                execution_id=execution_id, day=day,
             )
+            if relocation.carrier_fleet_commitment_id is not None:
+                carrier_arrival = (execution.legs[-1].origin.operational_node_id
+                    if execution.final_asset_disposition is OperationAssetDisposition.ORIGIN
+                    else relocation.destination_id)
+                self.receive_fleet_commitment(
+                    relocation.carrier_fleet_commitment_id, carrier_arrival,
+                    execution_id=execution_id, day=day,
+                )
             self.finish_movement_execution(execution_id)
             self.fleet_relocations.pop(relocation_id)
             self.release_fleet_commitment(relocation.fleet_commitment_id, day=day)
+            if relocation.carrier_fleet_commitment_id is not None:
+                self.release_fleet_commitment(relocation.carrier_fleet_commitment_id, day=day)
         self.reconcile_fleet_allocations(day)
 
     def fleet_relocation_plan(
@@ -1048,10 +1201,15 @@ class FleetAllocationMixin:
         *,
         movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
         day: int = 0,
+        require_destination_disposition: bool = True,
+        carrier_vehicle_definition_id: DefinitionId | None = None,
+        carrier_units: int = 1,
     ) -> FleetRelocationPlan:
         """Derive the exact decision contract used to start a Fleet relocation."""
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
+        if carrier_vehicle_definition_id is not None and carrier_vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(carrier_vehicle_definition_id)
         if not self.facilities.environment.graph.has_operational_node(source_id):
             raise KeyError(source_id)
         if not self.facilities.environment.graph.has_operational_node(destination_id):
@@ -1067,16 +1225,31 @@ class FleetAllocationMixin:
         if units > 0 and free_units < units:
             blockers.append(f"fleet_units:{free_units}/{units}")
 
+        carrier_definition = (None if carrier_vehicle_definition_id is None
+            else self.vehicle_defs[carrier_vehicle_definition_id])
+        payload_mass_t = (0.0 if carrier_definition is None else
+            self.vehicle_defs[vehicle_definition_id].dry_mass_t * max(units, 0))
+        if carrier_definition is not None:
+            if carrier_units <= 0:
+                blockers.append("carrier_units:positive_required")
+            available_carriers = self.fleet_free_units(carrier_vehicle_definition_id, source_id)
+            if carrier_vehicle_definition_id == vehicle_definition_id:
+                available_carriers = max(0, available_carriers - max(units, 0))
+            if available_carriers < carrier_units:
+                blockers.append(f"carrier_fleet_units:{available_carriers}/{carrier_units}")
+
         movement_plan_path: tuple[MovementPlanId, ...] = ()
         if source_id != destination_id:
             try:
                 movement_plan_path = self._movement_path_for_vehicle(
                     source_id,
                     destination_id,
-                    vehicle_definition_id,
+                    carrier_vehicle_definition_id or vehicle_definition_id,
                     day,
                     movement_hard_constraint,
-                    require_destination_disposition=True,
+                    require_destination_disposition=require_destination_disposition and carrier_definition is None,
+                    required_payload_t_per_unit=(payload_mass_t / carrier_units
+                        if carrier_definition is not None and carrier_units > 0 else 0.0),
                 )
             except ValueError as exc:
                 blockers.append(f"relocation_path:{exc}")
@@ -1085,17 +1258,24 @@ class FleetAllocationMixin:
         ):
             blockers.append("relocation_path:empty")
 
-        definition = self.vehicle_defs[vehicle_definition_id]
+        definition = carrier_definition or self.vehicle_defs[vehicle_definition_id]
+        operating_units = carrier_units if carrier_definition is not None else units
+        payload_t_per_unit = (payload_mass_t / carrier_units
+            if carrier_definition is not None and carrier_units > 0 else 0.0)
         movement_plans = tuple(self.require_movement_plan(movement_plan_id) for movement_plan_id in movement_plan_path)
         propellant_requirements: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         if movement_plan_path:
             for movement_plan in movement_plans:
                 blockers.extend(self.movement_plan_failures(movement_plan.id, day))
                 blockers.extend(
-                    self.vehicle_movement_failures(movement_plan.id, vehicle_definition_id, day)
+                    self.vehicle_movement_failures(movement_plan.id, definition.id, day)
                 )
-                if definition.propellant_resource_id is not None and units > 0:
-                    amount = definition.propellant_t(movement_plan, 0.0) * units
+                if carrier_definition is not None and carrier_units > 0:
+                    capacity = definition.max_cargo_for_movement(movement_plan)
+                    if payload_t_per_unit > capacity + 1e-9:
+                        blockers.append(f"carrier_payload:{capacity:g}/{payload_t_per_unit:g}")
+                if definition.propellant_resource_id is not None and operating_units > 0:
+                    amount = definition.propellant_t(movement_plan, payload_t_per_unit) * operating_units
                     if amount > 1e-12:
                         blockers.extend(
                             self.resource_support_failures(
@@ -1153,6 +1333,9 @@ class FleetAllocationMixin:
             resource_requirements=tuple(resource_requirements),
             infrastructure_requirements=infrastructure_requirements,
             blockers=tuple(dict.fromkeys(blockers)),
+            carrier_vehicle_definition_id=carrier_vehicle_definition_id,
+            carrier_units=carrier_units if carrier_definition is not None else 0,
+            payload_mass_t=payload_mass_t,
         )
 
     def relocate_fleet(
@@ -1163,6 +1346,8 @@ class FleetAllocationMixin:
         destination_id: SpatialNodeId,
         *,
         movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
+        carrier_vehicle_definition_id: DefinitionId | None = None,
+        carrier_units: int = 1,
         day: int = 0,
     ) -> EntityId:
         plan = self.fleet_relocation_plan(
@@ -1171,6 +1356,8 @@ class FleetAllocationMixin:
             source_id,
             destination_id,
             movement_hard_constraint=movement_hard_constraint,
+            carrier_vehicle_definition_id=carrier_vehicle_definition_id,
+            carrier_units=carrier_units,
             day=day,
         )
         # Inventory shortage is resolved by the shared Resource Claim allocator,
@@ -1203,16 +1390,19 @@ class FleetAllocationMixin:
             source_id,
             units,
         )
+        carrier_commitment_id = (None if carrier_vehicle_definition_id is None
+            else EntityId(f"fleet.commitment.carrier:{relocation_id}"))
+        if carrier_commitment_id is not None:
+            self.commit_fleet_units(
+                carrier_commitment_id, FleetActivityRef("fleet_relocation", relocation_id),
+                carrier_vehicle_definition_id, source_id, carrier_units,
+            )
         self.fleet_relocations[relocation_id] = FleetRelocation(
-            relocation_id,
-            vehicle_definition_id,
-            units,
-            commitment_id,
-            source_id,
-            destination_id,
-            day,
-            plan.path,
-            needs,
+            relocation_id, vehicle_definition_id, units, commitment_id,
+            source_id, destination_id, day, plan.path, needs,
+            carrier_vehicle_definition_id=carrier_vehicle_definition_id,
+            carrier_units=carrier_units if carrier_commitment_id is not None else 0,
+            carrier_fleet_commitment_id=carrier_commitment_id,
         )
         return relocation_id
 
@@ -1314,15 +1504,20 @@ class FleetAllocationMixin:
                 continue
             for need in relocation.resource_needs:
                 self.inventory.release_storage_occupancy(
-                    relocation.id, need.operational_node_id, need.resource_id, need.required_t
+                    relocation.id, need.operational_node_id, need.resource_id, need.required_t,
+                    destination_owner=f"fleet_relocation:{relocation.id}",
+                    activity_id=f"fleet_relocation_dispatch:{relocation.id}",
                 )
             execution_id = EntityId(f"movement.fleet_relocation:{relocation.id}")
+            carrier_id = relocation.carrier_fleet_commitment_id
+            payload_t_per_unit = (0.0 if carrier_id is None else
+                self.vehicle_defs[relocation.vehicle_definition_id].dry_mass_t
+                * relocation.requested_units / relocation.carrier_units)
             execution = self.start_movement_execution_for_path(
-                execution_id,
-                relocation.id,
-                MovementExecutionKind.FLEET_RELOCATION,
-                relocation.fleet_commitment_id,
-                relocation.path,
+                execution_id, relocation.id, MovementExecutionKind.FLEET_RELOCATION,
+                carrier_id or relocation.fleet_commitment_id, relocation.path,
+                payload_t_per_unit=payload_t_per_unit,
+                payload_fleet_commitment_id=(relocation.fleet_commitment_id if carrier_id else None),
                 day=day,
             )
             if execution.destination.operational_node_id != relocation.destination_id:
@@ -1332,6 +1527,8 @@ class FleetAllocationMixin:
                 self.dispatch_fleet_commitment(
                     relocation.fleet_commitment_id, execution_id, day=day
                 )
+                if carrier_id is not None:
+                    self.dispatch_fleet_commitment(carrier_id, execution_id, day=day)
             except Exception:
                 self.finish_movement_execution(execution_id)
                 raise

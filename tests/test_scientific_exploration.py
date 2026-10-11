@@ -15,6 +15,7 @@ from space_idle import (
     SetScientificExplorationCompletionDisposition,
     CreateTransportAllocation,
     GetFleet,
+    GetLogisticsSummary,
     GetResearch,
     GetScientificExplorations,
     GetTransportAllocations,
@@ -25,10 +26,11 @@ from space_idle import (
     UnassignExplorationFleet,
     build_game_application,
 )
+from space_idle.analysis_observation import observe_state
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
-from space_idle.facilities import FacilityDef
+from space_idle.facilities import CapabilitySupply, FacilityDef
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
 )
@@ -379,13 +381,16 @@ def test_rp_admission_blocks_only_active_science_and_shares_recovered_headroom()
     storage_definition_id = DefinitionId("test.facility.exploration_rp_storage")
     storage_provider_id = DefinitionId("test.research_provider.exploration_rp_storage")
     sim.facilities.definitions[storage_definition_id] = FacilityDef(
-        storage_definition_id, "Exploration RP storage fixture"
+        storage_definition_id, "Exploration RP storage fixture",
+        capability_supplies=(CapabilitySupply("test_exploration_research_storage"),),
     )
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {
         storage_provider_id: ResearchProviderSpec(
             storage_provider_id,
             ResearchProviderSourceKind.FACILITY,
-            storage_definition_id,
+            frozenset({"test_exploration_research_storage"}),
             tier=1,
             levels=(ResearchProviderLevelSpec(1, 4.0, 100.0, 0.0),),
         )
@@ -550,3 +555,367 @@ def test_scientific_exploration_abort_return_and_completion_disposition_are_doma
     assert state.fleet_commitment_id is None
     assert sim.transport.fleet_commitment_snapshot(commitment_id) is None
     validate_runtime_state(sim)
+
+
+def test_scientific_exploration_technology_is_a_start_requirement_not_an_in_flight_lock():
+    from space_idle.app_contracts.common import ApplicationError
+
+    app = build_game_application()
+    sim = app._simulation
+    mission_id = ids.MARS_ORBIT_SCIENCE_EXPLORATION
+    definition = sim.scientific_exploration.definitions[mission_id]
+    assert definition.prerequisite_technologies
+    mission = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(mission_id))
+    assert not mission.can_start
+    assert set(mission.prerequisite_technologies) == set(map(str, definition.prerequisite_technologies))
+    assert {f"technology:{tech_id}" for tech_id in definition.prerequisite_technologies} <= {
+        row.code for row in mission.blockers
+    }
+    with pytest.raises(ApplicationError, match="technology"):
+        app.execute(StartScientificExploration(str(mission_id)))
+    assert mission_id not in sim.scientific_exploration.campaigns
+    assert any(
+        unlock.kind == "scientific_exploration" and unlock.id == str(mission_id)
+        for research in app.query(GetResearch()).items for unlock in research.unlocks
+    )
+
+    sim.technology.completed.update(definition.prerequisite_technologies)
+    assert next(row for row in app.query(GetScientificExplorations()).items
+                if row.id == str(mission_id)).can_start
+    app.execute(StartScientificExploration(str(mission_id)))
+    sim.technology.completed.difference_update(definition.prerequisite_technologies)
+    assert sim.scientific_exploration.blockers(mission_id) == ("fleet_unassigned",)
+    assert sim.scientific_exploration.campaigns[mission_id].phase.value == "awaiting_fleet"
+    waiting = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(mission_id))
+    assert not waiting.can_start and waiting.can_abort
+    assert not waiting.can_return and not waiting.can_unassign
+    assert [row.code for row in waiting.return_action_blockers] == ["fleet_unassigned"]
+    assert [row.code for row in waiting.unassign_action_blockers] == ["scientific_exploration_phase_restricts_action"]
+    assert not waiting.abort_action_blockers
+
+
+def _start_unoperated_science(app):
+    sim = app._simulation
+    mission_id = ids.MARS_ORBIT_SCIENCE_EXPLORATION
+    # The scenario under test concerns Fleet ownership after a legitimate
+    # campaign acquisition, not whether the method has been researched.
+    sim.technology.completed.update(
+        sim.scientific_exploration.definitions[mission_id].prerequisite_technologies
+    )
+    vehicle_id = ids.DEEP_SPACE_PROBE
+    sim.transport.add_fleet_units(vehicle_id, 1, ids.LEO)
+    app.execute(StartScientificExploration(str(mission_id)))
+    app.execute(AssignExplorationFleet(str(mission_id), str(vehicle_id)))
+    definition = sim.scientific_exploration.definitions[mission_id]
+    state = sim.scientific_exploration.campaigns[mission_id]
+    needs = sim.scientific_exploration._preparation_requirements(definition, state, sim.day)
+    for node, resource, amount, _ in needs:
+        sim.inventory.add(node, resource, amount + 1.0)
+    start_balances = {(node, resource): sim.inventory.amount(node, resource)
+                      for node, resource, _amount, _ in needs}
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == "outbound"
+    outbound = next(row for row in app.query(GetScientificExplorations()).items
+                    if row.id == str(mission_id))
+    assert outbound.can_abort and outbound.can_return and not outbound.can_unassign
+    assert not outbound.return_action_blockers and not outbound.abort_action_blockers
+    assert [row.code for row in outbound.unassign_action_blockers] == ["scientific_exploration_phase_restricts_action"]
+    return state, start_balances, needs
+
+
+def _arrive_unoperated_science(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "active"
+    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert commitment.operational_node_id is None
+    assert commitment.physical_target.physical_target_node_id == ids.MARS_ORBIT
+    view = next(row for row in app.query(GetScientificExplorations()).items
+                if row.id == str(ids.MARS_ORBIT_SCIENCE_EXPLORATION))
+    assert view.destination_kind == "non_surface_spatial_node"
+    assert view.fleet_location_kind == "physical_target"
+    assert view.fleet_location_id == str(ids.MARS_ORBIT)
+    assert not view.can_set_completion_disposition
+    assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
+    assert not any(node == ids.MARS_ORBIT for node, _vehicle in sim.transport.fleet_pools)
+    assert not any(node == ids.MARS_ORBIT for node, _resource in sim.inventory.stock)
+    validate_runtime_state(sim)
+
+
+def _finish_unoperated_science(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    if state.phase.value == "active":
+        sim.research.stored_points = 0.0
+        app.execute(AdvanceTime(12))
+        assert state.phase.value == "return_preparing"
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == "returning"
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    validate_runtime_state(sim)
+    assert state.fleet_commitment_id is None
+    assert state.movement_execution_id is None
+    assert sim.transport.fleet_free_units(ids.DEEP_SPACE_PROBE, ids.LEO) == 1
+    assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
+
+
+def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_and_abort(
+    tmp_path, short_interplanetary_transit,
+):
+    app = build_game_application()
+    sim = app._simulation
+    before_survey = capture_state(sim)["survey"]
+    initial_owned_nodes = set(sim.graph.operational_node_ids())
+    assert ids.MARS_ORBIT not in initial_owned_nodes
+    initial_fleet_count = app.query(GetLogisticsSummary()).fleet_units
+    state, initial_balances, needs = _start_unoperated_science(app)
+    assert needs and all(node == ids.LEO for node, _, _, _ in needs)
+    # The spacecraft has left its origin pool, but it is still Player-owned.
+    # Neither the Fleet screen nor analysis may count only parked units.
+    # A physical destination cannot silently turn into an arbitrary FleetPool,
+    # even if a caller asks the Fleet Owner to settle the Movement there.
+    outbound_execution = sim.transport.movement_executions[state.movement_execution_id]
+    before_invalid_settlement = capture_state(sim)["transport"]
+    with pytest.raises(ValueError, match="recovery location mismatch"):
+        sim.transport.receive_fleet_commitment(
+            state.fleet_commitment_id, ids.EARTH,
+            execution_id=outbound_execution.id, day=outbound_execution.completion_day,
+        )
+    with pytest.raises(ValueError, match="before Movement completion"):
+        sim.transport.receive_fleet_commitment_at_physical_target(
+            state.fleet_commitment_id,
+            execution_id=outbound_execution.id, day=sim.day,
+        )
+    assert capture_state(sim)["transport"] == before_invalid_settlement
+    in_flight = next(row for row in app.query(GetFleet()).commitments
+                     if row.id == str(state.fleet_commitment_id))
+    assert in_flight.location_kind == "in_transit"
+    assert in_flight.movement_origin_id == str(ids.LEO)
+    assert in_flight.movement_destination_id == str(ids.MARS_ORBIT)
+    assert in_flight.movement_completion_day > sim.day
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    in_flight_metrics = observe_state(sim).metrics
+    assert any(m.kind == "fleet_detached" and m.quantity == 1
+               and m.context_id.startswith("movement:") for m in in_flight_metrics)
+    assert not any(m.kind == "inventory_stock" and m.context_id.startswith("movement:")
+                   for m in in_flight_metrics)
+    for node, resource, amount, _ in needs:
+        # Ordinary facility maintenance can also draw from the same inventory.
+        assert initial_balances[node, resource] - sim.inventory.amount(node, resource) + 1e-9 >= amount
+    _arrive_unoperated_science(app)
+    remote = next(row for row in app.query(GetFleet()).commitments
+                  if row.id == str(state.fleet_commitment_id))
+    assert remote.location_kind == "physical_target"
+    assert remote.physical_target_kind == "physical_non_surface_target"
+    assert remote.physical_target_id == str(ids.MARS_ORBIT)
+    assert remote.operational_node_id is None
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    observations = observe_state(sim).metrics
+    target_context = f"physical_target:physical_non_surface_target:{ids.MARS_ORBIT}"
+    assert any(row.kind == "fleet_detached" and row.context_id == target_context
+               and row.quantity == 1 for row in observations)
+    assert all(row.context_id != str(ids.MARS_ORBIT) for row in observations
+               if row.kind in ("inventory_stock", "fleet_total"))
+    for resource_id, amount in remote.onboard_resources:
+        assert any(row.kind == "fleet_onboard_resource"
+                   and row.subject_id == resource_id
+                   and row.context_id == target_context and row.quantity == amount
+                   for row in observations)
+    # Scoping to an operational Node cannot materialize a remote Fleet unit.
+    scoped = observe_state(sim, operational_node_ids=frozenset((ids.LEO,)))
+    assert not any(row.kind == "fleet_detached" for row in scoped.metrics)
+    path = tmp_path / "unoperated-science.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    assert loaded.query(GetFleet()).commitments == app.query(GetFleet()).commitments
+    original_metrics = observe_state(sim).metrics
+    restored_metrics = observe_state(loaded._simulation).metrics
+    # Save/Load retains physical quantity semantics; storage occupation may
+    # differ by a few floating-point ulps across supported Python versions.
+    identity = lambda row: (row.kind, row.subject_id, row.context_id, row.unit, row.provenance)
+    assert tuple(map(identity, restored_metrics)) == tuple(map(identity, original_metrics))
+    assert [row.quantity for row in restored_metrics] == pytest.approx(
+        [row.quantity for row in original_metrics], abs=1e-9,
+    )
+    for current in (app, loaded):
+        current._simulation.research.stored_points = 0.0
+        current.execute(AdvanceTime(12))
+        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "return_preparing"
+        current.execute(AdvanceTime(1))
+        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "returning"
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    returning_load, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    for current in (app, loaded, returning_load):
+        _finish_unoperated_science(current)
+    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
+    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    assert state.phase.value == "complete"
+    definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
+    assert capture_state(sim)["survey"] == before_survey
+    assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
+    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
+    assert not any(row.kind == "fleet_detached" and row.context_id == target_context
+                   for row in observe_state(sim).metrics)
+    for node, resource, _, _ in needs:
+        assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
+
+    aborted = build_game_application()
+    _start_unoperated_science(aborted)
+    aborted.execute(AbortScientificExploration(str(ids.MARS_ORBIT_SCIENCE_EXPLORATION)))
+    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "outbound"
+    _arrive_unoperated_science_on_abort(aborted)
+    _finish_unoperated_science(aborted)
+    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "aborted"
+
+
+def _arrive_unoperated_science_on_abort(app):
+    sim = app._simulation
+    state = sim.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
+    execution = sim.transport.movement_executions[state.movement_execution_id]
+    app.execute(AdvanceTime(execution.completion_day - sim.day))
+    assert state.phase.value == "return_preparing"
+    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert commitment.physical_target.physical_target_node_id == ids.MARS_ORBIT
+    validate_runtime_state(sim)
+
+
+def test_crewed_exploration_keeps_population_and_onboard_resources_until_physical_return(tmp_path):
+    """Mission crew cannot be reallocated while the real Fleet is transporting it."""
+    app = build_game_application()
+    sim = app._simulation
+    mission = ids.CREWED_CISLUNAR_EXPEDITION
+    craft = ids.REUSABLE_ORBITAL_CARGO_TUG
+    service = sim.scientific_exploration
+    sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
+    destination_habitat = sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LUNAR_ORBIT)
+    sim.refresh_storage()
+    sim.population.initialize(ids.LEO, 2)
+    for resource in (ids.FOOD, ids.WATER, ids.OXYGEN, ids.PROPELLANT):
+        sim.inventory.add(ids.LEO, resource, 50.0)
+        if resource != ids.PROPELLANT:
+            sim.inventory.add(ids.LUNAR_ORBIT, resource, 50.0)
+
+    initial_people = sum(group.count for group in sim.population.groups.values())
+    app.execute(StartScientificExploration(str(mission)))
+    assert app.query(GetScientificExplorations()).items
+    row = next(row for row in app.query(GetScientificExplorations()).items if row.id == str(mission))
+    assert row.required_crew == 2 and row.committed_crew == 0
+    assert any(option.vehicle_definition_id == str(craft) and not option.blockers for option in row.fleet_options)
+    app.execute(AssignExplorationFleet(str(mission), str(craft)))
+    state = service.campaigns[mission]
+    for node_id, resource, amount, _purpose in service._preparation_requirements(service.definitions[mission], state, sim.day):
+        if sim.inventory.available(node_id, resource) + 1e-9 < amount:
+            sim.inventory.add(node_id, resource, amount)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == 'outbound'
+    crew = sim.population.activity_groups(service._crew_owner(service.definitions[mission]))
+    assert sum(group.count for group in crew) == 2
+    assert sim.population.activity_work_fraction(service._crew_owner(service.definitions[mission]), 2) == pytest.approx(1.0)
+    assert all(group.position.kind == 'transport_execution' for group in crew)
+    assert sim.population.free_count_at(ids.LEO) == 0
+    cabin = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
+    assert sum(amount for _, amount in cabin.onboard_resources) > 0
+    spec = sim.transport.vehicle_definition(craft).passengers
+    assert spec.loaded_payload_mass(2, dict(cabin.onboard_resources)) > 2 * spec.person_mass_t
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    save_path = tmp_path / 'crewed-science.json'
+    save_game(app, save_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    loaded, _ = load_game(save_path, build_game_application_for_load)
+    assert capture_state(loaded._simulation)['population'] == capture_state(sim)['population']
+    assert capture_state(loaded._simulation)['transport'] == capture_state(sim)['transport']
+    completion = sim.transport.movement_execution_snapshot(state.movement_execution_id).completion_day
+    sim.facilities.pause(destination_habitat)
+    app.execute(AdvanceTime(completion - sim.day))
+    assert state.phase.value == 'outbound'
+    assert all(group.position.kind == 'transport_execution' for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    sim.facilities.resume(destination_habitat)
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == 'active'
+    assert all(group.position.kind == 'operational_node' for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    assert all(group.activity_commitment_ref is not None for group in sim.population.activity_groups(service._crew_owner(service.definitions[mission])))
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    while state.phase.value == 'active':
+        app.execute(AdvanceTime(1))
+    assert state.phase.value == 'return_preparing'
+    # Seed an additional physical onboard provision at the established return
+    # port. This tests independent Crew admission and Fleet cargo recovery when
+    # the vessel returns with surplus supplies, not a probabilistic mishap.
+    sim.inventory.consume_allocated(ids.LUNAR_ORBIT, ids.WATER, 1.0)
+    onboard_state = sim.transport.fleet_commitments[state.fleet_commitment_id]
+    onboard_state.onboard_resources[ids.WATER] = onboard_state.onboard_resources.get(ids.WATER, 0.0) + 1.0
+    for node_id, resource, amount, _purpose in service._preparation_requirements(
+        service.definitions[mission], state, sim.day, returning=True
+    ):
+        if sim.inventory.available(node_id, resource) + 1e-9 < amount:
+            sim.inventory.add(node_id, resource, amount)
+    app.execute(AdvanceTime(2))
+    assert state.phase.value == 'returning'
+    returning = sim.transport.movement_execution_snapshot(state.movement_execution_id)
+    assert returning is not None
+    assert sim.population.free_count_at(ids.LEO) == 0
+    # Occupy the actual shared Inventory pool before landing. Crew can
+    # disembark, but the Fleet and its leftover physical Resource must stay
+    # committed until that pool can receive the cabin provisions.
+    pool = sim.inventory.storage_pool_for_resource(ids.WATER)
+    fill_amount = sim.inventory.admission_state_for_pool(ids.LEO, pool).admission_capacity_t
+    sim.inventory.add(ids.LEO, ids.MINERAL_FEEDSTOCK, fill_amount)
+    app.execute(AdvanceTime(returning.completion_day - sim.day))
+    assert state.phase.value == 'recovering'
+    assert sim.population.free_count_at(ids.LEO) == 2
+    assert state.fleet_commitment_id is not None
+    assert sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id).onboard_resources
+    waiting_row = next(row for row in app.query(GetScientificExplorations()).items if row.id == str(mission))
+    assert any(blocker.code == 'onboard_resource_admission' for blocker in waiting_row.blockers)
+    recovery_path = tmp_path / 'crewed-recovery.json'
+    save_game(app, recovery_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    recovery_loaded, _ = load_game(recovery_path, build_game_application_for_load)
+    assert capture_state(recovery_loaded._simulation) == capture_state(sim)
+    sim.inventory.consume_allocated(ids.LEO, ids.MINERAL_FEEDSTOCK, 1.0)
+    app.execute(AdvanceTime(1))
+    assert state.phase.value == 'complete'
+    assert sim.population.free_count_at(ids.LEO) == 2
+    assert sim.transport.fleet_free_units(craft, ids.LEO) >= 1
+    assert sum(group.count for group in sim.population.groups.values()) == initial_people
+    assert not sim.population.activity_groups(service._crew_owner(service.definitions[mission]))
+    # Canonical day and offline/save replay preserve crew, Fleet and Resource stock.
+    loaded._simulation.facilities.pause(destination_habitat)
+    loaded.execute(AdvanceTime(completion - loaded._simulation.day))
+    loaded._simulation.facilities.resume(destination_habitat)
+    loaded.execute(AdvanceTime(1))
+    loaded_science = loaded._simulation.scientific_exploration
+    loaded_mission = loaded_science.campaigns[mission]
+    assert loaded_mission.phase.value == 'active'
+    while loaded_mission.phase.value == 'active':
+        loaded.execute(AdvanceTime(1))
+    loaded._simulation.inventory.consume_allocated(ids.LUNAR_ORBIT, ids.WATER, 1.0)
+    loaded_onboard = loaded._simulation.transport.fleet_commitments[loaded_mission.fleet_commitment_id]
+    loaded_onboard.onboard_resources[ids.WATER] = loaded_onboard.onboard_resources.get(ids.WATER, 0.0) + 1.0
+    for node_id, resource, amount, _purpose in loaded_science._preparation_requirements(
+        loaded_science.definitions[mission], loaded_mission, loaded._simulation.day, returning=True
+    ):
+        if loaded._simulation.inventory.available(node_id, resource) + 1e-9 < amount:
+            loaded._simulation.inventory.add(node_id, resource, amount)
+    loaded.execute(AdvanceTime(2))
+    back = loaded._simulation.transport.movement_execution_snapshot(loaded_mission.movement_execution_id)
+    loaded_pool = loaded._simulation.inventory.storage_pool_for_resource(ids.WATER)
+    loaded_fill = loaded._simulation.inventory.admission_state_for_pool(ids.LEO, loaded_pool).admission_capacity_t
+    loaded._simulation.inventory.add(ids.LEO, ids.MINERAL_FEEDSTOCK, loaded_fill)
+    loaded.execute(AdvanceTime(back.completion_day - loaded._simulation.day))
+    assert loaded_mission.phase.value == 'recovering'
+    loaded._simulation.inventory.consume_allocated(ids.LEO, ids.MINERAL_FEEDSTOCK, 1.0)
+    loaded.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(sim)

@@ -9,6 +9,15 @@ from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
+class ResearchSiteResourceRow:
+    resource_id: str
+    required_t: float
+    reserved_t: float
+    available_t: float
+    shortfall_t: float
+
+
+@dataclass(frozen=True)
 class ResearchSiteOptionRow:
     operational_node_id: str
     surface_cell_id: str | None
@@ -16,6 +25,7 @@ class ResearchSiteOptionRow:
     can_select: bool
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
+    resources: tuple[ResearchSiteResourceRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,7 @@ class ResearchRow:
     execution_requested: float
     execution_allocated: float
     current_blockers: tuple[DecisionConstraintRow, ...]
+    primary_blocker: DecisionConstraintRow | None
     start_blockers: tuple[DecisionConstraintRow, ...]
     stage_resources: tuple[ResearchPrototypeResourceRow, ...]
     execution_context: ResearchExecutionSiteRow | None
@@ -132,6 +143,9 @@ class ResearchRow:
     execution_context_comparison_axes: tuple[ComparisonAxisRow, ...]
     operational_experience: tuple[ResearchExperienceRow, ...]
     prerequisites: tuple[str, ...]
+    progression_stage: int | None = None
+    category: str | None = None
+    series: str | None = None
     unlocks: tuple[ResearchUnlockRow, ...] = ()
 
 
@@ -173,6 +187,9 @@ class ScientificExplorationRow:
     can_set_priority: bool
     origin_id: str
     destination_id: str
+    destination_kind: str
+    fleet_location_kind: str | None
+    fleet_location_id: str | None
     movement_operations: tuple[tuple[str, float], ...]
     outbound_latency_days: int | None
     return_latency_days: int | None
@@ -190,7 +207,12 @@ class ScientificExplorationRow:
     consumable_resources: tuple[tuple[str, float], ...]
     required_units: int
     minimum_payload_t: float
+    required_crew: int
+    committed_crew: int
+    crew_in_transit: int
+    onboard_resources: tuple[tuple[str, float], ...]
     required_vehicle_capabilities: tuple[str, ...]
+    prerequisite_technologies: tuple[str, ...]
     assigned_vehicle_definition_id: str | None
     fleet_commitment_id: str | None
     committed_units: int
@@ -205,6 +227,9 @@ class ScientificExplorationRow:
     can_return: bool
     can_set_completion_disposition: bool
     can_unassign: bool
+    return_action_blockers: tuple[DecisionConstraintRow, ...]
+    abort_action_blockers: tuple[DecisionConstraintRow, ...]
+    unassign_action_blockers: tuple[DecisionConstraintRow, ...]
     fleet_options: tuple[ScientificExplorationFleetOptionRow, ...]
 
 
@@ -273,10 +298,12 @@ class SurveyCampaignRow:
     goal_knowledge_level: int
     provider_constraint_definition_id: str | None
     provider_constraint_operational_node_id: str | None
+    provider_constraint_source_definition_id: str | None
     observation_mode_constraint: str | None
     projected_provider_definition_id: str | None
     projected_provider_display_name: str | None
     projected_provider_operational_node_id: str | None
+    projected_source_definition_id: str | None
     projected_observation_mode_id: str | None
     projected_observation_mode_display_name: str | None
     observation_mode_constraint_display_name: str | None

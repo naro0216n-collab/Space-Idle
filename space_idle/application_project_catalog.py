@@ -7,6 +7,7 @@ from .application_catalog_core_sections import (
     project_processes,
     project_research,
     project_resources,
+    project_survey_service_capacities,
 )
 from .application_catalog_transport_sections import (
     project_movement_plans,
@@ -27,6 +28,7 @@ class CatalogWorldProjectorMixin:
             project_processes(self),
             project_research(self),
             project_movement_plans(self),
+            project_survey_service_capacities(self),
         )
 
     def _world_view(self) -> WorldView:

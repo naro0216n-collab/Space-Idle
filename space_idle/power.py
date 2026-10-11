@@ -6,7 +6,7 @@ from typing import TypeAlias
 from .facilities import FacilityBook, FacilityState
 from .service_capacity import ServiceCapacityRequest, allocate_service_capacity
 from .shared import DefinitionId, EntityId, SpatialNodeId
-from .spatial import EnvironmentResolver, IlluminationField
+from .spatial import EnvironmentResolver, IlluminationField, SpatialContextId
 
 
 @dataclass(frozen=True)
@@ -71,13 +71,13 @@ class PowerService:
     specs: dict[DefinitionId, PowerSpec]
     environment: EnvironmentResolver
 
-    def _generation(self, spec: PowerSpec, facility: FacilityState, facilities: FacilityBook, day: int) -> float:
+    def _generation_at_context(self, spec: PowerSpec, context_id: SpatialContextId, day: int) -> float:
+        """Same physical generator for installed Assets and prospective Build sites."""
         model = spec.generation
         if model is None:
             return 0.0
         if isinstance(model, FixedGeneration):
             return model.mw
-        context_id = facilities.facility_environment_context(facility)
         illumination = self.environment.get(context_id, IlluminationField, day)
         if illumination is None:
             return 0.0
@@ -86,6 +86,25 @@ class PowerService:
             * illumination.solar_flux_w_m2
             / model.reference_flux_w_m2
             * illumination.availability
+        )
+
+    def nominal_for_definition_at_context(
+        self, definition_id: DefinitionId, context_id: SpatialContextId, day: int,
+    ) -> tuple[float, float]:
+        """Unmaintained active generation/load at a site, without installing it.
+
+        Acquisition, actual eligibility, maintenance and shared Power allocation
+        remain the owning Domains' responsibility. A missing PowerSpec supplies
+        neither capacity nor an invented load.
+        """
+        spec = self.specs.get(definition_id)
+        if spec is None:
+            return 0.0, 0.0
+        return self._generation_at_context(spec, context_id, day), spec.load_mw
+
+    def _generation(self, spec: PowerSpec, facility: FacilityState, facilities: FacilityBook, day: int) -> float:
+        return self._generation_at_context(
+            spec, facilities.facility_environment_context(facility), day,
         )
 
     def physical_snapshot(

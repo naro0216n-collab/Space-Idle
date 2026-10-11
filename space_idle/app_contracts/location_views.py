@@ -136,6 +136,7 @@ class IndustryProcessOptionRow:
     blockers: tuple[DecisionConstraintRow, ...]
     comparison_key: str
     comparison_values: tuple[ComparisonValueRow, ...]
+    can_select: bool = True
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,20 @@ class SurfaceLocationDecisionRow:
 
 
 @dataclass(frozen=True)
+class ExtractionMethodOptionRow:
+    method_id: str
+    display_name: str
+    resource_id: str
+    resource_name: str
+    output_resource_id: str
+    output_resource_name: str
+    potential_opportunity: float
+    nominal_output_t_per_day: float
+    can_select: bool
+    blockers: tuple[DecisionConstraintRow, ...]
+
+
+@dataclass(frozen=True)
 class ExtractionRow:
     facility_id: str
     facility_definition_id: str
@@ -198,18 +213,60 @@ class ExtractionRow:
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[DecisionConstraintRow, ...]
+    method_id: str | None = None
+    method_options: tuple[ExtractionMethodOptionRow, ...] = ()
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)
 class ExtractionResourceRow:
     resource_id: str
     resource_name: str
+    static_opportunity: float
     effective_opportunity: float
+    knowledge_eligible_cell_count: int
+    knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
     diminishing_efficiency: float
     marginal_efficiency: float
     output_t_per_day: float
+
+
+@dataclass(frozen=True)
+class ExternalPopulationSourceRow:
+    id: str
+    remaining_people: int
+    max_acquisition_per_day: int
+    available_today: int
+    missing_technologies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PopulationView:
+    current_count: int
+    desired_count: int | None
+    target_unmet_count: int
+    target_local_receivable: int
+    target_blockers: tuple[str, ...]
+    committed_count: int
+    housing_physical: int
+    housing_usable: int
+    life_support_required: float
+    life_support_allocated: float
+    crew_capacity: float
+    deprivation_person_days: float
+    resource_demand_per_day: tuple[tuple[str, float], ...]
+    external_sources: tuple[ExternalPopulationSourceRow, ...]
+    inbound_count: int = 0
+    outbound_count: int = 0
+    expected_count_after_confirmed_arrivals: int = 0
+    crew_service_used_per_day: float = 0.0
+    # Resource, current daily need, on-hand, in-transit/arrival-waiting,
+    # confirmed future daily need.  All quantities originate in owning Domains.
+    living_resource_flows: tuple[tuple[str, float, float, float, float], ...] = ()
+    # Origin, people, external source or None, route days, shared payload tonnes.
+    target_transport_candidates: tuple[tuple[str, int, int, str | None, int, float, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -234,3 +291,4 @@ class OperationalNodeView:
     extraction_resources: tuple[ExtractionResourceRow, ...]
     projects: tuple[ProjectRow, ...]
     surface_location: SurfaceLocationDecisionRow | None = None
+    population: PopulationView | None = None

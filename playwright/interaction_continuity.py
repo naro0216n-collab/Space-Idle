@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, priority_group, isolated_browser_context, monitored_page, wait_for_server
 
 import os
 from pathlib import Path
@@ -14,22 +14,7 @@ from space_idle.simulation import OfflineProgressPolicy
 from space_idle.version import VERSION
 
 
-def _priority_group(page, holder_selector: str):
-    holder = page.locator(holder_selector)
-    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
-
-
-def _choose_priority(page, holder_selector: str, level: int | str):
-    value = str(level)
-    group = _priority_group(page, holder_selector)
-    button = group.locator(f'[data-priority-choice="{value}"]')
-    button.click()
-    assert page.locator(holder_selector).input_value() == value
-    return button
-
-
-
-def run(*, browser=None) -> None:
+def run(browser) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
         raise ValueError(f"unsupported browser: {browser_name}")
@@ -49,8 +34,7 @@ def run(*, browser=None) -> None:
     try:
         wait_for_server(origin)
         with isolated_browser_context(
-            browser_name,
-            browser=browser,
+            browser,
             viewport={"width": 1194, "height": 834},
         ) as context, monitored_page(context) as page:
             page.goto(origin + "/", wait_until="load", timeout=30000)
@@ -66,14 +50,37 @@ def run(*, browser=None) -> None:
             first_research = page.locator('#researchTree [data-inspect="research"]').first
             first_research.click()
             research_title = page.locator("#inspectorTitle").inner_text()
+            # Exercise genuine horizontal DAG scrolling in the supported 1024px
+            # landscape workspace with an expanded inspector. At 1194px the
+            # currently loaded DAG can fit entirely in WebKit, so overflow is
+            # not a universal property of the same research catalog.
+            page.set_viewport_size({"width": 1024, "height": 834})
+            page.locator('#operationsView [data-toggle-inspector]').click()
             scroller = page.locator("#researchTreeScroll")
-            scroll_metrics = page.evaluate(
-                "el => ({width: el.clientWidth, scrollWidth: el.scrollWidth})", scroller.element_handle()
+            # Wait for the new viewport's layout before scrolling. Keep the same
+            # mounted element as the observation target across a real refresh:
+            # rebuilding that scrollport is itself a loss of user interaction.
+            page.wait_for_function(
+                "() => { const el=document.querySelector('#researchTreeScroll'); "
+                "return el && el.isConnected && el.scrollWidth > el.clientWidth; }",
+                timeout=10000,
             )
-            assert scroll_metrics["scrollWidth"] > scroll_metrics["width"]
-            page.evaluate("el => { el.scrollLeft = 180; el.dispatchEvent(new Event('scroll')); }", scroller.element_handle())
-            initial_tree_scroll = page.evaluate("el => el.scrollLeft", scroller.element_handle())
+            initial_tree_scroll = page.evaluate(
+                """() => {
+                    const el=document.querySelector('#researchTreeScroll');
+                    el.scrollLeft=Math.min(180,el.scrollWidth-el.clientWidth);
+                    window.__researchScrollportUnderTest=el;
+                    return el.scrollLeft;
+                }"""
+            )
             assert initial_tree_scroll > 0
+            page.evaluate(
+                """() => {
+                    window.__researchSnapshotApplied=false;
+                    document.addEventListener('spaceidle:snapshot',
+                        () => { window.__researchSnapshotApplied=true; }, {once:true});
+                }"""
+            )
 
             with page.expect_response(
                 lambda response: response.request.method == "GET"
@@ -82,6 +89,10 @@ def run(*, browser=None) -> None:
             ) as explicit_refresh:
                 page.locator("#refreshButton").click()
             assert explicit_refresh.value.ok
+            page.wait_for_function("() => window.__researchSnapshotApplied === true", timeout=10000)
+            assert page.evaluate(
+                "() => document.querySelector('#researchTreeScroll') === window.__researchScrollportUnderTest"
+            )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "research"
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1
@@ -94,6 +105,8 @@ def run(*, browser=None) -> None:
             page.locator('.primary-nav-button[data-section="research"]').click()
             assert page.locator("#inspectorTitle").inner_text() == research_title
             assert page.locator("#researchTree .research-node.is-selected").count() == 1
+            page.locator('#operationsView [data-toggle-inspector]').click()
+            page.set_viewport_size({"width": 1194, "height": 834})
 
             # A structured-decision draft must keep its unsaved priority and focus
             # while the authoritative clock refreshes the surrounding projection.
@@ -107,7 +120,7 @@ def run(*, browser=None) -> None:
             priority.wait_for(timeout=10000, state="attached")
             saved_priority = priority.input_value()
             draft_priority = "4" if saved_priority != "4" else "5"
-            priority_button = _choose_priority(page, "#buildPlanPriorityInput", draft_priority)
+            priority_button = choose_priority(page, "#buildPlanPriorityInput", draft_priority)
             priority_button.focus()
             with page.expect_response(
                 lambda response: response.request.method == "GET"
@@ -124,7 +137,7 @@ def run(*, browser=None) -> None:
             )
             assert page.locator(".tab-button.is-active").get_attribute("data-tab") == "construction"
             assert page.locator("#inspectorTitle").inner_text() == inspector_title
-            assert _priority_group(page, "#buildPlanPriorityInput").is_visible()
+            assert priority_group(page, "#buildPlanPriorityInput").is_visible()
             assert priority.input_value() == draft_priority
             assert page.evaluate("el => document.activeElement === el", priority_button.element_handle())
 
@@ -196,7 +209,7 @@ def run(*, browser=None) -> None:
             changed_priority = "4" if authoritative_priority != "4" else "5"
             page.locator("#saveButton").click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            _choose_priority(page, "#facilityPriorityInput", changed_priority)
+            choose_priority(page, "#facilityPriorityInput", changed_priority)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             assert page.locator("#facilityPriorityInput").input_value() == changed_priority
             page.locator("#loadButton").click()
@@ -209,7 +222,3 @@ def run(*, browser=None) -> None:
         server.server_close()
         thread.join(timeout=5)
         temp_dir.cleanup()
-
-
-if __name__ == "__main__":
-    run()

@@ -22,9 +22,8 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
     result = app.execute(
         PlanBuild(
             str(ids.EARTH),
-            str(ids.SURFACE_POWER_GRID),
+            str(ids.CONSTRUCTION_YARD),
             procurement_policy="extended_wait",
-            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
         )
     )
     project = _project(sim)

@@ -10,6 +10,7 @@ from .application_views import (
     EnvironmentFacetRow,
     LocationEnvironmentSummaryRow,
     ExtractionRow,
+    ExtractionMethodOptionRow,
     ExtractionResourceRow,
     FacilityRow,
     IndustryProcessOptionRow,
@@ -17,6 +18,7 @@ from .application_views import (
     InventoryRow,
     ResourceAllocationRow,
     OperationalNodeView,
+    PopulationView, ExternalPopulationSourceRow,
     SurfaceInfrastructureLoadRow,
     SurfaceInfrastructureRow,
     SurfaceAccessAnchorRow,
@@ -25,7 +27,7 @@ from .application_views import (
 )
 from .app_contracts.ui_reports import ComparisonValueRow
 from .execution_requirements import ResourceRequirement, ServiceCapacityRequirement, StockOrPoolAdmissionRequirement
-from .shared import SpatialNodeId
+from .shared import DefinitionId, SpatialNodeId
 from .disposal import project_salvage_recovery
 from .construction.models import FacilityDecommissionTarget, ProjectStatus
 from .spatial import EnvironmentFieldScope, SpatialContextId
@@ -415,6 +417,8 @@ class LocationProjectorMixin:
             )
             option_rows: list[IndustryProcessOptionRow] = []
             for option_process in compatible:
+                missing_technology = sim.industry.missing_process_technologies(option_process)
+                throughput = definition.process_throughput_per_day
                 requirements = sim.industry.execution_requirements_for_process(
                     option_process, sim.inventory
                 )
@@ -424,32 +428,32 @@ class LocationProjectorMixin:
                 for requirement in requirements:
                     if isinstance(requirement, ResourceRequirement):
                         available = sim.inventory.available(location_id, requirement.resource_id)
-                        required = requirement.amount_per_execution
+                        required = requirement.amount_per_execution * throughput
                         if available + 1e-9 < required:
                             projected_blocker_codes.append(
                                 f"resource:{location_id}:{requirement.resource_id}:{available:g}/{required:g}"
                             )
                     elif isinstance(requirement, ServiceCapacityRequirement):
                         service_requirements.append(
-                            (requirement.service_type, requirement.amount_per_execution)
+                            (requirement.service_type, requirement.amount_per_execution * throughput)
                         )
                     elif isinstance(requirement, StockOrPoolAdmissionRequirement):
                         admission = sim.inventory.admission_state_for_pool(
                             location_id, requirement.pool_id
                         ).admission_capacity_t
-                        storage_burden += requirement.amount_per_execution
-                        if admission + 1e-9 < requirement.amount_per_execution:
+                        storage_burden += requirement.amount_per_execution * throughput
+                        if admission + 1e-9 < requirement.amount_per_execution * throughput:
                             projected_blocker_codes.append(
-                                f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution:g}"
+                                f"storage:{requirement.pool_id}:{admission:g}/{requirement.amount_per_execution * throughput:g}"
                             )
                 comparison_values = (
                     ComparisonValueRow(
                         axis_key="input_total_t",
-                        number_value=sum(option_process.inputs_per_day.values()),
+                        number_value=sum(option_process.inputs_per_day.values()) * throughput,
                     ),
                     ComparisonValueRow(
                         axis_key="output_total_t",
-                        number_value=sum(option_process.outputs_per_day.values()),
+                        number_value=sum(option_process.outputs_per_day.values()) * throughput,
                     ),
                     ComparisonValueRow(
                         axis_key="storage_burden_t", number_value=storage_burden
@@ -457,14 +461,14 @@ class LocationProjectorMixin:
                     *(
                         ComparisonValueRow(
                             axis_key=f"input:{resource_id}",
-                            number_value=option_process.inputs_per_day.get(resource_id, 0.0),
+                            number_value=option_process.inputs_per_day.get(resource_id, 0.0) * throughput,
                         )
                         for resource_id in input_resource_ids
                     ),
                     *(
                         ComparisonValueRow(
                             axis_key=f"output:{resource_id}",
-                            number_value=option_process.outputs_per_day.get(resource_id, 0.0),
+                            number_value=option_process.outputs_per_day.get(resource_id, 0.0) * throughput,
                         )
                         for resource_id in output_resource_ids
                     ),
@@ -475,17 +479,24 @@ class LocationProjectorMixin:
                     input_rates_per_day=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
-                            option_process.inputs_per_day.items(), key=lambda row: str(row[0])
+                            ((key, value * throughput) for key, value in option_process.inputs_per_day.items()),
+                            key=lambda row: str(row[0])
                         )
                     ),
                     output_rates_per_day=tuple(
                         (str(resource_id), amount)
                         for resource_id, amount in sorted(
-                            option_process.outputs_per_day.items(), key=lambda row: str(row[0])
+                            ((key, value * throughput) for key, value in option_process.outputs_per_day.items()),
+                            key=lambda row: str(row[0])
                         )
                     ),
                     service_requirements=tuple(service_requirements),
-                    blockers=constraints_from_pairs(
+                    blockers=constraints_from_codes(
+                        tuple(f"technology:{technology_id}" for technology_id in missing_technology),
+                        affected_action="select_process",
+                        related_entity_kind="process_definition",
+                        related_entity_id=str(option_process.id),
+                    ) + constraints_from_pairs(
                         sim.facilities.activation_failures(facility, sim.day),
                         affected_action="run_process",
                         related_entity_kind="facility",
@@ -498,6 +509,7 @@ class LocationProjectorMixin:
                     ),
                     comparison_key=str(option_process.id),
                     comparison_values=comparison_values,
+                    can_select=not missing_technology,
                 ))
             process_comparison_axes = project_comparison_axes(
                 tuple(process_axis_definitions),
@@ -556,38 +568,74 @@ class LocationProjectorMixin:
         extraction: list[ExtractionRow] = []
         extraction_resources: list[ExtractionResourceRow] = []
         if sim.extraction is not None:
-            for snap in sim.extraction.snapshots(
-                location_id, sim.facilities, sim.inventory, power, sim.day,
-                execution_allocations,
-            ):
-                definition = sim.facilities.definitions[snap.facility_def_id]
-                extraction.append(
-                    ExtractionRow(
-                        str(snap.facility_id),
-                        str(snap.facility_def_id),
-                        definition.display_name,
-                        str(snap.resource_id),
-                        self._resource_name(snap.resource_id),
-                        str(snap.output_resource_id),
-                        self._resource_name(snap.output_resource_id),
-                        snap.nominal_capacity_t_per_day,
-                        snap.effective_opportunity,
-                        snap.marginal_efficiency,
-                        snap.scale,
-                        snap.output_t_per_day,
-                        limiting_factors_from_codes(
-                            snap.limiting_factors,
-                            affected_action="run_extraction",
-                            related_entity_kind="facility",
-                            related_entity_id=str(snap.facility_id),
-                        ),
-                    )
+            snapshots_by_facility = {
+                snap.facility_id: snap for snap in sim.extraction.snapshots(
+                    location_id, sim.facilities, sim.inventory, power, sim.day,
+                    execution_allocations,
                 )
+            }
+            for facility in sorted(sim.facilities.all_at(location_id), key=lambda item: str(item.id)):
+                methods = sim.extraction.compatible_methods(facility.definition_id)
+                if sim.extraction.nominal_capacity(facility) <= 1e-12:
+                    continue
+                selected = sim.extraction.method_for_facility(facility)
+                snap = snapshots_by_facility.get(facility.id)
+                options = []
+                for method in methods:
+                    missing = sim.extraction.missing_method_technologies(method)
+                    opportunity = sim.extraction.method_opportunity(location_id, method, sim.day)
+                    method_blockers = [f"technology:{technology}" for technology in missing]
+                    if opportunity <= 1e-12:
+                        method_blockers.extend(sim.extraction.method_opportunity_blockers(
+                            location_id, method, sim.day,
+                        ))
+                    options.append(ExtractionMethodOptionRow(
+                        str(method.id), method.display_name or str(method.id),
+                        str(method.resource_id), self._resource_name(method.resource_id),
+                        str(method.output_resource_id), self._resource_name(method.output_resource_id),
+                        opportunity, sim.extraction.diminishing_response(
+                            sim.extraction.nominal_capacity(facility), opportunity,
+                        ), not missing,
+                        constraints_from_codes(
+                            method_blockers,
+                            affected_action="select_extraction_method" if missing else "run_extraction",
+                            related_entity_kind="extraction_method",
+                            related_entity_id=str(method.id),
+                        ),
+                    ))
+                reasons = (
+                    snap.limiting_factors if snap is not None
+                    else (("extraction:no_compatible_method",) if not methods
+                          else ("extraction:unselected",))
+                )
+                extraction.append(ExtractionRow(
+                    str(facility.id), str(facility.definition_id),
+                    sim.facilities.definitions[facility.definition_id].display_name,
+                    "" if snap is None else str(snap.resource_id),
+                    "" if snap is None else self._resource_name(snap.resource_id),
+                    "" if snap is None else str(snap.output_resource_id),
+                    "" if snap is None else self._resource_name(snap.output_resource_id),
+                    sim.extraction.nominal_capacity(facility),
+                    0.0 if snap is None else snap.effective_opportunity,
+                    0.0 if snap is None else snap.marginal_efficiency,
+                    0.0 if snap is None else snap.scale,
+                    0.0 if snap is None else snap.output_t_per_day,
+                    limiting_factors_from_codes(
+                        reasons, affected_action="run_extraction",
+                        related_entity_kind="facility", related_entity_id=str(facility.id),
+                        message=("対応する採掘方式が登録されていません" if not methods else None),
+                    ),
+                    None if selected is None else str(selected.id),
+                    tuple(options), selected is None,
+                ))
             extraction_resources.extend(
                 ExtractionResourceRow(
                     str(row.resource_id),
                     self._resource_name(row.resource_id),
+                    row.static_opportunity,
                     row.effective_opportunity,
+                    row.knowledge_eligible_cell_count,
+                    row.knowledge_blocked_cell_count,
                     row.installed_nominal_capacity_t_per_day,
                     row.operational_fulfillment,
                     row.diminishing_efficiency,
@@ -680,6 +728,82 @@ class LocationProjectorMixin:
                 improvement_ids,
             )
 
+        population_view = None
+        if sim.population is not None:
+            pop = sim.population
+            people = pop.groups_at(location_id)
+            resource_demand: dict[str, float] = {}
+            future_demand: dict[str, float] = {}
+            for supply in pop.supplys(sim.day, node_id=location_id):
+                if supply.destination_id == location_id:
+                    key = str(supply.resource_id)
+                    ledger = (future_demand if supply.purpose == 'confirmed_population_arrival'
+                              else resource_demand)
+                    ledger[key] = ledger.get(key, 0.0) + supply.amount_t
+            inbound_resources: dict[str, float] = {}
+            for segment in sim.logistics.cargo_flow_snapshots():
+                if segment.final_destination_id == location_id:
+                    key = str(segment.resource_id)
+                    inbound_resources[key] = inbound_resources.get(key, 0.0) + segment.amount_t
+            for waiting in sim.logistics.arrival_waiting_snapshots():
+                if waiting.final_destination_id == location_id:
+                    key = str(waiting.resource_id)
+                    inbound_resources[key] = inbound_resources.get(key, 0.0) + waiting.amount_t
+            executed_life_support = sum(
+                next((row.allocated_execution for row in execution_allocations.allocations if row.bundle_id == pop._provider_bundle_id(facility.id)), 0.0)
+                for facility in sim.facilities.all_at(location_id)
+                if sim.facilities.definitions[facility.definition_id].life_support is not None
+            )
+            target_unmet, local_receivable, target_blockers = pop.local_target_preview(location_id, sim.day)
+            confirmed_inbound = pop._inbound_by_node().get(location_id, 0)
+            confirmed_outbound = pop.outbound_by_node().get(location_id, 0)
+            source_candidates = []
+            if pop.targets.get(location_id) is not None and target_unmet:
+                for demand in pop._automatic_passenger_demands(sim.day, destination_node_id=location_id):
+                    try:
+                        option, _, _ = pop._service_route_option(
+                            demand.origin_node_id, location_id, demand.requested_count, sim.day,
+                        )
+                    except ValueError:
+                        continue
+                    source_candidates.append((
+                        str(demand.origin_node_id), demand.requested_count,
+                        min(demand.requested_count, option.possible_people),
+                        demand.source_external_provider_id, option.latency_days,
+                        min(demand.requested_count, option.possible_people) * option.payload_per_person_t,
+                        option.blockers,
+                    ))
+            population_view = PopulationView(
+                sum(group.count for group in people),
+                pop.targets.get(location_id),
+                target_unmet, local_receivable, target_blockers,
+                sum(group.count for group in people if group.activity_commitment_ref),
+                pop.housing_capacity(location_id, sim.day, active=False),
+                pop.housing_capacity(location_id, sim.day),
+                float(pop.count_at(location_id)),
+                executed_life_support,
+                sum(group.count * pop.crew_factor(group) for group in people if not group.activity_commitment_ref),
+                sum(group.count * group.deprivation for group in people),
+                tuple(sorted(resource_demand.items())),
+                tuple(ExternalPopulationSourceRow(
+                    definition.id, pop.external_remaining[definition.id],
+                    definition.max_acquisition_per_day, pop.external_available(definition.id, sim.day),
+                    tuple(sim.research.definitions[tech].display_name for tech in definition.required_technology_ids
+                          if tech not in sim.technology.completed),
+                )
+                      for definition in sorted(pop.external_definitions.values(), key=lambda source: source.id)
+                      if definition.operational_node_id == location_id),
+                inbound_count=confirmed_inbound,
+                outbound_count=confirmed_outbound,
+                expected_count_after_confirmed_arrivals=pop.count_at(location_id) + confirmed_inbound,
+                crew_service_used_per_day=service_allocations.summary(location_id, 'crew').allocated_rate,
+                living_resource_flows=tuple((key, resource_demand.get(key, 0.0),
+                                             sim.inventory.amount(location_id, DefinitionId(key)),
+                                             inbound_resources.get(key, 0.0), future_demand.get(key, 0.0))
+                                            for key in sorted(set(resource_demand) | set(future_demand))),
+                target_transport_candidates=tuple(source_candidates),
+            )
+
         return OperationalNodeView(
             str(location_id),
             node.display_name,
@@ -701,4 +825,5 @@ class LocationProjectorMixin:
             tuple(extraction_resources),
             self._project_rows(location_id),
             self._surface_location_decision_row(location_id),
+            population_view,
         )

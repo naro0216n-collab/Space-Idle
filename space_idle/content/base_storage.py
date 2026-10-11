@@ -6,6 +6,10 @@ from . import base_ids as ids
 
 def build_storage_provider_specs() -> dict:
     return {
+        ids.ORBITAL_PROPELLANT_DEPOT: StorageProviderSpec(
+            ids.ORBITAL_PROPELLANT_DEPOT, {"cryogenic": 80.0}, frozenset({"cryogenic"}),
+        ),
+        ids.ORBITAL_LOGISTICS_NODE: StorageProviderSpec(ids.ORBITAL_LOGISTICS_NODE, {"default": 16.0, "cryogenic": 4.0}),
         ids.ROBOTIC_SURVEY_PACKAGE: StorageProviderSpec(ids.ROBOTIC_SURVEY_PACKAGE, {"default": 5.0, "cryogenic": 2.0}),
         ids.WATER_STORAGE: StorageProviderSpec(ids.WATER_STORAGE, {"default": 40.0}),
         ids.CRYOGENIC_STORAGE: StorageProviderSpec(ids.CRYOGENIC_STORAGE, {"cryogenic": 30.0}, frozenset({"cryogenic"})),

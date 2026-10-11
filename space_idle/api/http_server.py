@@ -5,6 +5,7 @@ import gzip
 from pathlib import Path
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 import json
 import ssl
 from typing import Any
@@ -14,7 +15,8 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
+    GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from ..persistence import SaveFormatError
 from .codec import ApiPayloadError, command_schema, decode_command, to_jsonable
@@ -34,6 +36,13 @@ class ApiServerConfig:
 
 class SpaceIdleHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def server_bind(self) -> None:
+        # HTTPServer's default reverse-DNS lookup is unused by our HTTP API and
+        # can block server startup on hosts without responsive DNS resolution.
+        TCPServer.server_bind(self)
+        self.server_name = self.server_address[0]
+        self.server_port = self.server_address[1]
 
     def __init__(self, server_address, handler_class, *, runtime: GameRuntime, config: ApiServerConfig):
         super().__init__(server_address, handler_class)
@@ -266,7 +275,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             body_id = unquote(path[len(surface_prefix):])
             if not body_id:
                 raise ApiPayloadError("body id is required")
-            self._query_result(GetSurfaceMap(body_id))
+            self._query_result(GetSurfaceMap(body_id, tuple(params.get("founding_cell_id", ()))))
             return
         if path == "/api/v1/dependency-analytics":
             scope_kind = _one(params, "scope_kind") or "player"
@@ -295,6 +304,7 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/logistics/movement-plans":
             self._query_result(GetMovementPlans(
+                touching_node_id=_one(params, "touching_node_id"),
                 origin_id=_one(params, "origin_id"),
                 destination_id=_one(params, "destination_id"),
                 movement_plan_id=_one(params, "movement_plan_id"),
@@ -326,6 +336,8 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                     if not params.get("movement_plan_id")
                     else tuple(params["movement_plan_id"])
                 ),
+                carrier_vehicle_definition_id=_one(params, "carrier_vehicle_definition_id"),
+                carrier_units=int(_one(params, "carrier_units") or 1),
             ))
             return
         if path == "/api/v1/logistics/transport-allocations":
@@ -333,6 +345,17 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/logistics/cargo-flows":
             self._query_result(GetCargoFlows())
+            return
+        if path == "/api/v1/population/passenger-transfers":
+            self._query_result(GetPassengerTransfers(_one(params, "operational_node_id")))
+            return
+        if path == "/api/v1/population/passenger-preview":
+            self._query_result(GetPassengerTransferPreview(
+                origin_node_id=_required(params, "origin_node_id"),
+                destination_node_id=_required(params, "destination_node_id"),
+                requested_count=int(_required(params, "requested_count")),
+                source_external_provider_id=_one(params, "source_external_provider_id"),
+            ))
             return
         if path == "/api/v1/transport-allocation-options":
             source_id = _required(params, "source_id")
@@ -362,8 +385,13 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/research":
             self._query_result(GetResearch())
             return
+        if path == "/api/v1/non-surface-founding-options":
+            self._query_result(GetNonSurfaceFoundingOptions(
+                _required(params, "body_id"), _one(params, "founding_context_id") or "",
+            ))
+            return
         if path == "/api/v1/surveys":
-            self._query_result(GetSurveys(_one(params, "provider_operational_node_id")))
+            self._query_result(GetSurveys(_one(params, "provider_operational_node_id"), _one(params, "body_id")))
             return
         if path == "/api/v1/survey-campaign-intent-preview":
             self._query_result(GetSurveyCampaignIntentPreview(

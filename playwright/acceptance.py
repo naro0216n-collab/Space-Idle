@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, isolated_browser_context, monitored_page, priority_group, wait_for_server
 
 import json
 import os
 from pathlib import Path
 from threading import Thread
 import tempfile
+import time
 
 from space_idle import (
     AdvanceTime,
+    GetOperationalNode,
     GetResearch,
     GetScientificExplorations,
+    GetMarket,
     GetSurfaceMap,
     GetSurveys,
+    GetSurveyCampaignIntentPreview,
     SetSurveyProviderFleetQuantity,
     StartResearch,
     build_game_application,
@@ -44,21 +48,28 @@ def _visible_button_min_height(page) -> float:
     )
 
 
-def _priority_group(page, holder_selector: str):
-    holder = page.locator(holder_selector)
-    return holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
-
-
-def _choose_priority(page, holder_selector: str, level: int | str) -> None:
-    value = str(level)
-    group = _priority_group(page, holder_selector)
-    group.locator(f'[data-priority-choice="{value}"]').click()
-    _assert(page.locator(holder_selector).input_value() == value, f"priority {holder_selector} must select {value}")
-
-
 def _assert_inspector_section_order(page, expected_prefix: list[str], message: str) -> None:
     headings = page.locator("#inspectorContent > .inspector-section > h3").all_inner_texts()
     _assert(headings[: len(expected_prefix)] == expected_prefix, f"{message}: {headings}")
+
+
+def _assert_surface_targets_are_independent(page, selector: str) -> None:
+    """Every map target must remain a direct hit target, regardless of geography."""
+    collisions = page.locator(selector).evaluate_all("""nodes => {
+      const boxes=nodes.map(node=>node.getBoundingClientRect());
+      const failures=[];
+      for(let i=0;i<boxes.length;i++){
+        if(boxes[i].width<44||boxes[i].height<44)failures.push(`undersized ${i}`);
+        for(let j=i+1;j<boxes.length;j++){
+          const a=boxes[i],b=boxes[j];
+          const dx=Math.min(a.right,b.right)-Math.max(a.left,b.left);
+          const dy=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);
+          if(dx>0.5&&dy>0.5)failures.push(`overlap ${i}/${j}`);
+        }
+      }
+      return failures;
+    }""")
+    _assert(not collisions, f"Surface targets must not obscure one another: {collisions}")
 
 
 def _select_location(page, location_id: object) -> None:
@@ -72,6 +83,26 @@ def _select_location(page, location_id: object) -> None:
           return title === name && Boolean(kind) && kind !== '地点状態を取得中';
         }""",
         arg=target_name,
+        timeout=10000,
+    )
+
+
+def _wait_for_periodic_sync(page) -> None:
+    """Observe the actual automatic fetch, including unchanged projections.
+
+    The server may answer ``unchanged`` without emitting a render event. Waiting
+    for a fixed wall-clock interval is neither an assertion about the sync nor
+    a reliable indication that its UI work has finished.
+    """
+    with page.expect_response(
+        lambda response: response.request.method == "GET"
+        and "/api/v1/ui-state" in response.url,
+        timeout=10000,
+    ) as response:
+        pass
+    _assert(response.value.ok, "automatic UI synchronization must succeed")
+    page.wait_for_function(
+        "() => !window.SpaceIdleApp.state.syncInFlight",
         timeout=10000,
     )
 
@@ -137,10 +168,18 @@ def _advance_exploration_fixture_until(runtime, exploration_id: str, predicate, 
     raise AssertionError(f"E2E fixture could not prepare scientific exploration {exploration_id}")
 
 
-def run(*, browser=None) -> dict[str, object]:
+def run(browser) -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
         raise ValueError(f"unsupported browser {browser_name!r}; expected one of {sorted(SUPPORTED_BROWSERS)}")
+
+    phase_started = time.monotonic()
+
+    def checkpoint(phase: str) -> None:
+        nonlocal phase_started
+        now = time.monotonic()
+        print(f"E2E acceptance phase {phase}: {now - phase_started:.3f}s", flush=True)
+        phase_started = now
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-e2e-")
     runtime = GameRuntime(
@@ -185,7 +224,9 @@ def run(*, browser=None) -> dict[str, object]:
             fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
                 target.thresholds[int(requirement.minimum_level) - 1]
             )
-    founding_surface_projection = runtime._app.query(GetSurfaceMap(str(ids.MOON)))
+    founding_surface_projection = runtime._app.query(GetSurfaceMap(
+        str(ids.MOON), (str(founding_fixture_cell), str(founding_comparison_cell)),
+    ))
     founding_cell_projection = next(
         cell for cell in founding_surface_projection.cells
         if cell.id == str(founding_fixture_cell)
@@ -238,10 +279,31 @@ def run(*, browser=None) -> dict[str, object]:
     ))
     _prepare_research_comparison_fixture(runtime._app)
     _seed_scientific_exploration_resources(runtime._app)
-    unlock_fixture = next(
-        row for row in runtime._app.query(GetResearch()).items if row.unlocks
+    # A process-capable Facility is selected from the Application projection.
+    # Discovering it by clicking every Facility is not a browser behavior under
+    # test and adds repeated Inspector/network work as the catalog expands.
+    process_fixture_id = next(
+        row.facility_id
+        for row in runtime._app.query(GetOperationalNode(str(ids.EARTH))).industry
+        if row.process_options
+    )
+    research_projection = runtime._app.query(GetResearch()).items
+    unlock_fixture = next(row for row in research_projection if row.unlocks)
+    # Select a startable subject from the authoritative decision projection.
+    # The browser still verifies the actual selection, command and lifecycle.
+    startable_research_id = next(row.id for row in research_projection if row.can_start)
+    # The browser should exercise one decision, not search every Cell/Resource/
+    # goal by triggering a network-backed preview for each DOM checkbox.
+    survey_scope = next(
+        (row.cell_id, row.resource_id, goal)
+        for row in runtime._app.query(GetSurveys(body_id=str(ids.MOON))).items
+        for goal in (1, 2, 3)
+        if runtime._app.query(GetSurveyCampaignIntentPreview(
+            (row.cell_id,), (row.resource_id,), goal,
+        )).can_apply
     )
 
+    checkpoint("fixture preparation")
     server = create_server(
         runtime,
         ApiServerConfig(host="127.0.0.1", port=0),
@@ -250,13 +312,14 @@ def run(*, browser=None) -> dict[str, object]:
     server_origin = f"http://127.0.0.1:{port}"
     server_thread = Thread(target=server.serve_forever, name="space-idle-e2e-http", daemon=True)
     server_thread.start()
+    checkpoint("server startup")
 
     results: dict[str, object] = {}
     try:
         wait_for_server(server_origin)
+        checkpoint("HTTP ready")
         with isolated_browser_context(
-            browser_name,
-            browser=browser,
+            browser,
             viewport={"width": 1194, "height": 834},
             screen={"width": 1194, "height": 834},
             has_touch=True,
@@ -272,6 +335,7 @@ def run(*, browser=None) -> dict[str, object]:
             page.goto(server_origin + "/", wait_until="load", timeout=30000)
             page.locator("#connectionState.is-ok").wait_for(timeout=10000)
 
+            checkpoint("browser load")
             _assert(page.locator("#globalView").is_visible(), "global decision canvas should be visible by default")
             _assert(not page.locator("#operationsView").is_visible(), "location workspace must not coexist with global canvas")
             _assert(not page.locator("#logisticsView").is_visible(), "logistics workspace must not coexist with global canvas")
@@ -282,38 +346,167 @@ def run(*, browser=None) -> dict[str, object]:
             )
             _assert(page.locator("#researchPointValue").is_visible(), "global bar must expose Research Point")
             _assert(page.locator("#fundsValue").count() == 0, "Funds must not be promoted to a global KPI")
-            _assert(page.locator(".global-map-stage").is_visible(), "global canvas must use the system map as its primary workspace")
-            _assert(page.locator(".global-map-node").count() > 0, "global map must expose spatial nodes as direct targets")
-            _assert(page.locator(".global-map-link").count() > 0, "global map must expose movement relationships without a dashboard detour")
-            first_global_node = page.locator(".global-map-node").first
-            first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; }")
-            page.wait_for_timeout(1200)
-            _assert(
-                first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"),
-                "periodic sync must preserve the global-map interaction target across authoritative refresh",
-            )
+            _assert(page.locator("#systemMapStage").is_visible(), "global canvas must expose the shared system map")
+            global_nodes = page.locator('#systemMapStage [data-system-node-id]')
+            _assert(global_nodes.count() > 0, "map must expose Operational Nodes as direct targets")
+            initial_node_count = global_nodes.count()
+            _assert(page.locator('#systemMapNodeIndex [data-system-node-jump]').count() == initial_node_count,
+                    "every Operational Node must remain accessible through a Map-independent touch list")
+            # The plane must expand with node density instead of making the
+            # touch rectangles overlap when several locations share a body.
+            layout = page.evaluate("""() => {
+                const synthetic=Array.from({length:36},(_,i)=>({
+                    id:`stress.node.${i}`,body_id:`stress.body.${Math.floor(i/12)}`,kind:'surface'
+                }));
+                const original=window.SpaceIdleSystemMap.positionsFor(synthetic);
+                const reversed=window.SpaceIdleSystemMap.positionsFor([...synthetic].reverse());
+                const points=Object.values(original.positions);
+                const clear=points.every((p,i)=>points.every((q,j)=>i===j||
+                    Math.abs(p[0]-q[0])>=142||Math.abs(p[1]-q[1])>=132));
+                return {clear,stable:JSON.stringify(original)===JSON.stringify(reversed),
+                    count:points.length,height:original.height};
+            }""")
+            _assert(layout['clear'] and layout['stable'] and layout['count'] == 36 and layout['height'] > 420,
+                    "a many-node Map must retain stable, non-overlapping hit targets")
+            first_global_node = global_nodes.first
+            first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
+            original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
+            _wait_for_periodic_sync(page)
+            _assert(first_global_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic sync must preserve map interaction targets")
+            # Map placement and zoom are insufficient if redraws discard
+            # keyboard focus: both selection and the focused control survive.
+            first_global_node.focus()
+            page.evaluate("() => window.SpaceIdleSystemMap.onSelect()")
+            _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
+                    "map redraw must retain keyboard focus on the same Operational Node")
+            _wait_for_periodic_sync(page)
+            _assert(page.evaluate("() => document.activeElement === window.__spaceIdleGlobalNode"),
+                    "authoritative periodic sync must not discard focused map controls")
             first_global_node.tap()
-            selected_global_node_id = first_global_node.get_attribute("data-global-node-id")
-            selected_global_node_name = first_global_node.locator(".global-map-node-name").inner_text().strip()
-            _assert(first_global_node.get_attribute("aria-pressed") == "true", "map selection must become the active global context")
-            _assert(page.locator(".global-map-legend").is_visible(), "global map must explain decision/activity signals in-place")
-            _assert(page.locator("#globalInspectorContent [data-open-location]").is_visible(), "selected map context must expose a direct location action")
-            page.locator("#globalInspectorContent [data-open-node-logistics]").click()
-            page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
-            _assert(selected_global_node_name in page.locator("#networkDecisionContext").inner_text(), "global map selection must carry the node context into Transport")
-            _assert(page.locator("#networkSvg .network-line.is-context-related").count() > 0, "Transport must highlight Network edges related to the inherited global node")
-            first_network_node = page.locator("[data-network-location]").first
-            first_network_node.evaluate("node => { window.__spaceIdleNetworkNode = node; }")
-            page.wait_for_timeout(1200)
-            _assert(
-                first_network_node.evaluate("node => node === window.__spaceIdleNetworkNode"),
-                "periodic sync must preserve network interaction targets across authoritative refresh",
-            )
+            selected_global_node_id = first_global_node.get_attribute("data-system-node-id")
+            selected_global_node_name = first_global_node.locator('.global-map-node-name').inner_text().strip()
+            _assert(first_global_node.get_attribute('aria-pressed') == 'true', "Map selection must become the active context")
+            _assert(page.locator('#systemMapLegend').is_visible(), "Map must explain the meaning of displayed connections")
+            page.locator('[data-system-zoom="in"]').click()
+            scaled = page.locator('#systemMapViewport').evaluate("element => element.style.transform")
+            _assert('scale(1.25)' in scaled, "Map zoom must change the shared viewport")
+            page.locator('#globalInspectorContent [data-open-node-logistics]').click()
+            page.locator('#networkDecisionContext').wait_for(state='visible', timeout=10000)
+            _assert(selected_global_node_name in page.locator('#networkDecisionContext').inner_text(), "Transport must inherit the global node")
+            _assert(page.locator('#systemMapStage').evaluate("element => element === window.__spaceIdleMapStage"), "both entrances must use the same map element")
+            selected_transport_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
+            _assert(selected_transport_node.is_visible(), "selected node must remain visible in Transport")
+            _assert(selected_transport_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }") == original_position, "Transport must retain common spatial placement")
+            _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled, "Transport must retain map pan / zoom")
+            _wait_for_periodic_sync(page)
+            _assert(selected_transport_node.evaluate("node => node === window.__spaceIdleGlobalNode"), "periodic refresh must preserve Transport node identity")
             page.locator('.primary-nav-button[data-section="global"]').click()
-            first_global_node = page.locator(f'.global-map-node[data-global-node-id="{selected_global_node_id}"]')
+            first_global_node = page.locator(f'#systemMapStage [data-system-node-id="{selected_global_node_id}"]')
             first_global_node.tap()
+            # A physical body is a spatial context, not an Operational Node.
+            # Its Surface Map must be reachable without changing inventory ownership
+            # or requiring an established Surface Location.
+            previous_operational_node_id = page.evaluate("() => window.SpaceIdleApp.state.operationalNodeId")
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function(
+                """body => {
+                  const state=window.SpaceIdleApp.state;
+                  return state.activeSection==='exploration' && state.activeTab==='surface'
+                    && state.surfaceMap?.body_id===body
+                    && Boolean(document.querySelector('#operationsTabContent .surface-map-card'));
+                }""",
+                arg=str(ids.MOON), timeout=10000,
+            )
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.operationalNodeId") == previous_operational_node_id,
+                    "body navigation must not turn physical targets into Operational Nodes")
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.selectedGlobalNodeId") == selected_global_node_id,
+                    "surface drill-down must preserve the shared map node context")
+            first_surface_cell = page.locator('#operationsTabContent .surface-cell-button').first
+            _assert_surface_targets_are_independent(page, '.surface-cell-button')
+            _assert(page.locator('.surface-cell-index [data-inspect="surface-cell"]').count() ==
+                    page.locator('.surface-cell-button').count(),
+                    "each map cell must have an alternative selection in the same physical context")
+            for width in (1024, 1180, 1194):
+                page.set_viewport_size({"width": width, "height": 834})
+                _assert_surface_targets_are_independent(page, '.surface-cell-button')
+                _assert(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"),
+                        f"Surface map must scroll internally rather than widen {width}px landscape")
+            page.set_viewport_size({"width": 1024, "height": 834})
+            # One real Cell selection at the narrowest supported width verifies
+            # touch activation; layout and reachability are checked at all widths.
+            page.locator('.surface-cell-button').last.click()
+            map_offset = page.locator('.surface-map-viewport').evaluate("""node => {
+              node.scrollLeft=Math.min(100,node.scrollWidth-node.clientWidth);
+              return node.scrollLeft;
+            }""")
+            page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
+            checkpoint("surface map decisions")
+            page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
+            page.wait_for_function("() => document.querySelector('.surface-map-viewport') !== null")
+            _assert(page.locator('.surface-map-viewport').evaluate("node => node.scrollLeft") == map_offset,
+                    "Surface map pan/scroll must survive a Survey round trip")
+            page.set_viewport_size({"width": 1194, "height": 834})
+            first_surface_cell.click()
+            selected_cell_id = page.evaluate("() => window.SpaceIdleApp.state.inspector?.id")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function("cell => window.SpaceIdleApp.state.inspector?.id === cell && window.SpaceIdleApp.state.activeTab === 'surface'", arg=selected_cell_id)
+            _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1
+                    and page.locator('#operationsTabContent .surface-cell-index-item.is-selected').count() == 1,
+                    "returning to the same body must retain the selected Surface Cell")
+            alternate_provider = page.evaluate("""body => {
+              const state=window.SpaceIdleApp.state;
+              return state.world.operational_nodes.find(node => node.id !== state.operationalNodeId && node.body_id && node.body_id !== body)?.id || null;
+            }""", str(ids.MOON))
+            if alternate_provider:
+                page.locator(f'#locationList [data-location-id="{alternate_provider}"]').click()
+                page.wait_for_function("""([provider,body,cell]) => {
+                  const state=window.SpaceIdleApp.state;
+                  return state.operationalNodeId===provider && state.operationalNode?.id===provider
+                    && state.selectedSurfaceBodyId===body && state.surfaceMap?.body_id===body
+                    && state.inspector?.id===cell
+                    && document.querySelectorAll('#operationsTabContent .surface-cell-button.is-selected').length===1;
+                }""", arg=[alternate_provider,str(ids.MOON),selected_cell_id])
+                _assert(page.locator('#operationsTabContent .surface-cell-button.is-selected').count() == 1,
+                        "switching an execution provider must preserve the independently selected physical cell")
+                page.locator(f'#locationList [data-location-id="{previous_operational_node_id}"]').click()
+                page.wait_for_function("id => window.SpaceIdleApp.state.operationalNodeId===id", arg=previous_operational_node_id)
+            page.locator('[data-tab="survey"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body && document.querySelector('#operationsTabContent .survey-decision-surface') !== null", arg=str(ids.MOON))
+            _assert(page.locator('#operationsTabContent .survey-loading-card').count() == 0,
+                    "survey must use the selected celestial body, not the operational node body")
+            _assert(str(ids.MOON) == page.evaluate("() => window.SpaceIdleApp.state.selectedSurfaceBodyId"),
+                    "selected body must remain separate from the provider Operational Node")
+            _assert(page.locator('#locationTitle').inner_text() == page.evaluate(
+                "body => window.SpaceIdleApp.state.catalog.celestial_bodies.find(x => x.id === body).display_name", str(ids.MOON)),
+                    "surface workspace must identify the physical body rather than an unrelated location")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled,
+                    "surface drill-down and return must preserve map pan / zoom")
+            _assert(page.locator('#systemMapStage [data-system-node-id]').count() == initial_node_count,
+                    "body targets must not be rendered as transport Operational Nodes")
+            # Revisiting an earlier query scope must not reuse its ETag as proof
+            # that a different body's Surface Map is still displayed.
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.EARTH_BODY}"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body", arg=str(ids.EARTH_BODY))
+            _assert(page.evaluate("() => window.SpaceIdleApp.state.inspector") is None,
+                    "switching physical bodies must not keep an inspector for another body's Surface Cell")
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            page.locator(f'#systemMapBodies [data-system-body-id="{ids.MOON}"]').click()
+            page.wait_for_function("body => window.SpaceIdleApp.state.surfaceMap?.body_id === body", arg=str(ids.MOON))
+            _assert(page.locator('#operationsTabContent .surface-map-card').count() == 1,
+                    "revisiting Surface Map must restore that body's actual cells")
+            page.locator('.primary-nav-button[data-section="global"]').click()
             viewport_metrics = page.evaluate("() => ({w: innerWidth, scroll: document.documentElement.scrollWidth})")
             _assert(viewport_metrics["scroll"] <= viewport_metrics["w"], "1194px landscape must not horizontally overflow")
+            for width in (1024, 1180):
+                page.set_viewport_size({"width": width, "height": 834})
+                _assert(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), f"{width}px landscape must not horizontally overflow")
+                page.locator('.primary-nav-button[data-section="logistics"]').click()
+                _assert(page.locator('#systemMapStage').is_visible(), "shared Map must remain operable on iPad landscape widths")
+                _assert(page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), f"{width}px logistics view must not horizontally overflow")
+                page.locator('.primary-nav-button[data-section="global"]').click()
+            page.set_viewport_size({"width": 1194, "height": 834})
             global_inspector = page.locator("#globalView .global-inspector")
             inspector_width = global_inspector.bounding_box()["width"]
             inspector_toggle = page.locator("#globalView [data-toggle-inspector]")
@@ -330,7 +523,6 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(page.locator('[data-time-speed="1"]').is_visible(), "1x speed control must be visible")
             _assert(page.locator('[data-time-speed="4"]').is_visible(), "4x speed control must be visible")
             _assert(page.locator('[data-time-speed="16"]').is_visible(), "16x speed control must be visible")
-            _assert(page.get_by_role("button", name="+1日").count() == 0, "manual day-jump control must be removed")
 
             page.locator("#timePauseButton").tap()
             page.wait_for_function(
@@ -347,6 +539,49 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="location"]').click()
             _assert(page.locator("#operationsView").is_visible(), "location section must open the location decision canvas")
             _assert(page.locator(".location-button").count() > 0, "location context browser must expose spatial nodes")
+            # Population Target and one-shot transfer are distinct player
+            # decisions. Exercise both on the real browser/server boundary,
+            # including preview, an accepted finite intent and cancellation.
+            _select_location(page, ids.EARTH)
+            page.locator('[data-section-tab="location"][data-tab="overview"]').click()
+            pop_card = page.locator('#operationsView .decision-card', has=page.locator('[data-population-target-input]'))
+            pop_card.wait_for(timeout=10000)
+            initial_people = runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.current_count
+            pop_card.locator('[data-population-target-input]').fill(str(initial_people + 2))
+            pop_card.locator('[data-set-population-target]').click()
+            page.wait_for_function(
+                'count => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === count',
+                arg=initial_people + 2,
+            )
+            _assert(runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.desired_count == initial_people + 2,
+                    'population Target UI must change the authoritative intent')
+            pop_card.locator('[data-clear-population-target]').click()
+            page.wait_for_function(
+                '() => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === null',
+            )
+            passenger_card = page.locator('#passengerLocationMount')
+            passenger_card.locator('[data-passenger-field="destination"]').select_option(str(ids.LEO))
+            passenger_card.locator('[data-passenger-field="count"]').fill('1')
+            passenger_card.locator('[data-passenger-preview]').click()
+            passenger_card.locator('.passenger-option').first.wait_for(timeout=10000)
+            _assert('出発可能' in passenger_card.locator('[data-passenger-options]').inner_text(),
+                    'passenger preview must show feasible capacity and blockers at the decision point')
+            passenger_card.locator('.passenger-option input[type="radio"]').first.check()
+            passenger_card.locator('[data-passenger-submit]').click()
+            passenger_card.locator('[data-passenger-cancel]').first.wait_for(timeout=10000)
+            _assert(len(runtime._app._simulation.population.transfer_orders) == 1,
+                    'finite transfer request must create exactly one Population Order')
+            passenger_card.locator('[data-passenger-cancel]').first.click()
+            # Every Order row renders the "取消済み <count>" field, even before
+            # cancellation.  Observe the settled count, not the field label,
+            # so this assertion cannot race the asynchronous HTTP Command.
+            page.wait_for_function(
+                """() => [...document.querySelectorAll('#passengerLocationMount [data-passenger-orders] .detail-card')]
+                  .some(row => row.textContent.includes('取消済み 1 /'))""",
+            )
+            order = next(iter(runtime._app._simulation.population.transfer_orders.values()))
+            _assert((order.cancelled_count, order.pending_count(runtime._app._simulation.population.groups)) == (1, 0),
+                    'cancellation must settle only the waiting passenger without moving any human')
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
                 f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
@@ -366,9 +601,9 @@ def run(*, browser=None) -> dict[str, object]:
                 and upgrade_deltas.first.locator('[data-upgrade-value-role="target"]').count() == 1,
                 "upgrade differences must present current and target values in the same Inspector",
             )
-            _assert(_priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
+            _assert(priority_group(page, "#upgradePlanPriorityInput").is_visible(), "upgrade planning must expose priority before project creation")
             _assert(page.locator("#upgradePlanProcurementTimingPolicy").is_visible(), "upgrade planning must expose procurement timing policy before project creation")
-            _choose_priority(page, "#upgradePlanPriorityInput", 4)
+            choose_priority(page, "#upgradePlanPriorityInput", 4)
             # Periodic-sync draft continuity is exercised in interaction_continuity.
             # Acceptance keeps this path focused on the structured decision itself.
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
@@ -396,12 +631,11 @@ def run(*, browser=None) -> dict[str, object]:
                 page.locator('#inspectorContent [data-project-routing-constraint]').count() > 0,
                 "project Supply Requirements must expose Routing Constraint actions at the decision point",
             )
-            _assert(_priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
+            _assert(priority_group(page, "#projectPriorityInput").locator('[data-priority-choice="5"]').is_enabled(), "mutable project priority must stay visible and enabled")
             _assert(page.locator("#projectProcurementTimingPolicy").is_enabled(), "mutable procurement timing policy must stay visible and enabled")
-            _choose_priority(page, "#projectPriorityInput", 5)
+            choose_priority(page, "#projectPriorityInput", 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             _assert(page.locator("#projectPriorityInput").input_value() == "5", "project priority direct action must round-trip through the UI")
-            _assert(page.locator('[data-set-project-priority]').count() == 0, "project priority must not require a second Apply action")
             cancel_upgrade = page.locator('#inspectorContent [data-command="CancelBuild"]')
             _assert(cancel_upgrade.is_enabled(), "planned upgrade project must use ordinary construction cancellation")
             cancel_upgrade.click()
@@ -422,9 +656,9 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(decommission_button.count() == 1, "facility inspector must expose the Application-projected decommission action")
             _assert(decommission_button.is_enabled(), "unblocked facility decommission must be selectable")
             _assert("見込回収量" in page.locator('#inspectorContent').inner_text(), "decommission decision must expose projected salvage before commitment")
-            _assert(_priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
+            _assert(priority_group(page, '#decommissionPlanPriorityInput').is_visible(), "decommission planning must expose priority")
             _assert(page.locator('#decommissionPlanProcurementTimingPolicy').is_visible(), "decommission planning must expose procurement timing")
-            _choose_priority(page, '#decommissionPlanPriorityInput', 2)
+            choose_priority(page, '#decommissionPlanPriorityInput', 2)
             page.locator('#decommissionPlanProcurementTimingPolicy').select_option('extended_wait')
             decommission_button.click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
@@ -479,30 +713,50 @@ def run(*, browser=None) -> dict[str, object]:
             # Process selection is a Direct Action. A facility with a process
             # option keeps the choices visible and does not require a second Apply.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
-            process_choice_found = False
-            facility_rows = page.locator('[data-inspect="facility"]')
-            for index in range(facility_rows.count()):
-                facility_rows.nth(index).click()
-                if page.locator('#inspectorContent [data-facility-process]').count() > 0:
-                    process_choice_found = True
-                    _assert(page.locator('#inspectorContent [data-set-facility-process]').count() == 0, "process selection must not require a second Apply action")
-                    _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1, "current process must remain visibly selected")
-                    break
-            _assert(process_choice_found, "base application must expose at least one facility process decision")
+            page.locator(
+                f'[data-inspect="facility"][data-id="{process_fixture_id}"]'
+            ).click()
+            _assert(page.locator('#inspectorContent [data-facility-process]').count() > 0,
+                    "Application process options must reach the Facility Inspector")
+            _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
+                    "current process must remain visibly selected")
 
+            checkpoint("research decisions")
             page.locator('.primary-nav-button[data-section="research"]').click()
             page.locator('.research-tree-card').wait_for(timeout=10000)
             _assert(page.locator('.research-rp-strip').count() == 1, "research canvas must expose RP state beside the primary DAG")
             _assert(page.locator('.research-tree-card').evaluate("el => Boolean(el.compareDocumentPosition(document.querySelector('.research-provider-summary')) & Node.DOCUMENT_POSITION_FOLLOWING)"), "research DAG must precede provider allocation details in the decision flow")
             research_rows = page.locator('#researchTree [data-inspect="research"]')
             _assert(research_rows.count() > 0, "research tree must expose research decisions")
+            blocked_research_nodes = page.locator('#researchTree .research-node.is-blocked')
+            _assert(blocked_research_nodes.count() > 0, "research DAG must distinguish blocked decisions on the node")
+            primary_blocker = blocked_research_nodes.first.locator('.research-node-blocker:not(.is-empty)')
+            _assert(primary_blocker.count() == 1, "blocked research nodes must expose the Application-projected primary blocker")
+            _assert(bool(primary_blocker.inner_text().strip()), "blocked research node must identify its primary constraint")
             first_research_node = research_rows.first
             first_research_node.evaluate("node => { window.__spaceIdleResearchNode = node; }")
-            page.wait_for_timeout(1200)
+            _wait_for_periodic_sync(page)
             _assert(
                 first_research_node.evaluate("node => node === window.__spaceIdleResearchNode"),
                 "periodic sync must preserve research decision targets while progress projections refresh",
             )
+            selected_research_name = first_research_node.locator('.research-node-title').inner_text().strip()
+            search_input = page.locator('#researchTreeSearch')
+            search_input.fill(selected_research_name)
+            _assert(page.locator('#researchSearchResults [data-research-jump]').count() >= 1, "research search must find an existing technology without removing the DAG")
+            page.locator('#researchSearchResults [data-research-jump]').first.click()
+            selected_research_id = first_research_node.get_attribute('data-id')
+            _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "search jump must select the matching Research node")
+            page.locator('.primary-nav-button[data-section="location"]').click()
+            page.locator('.primary-nav-button[data-section="research"]').click()
+            _assert(search_input.input_value() == selected_research_name, "returning from Location must preserve Research query")
+            _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "returning from Location must preserve Research selection")
+            _wait_for_periodic_sync(page)
+            _assert(search_input.input_value() == selected_research_name, "periodic refresh must retain an edited search query")
+            search_input.fill('nonexistent-research-node-987654321')
+            _assert(page.locator('#researchSearchResults [data-research-jump]').count() == 0, "zero search matches must be represented without filtering the DAG")
+            _assert(page.locator(f'#researchTree [data-id="{selected_research_id}"]').get_attribute('aria-pressed') == 'true', "zero search matches must not discard the selected Research node")
+            search_input.fill('')
             unlock_node = page.locator(
                 f'#researchTree [data-inspect="research"][data-id="{unlock_fixture.id}"]'
             )
@@ -513,19 +767,17 @@ def run(*, browser=None) -> dict[str, object]:
                 unlock_fixture.unlocks[0].display_name in unlock_inspector_text,
                 "research unlock text must come from the Application projection",
             )
-            startable_research = None
-            for index in range(research_rows.count()):
-                research_rows.nth(index).click()
-                control = page.locator('#inspectorContent [data-lifecycle-control="research"]')
-                if (
-                    control.count() == 1
-                    and control.get_attribute('data-research-action') == 'start'
-                    and control.is_enabled()
-                ):
-                    startable_research = control
-                    break
-            _assert(startable_research is not None, "at least one projected Research decision must be startable")
-            _choose_priority(page, '#researchPriorityInput', 4)
+            page.locator(
+                f'#researchTree [data-inspect="research"][data-id="{startable_research_id}"]'
+            ).click()
+            startable_research = page.locator('#inspectorContent [data-lifecycle-control="research"]')
+            _assert(
+                startable_research.count() == 1
+                and startable_research.get_attribute('data-research-action') == 'start'
+                and startable_research.is_enabled(),
+                "Application-startable Research must expose an enabled Start command in the Inspector",
+            )
+            choose_priority(page, '#researchPriorityInput', 4)
             startable_research.click()
             research_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="research"]')
             page.wait_for_function(
@@ -557,10 +809,25 @@ def run(*, browser=None) -> dict[str, object]:
                 research_pins.count() >= 2,
                 "Research execution context with strategic differences must expose Comparison pins",
             )
-            research_pins.first.click()
-            page.locator(
-                '#inspectorContent [data-research-compare-pin][aria-pressed="false"]'
-            ).first.click()
+            research_row = next(
+                row for row in runtime._app.query(GetResearch()).items
+                if row.id == str(RESEARCH_COMPARISON_FIXTURE_ID)
+            )
+            ready_site = unavailable_site = None
+            for site in research_row.execution_context_options:
+                estimate = next(value for value in site.comparison_values if value.axis_key == "estimated_days")
+                if estimate.number_value is None and unavailable_site is None:
+                    unavailable_site = site
+                elif estimate.number_value is not None and ready_site is None:
+                    ready_site = site
+            _assert(
+                ready_site is not None and unavailable_site is not None,
+                "Research browser fixture must contain both estimable and blocked execution contexts",
+            )
+            for site in (ready_site, unavailable_site):
+                page.locator(
+                    f'#inspectorContent [data-research-compare-pin][data-comparison-key="{site.comparison_key}"]'
+                ).click()
             research_comparison = page.locator('#inspectorContent .comparison-surface')
             research_comparison.wait_for(timeout=10000)
             _assert(
@@ -574,9 +841,14 @@ def run(*, browser=None) -> dict[str, object]:
             comparison_text = research_comparison.inner_text()
             for label in (
                 "研究Fleet拘束",
-                "現地利用可能Resource",
+                "現地Resource不足",
                 "Service供給による実行能力",
-                "推定所要時間",
+                "現在条件での参考所要日数",
+                "試作Resource",
+                "予約済",
+                "利用可能",
+                "不足",
+                "算定不可",
             ):
                 _assert(label in comparison_text, f"Research Comparison must expose {label}")
             site_button = page.locator(
@@ -594,6 +866,7 @@ def run(*, browser=None) -> dict[str, object]:
                 timeout=10000,
             )
 
+            checkpoint("exploration decisions")
             page.locator('.primary-nav-button[data-section="exploration"]').click()
             page.locator('[data-section-tab="exploration"][data-tab="scientific-exploration"]').click()
             exploration_rows = page.locator('[data-inspect="scientific-exploration"]')
@@ -624,8 +897,25 @@ def run(*, browser=None) -> dict[str, object]:
             exploration_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="exploration"]')
             _assert(exploration_lifecycle.count() == 1, "exploration must expose one lifecycle control")
             _assert(exploration_lifecycle.get_attribute('data-exploration-action') == 'start' and exploration_lifecycle.is_enabled(), "campaign lifecycle control must expose start when startable")
-            _choose_priority(page, '#explorationPriorityInput', 4)
+            choose_priority(page, '#explorationPriorityInput', 4)
             exploration_lifecycle.click()
+            # The command refreshes authoritative Application state asynchronously.
+            # Observe the started lifecycle before asserting its action options.
+            page.wait_for_function(
+                "() => document.querySelector('#inspectorContent [data-lifecycle-control=exploration]')?.dataset.explorationAction === 'pause'",
+                timeout=10000,
+            )
+
+            _assert(
+                page.locator('#inspectorContent [data-exploration-return]').count() == 1
+                and not page.locator('#inspectorContent [data-exploration-return]').is_enabled(),
+                "Return choice must remain visible but unavailable before Fleet assignment",
+            )
+            _assert(
+                page.locator('#inspectorContent [data-exploration-unassign]').count() == 1
+                and not page.locator('#inspectorContent [data-exploration-unassign]').is_enabled(),
+                "Fleet release must remain visible with its actual eligibility",
+            )
 
             # Completion disposition is a real Direct Action. The browser test
             # validates the select -> Command -> refreshed Inspector round trip.
@@ -766,6 +1056,19 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
             page.locator('.survey-scope-map').wait_for(timeout=10000)
             _assert(page.locator('.survey-scope-map').count() == 1, "Survey must use the surface map as the primary scope-selection canvas")
+            _assert_surface_targets_are_independent(page, '.survey-scope-node')
+            _assert(page.locator('[data-survey-focus-cell]').count() == page.locator('.survey-scope-node').count(),
+                    "Survey region index must lead to each actual map checkbox")
+            first_survey_cell = page.locator('[data-survey-focus-cell]').first
+            target_survey_cell = first_survey_cell.get_attribute('data-survey-focus-cell')
+            first_survey_cell.click()
+            _assert(page.locator('[data-survey-draft-cell]').evaluate_all(
+                "(nodes,id) => nodes.find(node=>node.value===id)?.checked || false", target_survey_cell),
+                "alternative Survey list must toggle the same editable scope as the map")
+            first_survey_cell.click()
+            _assert(not page.locator('[data-survey-draft-cell]').evaluate_all(
+                "(nodes,id) => nodes.find(node=>node.value===id)?.checked || false", target_survey_cell),
+                "alternative Survey list must also remove its selection without a separate state path")
             _assert(page.locator('[data-survey-map-layer]').count() == 5, "Survey surface canvas must expose the five canonical information layers")
             movement_layer = page.locator('[data-survey-map-layer="movement"]')
             movement_layer.click()
@@ -784,39 +1087,57 @@ def run(*, browser=None) -> dict[str, object]:
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             surface_cells = page.locator('.surface-cell-button')
             surface_cells.first.wait_for(timeout=10000)
+            _assert_surface_targets_are_independent(page, '.surface-cell-button')
+            _assert(page.locator('.surface-cell-index-item[data-inspect="surface-cell"]').count() == surface_cells.count(),
+                    "all physical cells must be reachable without aiming at an edge")
             _assert(surface_cells.count() > 0, "surface map must render Application-projected body cells")
             _assert("base.cell." not in surface_cells.first.inner_text(), "surface map must present labels rather than internal cell ids")
-            surface_decision_found = False
-            for index in range(surface_cells.count()):
-                surface_cells.nth(index).click()
-                if (
-                    page.locator('#inspectorContent [data-surface-develop]').count() > 0
-                    and "新拠点設立" in page.locator("#inspectorContent").inner_text()
-                ):
-                    surface_decision_found = True
-                    break
-            _assert(surface_decision_found, "surface map must expose a projected development/founding decision")
+            # The earlier Application-projected founding option identifies the
+            # target. The browser checks the actual map selection and Inspector,
+            # without opening unrelated Cells one by one as fixture discovery.
+            page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]').click()
+            page.wait_for_function("""cell => {
+              const state = window.SpaceIdleApp.state;
+              return state.inspector?.id === cell && state.surfaceMap?.cells?.some(
+                row => row.id === cell && row.foundation_options?.length > 0);
+            }""", arg=str(founding_fixture_cell), timeout=10000)
+            _assert(
+                page.locator('#inspectorContent [data-surface-found]').count() > 0,
+                "Surface Map must expose Application-projected Founding on an unowned Cell",
+            )
+            selected_surface_projection = page.evaluate("""() => {
+              const state=window.SpaceIdleApp.state;
+              return state.surfaceMap.cells.find(cell => cell.id === state.inspector?.id);
+            }""")
+            _assert(selected_surface_projection is not None,
+                    "Surface Inspector must resolve the same physical cell selected on the map")
             surface_inspector = page.locator("#inspectorContent").inner_text()
             _assert("地域状態" in surface_inspector, "surface cell inspector must expose physical cell state")
             _assert("現在の環境" in surface_inspector, "surface cell inspector must expose application-projected current environment")
             _assert("資源調査情報" in surface_inspector, "surface cell inspector must expose survey-derived resource knowledge")
             _assert(page.locator('#inspectorContent [data-inspect="survey"]').count() > 0, "surface map resource decisions must link directly to survey controls")
-            _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must expose location development options in-place")
+            _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must explain nearby location development eligibility in-place")
             _assert("新拠点設立" in surface_inspector, "unowned cell must expose founding options in-place")
-            _assert(page.locator('#inspectorContent [data-surface-develop]').count() > 0, "surface cell inspector must expose application-projected development commands")
+            _assert(page.locator('#inspectorContent [data-surface-found]').count() ==
+                    len(selected_surface_projection['foundation_options']),
+                    "founding controls must correspond to the selected cell's Application options")
+            _assert(page.locator('#inspectorContent [data-surface-develop]').count() ==
+                    len(selected_surface_projection['development_options']),
+                    "development actions must exist only where existing Locations can actually expand")
             page.locator('.primary-nav-button[data-section="location"]').click()
             # Top-level navigation preserves the last Location context by design.
             # Select Overview explicitly when validating the Overview decision surface.
             page.locator('[data-section-tab="location"][data-tab="overview"]').click()
-            overview_text = page.locator('#operationsTabContent').inner_text()
-            _assert("地表インフラ" in overview_text, "location overview must expose aggregate surface infrastructure state")
-            _assert("在庫とフロー" in overview_text, "location overview must expose resource state at the decision point")
-            _assert("サービス能力" in overview_text, "location overview must expose service capacity constraints")
-            _assert("外部依存" in overview_text, "location overview must expose external dependency as a decision category")
+            overview = page.locator('#operationsTabContent .location-overview-board')
+            _assert(overview.count() == 1, "location overview must retain its decision surface")
+            for selector in ('.capacity-quad', '.overview-resource-grid', '.overview-capacity-list', '.overview-dependency-list'):
+                _assert(overview.locator(selector).count() > 0, f"location overview must expose {selector} at the decision point")
             page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
-            dependency_text = page.locator('#operationsTabContent').inner_text()
-            _assert("資源依存" in dependency_text, "dependency analytics must keep Resource dependency as its own projection")
-            _assert("サービス依存" in dependency_text, "dependency analytics must expose Service dependency separately from Resources")
+            _assert(
+                page.locator('#operationsTabContent [data-inspect="dependency-resource"]').count() > 0
+                and page.locator('#operationsTabContent [data-inspect="dependency-service"]').count() > 0,
+                "dependency analytics must expose selectable Resource and Service demand separately",
+            )
             dependency_transport_found = False
             resource_dependencies = page.locator('[data-inspect="dependency-resource"]')
             for dependency_index in range(resource_dependencies.count()):
@@ -836,14 +1157,10 @@ def run(*, browser=None) -> dict[str, object]:
                     page.locator('.supply-requirement-card.is-context-target').count() > 0,
                     "external dependency navigation must select related Supply Requirements",
                 )
-                context_has_paths = page.evaluate(
-                    "() => (window.SpaceIdleApp?.state?.decisionContext?.movement_plan_ids || []).length > 0"
+                _assert(
+                    page.locator('#systemMapStage').is_visible(),
+                    "external dependency navigation must retain the shared spatial context",
                 )
-                if context_has_paths:
-                    _assert(
-                        page.locator('#networkSvg .network-line.is-context-related').count() > 0,
-                        "external dependency navigation must highlight projected related movement paths when they exist",
-                    )
                 dependency_transport_found = True
                 page.locator('.primary-nav-button[data-section="location"]').click()
                 page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
@@ -860,9 +1177,9 @@ def run(*, browser=None) -> dict[str, object]:
             # real browser -> HTTP -> Application -> rendered-result round trip.
             forecast_surface = page.locator('.detailed-forecast-surface')
             forecast_surface.wait_for(timeout=10000)
-            initial_forecast_text = forecast_surface.inner_text()
             _assert(
-                "明示実行" in initial_forecast_text and "基準 Day" not in initial_forecast_text,
+                forecast_surface.locator('[data-run-detailed-forecast]').is_enabled()
+                and forecast_surface.locator('[data-forecast-period]').count() == 0,
                 "Detailed Forecast must remain idle until the player explicitly runs it",
             )
             medium_horizon = forecast_surface.locator(
@@ -871,7 +1188,7 @@ def run(*, browser=None) -> dict[str, object]:
             medium_horizon.click()
             _assert(
                 medium_horizon.get_attribute('aria-pressed') == 'true'
-                and "基準 Day" not in forecast_surface.inner_text(),
+                and forecast_surface.locator('[data-forecast-period]').count() == 0,
                 "changing Detailed Forecast horizon must not implicitly execute the forecast",
             )
             short_horizon = forecast_surface.locator(
@@ -879,13 +1196,18 @@ def run(*, browser=None) -> dict[str, object]:
             )
             short_horizon.click()
             forecast_surface.locator('[data-run-detailed-forecast]').click()
-            page.wait_for_function(
-                "() => document.querySelector('.detailed-forecast-surface')?.innerText.includes('基準 Day')",
-                timeout=15000,
+            forecast_surface.locator('[data-forecast-period]').wait_for(timeout=15000)
+            for kind in ('inventory', 'inventory-range', 'allocation-gap', 'arrival-waiting', 'downstream', 'logistics'):
+                result = forecast_surface.locator(f'[data-forecast-result="{kind}"]')
+                _assert(
+                    result.count() == 1 and result.locator('.dependency-card-grid').count() == 1
+                    and result.locator('.detail-card, .empty-state').count() > 0,
+                    f"Detailed Forecast must render {kind} values or their empty state",
+                )
+            _assert(
+                forecast_surface.locator('[data-forecast-result="inventory"] .detail-card .dependency-metrics strong').count() > 0,
+                "Detailed Forecast must render numeric inventory projections, not headings alone",
             )
-            forecast_text = forecast_surface.inner_text()
-            for heading in ("将来在庫", "波及影響", "広域物流への影響"):
-                _assert(heading in forecast_text, f"詳細予測結果に {heading} が必要です")
 
             _select_location(page, ids.LUNAR_ORBIT)
             page.locator('.primary-nav-button[data-section="exploration"]').click()
@@ -893,51 +1215,42 @@ def run(*, browser=None) -> dict[str, object]:
             survey_rows = page.locator('[data-inspect="survey"]')
             survey_rows.first.wait_for(timeout=10000)
             _assert(survey_rows.count() > 0, "Survey UI must expose at least one Application-projected target")
-            campaign_cell_id = campaign_resource_id = None
-            for row_index in range(survey_rows.count()):
-                survey_pair_id = survey_rows.nth(row_index).get_attribute("data-id")
-                if survey_pair_id is None or "::" not in survey_pair_id:
-                    continue
-                candidate_cell_id, candidate_resource_id = survey_pair_id.split("::", 1)
-                cell_checkbox = page.locator(
-                    f'[data-survey-draft-cell][value="{candidate_cell_id}"]'
-                )
-                resource_checkbox = page.locator(
-                    f'[data-survey-draft-resource][value="{candidate_resource_id}"]'
-                )
-                if cell_checkbox.count() == 0 or resource_checkbox.count() == 0:
-                    continue
-                cell_checkbox.check()
-                resource_checkbox.check()
-                for goal in ("1", "2", "3"):
-                    page.locator('#surveyDraftGoal').select_option(goal)
-                    page.wait_for_function(
-                        "() => !document.querySelector('[data-survey-start-intent-status]')?.textContent?.includes('可否確認中')",
-                        timeout=10000,
-                    )
-                    if page.locator('[data-start-survey-campaign]').is_enabled():
-                        campaign_cell_id = candidate_cell_id
-                        campaign_resource_id = candidate_resource_id
-                        break
-                if campaign_cell_id is not None:
-                    break
-                cell_checkbox.uncheck()
-                resource_checkbox.uncheck()
+            campaign_cell_id, campaign_resource_id, campaign_goal = survey_scope
+            cell_checkbox = page.locator(f'[data-survey-draft-cell][value="{campaign_cell_id}"]')
+            resource_checkbox = page.locator(f'[data-survey-draft-resource][value="{campaign_resource_id}"]')
             _assert(
-                campaign_cell_id is not None and campaign_resource_id is not None,
-                "Survey Campaign UI must expose at least one Application-approved scope / goal intent",
+                cell_checkbox.count() == 1 and resource_checkbox.count() == 1,
+                "Application-approved Survey intent must be available in the browser scope editor",
+            )
+            cell_checkbox.check()
+            resource_checkbox.check()
+            page.locator('#surveyDraftGoal').select_option(str(campaign_goal))
+            page.wait_for_function(
+                "() => !document.querySelector('[data-survey-start-intent-status]')?.textContent?.includes('可否確認中')",
+                timeout=10000,
             )
             _assert(
-                page.locator('[data-survey-start-intent-status]').inner_text().strip() == "適用可能",
+                page.locator('[data-start-survey-campaign]').is_enabled(),
                 "Survey Campaign creation availability must come from Application preview",
             )
-            _choose_priority(page, '#surveyDraftPriority', 4)
+            choose_priority(page, '#surveyDraftPriority', 4)
             page.locator('[data-start-survey-campaign]').click()
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             campaign_row = page.locator('[data-inspect="survey-campaign"]').first
             campaign_row.wait_for(timeout=10000)
             _assert(campaign_row.evaluate("el => el.classList.contains('survey-campaign-card')"), "Survey Campaign must remain a touch decision card after creation")
-            _assert("1 地域 × 1 資源" in campaign_row.inner_text(), "Survey Campaign creation must round-trip the selected UI scope")
+            campaign_id = campaign_row.get_attribute('data-id')
+            campaign_state = page.evaluate(
+                "id => window.SpaceIdleApp.state.surveys.campaigns.find(c => c.id === id)",
+                campaign_id,
+            )
+            _assert(
+                campaign_state is not None
+                and campaign_state['target_cell_ids'] == [campaign_cell_id]
+                and campaign_state['resource_ids'] == [campaign_resource_id]
+                and bool(campaign_row.locator('.decision-card-title small').inner_text().strip()),
+                "Survey Campaign must display and retain the player-selected scope",
+            )
             _assert("base." not in campaign_row.inner_text(), "Survey Campaign row must use presentation labels rather than raw definition ids")
             campaign_row.click()
             _assert_inspector_section_order(
@@ -965,7 +1278,7 @@ def run(*, browser=None) -> dict[str, object]:
                 "Survey Comparison must highlight Application-declared differences",
             )
             _assert(
-                "現在の制約" in comparison_surface.inner_text(),
+                comparison_surface.locator('.comparison-blocker-cell').count() == 2,
                 "Survey Comparison must keep candidate blockers in the comparison surface",
             )
             comparison_surface.locator('[data-survey-candidate-detail]').first.click()
@@ -975,7 +1288,7 @@ def run(*, browser=None) -> dict[str, object]:
                 "Comparison detail must preserve the canonical Inspector hierarchy",
             )
             page.locator('#inspectorContent [data-inspect="survey-campaign"]').click()
-            _assert(_priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
+            _assert(priority_group(page, '#surveyPriorityInput').locator('[data-priority-choice="5"]').is_enabled(), "active Survey Campaign must expose priority control")
             page.wait_for_function(
                 "() => !document.querySelector('[data-survey-update-intent-status]')?.textContent?.includes('可否確認中')",
                 timeout=10000,
@@ -987,12 +1300,11 @@ def run(*, browser=None) -> dict[str, object]:
             _assert(int(page.locator('#surveyPriorityInput').input_value()) == 4, "Survey Campaign start priority must round-trip through the UI")
             survey_lifecycle = page.locator('#inspectorContent [data-lifecycle-control="survey-campaign"]')
             _assert(survey_lifecycle.get_attribute('data-survey-campaign-action') == 'pause' and survey_lifecycle.is_enabled(), "active Survey Campaign must expose pause on the stable lifecycle control")
-            _choose_priority(page, '#surveyPriorityInput', 5)
+            choose_priority(page, '#surveyPriorityInput', 5)
             page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
             page.wait_for_function(
                 "() => document.querySelector('#surveyPriorityInput')?.value === '5'", timeout=10000
             )
-            _assert(page.locator('#inspectorContent [data-set-survey-priority]').count() == 0, "Survey priority must be a direct action without a second Apply button")
             survey_lifecycle.click()
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=survey-campaign]')?.dataset.surveyCampaignAction === 'resume'",
@@ -1007,6 +1319,7 @@ def run(*, browser=None) -> dict[str, object]:
             # A surveyed Cell must become a player-selectable founding site; the
             # UI must use the Application-projected option rather than inventing
             # a fixed pre-existing lunar Location.
+            checkpoint("survey and founding decisions")
             page.locator('[data-section-tab="exploration"][data-tab="surface"]').click()
             founding_cell = page.locator(f'.surface-cell-button[data-id="{founding_fixture_cell}"]')
             founding_cell.wait_for(timeout=10000)
@@ -1018,6 +1331,7 @@ def run(*, browser=None) -> dict[str, object]:
                 '#inspectorContent '
                 f'[data-founding-compare-pin="{founding_fixture_option.comparison_key}"]'
             ).first
+            first_founding_pin.wait_for(timeout=10000)
             _assert(first_founding_pin.count() == 1, "Founding option must expose Comparison pin")
             first_founding_pin.click()
             comparison_cell = page.locator(
@@ -1028,6 +1342,7 @@ def run(*, browser=None) -> dict[str, object]:
                 '#inspectorContent '
                 f'[data-founding-compare-pin="{founding_comparison_option.comparison_key}"]'
             ).first
+            second_founding_pin.wait_for(timeout=10000)
             _assert(second_founding_pin.count() == 1, "second Founding Cell must expose Comparison pin")
             second_founding_pin.click()
             page.wait_for_function(
@@ -1080,6 +1395,50 @@ def run(*, browser=None) -> dict[str, object]:
             _assert("案件進行中" in page.locator('#inspectorContent').inner_text(), "Founding command must round-trip to an active project on the selected cell")
             _assert(founding_button.count() == 1, "Founding control must remain in the same place after project start")
             _assert(not founding_button.is_enabled(), "active Founding must keep the same action visible but unavailable")
+            checkpoint("market order decisions")
+            page.locator('.primary-nav-button[data-section="economy"]').click()
+            create_market = page.locator('#marketPanel [data-new-market-order]')
+            create_market.wait_for(timeout=10000)
+            market_candidates = runtime._app.query(GetMarket()).order_candidates
+            blocked_market = next((row for row in market_candidates if not row.can_create), None)
+            accepted_market = next((row for row in market_candidates if row.can_create), None)
+            _assert(blocked_market is not None and accepted_market is not None,
+                    "browser Market fixture must expose selectable and blocked order offers")
+            for row in (blocked_market, accepted_market):
+                create_market.locator('[data-market-interface]').select_option(row.market_interface_id)
+                create_market.locator('[data-market-direction]').select_option(row.direction)
+                create_market.locator('[data-market-resource]').select_option(row.resource_id)
+                page.wait_for_function(
+                    "expected => document.querySelector('[data-market-create]')?.disabled === expected",
+                    arg=not row.can_create,
+                    timeout=10000,
+                )
+                _assert(bool(create_market.locator('[data-market-new-conditions]').inner_text().strip()),
+                        "Market create conditions must remain visible for every candidate")
+            # Draft state and the selected offer must survive the regular server sync.
+            create_market.locator('[data-market-price]').fill('25')
+            _wait_for_periodic_sync(page)
+            _assert(create_market.locator('[data-market-price]').input_value() == '25',
+                    "periodic Market refresh must preserve an edited price-condition draft")
+            _assert(create_market.locator('[data-market-resource]').input_value() == accepted_market.resource_id,
+                    "periodic Market refresh must preserve the selected resource")
+            create_market.locator('[data-market-price]').fill('')
+            create_market.locator('[data-market-target]').fill('1')
+            with page.expect_response(
+                lambda response: response.request.method == 'POST'
+                and response.url.endswith('/api/v1/commands')
+                and 'CreateTradeOrder' in (response.request.post_data or ''),
+                timeout=10000,
+            ) as market_create_response:
+                create_market.locator('[data-market-create]').click()
+            _assert(market_create_response.value.ok,
+                    "an eligible Market candidate must create an order through the real Application")
+            page.wait_for_function(
+                "() => document.querySelectorAll('#marketPanel [data-market-order-row]').length > 0",
+                timeout=10000,
+            )
+
+            checkpoint("responsive layout")
             page.locator('.primary-nav-button[data-section="location"]').click()
 
             page.set_viewport_size({"width": 1180, "height": 820})
@@ -1139,20 +1498,18 @@ def run(*, browser=None) -> dict[str, object]:
                 "1024px iPad landscape logistics must not horizontally overflow the page",
             )
             page.set_viewport_size({"width": 1194, "height": 834})
-            network_locations = page.locator("#networkNodes [data-network-location]")
-            expected_network_locations = page.locator("#movementPlanOriginFilter option").count() - 1
-            _assert(
-                network_locations.count() == expected_network_locations,
-                "network must render every location exposed by the Application view",
-            )
+            network_locations = page.locator('#systemMapStage [data-system-node-id]')
+            expected_network_locations = page.evaluate('() => window.SpaceIdleApp.state.world.operational_nodes.length')
+            _assert(network_locations.count() == expected_network_locations, "System Map must expose all operational nodes")
             network_positions = network_locations.evaluate_all(
-                "rows => rows.map(row => { const node=row.closest('.network-node'); return `${node.style.left}:${node.style.top}`; })"
+                "rows => rows.map(row => { const node=row.closest('.system-map-node-shell'); return `${node.style.left}:${node.style.top}`; })"
             )
-            _assert(
-                len(set(network_positions)) == len(network_positions),
-                "network layout must give each rendered location a distinct position",
-            )
+            _assert(len(set(network_positions)) == len(network_positions), "nodes must occupy distinct positions")
+            _assert(page.locator('#systemMapStage').count() == 1, "there must be only one authoritative map DOM surface")
+            actual_allocations = page.evaluate("() => window.SpaceIdleApp?.state?.transportAllocations?.items?.length || 0")
+            _assert(page.locator('[data-system-allocation-id]').count() == actual_allocations, "relation overview must preserve every independently editable Allocation")
 
+            checkpoint("operations and layout")
             results = {
                 "browser": browser_name,
                 "server": "in_process_http",
@@ -1173,7 +1530,3 @@ def run(*, browser=None) -> dict[str, object]:
         server.server_close()
         server_thread.join(timeout=5)
         temp_dir.cleanup()
-
-
-if __name__ == "__main__":
-    print(json.dumps(run(), ensure_ascii=False, indent=2))

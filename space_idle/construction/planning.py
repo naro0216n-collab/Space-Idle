@@ -46,18 +46,22 @@ class ConstructionPlanningMixin:
         facility = self.facilities.facilities.get(facility_id)
         if facility is None:
             return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            return (ProjectBlocker("facility_lifecycle", "facility is not in normal operation"),)
         target_level = facility.level + 1
         if (facility.definition_id, target_level) not in self.upgrade_recipes:
             return (ProjectBlocker("upgrade_recipe", "facility has no next upgrade recipe"),)
         active = next((
             project
             for project in self.projects.values()
-            if isinstance(project.target, FacilityUpgradeTarget)
+            if isinstance(project.target, (FacilityUpgradeTarget, FacilityDecommissionTarget))
             and project.target.facility_id == facility_id
             and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
         ), None)
         if active is not None:
-            return (ProjectBlocker("active_upgrade_project", str(active.id)),)
+            code = ("active_upgrade_project" if isinstance(active.target, FacilityUpgradeTarget)
+                    else "active_facility_project")
+            return (ProjectBlocker(code, str(active.id)),)
         return ()
 
     def decommission_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
@@ -189,7 +193,7 @@ class ConstructionPlanningMixin:
                 raise KeyError(facility_id)
             if failures[0].code == "upgrade_recipe":
                 raise ValueError("facility has no next upgrade recipe")
-            raise ValueError("facility already has an active upgrade project")
+            raise ValueError("; ".join(f"{failure.code}: {failure.detail}" for failure in failures))
         facility = self.facilities.facilities[facility_id]
         target_level = facility.level + 1
         return self._create_project(

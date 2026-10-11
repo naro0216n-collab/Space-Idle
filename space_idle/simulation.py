@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
+from collections.abc import Callable
 import math
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
 from .contracts import ContractService
 from .domain import DomainExtension
 from .market import MarketBuyAllocationPlan, MarketService
+from .population import PopulationService
 from .facilities import FacilityBook
 from .founding import OperationalNodeFoundingService
 from .industry import IndustryService
@@ -63,8 +65,8 @@ class OfflineProgressPolicy:
     max_game_days_per_resume: int | None = None
 
     def __post_init__(self) -> None:
-        if self.real_seconds_per_game_day <= 0:
-            raise ValueError("real_seconds_per_game_day must be positive")
+        if not math.isfinite(self.real_seconds_per_game_day) or self.real_seconds_per_game_day <= 0:
+            raise ValueError("real_seconds_per_game_day must be positive and finite")
         if self.max_game_days_per_resume is not None and self.max_game_days_per_resume < 0:
             raise ValueError("max_game_days_per_resume must be non-negative")
 
@@ -145,6 +147,7 @@ class Simulation:
     projects: ProjectService
     technology: TechnologyState
     service_capacity_registry: ServiceCapacityRegistry
+    population: PopulationService | None = None
     founding: OperationalNodeFoundingService | None = None
     contracts: ContractService | None = None
     research: ResearchService | None = None
@@ -161,6 +164,9 @@ class Simulation:
     _boundary_service_usage: dict[AllocationConstraintKey, float] = field(default_factory=dict, init=False, repr=False)
     _initial_state_initialized: bool = field(default=False, init=False, repr=False)
     _boundary_settled_day: int = field(init=False, repr=False)
+    _analysis_decision_observer: Callable[[TickDecisionProjection], None] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     def __post_init__(self) -> None:
         # A freshly composed Simulation has not yet executed the day-0 boundary.
@@ -294,6 +300,8 @@ class Simulation:
         if self.scientific_exploration is not None:
             requirements.extend(self.scientific_exploration.supplys(self.day))
         requirements.extend(self.market.sell_supply_requirements())
+        if self.population is not None:
+            requirements.extend(self.population.supplys(self.day))
         seen: set[object] = set()
         for requirement in requirements:
             if requirement.id in seen:
@@ -343,6 +351,9 @@ class Simulation:
             rows.extend(self.scientific_exploration.execution_requirement_bundles(self.day))
         rows.extend(self.transport.fleet_retirement_execution_requirement_bundles(self.day))
         rows.extend(self.market.sell_execution_bundles())
+        if self.population is not None:
+            rows.extend(self.population.execution_requirement_bundles(self.day))
+            rows.extend(self.population.passenger_dispatch_bundles(self.day))
         service_scopes = self.service_capacity_scopes()
         rows = [
             with_service_capacity_conservation(row, service_scopes)
@@ -362,29 +373,6 @@ class Simulation:
             return ()
         return surface.provider_dependencies(
             self.service_capacity_providers(), self.facilities
-        )
-
-    def _service_provider_factors(
-        self,
-        location_id: SpatialNodeId,
-        service_type: str,
-        resolved_plan: ServiceCapacityAllocationPlan,
-        dependencies: tuple[ServiceCapacityDependency, ...],
-    ) -> dict | None:
-        surface = self.surface_infrastructure
-        if surface is None:
-            return None
-        if not any(
-            edge.service_type == service_type
-            and edge.upstream_service_type == surface.service_type
-            for edge in dependencies
-        ):
-            return None
-        provider = self._service_capacity_provider(service_type)
-        if provider is None:
-            return None
-        return surface.provider_availability_factors(
-            location_id, service_type, provider, self.facilities, resolved_plan, self.day
         )
 
     def service_capacity_providers(self) -> tuple[ServiceCapacityProvider, ...]:
@@ -416,30 +404,6 @@ class Simulation:
         except KeyError as exc:
             raise KeyError(f"no service capacity provider for {service_type}") from exc
 
-    def _service_capacity_provider(
-        self, service_type: str
-    ) -> ServiceCapacityProvider | None:
-        return self.service_capacity_registry.provider_for(service_type)
-
-    def _service_supply_at(
-        self,
-        location_id: SpatialNodeId,
-        service_type: str,
-        power: PowerSnapshot,
-        provider_factors: dict | None,
-    ) -> tuple[float, float]:
-        provider = self._service_capacity_provider(service_type)
-        if provider is None:
-            return (0.0, 0.0)
-        return provider.service_capacity_supply_at(
-            location_id,
-            service_type,
-            self.facilities,
-            power,
-            self.day,
-            provider_factors=provider_factors,
-        )
-
     def _service_allocation_types(
         self, requests: tuple[ServiceCapacityRequest, ...]
     ) -> tuple[str, ...]:
@@ -453,31 +417,37 @@ class Simulation:
         service_type: str,
         *,
         power_by_location: dict[SpatialNodeId, PowerSnapshot],
-        requests: tuple[ServiceCapacityRequest, ...],
+        locations: tuple[SpatialNodeId, ...],
+        stage_requests: tuple[ServiceCapacityRequest, ...],
+        provider: ServiceCapacityProvider | None,
+        surface_dependent: bool,
         resolved_plan: ServiceCapacityAllocationPlan,
-        dependencies: tuple[ServiceCapacityDependency, ...],
     ) -> ServiceCapacityAllocationPlan:
-        locations = tuple(
-            sorted(
-                self._active_locations() | set(self.graph.operational_node_ids()),
-                key=str,
-            )
-        )
-        stage_requests = tuple(
-            request for request in requests if request.service_type == service_type
-        )
         nominal: dict[tuple[SpatialNodeId, str], float] = {}
         enabled: dict[tuple[SpatialNodeId, str], float] = {}
         limiting: dict[tuple[SpatialNodeId, str], tuple[str, ...]] = {}
         requested_locations = {request.operational_node_id for request in stage_requests}
+        positive_request_locations = {
+            request.operational_node_id for request in stage_requests
+            if request.requested_rate > 1e-12
+        }
         for location_id in locations:
             power = power_by_location[location_id]
-            provider_factors = self._service_provider_factors(
-                location_id, service_type, resolved_plan, dependencies
-            )
-            nominal_rate, enabled_rate = self._service_supply_at(
-                location_id, service_type, power, provider_factors
-            )
+            if provider is None:
+                nominal_rate, enabled_rate = 0.0, 0.0
+            else:
+                factors = (
+                    self.surface_infrastructure.provider_availability_factors(
+                        location_id, service_type, provider, self.facilities,
+                        resolved_plan, self.day,
+                    )
+                    if surface_dependent and self.surface_infrastructure is not None
+                    else None
+                )
+                nominal_rate, enabled_rate = provider.service_capacity_supply_at(
+                    location_id, service_type, self.facilities, power, self.day,
+                    provider_factors=factors,
+                )
             if (
                 nominal_rate <= 1e-12
                 and enabled_rate <= 1e-12
@@ -489,11 +459,7 @@ class Simulation:
             enabled[key] = enabled_rate
             factors: list[str] = []
             if nominal_rate <= 1e-12:
-                if any(
-                    request.operational_node_id == location_id
-                    and request.requested_rate > 1e-12
-                    for request in stage_requests
-                ):
+                if location_id in positive_request_locations:
                     factors.append("provider_absent")
             elif enabled_rate + 1e-9 < nominal_rate:
                 factors.append("provider_dependency")
@@ -515,17 +481,41 @@ class Simulation:
         service_types = self._service_allocation_types(requests)
         dependencies = self.service_capacity_dependencies()
         order = service_capacity_dependency_order(service_types, dependencies)
+        locations = tuple(sorted(
+            self._active_locations() | set(self.graph.operational_node_ids()), key=str
+        ))
+        requests_by_type: dict[str, list[ServiceCapacityRequest]] = {}
+        for request in requests:
+            requests_by_type.setdefault(request.service_type, []).append(request)
+        # Resolve ownership once for this allocation, rather than scanning all
+        # Domain providers again for every service at every physical Location.
+        # The same duplicate-owner contract as provider_for() applies.
+        providers: dict[str, ServiceCapacityProvider] = {}
+        for provider in self.service_capacity_registry.providers():
+            for service_type in provider.service_capacity_types():
+                if service_type in providers:
+                    raise RuntimeError(f"multiple service capacity providers own {service_type}")
+                providers[service_type] = provider
+        surface_dependent = (
+            set() if self.surface_infrastructure is None else {
+                edge.service_type for edge in dependencies
+                if edge.upstream_service_type == self.surface_infrastructure.service_type
+            }
+        )
         plans: list[ServiceCapacityAllocationPlan] = []
-        for service_type in order:
-            plans.append(
-                self._allocate_service_stage(
-                    service_type,
-                    power_by_location=power_by_location,
-                    requests=requests,
-                    resolved_plan=merge_service_capacity_plans(plans),
-                    dependencies=dependencies,
+        with self.facilities.compatible_projection_scope():
+            for service_type in order:
+                plans.append(
+                    self._allocate_service_stage(
+                        service_type,
+                        power_by_location=power_by_location,
+                        locations=locations,
+                        stage_requests=tuple(requests_by_type.get(service_type, ())),
+                        provider=providers.get(service_type),
+                        surface_dependent=service_type in surface_dependent,
+                        resolved_plan=merge_service_capacity_plans(plans),
+                    )
                 )
-            )
         return merge_service_capacity_plans(plans)
 
     def service_capacity_allocation_projection(self) -> ServiceCapacityAllocationPlan:
@@ -565,8 +555,8 @@ class Simulation:
     def advance_offline(
         self, elapsed_real_seconds: float, policy: OfflineProgressPolicy
     ) -> OfflineProgressResult:
-        if elapsed_real_seconds < 0:
-            raise ValueError("elapsed_real_seconds must be non-negative")
+        if not math.isfinite(elapsed_real_seconds) or elapsed_real_seconds < 0:
+            raise ValueError("elapsed_real_seconds must be finite and non-negative")
         raw_game_days = elapsed_real_seconds / policy.real_seconds_per_game_day
         capped = False
         if (
@@ -575,6 +565,8 @@ class Simulation:
         ):
             raw_game_days = float(policy.max_game_days_per_resume)
             capped = True
+        if not math.isfinite(raw_game_days):
+            raise ValueError("elapsed_real_seconds exceeds representable game time")
         credited = raw_game_days + self.pending_offline_game_days
         whole_days = math.floor(credited + 1e-12)
         self.pending_offline_game_days = max(0.0, credited - whole_days)
@@ -597,6 +589,8 @@ class Simulation:
             self.scientific_exploration.settle_movement_arrivals(self.day)
         if self.founding is not None and self.founding.settle_arrivals(self.day):
             self.transport.invalidate_movement_plans()
+        if self.population is not None:
+            self.population.settle_transit_arrivals(self.day)
 
         # Routing constraints are Logistics-owned intent while owner lifecycle is
         # authoritative in each activity Domain. Boundary settlement completes
@@ -631,6 +625,9 @@ class Simulation:
             }
             self.logistics.settle_cargo_boundary_execution(self.day, boundary_execution)
             self.market.settle_matured_buys(self.day, boundary_execution, self.inventory)
+
+        if self.population is not None:
+            self.population.acquire_for_local_targets(self.day)
 
         # Project procurement is an internal durable reservation lifecycle unrelated
         # to the External Resource Market. Its clock maturation remains boundary-owned.
@@ -958,10 +955,19 @@ class Simulation:
             dispatch_intents = self.logistics.dispatch_execution_requirements(
                 day, logistics_plan, reference
             )
-            allocation_intents = static_intents + dispatch_intents
+            passenger_intents = (
+                () if self.population is None else
+                self.population.passenger_service_bundles(day, reference)
+            )
+            allocation_intents = static_intents + dispatch_intents + passenger_intents
             pool_overrides = dict(
                 self.logistics.allocation_pool_capacities(day, surface)
             )
+            if self.population is not None:
+                for key, value in self.population.service_seat_pool_capacities(day).items():
+                    if key in pool_overrides:
+                        raise RuntimeError(f'duplicate passenger seat Pool: {key}')
+                    pool_overrides[key] = value
             for key, value in (research_pool_overrides or {}).items():
                 if key in pool_overrides:
                     raise RuntimeError(f"duplicate allocation pool override: {key}")
@@ -981,6 +987,13 @@ class Simulation:
             actual_usage = self.logistics.dispatch_usage_from_execution(
                 logistics_plan, execution
             )
+            if self.population is not None:
+                for allocation_id, passengers in self.population.passenger_service_usage(execution).items():
+                    cargo = actual_usage.get(allocation_id, DirectionalCapacity())
+                    actual_usage[allocation_id] = DirectionalCapacity(
+                        cargo.forward_t_per_day + passengers.forward_t_per_day,
+                        cargo.reverse_t_per_day + passengers.reverse_t_per_day,
+                    )
             return execution, actual_usage, next_surface, surface_limits
 
         for _ in range(64):
@@ -1360,6 +1373,8 @@ class Simulation:
         # physical Interface inventory and credits Funds after this tick's allocation.
         self.market.create_buy_commitments(allocations.market_buys, self.day)
         self.market.settle_sells(allocations.execution, self.inventory)
+        if self.population is not None:
+            self.population.consume_allocated(allocations.execution, self.day)
         if self.maintenance is not None:
             self.maintenance.advance_day(allocations.execution, self.day)
 
@@ -1416,11 +1431,18 @@ class Simulation:
         # only amounts authorized from the start-of-tick allocation and cannot
         # admit arriving Cargo to Inventory until the next boundary.
         self.transport.advance_fleet_relocations(allocations.execution, self.day)
+        if self.population is not None:
+            self.population.dispatch_allocated_passengers(allocations.execution, self.day)
+            self.population.dispatch_allocated_service_passengers(allocations.execution, self.day)
         return self.logistics.advance_capacity_logistics(
             self.day, allocations.logistics, allocations.transport
         )
 
     def _settle_tick_state_transitions(self, allocations: TickAllocations) -> None:
+        if self.scientific_exploration is not None:
+            self.scientific_exploration.settle_crew_life_support()
+        if self.population is not None:
+            self.population.settle_deprivation()
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
         if self.projects.settle_completions(
@@ -1440,7 +1462,9 @@ class Simulation:
         # refresh their new physical envelope during that boundary.
         self.storage.refresh(self.day, allocations.power_by_location)
 
-    def _advance_canonical_day(self) -> None:
+    def _advance_canonical_day(
+        self, observe_decision: Callable[[TickDecisionProjection], None] | None = None,
+    ) -> None:
         """Advance exactly one canonical game day through the phase contract."""
         # Phase 1: Boundary settlement.  In the normal resting state this was
         # already completed when the previous day returned.
@@ -1457,6 +1481,11 @@ class Simulation:
             plan = self._plan_tick(intents)
             # Phase 5: Allocation.
             allocations = self._allocate_tick(snapshot, intents, plan)
+            observer = observe_decision if observe_decision is not None else self._analysis_decision_observer
+            if observer is not None:
+                # An opt-in observer reads the allocation that actually executes,
+                # without invoking the planner a second time.
+                observer(TickDecisionProjection(snapshot, intents, plan, allocations))
             # Phase 6: Domain execution.
             activities = self._execute_tick_domains(snapshot, allocations)
         # Phase 7: Logistics / Movement progression.
@@ -1473,8 +1502,11 @@ class Simulation:
         # Player Commands are allowed to mutate authoritative intent/state.
         self._ensure_current_boundary_settled()
 
-    def advance_days(self, days: int) -> None:
+    def advance_days(
+        self, days: int, *,
+        observe_decision: Callable[[TickDecisionProjection], None] | None = None,
+    ) -> None:
         if days < 0:
             raise ValueError("days must be non-negative")
         for _ in range(days):
-            self._advance_canonical_day()
+            self._advance_canonical_day(observe_decision)

@@ -6,6 +6,7 @@ from .market import MarketInterfaceState
 from .shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .supply import SupplyRoutingConstraintScope
 from .spatial import OperationalNodeState
+from .population import PopulationRules, ExternalPopulationSourceDefinition
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,9 @@ class ScenarioFacility:
     operational_node_id: SpatialNodeId
     site_cell_id: SurfaceCellId | None = None
     invested_resources: tuple[tuple[DefinitionId, float], ...] = ()
+    selected_extraction_method_id: DefinitionId | None = None
+    selected_process_id: DefinitionId | None = None
+    level: int = 1
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,15 @@ class ScenarioFleet:
 
 
 @dataclass(frozen=True)
+class ScenarioProviderFleetAssignment:
+    """Initial provider use of real Fleet units; quantity remains owned by Fleet."""
+    provider_definition_id: DefinitionId
+    operational_node_id: SpatialNodeId
+    vehicle_definition_id: DefinitionId
+    units: int
+
+
+@dataclass(frozen=True)
 class ScenarioMarketInterface:
     id: EntityId
     provider_id: DefinitionId
@@ -65,6 +78,12 @@ class ScenarioSupplyRoutingConstraint:
 
 
 @dataclass(frozen=True)
+class ScenarioPopulation:
+    operational_node_id: SpatialNodeId
+    count: int
+
+
+@dataclass(frozen=True)
 class ScenarioDefinition:
     """Content-owned new-game state definition.
 
@@ -81,12 +100,17 @@ class ScenarioDefinition:
     storage_infrastructure: tuple[ScenarioStorageInfrastructure, ...] = ()
     inventory_stock: tuple[ScenarioInventoryStock, ...] = ()
     fleet: tuple[ScenarioFleet, ...] = ()
+    survey_fleet_assignments: tuple[ScenarioProviderFleetAssignment, ...] = ()
+    research_fleet_assignments: tuple[ScenarioProviderFleetAssignment, ...] = ()
     known_surface_resources: tuple[tuple[SurfaceCellId, DefinitionId], ...] = ()
     completed_technologies: tuple[DefinitionId, ...] = ()
     funds_balance_musd: float = 0.0
     market_provider_ids: tuple[DefinitionId, ...] = ()
     market_interfaces: tuple[ScenarioMarketInterface, ...] = ()
     routing_constraints: tuple[ScenarioSupplyRoutingConstraint, ...] = ()
+    initial_population: tuple[ScenarioPopulation, ...] = ()
+    external_population_sources: tuple[ExternalPopulationSourceDefinition, ...] = ()
+    population_rules: PopulationRules = PopulationRules(0.25, 0.05, 2.0, 3.0)
 
     def apply(self, sim) -> None:
         sim.require_uninitialized_runtime_state()
@@ -103,13 +127,16 @@ class ScenarioDefinition:
 
         for row in self.storage_infrastructure:
             sim.storage.set_infrastructure_capacity(row.operational_node_id, row.storage_pool_key, row.amount_t)
+        initial_facility_ids = []
         for row in self.facilities:
-            sim.facilities.install(
+            facility_id = sim.facilities.install(
                 row.definition_id,
                 row.operational_node_id,
                 site_cell_id=row.site_cell_id,
                 invested_resources=dict(row.invested_resources),
+                level=row.level,
             )
+            initial_facility_ids.append(facility_id)
         sim.refresh_storage()
         for row in self.inventory_stock:
             sim.inventory.add(row.operational_node_id, row.resource_id, row.amount_t)
@@ -124,6 +151,36 @@ class ScenarioDefinition:
             for cell_id, resource_id in self.known_surface_resources:
                 sim.survey.initialize_known(cell_id, resource_id)
         sim.technology.replace(set(self.completed_technologies))
+        # Initial intent goes through the same capability and Technology
+        # eligibility used by later Application Commands; Scenario does not
+        # inject a special production or extraction operating state.
+        for facility_id, row in zip(initial_facility_ids, self.facilities, strict=True):
+            facility = sim.facilities.facilities[facility_id]
+            if row.selected_process_id is not None:
+                sim.industry.set_process(facility, row.selected_process_id)
+            if row.selected_extraction_method_id is not None:
+                if sim.extraction is None:
+                    raise ValueError("Scenario has extraction choices without Extraction Domain")
+                sim.extraction.set_method(facility, row.selected_extraction_method_id)
+        if self.survey_fleet_assignments and sim.survey is None:
+            raise ValueError("Scenario has Survey Fleet assignments without Survey Domain")
+        for row in self.survey_fleet_assignments:
+            sim.survey.set_provider_fleet_quantity(
+                row.provider_definition_id,
+                row.operational_node_id,
+                row.vehicle_definition_id,
+                row.units,
+                day=sim.day,
+            )
+
+        for row in self.research_fleet_assignments:
+            sim.research.set_provider_fleet_quantity(
+                row.provider_definition_id,
+                row.operational_node_id,
+                row.vehicle_definition_id,
+                row.units,
+                day=sim.day,
+            )
 
         sim.market.initialize_funds(self.funds_balance_musd)
         for provider_id in self.market_provider_ids:
@@ -144,4 +201,8 @@ class ScenarioDefinition:
                 required_via_node_ids=row.required_via_node_ids,
                 required_transport_allocation_ids=row.required_transport_allocation_ids,
             )
+        if sim.population is not None:
+            for row in self.initial_population:
+                sim.population.initialize(row.operational_node_id, row.count)
+            sim.population.initialize_external_sources()
         sim.mark_runtime_state_initialized()

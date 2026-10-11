@@ -20,10 +20,49 @@ from .models import (
 
 
 @dataclass(frozen=True)
+class SurfaceOperationEnvironment:
+    """Measured surface inputs; absent Field is unknown, not physical zero."""
+
+    gravity_m_s2: float | None
+    pressure_pa: float | None
+    maximum_temperature_k: float | None = None
+    characteristic_entry_energy_mj_per_kg: float | None = None
+
+
+def _surface_limits(
+    operation_type: str,
+    surface: SurfaceOperationEnvironment,
+    *,
+    max_gravity: float | None = None,
+    max_pressure: float | None = None,
+    max_temperature: float | None = None,
+) -> tuple[str, ...]:
+    failures: list[str] = []
+    if max_gravity is not None:
+        if surface.gravity_m_s2 is None:
+            failures.append(f"operation:{operation_type}:gravity_unknown")
+        elif surface.gravity_m_s2 > max_gravity + 1e-9:
+            failures.append(f"operation:{operation_type}:gravity:{surface.gravity_m_s2:g}/{max_gravity:g}")
+    if max_pressure is not None:
+        if surface.pressure_pa is None:
+            failures.append(f"operation:{operation_type}:pressure_unknown")
+        elif surface.pressure_pa > max_pressure + 1e-9:
+            failures.append(f"operation:{operation_type}:pressure:{surface.pressure_pa:g}/{max_pressure:g}")
+    if max_temperature is not None:
+        if surface.maximum_temperature_k is None:
+            failures.append(f"operation:{operation_type}:temperature_unknown")
+        elif surface.maximum_temperature_k > max_temperature + 1e-9:
+            failures.append(
+                f"operation:{operation_type}:temperature:{surface.maximum_temperature_k:g}/{max_temperature:g}"
+            )
+    return tuple(failures)
+
+
+@dataclass(frozen=True)
 class OperationEvaluationContext:
     transit_days: int
-    origin_surface: tuple[float, float] | None
-    destination_surface: tuple[float, float] | None
+    origin_surface: SurfaceOperationEnvironment | None
+    destination_surface: SurfaceOperationEnvironment | None
     surface_distance_km: float | None = None
 
 
@@ -78,11 +117,12 @@ def _powered_ascent(req, cap: PoweredAscentCapability, ctx: OperationEvaluationC
     if ctx.origin_surface is None:
         failures.append(f"operation:{req.operation_type}:origin_surface_required")
     else:
-        gravity, pressure = ctx.origin_surface
-        if gravity > cap.max_surface_gravity_m_s2 + 1e-9:
-            failures.append(f"operation:{req.operation_type}:gravity:{gravity:g}/{cap.max_surface_gravity_m_s2:g}")
-        if pressure > cap.max_surface_pressure_pa + 1e-9:
-            failures.append(f"operation:{req.operation_type}:pressure:{pressure:g}/{cap.max_surface_pressure_pa:g}")
+        failures.extend(_surface_limits(
+            req.operation_type, ctx.origin_surface,
+            max_gravity=cap.max_surface_gravity_m_s2,
+            max_pressure=cap.max_surface_pressure_pa,
+            max_temperature=cap.max_surface_temperature_k,
+        ))
     return tuple(failures)
 
 
@@ -100,21 +140,35 @@ def _landing(req, cap: LandingCapability, ctx: OperationEvaluationContext) -> tu
     if ctx.destination_surface is None:
         failures.append(f"operation:{req.operation_type}:destination_surface_required")
     else:
-        gravity, pressure = ctx.destination_surface
-        if gravity > cap.max_surface_gravity_m_s2 + 1e-9:
-            failures.append(f"operation:{req.operation_type}:gravity:{gravity:g}/{cap.max_surface_gravity_m_s2:g}")
-        if pressure > cap.max_surface_pressure_pa + 1e-9:
-            failures.append(f"operation:{req.operation_type}:pressure:{pressure:g}/{cap.max_surface_pressure_pa:g}")
+        failures.extend(_surface_limits(
+            req.operation_type, ctx.destination_surface,
+            max_gravity=cap.max_surface_gravity_m_s2,
+            max_pressure=cap.max_surface_pressure_pa,
+            max_temperature=cap.max_surface_temperature_k,
+        ))
     return tuple(failures)
 
 
 def _atmospheric_entry(req, cap: AtmosphericEntryCapability, ctx: OperationEvaluationContext) -> tuple[str, ...]:
     if ctx.destination_surface is None:
         return (f"operation:{req.operation_type}:destination_surface_required",)
-    _gravity, pressure = ctx.destination_surface
-    if pressure > cap.max_surface_pressure_pa + 1e-9:
-        return (f"operation:{req.operation_type}:pressure:{pressure:g}/{cap.max_surface_pressure_pa:g}",)
-    return ()
+    surface = ctx.destination_surface
+    failures = list(_surface_limits(
+        req.operation_type, surface,
+        max_pressure=cap.max_surface_pressure_pa,
+        max_temperature=cap.max_surface_temperature_k,
+    ))
+    # Reference circular-orbit energy per unit mass, not a dynamic aerothermal
+    # prediction. In vacuum no atmospheric energy must be dissipated.
+    if surface.pressure_pa is not None and surface.pressure_pa > 0:
+        energy = surface.characteristic_entry_energy_mj_per_kg
+        if energy is None:
+            failures.append(f"operation:{req.operation_type}:entry_energy_unknown")
+        elif energy > cap.max_entry_specific_energy_mj_per_kg + 1e-9:
+            failures.append(
+                f"operation:{req.operation_type}:entry_energy:{energy:g}/{cap.max_entry_specific_energy_mj_per_kg:g}"
+            )
+    return tuple(failures)
 
 
 def _surface_transport(req, cap: SurfaceTransportCapability, ctx: OperationEvaluationContext) -> tuple[str, ...]:

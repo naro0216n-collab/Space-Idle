@@ -83,25 +83,20 @@ def test_surface_topology_supports_variable_graphs_and_connected_single_owner_te
         graph.found_location(SpatialNodeId("location.two"), "Two", body_a, SurfaceCellId("a.2"))
 
 
-def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_nodes():
-    app = build_game_application()
-    sim = app._simulation
-    before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
-    view = app.query(GetSurfaceMap(str(ids.MOON)))
-
-    assert view.cells
-    assert not view.locations
-    assert any(not cell.developed for cell in view.cells)
-    assert all(cell.environment for cell in view.cells)
-    assert all(cell.display_name for cell in view.cells)
-    assert all(cell.id not in {str(value) for value in sim.graph.operational_node_ids()} for cell in sim.graph.surface_cells.values())
-    assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
-
-
-
 def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds():
     app = build_game_application()
     sim = app._simulation
+    # Surface cells are map geometry, never implicit Operational Nodes or stores.
+    before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
+    map_view = app.query(GetSurfaceMap(str(ids.MOON)))
+    assert map_view.cells
+    assert not map_view.locations
+    assert any(not cell.developed for cell in map_view.cells)
+    assert all(cell.environment and cell.display_name for cell in map_view.cells)
+    assert all(str(cell.id) not in {str(node) for node in sim.graph.operational_node_ids()}
+               for cell in map_view.cells)
+    assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
+
     dormant = SpatialNodeId("test.node.dormant")
     sim.graph.add(
         SpatialNodeDef(

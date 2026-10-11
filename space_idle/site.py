@@ -7,7 +7,8 @@ from typing import Protocol, TYPE_CHECKING
 if TYPE_CHECKING:
     from .facilities import FacilityBook
 from .shared import SpatialNodeId
-from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
+from .shared import DefinitionId
+from .spatial import AtmosphereField, EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
 
 
 
@@ -77,6 +78,41 @@ class FacetValueRange:
         if self.minimum is not None and value < self.minimum - 1e-12:
             return False
         if self.maximum is not None and value > self.maximum + 1e-12:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
+class AtmosphericPartialPressureRange:
+    """An environmental gas requirement, not a planet or Location exception.
+
+    Atmosphere composition contains mole fractions of environmental species,
+    while pressure is the total ambient pressure. Missing species have zero
+    partial pressure.
+    """
+
+    species_id: DefinitionId
+    code: str
+    description: str
+    minimum_pa: float | None = None
+    maximum_pa: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.minimum_pa is not None and self.minimum_pa < 0:
+            raise ValueError('minimum partial pressure cannot be negative')
+        if self.maximum_pa is not None and self.maximum_pa < 0:
+            raise ValueError('maximum partial pressure cannot be negative')
+        if self.minimum_pa is not None and self.maximum_pa is not None and self.minimum_pa > self.maximum_pa:
+            raise ValueError('invalid partial-pressure bounds')
+
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
+        atmosphere = environment.get(context_id, AtmosphereField, day)
+        if atmosphere is None:
+            return False
+        partial_pressure = atmosphere.pressure_pa * atmosphere.composition.get(self.species_id, 0.0)
+        if self.minimum_pa is not None and partial_pressure < self.minimum_pa:
+            return False
+        if self.maximum_pa is not None and partial_pressure > self.maximum_pa:
             return False
         return True
 

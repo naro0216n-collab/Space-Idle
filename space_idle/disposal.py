@@ -86,6 +86,7 @@ def settle_salvage_recovery(
     operational_node_id: SpatialNodeId,
     recovery_potential: Mapping[DefinitionId, float] | Iterable[tuple[DefinitionId, float]],
     recoverable_fraction: float,
+    *, source_owner: str | None = None, activity_id: str | None = None,
 ) -> tuple[tuple[DefinitionId, float], ...]:
     """Materialize only the fraction authorized by shared Allocation."""
     fraction = float(recoverable_fraction)
@@ -97,7 +98,10 @@ def settle_salvage_recovery(
         amount = potential * fraction
         if amount <= _EPS:
             continue
-        result = inventory.admit(operational_node_id, resource_id, amount)
+        result = inventory.admit(
+            operational_node_id, resource_id, amount,
+            source_owner=source_owner, activity_id=activity_id,
+        )
         if not result.fully_admitted:
             raise RuntimeError("allocated salvage admission changed before settlement")
         recovered.append((resource_id, result.admitted_t))

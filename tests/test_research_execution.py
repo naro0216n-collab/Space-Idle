@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from math import isclose
+from dataclasses import replace
 
 import pytest
 
@@ -20,7 +21,7 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.facilities import FacilityDef
+from space_idle.facilities import CapabilitySupply, FacilityDef
 from space_idle.knowledge import ExperienceContributionRule
 from space_idle.power import PowerSpec
 from space_idle.research import (
@@ -42,7 +43,7 @@ def _install_fleet_research_provider(sim, provider_id: DefinitionId) -> None:
     sim.research.providers[provider_id] = ResearchProviderSpec(
         provider_id,
         ResearchProviderSourceKind.FLEET,
-        ids.REUSABLE_ORBITAL_CARGO_TUG,
+        frozenset({"docking_interface"}),
         tier=2,
         levels=(ResearchProviderLevelSpec(1, 3.0, 20.0, 2.0),),
     )
@@ -61,6 +62,7 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
         row for row in app.query(GetResearch()).provider_fleet
         if row.provider_definition_id == str(provider_id)
         and row.operational_node_id == str(ids.LEO)
+        and row.vehicle_definition_id == str(ids.REUSABLE_ORBITAL_CARGO_TUG)
     )
     assert option.can_set_quantity
     assert option.committed_units == 0
@@ -71,21 +73,21 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
         app.execute(SetResearchProviderFleetQuantity(
             str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
         ))
-    assert sim.research.provider_assignments == {}
+    assert not any(row.provider_definition_id == provider_id for row in sim.research.provider_assignments.values())
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == initial_free
 
     assignment_id = app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     )).created_id
     assert assignment_id is not None
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     repeated_id = app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
     )).created_id
     assert repeated_id == assignment_id
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     app.execute(SetResearchProviderAssignmentPriority(assignment_id, 4))
-    assignment = sim.research.provider_assignments[next(iter(sim.research.provider_assignments))]
+    assignment = next(row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id)
     commitment = sim.transport.fleet_commitment_snapshot(assignment.fleet_commitment_ref)
     assert commitment is not None
     assert commitment.quantity == 1
@@ -114,7 +116,7 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 2
     )).created_id
     assert resized_id == assignment_id
-    assert len(sim.research.provider_assignments) == 1
+    assert len([row for row in sim.research.provider_assignments.values() if row.provider_definition_id == provider_id]) == 1
     resized = next(item for item in app.query(GetResearch()).providers if item.id == assignment_id)
     assert resized.committed_units == 2
     assert resized.priority == 5
@@ -123,30 +125,33 @@ def test_fleet_research_provider_assignment_owns_intent_while_fleet_owns_quantit
     app.execute(SetResearchProviderFleetQuantity(
         str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 0
     ))
-    assert sim.research.provider_assignments == {}
+    assert not any(row.provider_definition_id == provider_id for row in sim.research.provider_assignments.values())
     assert sim.transport.fleet_free_units(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO) == 2
 
 
 def _mixed_provider_admission_projection(provider_order: tuple[str, str]):
     app = build_game_application()
     sim = app._simulation
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {}
 
     facility_definition_id = DefinitionId("test.facility.rp_provider.mixed")
     facility_provider_id = DefinitionId("test.research_provider.facility.mixed")
     fleet_provider_id = DefinitionId("test.research_provider.fleet.mixed")
     sim.facilities.definitions[facility_definition_id] = FacilityDef(
-        facility_definition_id, "Mixed admission facility"
+        facility_definition_id, "Mixed admission facility",
+        capability_supplies=(CapabilitySupply("test_mixed_research_instrument"),),
     )
     providers = {
         "facility": ResearchProviderSpec(
             facility_provider_id, ResearchProviderSourceKind.FACILITY,
-            facility_definition_id, tier=1,
+            frozenset({"test_mixed_research_instrument"}), tier=1,
             levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
         ),
         "fleet": ResearchProviderSpec(
             fleet_provider_id, ResearchProviderSourceKind.FLEET,
-            ids.REUSABLE_ORBITAL_CARGO_TUG, tier=1,
+            frozenset({"docking_interface"}), tier=1,
             levels=(ResearchProviderLevelSpec(1, 4.0, 10.0, 0.0),),
         ),
     }
@@ -220,10 +225,13 @@ def test_research_point_pool_limits_generation_and_admits_providers_by_priority_
 def _set_earth_research_execution_capacity(sim, rate: float) -> None:
     fixture_id = DefinitionId("test.facility.research_execution_capacity")
     sim.facilities.definitions[fixture_id] = FacilityDef(
-        fixture_id, "Research execution capacity fixture"
+        fixture_id, "Research execution capacity fixture",
+        capability_supplies=(CapabilitySupply("test_execution_research_instrument"),),
     )
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {fixture_id: ResearchProviderSpec(
-        fixture_id, ResearchProviderSourceKind.FACILITY, fixture_id, tier=1,
+        fixture_id, ResearchProviderSourceKind.FACILITY, frozenset({"test_execution_research_instrument"}), tier=1,
         levels=(ResearchProviderLevelSpec(1, 0.0, 0.0, rate),),
     )}
     sim.facilities.install(fixture_id, ids.EARTH)
@@ -306,17 +314,23 @@ def test_organization_research_execution_aggregates_provider_sites_after_local_p
     sim = app._simulation
     earth_provider = DefinitionId("test.facility.research_execution.earth")
     leo_provider = DefinitionId("test.facility.research_execution.leo")
+    for assignment in tuple(sim.research.provider_assignments.values()):
+        sim.research.release_provider_assignment(assignment.id, day=sim.day)
     sim.research.providers = {}
     for definition_id in (earth_provider, leo_provider):
-        sim.facilities.definitions[definition_id] = FacilityDef(definition_id, str(definition_id))
+        sim.facilities.definitions[definition_id] = FacilityDef(
+            definition_id, str(definition_id),
+            capability_supplies=(CapabilitySupply(f"test_research:{definition_id}"),),
+        )
         sim.research.providers[definition_id] = ResearchProviderSpec(
-            definition_id, ResearchProviderSourceKind.FACILITY, definition_id, tier=1,
+            definition_id, ResearchProviderSourceKind.FACILITY, frozenset({f"test_research:{definition_id}"}), tier=1,
             levels=(ResearchProviderLevelSpec(1, 0.0, 0.0, 1.0),),
         )
     sim.power.specs[earth_provider] = PowerSpec(None, 0.1)
     sim.power.specs[leo_provider] = PowerSpec(None, 1.0)
     sim.facilities.install(earth_provider, ids.EARTH)
     sim.facilities.install(leo_provider, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_FISSION_POWER, ids.LEO)
 
     research_id = DefinitionId("test.research.organization_provider_power")
     sim.research.definitions[research_id] = ResearchDefinition(research_id, "Organization Provider Power", (ResearchTheoryStageSpec("theory", 10.0),), prerequisites=frozenset())
@@ -388,3 +402,64 @@ def test_operational_experience_is_driven_by_real_activity_not_research_time():
         ids.EXPERIENCE_EXTRACTION_OPERATIONS
     ) > extraction_before
     assert extraction_id in sim.research.completed
+
+
+def test_research_source_capabilities_enable_alternative_vehicle_without_duplicating_provider():
+    app = build_game_application()
+    sim = app._simulation
+    provider_id = ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER
+    baseline_vehicle_id = ids.ORBITAL_OBSERVATION_SPACECRAFT
+    alternative_id = DefinitionId("test.vehicle.alternative_optical_observatory")
+    original = sim.transport.vehicle_definition(baseline_vehicle_id)
+    assert original is not None
+    sim.transport.vehicle_defs[alternative_id] = replace(
+        original, id=alternative_id, display_name="Alternative orbital observatory"
+    )
+    sim.transport.fleet_pool(alternative_id, ids.LEO).total_units = 1
+    initial_original = sim.transport.fleet_free_units(baseline_vehicle_id, ids.LEO)
+    options = [
+        row for row in app.query(GetResearch()).provider_fleet
+        if row.provider_definition_id == str(provider_id)
+        and row.operational_node_id == str(ids.LEO)
+    ]
+    assert {row.vehicle_definition_id for row in options} == {
+        str(baseline_vehicle_id), str(alternative_id)
+    }
+    assert next(row for row in options if row.vehicle_definition_id == str(alternative_id)).free_units == 1
+
+    with pytest.raises(ApplicationError, match="required source capabilities"):
+        app.execute(SetResearchProviderFleetQuantity(
+            str(provider_id), str(ids.LEO), str(ids.REUSABLE_ORBITAL_CARGO_TUG), 1
+        ))
+    assert sim.transport.fleet_free_units(alternative_id, ids.LEO) == 1
+    assert sim.transport.fleet_free_units(baseline_vehicle_id, ids.LEO) == initial_original
+
+    assignment_id = app.execute(SetResearchProviderFleetQuantity(
+        str(provider_id), str(ids.LEO), str(alternative_id), 1
+    )).created_id
+    assert assignment_id is not None
+    assert sim.transport.fleet_free_units(alternative_id, ids.LEO) == 0
+    assert sim.transport.fleet_free_units(baseline_vehicle_id, ids.LEO) == initial_original
+    assert sim.research.provider_assignment_for(provider_id, ids.LEO, alternative_id) is not None
+    sim.research.release_provider_assignment(assignment_id, day=sim.day)
+    assert sim.transport.fleet_free_units(alternative_id, ids.LEO) == 1
+    assert sim.transport.fleet_free_units(baseline_vehicle_id, ids.LEO) == initial_original
+
+
+def test_research_source_capabilities_enable_alternative_facility_definition():
+    app = build_game_application()
+    sim = app._simulation
+    provider_id = ids.EARTH_RESEARCH_LAB
+    alternative_id = DefinitionId("test.facility.alternative_research_laboratory")
+    original = sim.facilities.definitions[ids.EARTH_RESEARCH_LAB]
+    sim.facilities.definitions[alternative_id] = replace(
+        original, id=alternative_id, display_name="Alternative research laboratory"
+    )
+    facility = sim.facilities.install(alternative_id, ids.EARTH)
+    provider = sim.research.facility_provider_spec(facility)
+    assert provider is not None and provider.id == provider_id
+    provider_row = next(
+        row for row in app.query(GetResearch()).providers if row.id == str(facility)
+    )
+    assert provider_row.provider_definition_id == str(provider_id)
+    assert provider_row.source_definition_id == str(alternative_id)

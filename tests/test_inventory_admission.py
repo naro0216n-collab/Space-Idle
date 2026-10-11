@@ -6,6 +6,7 @@ from space_idle import GetOperationalNode, build_game_application
 from space_idle.catalog import ResourceDef
 from space_idle.content import base_ids as ids
 from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
+from space_idle.execution_requirements import StockOrPoolAdmissionRequirement, admission_constraint
 from space_idle.shared import DefinitionId, SpatialNodeId
 
 
@@ -27,6 +28,11 @@ def test_inventory_admission_preserves_stock_and_enforces_resource_pool_compatib
 
     admitted = inventory.admit(node, a, 8.0)
     assert admitted.fully_admitted
+    assert inventory.amount(node, a) == pytest.approx(8.0)
+    # An arriving vessel's different Resources still occupy the same shared
+    # Storage pool; individual admission checks cannot authorize both.
+    assert inventory.can_admit_resources(node, {a: 1.0, b: 1.0})
+    assert not inventory.can_admit_resources(node, {a: 1.1, b: 1.1})
     assert inventory.amount(node, a) == pytest.approx(8.0)
 
     inventory.set_capacity_snapshot(
@@ -63,7 +69,7 @@ def test_execution_bundles_share_one_default_pool_admission_capacity():
     node = ids.EARTH
     pool = DEFAULT_STORAGE_POOL_KEY
     capacity = sim.inventory.usable_storage_capacity_t[(node, pool)]
-    sim.inventory.admit(node, ids.AGGREGATE, capacity - sim.inventory.stored_in_pool(node, pool) - 1.0)
+    sim.inventory.admit(node, ids.MINERAL_FEEDSTOCK, capacity - sim.inventory.stored_in_pool(node, pool) - 1.0)
 
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[node]
@@ -75,7 +81,20 @@ def test_execution_bundles_share_one_default_pool_admission_capacity():
         for row in rows
         if sim.inventory.storage_pool_for_resource(row.output_resource_id) == pool
     )
-    assert default_pool_output == pytest.approx(1.0)
+    # The default storage pool is shared with Industry (including Food), so
+    # Extraction alone is not entitled to the entire vacant tonne.
+    constraint = admission_constraint(node, pool)
+    allocation = decision.allocations.execution
+    summed_admission = sum(
+        row.allocated_execution * requirement.amount_per_execution
+        for row in allocation.allocations
+        for requirement in allocation.bundle(row.bundle_id).requirements
+        if isinstance(requirement, StockOrPoolAdmissionRequirement)
+        and requirement.constraint_key(allocation.bundle(row.bundle_id).operational_node_id) == constraint
+    )
+    assert 0 < default_pool_output <= 1.0
+    assert summed_admission == pytest.approx(allocation.used_by_constraint[constraint])
+    assert summed_admission == pytest.approx(1.0)
     state = sim.inventory.admission_state_for_pool(node, pool)
     assert state.admission_capacity_t == pytest.approx(1.0)
 
@@ -84,7 +103,7 @@ def test_application_exposes_pool_capacity_and_actual_limiting_factor():
     app = build_game_application()
     sim = app._simulation
     node = ids.EARTH
-    resource = ids.AGGREGATE
+    resource = ids.MINERAL_FEEDSTOCK
     pool = sim.inventory.storage_pool_for_resource(resource)
     current_physical = dict(sim.inventory.physical_storage_capacity_t)
     current_usable = dict(sim.inventory.usable_storage_capacity_t)

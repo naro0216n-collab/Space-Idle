@@ -9,13 +9,9 @@
   const kv=(rows)=>`<dl class="kv-grid">${rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
   const setInspector=(title,html)=>{$('#inspectorTitle').textContent=title;$('#inspectorContent').innerHTML=html;A.restoreActiveDraftValues?.();};
   const resourceCards=(resources)=>(resources||[]).map((r)=>{
-    const available=Number(r.available_t||0),required=Number(r.required_t||0),shortage=Math.max(0,required-available);
-    const sourcing=shortage<=1e-9
-      ? '<span class="badge ok">現地準備済み</span>'
-      : r.projected_arrival_day!=null
-        ? `<span class="cell-sub">不足 ${fmt(shortage,2)} t · ${esc(locationName(r.projected_source_id))} から Day ${fmt(r.projected_arrival_day,0)} 見込み</span>`
-        : `<span class="cell-sub">不足 ${fmt(shortage,2)} t · 供給見込み未確定</span>`;
-    return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(required)} t</span></div><div class="cell-sub">現地利用可能 ${fmt(available,2)} t</div>${sourcing}</div>`;
+    const arrival=r.projected_arrival_day==null?'未確定':`Day ${fmt(r.projected_arrival_day,0)}`;
+    const origin=r.projected_source_id?locationName(r.projected_source_id):'未確定';
+    return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">現地利用可能 ${fmt(r.available_t,2)} t · 未充足 ${fmt(r.shortage_t,2)} t</div><div class="cell-sub">候補供給元 ${esc(origin)} · 最短到着見込 ${esc(arrival)}</div></div>`;
   }).join('')||'<div class="empty-state">追加資源なし</div>';
   const procurementPolicyLabels={immediate:'即時外部調達',standard_wait:'標準待機後に外部調達',extended_wait:'現地在庫を長く待つ'};
   const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
@@ -28,6 +24,43 @@
   const environmentFacetLabels={gravity:'重力',atmosphere:'大気',thermal:'温度',illumination:'日照',radiation:'放射線'};
   const environmentFacetName=(key)=>environmentFacetLabels[key]||A.userFacingText(key);
   const surveyLayerNames={environment:'環境',knowledge:'調査知識',potential:'資源ポテンシャル',territory:'拠点領域',movement:'移動到達性'};
+  // Shared Surface/Survey schematic: every physical cell gets its own hit target.
+  // The true latitude/longitude are retained in the Application Inspector.
+  function surfaceDecisionLayout(cells){
+    const count=cells.length;
+    const columns=Math.max(1,Math.ceil(Math.sqrt(count*1.2)));
+    const rows=Math.ceil(count/columns);
+    const coordinate=(value)=>Number.isFinite(Number(value))?Number(value):0;
+    // Latitude bands preserve north/south order and longitude orders each band.
+    // Sorting by physical values + stable ID avoids input registration dependence.
+    const ordered=[...cells].sort((a,b)=>
+      coordinate(b.latitude_deg)-coordinate(a.latitude_deg)
+      ||coordinate(a.longitude_deg)-coordinate(b.longitude_deg)
+      ||String(a.id).localeCompare(String(b.id)));
+    const positions={};
+    for(let row=0;row<rows;row++){
+      const band=ordered.slice(row*columns,(row+1)*columns).sort((a,b)=>
+        coordinate(a.longitude_deg)-coordinate(b.longitude_deg)
+        ||coordinate(b.latitude_deg)-coordinate(a.latitude_deg)
+        ||String(a.id).localeCompare(String(b.id)));
+      for(let col=0;col<band.length;col++){
+        const centeredCol=col+(columns-band.length)/2;
+        positions[band[col].id]={x:(centeredCol+0.5)*100/columns,y:(row+0.5)*100/rows};
+      }
+    }
+    return {positions,width:columns*178,height:Math.max(420,rows*112)};
+  }
+  function surfaceAdjacencyLines(cells,positions){
+    const lines=[],seen=new Set();
+    for(const cell of cells)for(const neighbor of cell.neighbor_ids||[]){
+      if(!positions[neighbor])continue;
+      const key=[cell.id,neighbor].sort().join('::');
+      if(seen.has(key))continue;
+      seen.add(key);
+      lines.push(`<line x1="${positions[cell.id].x*10}" y1="${positions[cell.id].y*10}" x2="${positions[neighbor].x*10}" y2="${positions[neighbor].y*10}"></line>`);
+    }
+    return lines.join('');
+  }
   function surveyLayerSummary(cell,knowledgeRows){
     const levels=(knowledgeRows||[]).map((row)=>Number(row.knowledge_level||0));
     const measured=(knowledgeRows||[]).filter((row)=>row.visible_potential!=null&&Number(row.visible_potential_precision_fraction||0)<=0).length;
@@ -44,11 +77,13 @@
   let detailedForecastLoading=false;
   let detailedForecastHorizon='SHORT_TERM';
   let surveyMapLayer='knowledge';
+  const surfaceMapScrollByContext=new Map();
   const comparisonPins=new Map();
   function comparisonPinnedKeys(scopeKey,candidates){
     const valid=new Set((candidates||[]).map((row)=>row.comparison_key));
     const pins=(comparisonPins.get(scopeKey)||[]).filter((key)=>valid.has(key)).slice(0,4);
     comparisonPins.set(scopeKey,pins);
+    if(scopeKey.startsWith('founding:'))state.foundingPinnedCellIds=[...new Set(pins.map((item)=>item.split('|')[0]))];
     return pins;
   }
   function toggleComparisonPin(scopeKey,candidates,key){
@@ -165,7 +200,7 @@
       promptText:'実行地点から2〜4候補を比較に追加すると、Fleet拘束・Resource・Service供給・所要時間を共通の比較軸で確認できます。',
       headingHtml:(row)=>`<strong>${esc(researchSiteLabel(row))}</strong><small>${row.can_select?'選択可能':'条件未達'}</small>`,
       detailButtonHtml:()=>'',
-      blockerHtml:(row)=>(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>',
+      blockerHtml:(row)=>`${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">選択条件を満たす</span>'}${researchSiteResourceHtml(row)}`,
     });
   }
   const surveyIntentPreviewSerial=new Map();
@@ -335,22 +370,37 @@
       const blockers=facility.operating_blockers||facility.activation_blockers||[];
       const main=blockers.length?blockerText(blockers[0]):facility.paused?'手動停止':'稼働率低下';
       return `<button type="button" class="overview-facility" data-inspect="facility" data-id="${esc(facility.id)}"><span class="overview-project-heading"><strong>${esc(facility.display_name)}</strong><span class="badge warn">${facility.paused?'停止':pct(facility.operational_utilization)}</span></span><span class="cell-sub">${esc(main)}</span></button>`;
-    }).join('')||'<div class="empty-state compact-empty">要確認の設備はありません。</div>';
+    }).join('')||'<div class="empty-state compact-empty">設備の停止・制約なし</div>';
 
     const currentAnalytics=state.dependencyAnalyticsCurrent;
-    const criticalIds=new Set(currentAnalytics?.critical_dependency_resource_ids||[]);
-    const dependencyRows=(currentAnalytics?.current_resources||[]).filter((row)=>criticalIds.has(row.id)).map((row)=>`<button type="button" class="overview-dependency" data-inspect="dependency-resource" data-id="${esc(row.id)}"><strong>${esc(row.display_name)}</strong><span>外部依存 ${fmt(row.external_dependency_per_day,2)} /日</span><span>未充足 ${fmt(row.unmet_demand_t,2)} t</span></button>`).join('')||'<div class="empty-state compact-empty">重大な外部依存はありません。</div>';
+    const dependencyRows=(currentAnalytics?.current_resources||[]).filter((row)=>row.local_production_gap_per_day>1e-9||row.unmet_demand_t>1e-9).map((row)=>`<button type="button" class="overview-dependency" data-inspect="dependency-resource" data-id="${esc(row.id)}"><strong>${esc(row.display_name)}</strong><span>現地生産差 ${fmt(row.local_production_gap_per_day,2)} /日</span><span>未発送 ${fmt(row.unmet_demand_t,2)} t</span></button>`).join('')||'<div class="empty-state compact-empty">現地生産差・未発送ともに0</div>';
+
+    const pop=loc.population;
+    const populationCard=pop?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">人口</span><h3>居住・生命維持</h3></div><span class="badge ${pop.life_support_allocated+1e-9<pop.life_support_required?'warn':'ok'}">${fmt(pop.current_count,0)} 人</span></div>
+      <div class="capacity-quad"><div><span>現在人数</span><strong>${fmt(pop.current_count,0)} 人</strong></div><div><span>人口目標</span><strong>${pop.desired_count==null?'未設定':`${fmt(pop.desired_count,0)} 人`}</strong></div><div><span>利用可能居住枠</span><strong>${fmt(pop.housing_usable,0)} / ${fmt(pop.housing_physical,0)} 人</strong></div><div><span>活動拘束</span><strong>${fmt(pop.committed_count,0)} 人</strong></div></div>
+      <div class="cell-sub">確定Inbound ${fmt(pop.inbound_count,0)} 人 · Transit Outbound ${fmt(pop.outbound_count,0)} 人 · 確定到着後 ${fmt(pop.expected_count_after_confirmed_arrivals,0)} 人（未発送候補を除く）</div>
+      <div class="overview-capacity"><div class="overview-capacity-heading"><strong>Life Support（person-day/日）</strong><span>割当見込 ${fmt(pop.life_support_allocated,2)} / 需要 ${fmt(pop.life_support_required,2)}</span></div><div class="cell-sub">Crew供給可能 ${fmt(pop.crew_capacity,2)} / 使用 ${fmt(pop.crew_service_used_per_day,2)} 人日/日 · 累積不足 ${fmt(pop.deprivation_person_days,2)} 人日</div></div>
+      <div class="cell-sub">生活資源（消費/日・現在在庫・輸送中・確定Inboundによる追加需要/日）</div>
+      ${(pop.living_resource_flows||[]).map(([resource,need,onhand,inbound,future])=>`<div class="cell-sub">${esc(resourceName(resource))}: ${fmt(need,3)} / ${fmt(onhand,3)} / ${fmt(inbound,3)} / +${fmt(future,3)} t</div>`).join('')||'<div class="cell-sub">生活資源需要なし</div>'}
+      ${(pop.external_sources||[]).map((source)=>`<div class="cell-sub">外部人員供給元 ${esc(source.id)}: 残 ${fmt(source.remaining_people,0)} 人 · 日次上限 ${fmt(source.max_acquisition_per_day,0)} 人 · 本日取得可能 ${fmt(source.available_today,0)} 人${(source.missing_technologies||[]).length?` · 必要研究 ${source.missing_technologies.map(esc).join('、')}`:''}</div>`).join('')}
+      ${pop.desired_count==null?'':`<div class="cell-sub">人口目標未達 ${fmt(pop.target_unmet_count,0)} 人 · 現地直接受入可能 ${fmt(pop.target_local_receivable,0)} 人</div>
+        ${(pop.target_transport_candidates||[]).map(([origin,count,possible,provider,days,mass,blockers])=>`<div class="cell-sub">移住候補: ${esc(locationName(origin))}${provider?`（${esc(provider)}）`:'（余剰Player人口）'} · 需要 ${fmt(count,0)} 人 / 現時点の便能力 ${fmt(possible,0)} 人 · ${fmt(days,0)} 日 · ${fmt(mass,3)} t${(blockers||[]).length?` · 制約 ${blockers.map(esc).join('、')}`:''}</div>`).join('')}
+        ${(pop.target_blockers||[]).length?`<div class="issue-stack compact-issues">${pop.target_blockers.map((code)=>`<div class="issue"><div class="issue-title">${esc(({transport_required:'輸送経路が必要',external_supply_limit:'外部人員の取得上限／残員不足',housing_full:'利用可能な居住枠が不足',life_support_or_resource_limit:'生命維持能力または生活資源が不足'})[code]||code)}</div></div>`).join('')}</div>`:''}` }
+      <div class="form-row"><label>維持したい人口目標<input type="number" min="0" step="1" value="${pop.desired_count??pop.current_count}" data-population-target-input data-draft-key="population:${esc(loc.id)}:target" data-structured-draft data-draft-scope="population:${esc(loc.id)}"></label><button type="button" data-set-population-target>目標を設定</button><button type="button" data-clear-population-target ${pop.desired_count==null?'disabled':''}>設定解除</button></div>
+      <div class="cell-sub">人口目標は希望数の指定です。設定・解除だけでは人口の増減や強制転出は行いません。</div>
+      <div id="passengerLocationMount" class="passenger-controls" data-passenger-origin="${esc(loc.id)}"></div></section>`:'';
 
     const infra=loc.surface_infrastructure;
     const infraCard=infra?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">地表</span><h3>地表インフラ</h3></div><span class="badge ${infra.fulfillment<0.999999?'warn':'ok'}">${pct(infra.fulfillment)}</span></div><div class="capacity-quad"><div><span>基準能力</span><strong>${fmt(infra.nominal_capacity,2)}</strong></div><div><span>利用可能</span><strong>${fmt(infra.available_capacity,2)}</strong></div><div><span>需要</span><strong>${fmt(infra.requested_capacity,2)}</strong></div><div><span>余力</span><strong>${fmt(infra.spare_capacity,2)}</strong></div></div>${(infra.limiting_factors||[]).length?`<div class="issue-stack compact-issues">${infra.limiting_factors.map((factor)=>`<div class="issue"><div class="issue-title">${esc(blockerText(factor))}</div></div>`).join('')}</div>`:''}</section>`:'';
 
     return `<div class="location-overview-board">
-      <section class="decision-card attention-decision-card"><div class="decision-card-heading"><div><span class="eyebrow">判断</span><h3>現在の判断</h3></div><span class="badge ${issues.length?'warn':'ok'}">${issues.length} 件</span></div><div class="issue-stack overview-issues">${issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state compact-empty">現在、この拠点で判断を必要とする制約はありません。</div>'}</div></section>
+      <section class="decision-card attention-decision-card"><div class="decision-card-heading"><div><span class="eyebrow">判断</span><h3>現在の制約</h3></div><span class="badge ${issues.length?'warn':'ok'}">${issues.length} 件</span></div><div class="issue-stack overview-issues">${issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state compact-empty">現在の制約なし</div>'}</div></section>
       <section class="decision-card resource-decision-card"><div class="decision-card-heading"><div><span class="eyebrow">資源</span><h3>在庫とフロー</h3></div><button type="button" class="small-action" data-tab="inventory">詳細</button></div><div class="overview-resource-grid">${resourceSummary}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">サービス</span><h3>サービス能力</h3></div></div><div class="overview-capacity-list">${services}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">案件</span><h3>進行中案件</h3></div><button type="button" class="small-action" data-tab="construction">建設へ</button></div><div class="overview-project-list">${projectRows}</div></section>
-      <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">設備</span><h3>要確認の設備</h3></div><button type="button" class="small-action" data-tab="facilities">設備へ</button></div><div class="overview-project-list">${facilityRows}</div></section>
-      <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">依存</span><h3>外部依存</h3></div><button type="button" class="small-action" data-tab="inventory">分析</button></div><div class="overview-dependency-list">${dependencyRows}</div></section>
+      <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">設備</span><h3>停止・制約のある設備</h3></div><button type="button" class="small-action" data-tab="facilities">設備へ</button></div><div class="overview-project-list">${facilityRows}</div></section>
+      <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">依存</span><h3>生産差・未充足</h3></div><button type="button" class="small-action" data-tab="inventory">分析</button></div><div class="overview-dependency-list">${dependencyRows}</div></section>
+      ${populationCard}
       ${infraCard}
     </div>`;
   }
@@ -361,7 +411,7 @@
     const blockerText=(row)=>A.constraintSummary(row);
     const cards=(state.operationalNode?.facilities||[]).map((facility)=>{
       const industry=industryByFacility[facility.id],extraction=extractionByFacility[facility.id];
-      const primary=industry?.process_display_name||(extraction?`${resourceName(extraction.resource_id)}採掘`:(facility.capabilities||[]).map(capabilityName)[0])||'生産工程';
+      const primary=industry?.process_display_name||(extraction?`${extraction.method_id?resourceName(extraction.resource_id):(extraction.method_options?.length?'方式未選択':'方式未登録')} 採掘`:(facility.capabilities||[]).map(capabilityName)[0])||'生産工程';
       const blockers=facility.operating_blockers||facility.activation_blockers||[];
       const mainBlocker=blockers.length?blockerText(blockers[0]):'';
       const utilization=Math.max(0,Math.min(1,Number(facility.operational_utilization||0)));
@@ -374,14 +424,17 @@
   function detailedForecastHtml(){
     const currentNode=state.operationalNodeId;
     const forecast=detailedForecast&&(detailedForecast.node_ids||[]).includes(currentNode)?detailedForecast:null;
-    const horizonButtons=[['SHORT_TERM','短期'],['MEDIUM_TERM','中期'],['STEADY_STATE','長期均衡']].map(([value,label])=>`<button type="button" data-detailed-forecast-horizon="${value}" class="${detailedForecastHorizon===value?'is-active':''}" aria-pressed="${detailedForecastHorizon===value?'true':'false'}">${label}</button>`).join('');
+    const horizonButtons=[['SHORT_TERM','短期'],['MEDIUM_TERM','中期'],['LONG_TERM','365日']].map(([value,label])=>`<button type="button" data-detailed-forecast-horizon="${value}" class="${detailedForecastHorizon===value?'is-active':''}" aria-pressed="${detailedForecastHorizon===value?'true':'false'}">${label}</button>`).join('');
     const controls=`<div class="detailed-forecast-controls"><div class="segmented-control" role="group" aria-label="詳細予測の期間">${horizonButtons}</div><button type="button" class="primary" data-run-detailed-forecast ${detailedForecastLoading?'disabled':''}>${detailedForecastLoading?'予測中':'詳細予測を実行'}</button></div>`;
     if(!forecast)return `${controls}<div class="empty-state">広域予測は明示実行時だけ計算します。将来在庫、波及影響、複数区間の物流影響を短時間の操作プレビューから分離して確認できます。</div>`;
-    const steadyLabels={stable:'収束/均衡',accumulating:'蓄積傾向',depleting:'枯渇傾向'};
-    const inventory=(forecast.inventory||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(row.display_name||resourceName(row.resource_id))}</span><span class="badge">${esc(steadyLabels[row.steady_state]||A.userFacingText(row.steady_state))}</span></div><div class="dependency-metrics"><span><small>現在</small><strong>${fmt(row.current_amount,2)} ${esc(row.unit)}</strong></span><span><small>予測</small><strong>${fmt(row.projected_amount,2)} ${esc(row.unit)}</strong></span><span><small>変化</small><strong>${signed(row.delta_amount)} ${esc(row.unit)}</strong></span><span><small>生産</small><strong>${fmt(row.projected_production_per_day,2)}/日</strong></span><span><small>消費</small><strong>${fmt(row.projected_consumption_per_day,2)}/日</strong></span><span><small>外部依存</small><strong>${fmt(row.projected_external_dependency_per_day,2)}/日</strong></span></div></div>`).join('')||'<div class="empty-state">この予測期間で変化する在庫はありません。</div>';
+    const inventory=(forecast.inventory||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(row.display_name||resourceName(row.resource_id))}</span><span class="badge">Day ${fmt(forecast.projected_day,0)}</span></div><div class="dependency-metrics"><span><small>現在</small><strong>${fmt(row.current_amount,2)} ${esc(row.unit)}</strong></span><span><small>予測</small><strong>${fmt(row.projected_amount,2)} ${esc(row.unit)}</strong></span><span><small>変化</small><strong>${signed(row.delta_amount)} ${esc(row.unit)}</strong></span><span><small>生産</small><strong>${fmt(row.projected_production_per_day,2)}/日</strong></span><span><small>消費</small><strong>${fmt(row.projected_consumption_per_day,2)}/日</strong></span><span><small>現地生産差</small><strong>${fmt(row.projected_local_production_gap_per_day,2)}/日</strong></span><span><small>当日純変化</small><strong>${signed(row.projected_net_per_day)}/日</strong></span></div></div>`).join('')||'<div class="empty-state">この予測期間で変化する在庫はありません。</div>';
+    const ranges=(forecast.inventory_ranges||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(locationName(row.operational_node_id))} · ${esc(row.display_name||resourceName(row.resource_id))}</span><span class="badge">Day ${fmt(row.minimum_available_day,0)}</span></div><div class="dependency-metrics"><span><small>初日利用可能</small><strong>${fmt(row.base_available_amount,2)} ${esc(row.unit)}</strong></span><span><small>期間内最小</small><strong>${fmt(row.minimum_available_amount,2)} ${esc(row.unit)}</strong></span><span><small>末日利用可能</small><strong>${fmt(row.projected_available_amount,2)} ${esc(row.unit)}</strong></span><span><small>正→0 の初日</small><strong>${row.first_depleted_day==null?'—':`Day ${fmt(row.first_depleted_day,0)}`}</strong></span></div></div>`).join('')||'<div class="empty-state">期間内に記録された在庫はありません。</div>';
+    const gaps=(forecast.supply_gaps||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(locationName(row.operational_node_id))} · ${esc(resourceName(row.resource_id))}</span><span class="badge">${row.kind==='execution_allocation'?'実行配分':'物流未発送'}</span></div><div class="dependency-metrics"><span><small>初回発生日</small><strong>Day ${fmt(row.first_unmet_day,0)}</strong></span><span><small>初回未達量</small><strong>${fmt(row.first_unmet_t,2)} t</strong></span><span><small>最大未達日</small><strong>Day ${fmt(row.peak_unmet_day,0)}</strong></span><span><small>最大未達量</small><strong>${fmt(row.peak_unmet_t,2)} t</strong></span></div></div>`).join('')||'<div class="empty-state">予測期間内の実行配分未達・物流未発送はありません。</div>';
+    const waiting=(forecast.arrival_waiting||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(locationName(row.operational_node_id))} · ${esc(resourceName(row.resource_id))}</span><span class="badge">${row.operational_node_id===row.final_destination_id?'目的地入庫待機':'中継待機'}</span></div><div class="dependency-metrics"><span><small>初回待機日</small><strong>Day ${fmt(row.first_waiting_day,0)}</strong></span><span><small>最大待機日</small><strong>Day ${fmt(row.peak_waiting_day,0)}</strong></span><span><small>最大待機量</small><strong>${fmt(row.peak_waiting_t,2)} t</strong></span><span><small>末日待機量</small><strong>${fmt(row.projected_waiting_t,2)} t</strong></span></div><div class="cell-sub">最終目的地 ${esc(locationName(row.final_destination_id))}</div></div>`).join('')||'<div class="empty-state">予測期間内の到着待機はありません。</div>';
     const impacts=(forecast.downstream_impacts||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(row.display_name)}</span><span class="badge">${esc(A.userFacingText(row.kind))}</span></div><div class="cell-sub">${esc(A.userFacingText(row.current_state))} → ${esc(A.userFacingText(row.projected_state))}</div></div>`).join('')||'<div class="empty-state">この予測期間で主要な案件・研究状態遷移はありません。</div>';
     const logistics=(forecast.logistics_impacts||[]).map((row)=>`<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(row.resource_id))} → ${esc(locationName(row.destination_id))}</span><span class="badge ${row.remaining_t>1e-9?'warn':'ok'}">中継 ${fmt(row.handoff_count,0)} 回</span></div><div class="cell-sub">供給元 ${esc(row.source_id?locationName(row.source_id):'未確定')} · ${esc((row.service_ids||[]).map(serviceName).join(' → ')||'経路未確定')}</div><div class="cell-sub">予測到着 ${row.projected_arrival_day==null?'未確定':`Day ${fmt(row.projected_arrival_day,0)}`} · 輸送中 ${fmt(row.pipeline_t,2)} t · 残 ${fmt(row.remaining_t,2)} t</div></div>`).join('')||'<div class="empty-state">この予測期間で広域物流への影響はありません。</div>';
-    return `${controls}<div class="cell-sub">基準 Day ${fmt(forecast.base_day,0)} → Day ${fmt(forecast.projected_day,0)} · 予測期間 ${fmt(forecast.period_days,0)}日</div><h3>将来在庫 / 長期傾向</h3><div class="dependency-card-grid">${inventory}</div><h3>波及影響</h3><div class="dependency-card-grid">${impacts}</div><h3>広域物流への影響</h3><div class="dependency-card-grid">${logistics}</div>`;
+    const forecastSection=(kind,title,cards)=>`<section class="forecast-result-group" data-forecast-result="${kind}"><h3>${esc(title)}</h3><div class="dependency-card-grid">${cards}</div></section>`;
+    return `${controls}<div class="cell-sub" data-forecast-period>基準 Day ${fmt(forecast.base_day,0)} → Day ${fmt(forecast.projected_day,0)} · 予測期間 ${fmt(forecast.period_days,0)}日</div>${forecastSection('inventory','予測時点の在庫・フロー',inventory)}${forecastSection('inventory-range','拠点別・期間内の利用可能在庫',ranges)}${forecastSection('allocation-gap','要求・割当の未達履歴',gaps)}${forecastSection('arrival-waiting','入庫・中継待機の履歴',waiting)}${forecastSection('downstream','波及影響',impacts)}${forecastSection('logistics','広域物流への影響',logistics)}`;
   }
 
   function renderInventoryTab(){
@@ -394,7 +447,7 @@
         const warnings=[];
         if(Number(r.over_capacity||0)>1e-9)warnings.push(`超過 ${fmt(r.over_capacity,2)} t`);
         if(Number(f.arrival_waiting_t||0)>1e-9)warnings.push(`到着待ち ${fmt(f.arrival_waiting_t,2)} t`);
-        return `<button type="button" class="resource-flow-card ${selected?'is-selected':''}" data-inspect="resource" data-id="${esc(r.resource_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>予約 ${fmt(r.reserved,2)} t</small></span>${warnings.length?`<span class="badge warn">要確認</span>`:'<span class="badge ok">通常</span>'}</span><span class="resource-stock-line"><span><small>在庫</small><strong>${fmt(r.amount,2)} t</strong></span><span><small>利用可能</small><strong>${fmt(r.available,2)} t</strong></span><span><small>空容量</small><strong>${fmt(r.admission_capacity,2)} t</strong></span></span><span class="resource-flow-line"><span>生産 <strong>${fmt(f.local_production_per_day,2)}</strong> /日</span><span>消費 <strong>${fmt(f.local_consumption_per_day,2)}</strong> /日</span><span>純変化 <strong>${signed(f.local_net_per_day)}</strong> /日</span></span><span class="decision-card-footer ${warnings.length?'has-warning':''}">${warnings.length?esc(warnings.join(' · ')):`入荷中 ${fmt(f.inbound_in_transit_t,2)} t · 出荷中 ${fmt(f.outbound_in_transit_t,2)} t`}</span></button>`;
+        return `<button type="button" class="resource-flow-card ${selected?'is-selected':''}" data-inspect="resource" data-id="${esc(r.resource_id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>予約 ${fmt(r.reserved,2)} t</small></span>${warnings.length?`<span class="badge warn">制約 ${warnings.length}</span>`:'<span class="badge">在庫</span>'}</span><span class="resource-stock-line"><span><small>在庫</small><strong>${fmt(r.amount,2)} t</strong></span><span><small>利用可能</small><strong>${fmt(r.available,2)} t</strong></span><span><small>空容量</small><strong>${fmt(r.admission_capacity,2)} t</strong></span></span><span class="resource-flow-line"><span>生産 <strong>${fmt(f.local_production_per_day,2)}</strong> /日</span><span>消費 <strong>${fmt(f.local_consumption_per_day,2)}</strong> /日</span><span>純変化 <strong>${signed(f.local_net_per_day)}</strong> /日</span></span><span class="decision-card-footer ${warnings.length?'has-warning':''}">${warnings.length?esc(warnings.join(' · ')):`入荷中 ${fmt(f.inbound_in_transit_t,2)} t · 出荷中 ${fmt(f.outbound_in_transit_t,2)} t`}</span></button>`;
       }).join('');
 
     const allocations=state.operationalNode?.resource_allocations||[];
@@ -402,44 +455,36 @@
 
     const currentAnalytics=state.dependencyAnalyticsCurrent;
     const forecastAnalytics=state.dependencyAnalyticsForecast;
-    const currentCritical=new Set(currentAnalytics?.critical_dependency_resource_ids||[]);
-    const forecastCritical=new Set(forecastAnalytics?.critical_dependency_resource_ids||[]);
-    const currentCriticalServices=new Set(currentAnalytics?.critical_dependency_service_types||[]);
-    const forecastCriticalServices=new Set(forecastAnalytics?.critical_dependency_service_types||[]);
     const dependencyCards=(dependencyView==='current'?(currentAnalytics?.current_resources||[]):(forecastAnalytics?.forecast_resources||[])).map((r)=>{
       const isCurrent=dependencyView==='current';
-      const critical=(isCurrent?currentCritical:forecastCritical).has(r.id);
       const sources=(r.dependency_source_node_ids||[]).map(locationName).join(' / ')||'依存元なし';
       const limits=(r.limiting_factors||[]).map(A.constraintSummary);
       const metrics=isCurrent
-        ? `<span><small>生産</small><strong>${fmt(r.production_per_day,2)} /日</strong></span><span><small>消費</small><strong>${fmt(r.consumption_per_day,2)} /日</strong></span><span><small>外部依存</small><strong>${fmt(r.external_dependency_per_day,2)} /日</strong></span><span><small>流入中</small><strong>${fmt(r.imports_pipeline_t,2)} t</strong></span><span><small>未充足</small><strong>${fmt(r.unmet_demand_t,2)} t</strong></span>`
-        : `<span><small>計画需要</small><strong>${fmt(r.planned_requirement_t,2)} t</strong></span><span><small>継続消費</small><strong>${fmt(r.recurring_consumption_per_day,2)} /日</strong></span><span><small>外部必要量</small><strong>${fmt(r.external_requirement_t,2)} t</strong></span><span><small>外部依存</small><strong>${fmt(r.external_recurring_dependency_per_day,2)} /日</strong></span><span><small>追加備蓄</small><strong>${fmt(r.target_stock_t,2)} t</strong></span>`;
+        ? `<span><small>生産</small><strong>${fmt(r.production_per_day,2)} /日</strong></span><span><small>消費</small><strong>${fmt(r.consumption_per_day,2)} /日</strong></span><span><small>現地生産差</small><strong>${fmt(r.local_production_gap_per_day,2)} /日</strong></span><span><small>流入中</small><strong>${fmt(r.imports_pipeline_t,2)} t</strong></span><span><small>範囲内発送</small><strong>${fmt(r.internal_dispatch_per_day,2)} /日</strong></span><span><small>範囲内輸送中</small><strong>${fmt(r.internal_pipeline_t,2)} t</strong></span><span><small>未発送</small><strong>${fmt(r.unmet_demand_t,2)} t</strong></span>`
+        : `<span><small>計画需要</small><strong>${fmt(r.planned_requirement_t,2)} t</strong></span><span><small>継続消費</small><strong>${fmt(r.recurring_consumption_per_day,2)} /日</strong></span><span><small>現地在庫外需要</small><strong>${fmt(r.offsite_requirement_t,2)} t</strong></span><span><small>現地生産差</small><strong>${fmt(r.recurring_local_production_gap_per_day,2)} /日</strong></span><span><small>追加備蓄</small><strong>${fmt(r.target_stock_t,2)} t</strong></span>`;
       const timing=!isCurrent&&r.earliest_requirement_day!=null?`最早必要 Day ${fmt(r.earliest_requirement_day,0)}`:'';
-      return `<button type="button" class="dependency-card ${critical?'has-warning':''}" data-inspect="dependency-resource" data-id="${esc(r.id)}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>${esc(sources)}</small></span><span class="badge ${critical?'warn':'ok'}">${critical?'要対処':'安定'}</span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||timing||'主要な制約なし')}${timing&&limits.length?` · ${esc(timing)}`:''}</span></button>`;
+      return `<button type="button" class="dependency-card" data-inspect="dependency-resource" data-id="${esc(r.id)}"><span class="decision-card-title"><span><strong>${esc(r.display_name)}</strong><small>${esc(sources)}</small></span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||timing||'制約なし')}${timing&&limits.length?` · ${esc(timing)}`:''}</span></button>`;
     }).join('');
     const serviceRows=dependencyView==='current'?(currentAnalytics?.current_services||[]):(forecastAnalytics?.forecast_services||[]);
     const serviceCards=serviceRows.map((r)=>{
       const isCurrent=dependencyView==='current';
-      const critical=(isCurrent?currentCriticalServices:forecastCriticalServices).has(r.service_type);
       const scope=r.scope==='ORGANIZATION'?'組織共有':'拠点内';
       const limits=(r.limiting_factors||[]).map(A.constraintSummary);
       const metrics=isCurrent
         ? `<span><small>利用可能</small><strong>${fmt(r.local_enabled_rate,2)} /日</strong></span><span><small>需要</small><strong>${fmt(r.requested_rate,2)} /日</strong></span><span><small>実使用</small><strong>${fmt(r.allocated_rate,2)} /日</strong></span><span><small>能力不足</small><strong>${fmt(r.unmet_rate,2)} /日</strong></span><span><small>範囲外依存</small><strong>${fmt(r.external_dependency_rate,2)} /日</strong></span>`
         : `<span><small>計画要求</small><strong>${fmt(r.planned_requirement,2)}</strong></span><span><small>現在能力</small><strong>${fmt(r.local_enabled_rate,2)} /日</strong></span><span><small>範囲外能力</small><strong>${fmt(r.outside_scope_enabled_rate,2)} /日</strong></span><span><small>必要時期</small><strong>${r.earliest_requirement_day==null?'未確定':`Day ${fmt(r.earliest_requirement_day,0)}`}</strong></span>`;
-      return `<button type="button" class="dependency-card ${critical?'has-warning':''}" data-inspect="dependency-service" data-id="${esc(r.service_type)}"><span class="decision-card-title"><span><strong>${esc(serviceName(r.service_type))}</strong><small>${esc(scope)}</small></span><span class="badge ${critical?'warn':'ok'}">${critical?'要対処':'安定'}</span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||'主要な制約なし')}</span></button>`;
+      return `<button type="button" class="dependency-card" data-inspect="dependency-service" data-id="${esc(r.service_type)}"><span class="decision-card-title"><span><strong>${esc(serviceName(r.service_type))}</strong><small>${esc(scope)}</small></span></span><span class="dependency-metrics">${metrics}</span><span class="decision-card-footer ${limits.length?'has-warning':''}">${esc(limits[0]||'制約なし')}</span></button>`;
     }).join('');
     const groupRows=dependencyView==='current'?(currentAnalytics?.current_resource_groups||[]):(forecastAnalytics?.forecast_resource_groups||[]);
     const groupCards=groupRows.map((r)=>dependencyView==='current'
-      ? `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>生産 ${fmt(r.production_per_day,2)} /日</span><span>消費 ${fmt(r.consumption_per_day,2)} /日</span><span>外部依存 ${fmt(r.external_dependency_per_day,2)} /日</span><span>未充足 ${fmt(r.unmet_demand_t,2)} t</span></div>`
-      : `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>計画需要 ${fmt(r.planned_requirement_t,2)} t</span><span>外部必要量 ${fmt(r.external_requirement_t,2)} t</span><span>継続外部依存 ${fmt(r.external_recurring_dependency_per_day,2)} /日</span><span>${r.earliest_requirement_day==null?'必要日未定':`最早 Day ${fmt(r.earliest_requirement_day,0)}`}</span></div>`).join('');
+      ? `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>生産 ${fmt(r.production_per_day,2)} /日</span><span>消費 ${fmt(r.consumption_per_day,2)} /日</span><span>現地生産差 ${fmt(r.local_production_gap_per_day,2)} /日</span><span>未発送 ${fmt(r.unmet_demand_t,2)} t</span><span>内部発送 ${fmt(r.internal_dispatch_per_day,2)} /日</span><span>内部輸送中 ${fmt(r.internal_pipeline_t,2)} t</span></div>`
+      : `<div class="dependency-group-card"><strong>${esc(r.display_name)}</strong><span>計画需要 ${fmt(r.planned_requirement_t,2)} t</span><span>現地在庫外需要 ${fmt(r.offsite_requirement_t,2)} t</span><span>継続現地生産差 ${fmt(r.recurring_local_production_gap_per_day,2)} /日</span><span>${r.earliest_requirement_day==null?'必要日未定':`最早 Day ${fmt(r.earliest_requirement_day,0)}`}</span></div>`).join('');
 
-    const criticalResourceCount=dependencyView==='current'?currentCritical.size:forecastCritical.size;
-    const criticalServiceCount=dependencyView==='current'?currentCriticalServices.size:forecastCriticalServices.size;
     return `<div class="inventory-decision-surface">
       <section class="decision-surface-block"><div class="decision-surface-heading"><div><span class="eyebrow">資源</span><h2>在庫とフロー</h2><p>現在量・利用可能量・入出荷を比較し、資源を選択すると右の詳細パネルで供給源と制約を確認できます。</p></div><span class="badge">${state.operationalNode?.inventory?.length||0} 資源</span></div><div class="resource-flow-grid">${inventoryCards||'<div class="empty-state">表示対象の資源はありません。</div>'}</div></section>
       <section class="decision-surface-block"><div class="decision-card-heading"><div><span class="eyebrow">配分</span><h3>現在の資源配分</h3></div><span class="badge ${allocations.some((c)=>Number(c.unmet||0)>1e-9)?'warn':'ok'}">${allocations.length} 件</span></div><div class="resource-allocation-grid">${allocationCards||'<div class="empty-state compact-empty">現在の資源配分はありません。</div>'}</div></section>
-      <section class="decision-surface-block dependency-surface"><div class="decision-surface-heading"><div><span class="eyebrow">依存分析</span><h2>外部依存</h2><p>現在の不足と、計画済み案件から生じる将来需要を切り替えて確認します。</p></div><div class="segmented-control dependency-mode-switch" role="group" aria-label="外部依存の表示"><button type="button" data-dependency-view="current" class="${dependencyView==='current'?'is-active':''}" aria-pressed="${dependencyView==='current'?'true':'false'}">現在</button><button type="button" data-dependency-view="forecast" class="${dependencyView==='forecast'?'is-active':''}" aria-pressed="${dependencyView==='forecast'?'true':'false'}">予測</button></div></div><div class="dependency-status-row"><span class="badge ${criticalResourceCount||criticalServiceCount?'warn':'ok'}">要対処 ${criticalResourceCount} 資源 · ${criticalServiceCount} サービス</span><span class="cell-sub">${dependencyView==='current'?'実際の生産・消費・物流状態':'計画済み需要・備蓄目標・必要時期'}</span></div><h3>資源依存</h3><div class="dependency-card-grid">${dependencyCards||'<div class="empty-state">資源外部依存の対象はありません。</div>'}</div>${groupCards?`<details class="dependency-group-details"><summary>資源グループ集計</summary><div class="dependency-group-grid">${groupCards}</div></details>`:''}<h3>サービス依存</h3><div class="dependency-card-grid">${serviceCards||'<div class="empty-state">サービス依存の対象はありません。</div>'}</div></section>
-      <section class="decision-surface-block detailed-forecast-surface"><div class="decision-surface-heading"><div><span class="eyebrow">広域予測</span><h2>詳細予測</h2><p>将来在庫・波及影響・複数区間の物流影響・長期傾向を、現在/計画依存分析とは別契約で計算します。</p></div></div>${detailedForecastHtml()}</section>
+      <section class="decision-surface-block dependency-surface"><div class="decision-surface-heading"><div><span class="eyebrow">依存分析</span><h2>資源需要と物流</h2><p>現在の不足と、計画済み案件から生じる将来需要を切り替えて確認します。</p></div><div class="segmented-control dependency-mode-switch" role="group" aria-label="資源需要の表示"><button type="button" data-dependency-view="current" class="${dependencyView==='current'?'is-active':''}" aria-pressed="${dependencyView==='current'?'true':'false'}">現在</button><button type="button" data-dependency-view="forecast" class="${dependencyView==='forecast'?'is-active':''}" aria-pressed="${dependencyView==='forecast'?'true':'false'}">予測</button></div></div><div class="dependency-status-row"><span class="badge">${dependencyView==='current'?currentAnalytics?.current_resources?.length||0:forecastAnalytics?.forecast_resources?.length||0} 資源 · ${serviceRows.length} サービス</span><span class="cell-sub">${dependencyView==='current'?'実際の生産・消費・物流状態':'計画済み需要・備蓄目標・必要時期'}</span></div><h3>資源別の需要と供給</h3><div class="dependency-card-grid">${dependencyCards||'<div class="empty-state">資源需要・供給の表示対象はありません。</div>'}</div>${groupCards?`<details class="dependency-group-details"><summary>資源グループ集計</summary><div class="dependency-group-grid">${groupCards}</div></details>`:''}<h3>サービス依存</h3><div class="dependency-card-grid">${serviceCards||'<div class="empty-state">サービス依存の対象はありません。</div>'}</div></section>
+      <section class="decision-surface-block detailed-forecast-surface"><div class="decision-surface-heading"><div><span class="eyebrow">広域予測</span><h2>詳細予測</h2><p>現在の設定を維持した期間内の在庫・要求未達・輸送待機と、期間末日のフロー・案件状態を計算します。</p></div></div>${detailedForecastHtml()}</section>
     </div>`;
   }
 
@@ -459,7 +504,7 @@
       const blockers=p.blockers||[];
       const done=p.progress??p.construction_done??0;
       const required=p.construction_required??0;
-      return `<button type="button" class="construction-project-card ${selected?'is-selected':''}" data-inspect="project" data-id="${esc(p.id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(p.display_name||p.facility_display_name||'建設案件')}</strong><small>${esc(projectTargetLabel(p))}</small></span><span class="badge ${blockers.length?'warn':p.paused?'':'ok'}">${esc(stateLabels[p.status]||p.status||(p.paused?'停止':'進行中'))}</span></span><span class="construction-progress"><span><small>進捗</small><strong>${fmt(done,1)} / ${fmt(required,1)}</strong></span><span><small>優先度</small><strong>${esc(priorityName(p.priority))}</strong></span><span><small>調達</small><strong>${esc(procurementPolicyName(p.procurement_policy))}</strong></span></span><span class="decision-card-footer ${blockers.length?'has-warning':''}">${blockers.length?`制約: ${esc(A.constraintSummary(blockers[0]))}`:'主要な制約なし'}</span></button>`;
+      return `<button type="button" class="construction-project-card ${selected?'is-selected':''}" data-inspect="project" data-id="${esc(p.id)}" aria-pressed="${selected?'true':'false'}"><span class="decision-card-title"><span><strong>${esc(p.display_name||p.facility_display_name||'建設案件')}</strong><small>${esc(projectTargetLabel(p))}</small></span><span class="badge ${blockers.length?'warn':p.paused?'':'ok'}">${esc(stateLabels[p.status]||p.status||'進行中')}${p.paused?' · 手動停止':''}</span></span><span class="construction-progress"><span><small>進捗</small><strong>${fmt(done,1)} / ${fmt(required,1)}</strong></span><span><small>優先度</small><strong>${esc(priorityName(p.priority))}</strong></span><span><small>調達</small><strong>${esc(procurementPolicyName(p.procurement_policy))}</strong></span></span><span class="decision-card-footer ${blockers.length?'has-warning':''}">${blockers.length?`制約: ${esc(A.constraintSummary(blockers[0]))}`:'主要な制約なし'}</span></button>`;
     }).join('');
     const optionCards=options.map((o)=>{
       const plan=planningOptionState(o,'建設可');
@@ -492,7 +537,7 @@
       const rpTotal=Math.max(0,Number(x.research_points_total||0));
       const rpDone=Math.max(0,Number(x.research_points_awarded||0));
       return `<button type="button" class="exploration-decision-card ${state.inspector?.type==='scientific-exploration'&&state.inspector.id===x.id?'is-selected':''}" data-inspect="scientific-exploration" data-id="${esc(x.id)}" aria-pressed="${state.inspector?.type==='scientific-exploration'&&state.inspector.id===x.id?'true':'false'}">
-        <span class="decision-card-title"><span><strong>${esc(x.display_name)}</strong><small>${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</small></span><span class="badge ${blocked?'warn':x.status==='complete'?'ok':''}">${esc(stateLabels[x.status]||x.status)}</span></span>
+        <span class="decision-card-title"><span><strong>${esc(x.display_name)}</strong><small>${esc(locationName(x.origin_id))} → ${esc(locationName(x.destination_id))}</small></span><span class="badge ${blocked?'warn':x.status==='complete'?'ok':''}">${esc(stateLabels[x.status]||x.status)}${x.paused?' · 手動停止':''}</span></span>
         <span class="exploration-progress"><span>科学活動 ${fmt(progressDone,1)}/${fmt(progressTotal,1)}日</span><span class="progress-track"><span class="progress-bar" style="width:${ratio*100}%"></span></span></span>
         <span class="decision-card-metrics"><span>獲得RP <strong>${fmt(rpDone,1)}/${fmt(rpTotal,1)}</strong></span><span>当日受入 <strong>${fmt(x.rp_admitted_today,2)}</strong></span><span>優先度 <strong>${esc(priorityName(x.priority??3))}</strong></span></span>
         <span class="decision-card-metrics"><span>Fleet <strong>${esc(assigned)}</strong></span><span>往路 <strong>${esc(outbound)}</strong></span><span>復路 <strong>${esc(returning)}</strong></span></span>
@@ -504,9 +549,10 @@
 
   function renderSurveyTab(){
     const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
-    const expectedBodyId=locationSummary?.body_id||null;
+    const expectedBodyId=state.selectedSurfaceBodyId||locationSummary?.body_id||null;
     if(expectedBodyId&&state.surfaceMap?.body_id!==expectedBodyId){
-      return `<section class="card survey-loading-card"><div class="card-heading"><div><h3>地表調査</h3><div class="cell-sub">${esc(locationSummary?.display_name||locationName(state.operationalNodeId))} に対応する地表情報を取得しています。</div></div><span class="badge">読込中</span></div><div class="empty-state">対象天体のSurface Mapが確定するまで調査範囲は編集できません。</div></section>`;
+      const bodyName=(state.catalog?.celestial_bodies||[]).find((body)=>body.id===expectedBodyId)?.display_name||expectedBodyId;
+      return `<section class="card survey-loading-card"><div class="card-heading"><div><h3>地表調査</h3><div class="cell-sub">${esc(bodyName)} に対応する地表情報を取得しています。</div></div><span class="badge">読込中</span></div><div class="empty-state">対象天体のSurface Mapが確定するまで調査範囲は編集できません。</div></section>`;
     }
     const providerFleet=state.surveys?.provider_fleet||[];
     const knowledge=state.surveys?.items||[];
@@ -520,17 +566,16 @@
 
     let scopeMap='';
     if(cells.length){
-      const minLon=Math.min(...cells.map((c)=>Number(c.longitude_deg))),maxLon=Math.max(...cells.map((c)=>Number(c.longitude_deg)));
-      const minLat=Math.min(...cells.map((c)=>Number(c.latitude_deg))),maxLat=Math.max(...cells.map((c)=>Number(c.latitude_deg)));
-      const lonSpan=Math.max(1,maxLon-minLon),latSpan=Math.max(1,maxLat-minLat);
-      const pos=Object.fromEntries(cells.map((c)=>[c.id,{x:8+84*(Number(c.longitude_deg)-minLon)/lonSpan,y:8+84*(maxLat-Number(c.latitude_deg))/latSpan}]));
-      const seen=new Set(),lines=[];
-      for(const cell of cells){for(const neighbor of cell.neighbor_ids||[]){if(!pos[neighbor])continue;const key=[cell.id,neighbor].sort().join('::');if(seen.has(key))continue;seen.add(key);lines.push(`<line x1="${pos[cell.id].x*10}" y1="${pos[cell.id].y*4.2}" x2="${pos[neighbor].x*10}" y2="${pos[neighbor].y*4.2}"></line>`);}}
+      // Keep physical positions stable across Surface and Survey, even when
+      // only a subset of the body's cells currently has Survey controls.
+      const layout=surfaceDecisionLayout(state.surfaceMap.cells||cells),pos=layout.positions;
+      const links=surfaceAdjacencyLines(cells,pos);
       const knowledgeByCell=new Map();
       for(const row of visibleKnowledge){if(!knowledgeByCell.has(row.cell_id))knowledgeByCell.set(row.cell_id,[]);knowledgeByCell.get(row.cell_id).push(row);}
       const nodes=cells.map((cell)=>{const layers=surveyLayerSummary(cell,knowledgeByCell.get(cell.id)||[]);return `<label class="survey-scope-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(cell.id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(cell.id)}"><span><strong>${esc(cellMap.get(cell.id)||cell.display_name||'地域')}</strong>${Object.entries(layers).map(([layer,value])=>`<small data-survey-layer-value="${esc(layer)}">${esc(value)}</small>`).join('')}</span></label>`;}).join('');
       const layerButtons=Object.entries(surveyLayerNames).map(([key,label])=>`<button type="button" class="survey-layer-button ${surveyMapLayer===key?'is-active':''}" data-survey-map-layer="${esc(key)}" aria-pressed="${surveyMapLayer===key?'true':'false'}">${esc(label)}</button>`).join('');
-      scopeMap=`<div class="survey-layer-toolbar" role="group" aria-label="地表Map表示Layer">${layerButtons}</div><div class="survey-scope-map" data-survey-layer="${esc(surveyMapLayer)}"><svg viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg>${nodes}</div>`;
+      const cellIndex=cells.map((cell)=>`<button type="button" data-survey-focus-cell="${esc(cell.id)}" class="surface-cell-index-item">${esc(cellMap.get(cell.id)||cell.display_name||'地域')}</button>`).join('');
+      scopeMap=`<div class="survey-layer-toolbar" role="group" aria-label="地表Map表示Layer">${layerButtons}</div><div class="surface-map-viewport"><div class="survey-scope-map" style="min-width:${layout.width}px;height:${layout.height}px" data-survey-layer="${esc(surveyMapLayer)}"><svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${nodes}</div></div><div class="surface-cell-index" aria-label="地表調査の地域一覧">${cellIndex}</div><div class="cell-sub">地域の配置は地理的関係の概略です。正確な緯度・経度は地域詳細で確認できます。</div>`;
     }
     const fallbackHtml=fallbackCells.map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-cell data-draft-key="survey:new:cell:${esc(id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
     const resourceChoices=[...resourceMap].map(([id,label])=>`<label class="survey-resource-choice"><input type="checkbox" data-survey-draft-resource data-draft-key="survey:new:resource:${esc(id)}" data-structured-draft data-draft-scope="survey:new" value="${esc(id)}"><span>${esc(label)}</span></label>`).join('');
@@ -574,37 +619,69 @@
     return `<div class="survey-decision-surface"><div class="decision-surface-heading"><div><span class="eyebrow">地表調査</span><h2>地表調査</h2><p>地域、対象資源、調査知識目標を直接選びます。観測手段は自動選択し、戦略差が意思決定に影響する場合だけ比較します。</p></div></div>${createSection}${campaignSection}${knowledgeSection}${providerSection}</div>`;
   }
 
+  function nonSurfaceFoundingHtml(bodyId){
+    const context=state.nonSurfaceFounding;
+    if(!context||context.body_id!==bodyId)return '<section class="card"><div class="card-heading"><h3>非地表Context</h3></div><div class="empty-state">軌道・非地表の設立候補を取得しています。</div></section>';
+    const contexts=context.contexts||[];
+    const cards=contexts.map((node)=>{
+      if(node.operational)return `<div class="detail-card"><strong>${esc(node.display_name)}</strong><div class="cell-sub">運用拠点設立済み · 通常の在庫・Fleet管理は運用拠点で行います。</div></div>`;
+      if(state.selectedNonSurfaceContextId!==node.spatial_node_id)return `<div class="detail-card"><strong>${esc(node.display_name)}</strong><div class="cell-sub">物理Context・未運用</div><button type="button" data-nonsurface-context="${esc(node.spatial_node_id)}">設立候補と条件を確認</button></div>`;
+      const candidates=(node.foundation_options||[]).slice().sort((a,b)=>
+        Number(b.can_plan)-Number(a.can_plan)||(a.blockers||[]).length-(b.blockers||[]).length
+        ||String(a.comparison_key).localeCompare(String(b.comparison_key)));
+      const options=candidates.map((option)=>{
+        const plan=planningOptionState(option,'設立可');
+        const scope=`foundation:${node.spatial_node_id}:${option.staging_node_id}:${option.deployment_recipe_id}:${option.vehicle_definition_id}`;
+        const resourceHeading=option.transit_days==null?'基本展開資材':'出発拠点で必要なResource';
+        return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${plan.disabled?'warn':'ok'}">${option.active_project_id?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備 ${fmt(option.preparation_work,1)} · 航行 ${option.transit_days==null?'移動経路未成立':`${fmt(option.transit_days,0)} 日`} · 搭載量 ${fmt(option.payload_t,2)} t / ${fmt(option.required_units,0)} 機</div><div class="cell-sub">${resourceHeading}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${option.transit_days==null?'<div class="cell-sub">現行の能力では出発時の全Resource要件を算出できません。</div>':''}${plan.blockers.length?`<div class="issue-stack">${plan.blockers.map(issueHtml).join('')}</div>`:''}${foundingPlanControls(scope,option,plan.disabled)}<label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規宇宙拠点"></label><button type="button" class="primary" data-nonsurface-found data-spatial-node-id="${esc(node.spatial_node_id)}" data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" ${plan.disabled?'disabled':''}>この軌道Contextへ設立</button></div>`;
+      }).join('')||'<div class="empty-state">登録された展開構成はありません。</div>';
+      return `<div class="detail-card"><div class="mode-title"><strong>${esc(node.display_name)}</strong><span class="badge">物理Context・未運用</span></div><div class="cell-sub">対象 ${esc(node.spatial_node_id)} · ${candidates.length} 構成（実行拠点／Recipe／Vehicle）</div><div class="detail-stack">${options}</div></div>`;
+    }).join('');
+    return `<section class="card"><div class="card-heading"><div><h3>周回軌道・非地表Context</h3><div class="cell-sub">運用Nodeとは異なる物理Targetです。設立条件・輸送能力・Resourceを比較します。</div></div><span class="badge">${contexts.length} Context</span></div><div class="card-body detail-stack">${cards||'<div class="empty-state">この天体には設立対象の非地表Contextが登録されていません。物理天体の存在と設立候補の有無は別です。</div>'}</div></section>`;
+  }
+
+  function bodyPhysicalHtml(bodyId){
+    const body=(state.catalog?.celestial_bodies||[]).find((row)=>row.id===bodyId);
+    if(!body)return '';
+    const parent=(state.catalog?.celestial_bodies||[]).find((row)=>row.id===body.parent_body_id);
+    const number=(value,unit,digits=2)=>value==null?'未定義':`${fmt(value,digits)} ${unit}`;
+    return `<section class="card"><div class="card-heading"><div><h3>${esc(body.display_name)} · 物理情報</h3><div class="cell-sub">静的Worldの基準値 · 航行可否や操業能力そのものではありません</div></div></div><div class="card-body">${kv([
+      ['分類',body.parent_body_id?'衛星':'惑星'],
+      ['母天体',parent?esc(parent.display_name):'太陽系中心'],
+      ['固体地表',body.physical_surface==='solid'?'あり':'なし'],
+      ['地表地域の登録数',fmt(body.surface_cell_count,0)],
+      ['平均半径',number(body.mean_radius_km,'km')],
+      ['代表重力',number(body.reference_gravity_m_s2,'m/s²')],
+      ['基準日射',number(body.representative_solar_flux_w_m2,'W/m²')],
+      ['太陽周回長半径',number(body.heliocentric_semimajor_axis_au,'AU',3)],
+      ['母天体周回長半径',number(body.parent_orbit_semimajor_axis_km,'km')],
+    ])}<div class="cell-sub">環境へのFacility適合・Movement条件は候補別のApplication判定を参照します。科学探査は「科学探査」タブ、資源調査は「地表調査」タブで確認できます。</div></div></section>`;
+  }
+
   function renderSurfaceTab(){
     const map=state.surfaceMap;
     if(!map){
       const summary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
-      const message=summary?.body_id?'地表マップを取得しています。':'このSpatial Nodeには表示可能な地表天体がありません。';
+      const message=(state.selectedSurfaceBodyId||summary?.body_id)?'地表マップを取得しています。':'地表天体が選択されていません。';
       return `<section class="card"><div class="card-heading"><h3>地表マップ</h3></div><div class="empty-state">${message}</div></section>`;
     }
     const cells=map.cells||[];
-    if(!cells.length)return `<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">地表区画が定義されていません。</div></section>`;
-    const minLon=Math.min(...cells.map((c)=>Number(c.longitude_deg))),maxLon=Math.max(...cells.map((c)=>Number(c.longitude_deg)));
-    const minLat=Math.min(...cells.map((c)=>Number(c.latitude_deg))),maxLat=Math.max(...cells.map((c)=>Number(c.latitude_deg)));
-    const lonSpan=Math.max(1,maxLon-minLon),latSpan=Math.max(1,maxLat-minLat);
-    const pos=Object.fromEntries(cells.map((c)=>[c.id,{
-      x:8+84*(Number(c.longitude_deg)-minLon)/lonSpan,
-      y:8+84*(maxLat-Number(c.latitude_deg))/latSpan,
-    }]));
-    const seen=new Set(),lines=[];
-    for(const cell of cells){
-      for(const neighbor of cell.neighbor_ids||[]){
-        if(!pos[neighbor])continue;
-        const key=[cell.id,neighbor].sort().join('::');if(seen.has(key))continue;seen.add(key);
-        lines.push(`<line x1="${pos[cell.id].x*10}" y1="${pos[cell.id].y*4.8}" x2="${pos[neighbor].x*10}" y2="${pos[neighbor].y*4.8}"></line>`);
-      }
+    const bodyContext=bodyPhysicalHtml(map.body_id);
+    const nonSurface=nonSurfaceFoundingHtml(map.body_id);
+    if(!cells.length){
+      const noSurface=map.physical_surface==='no_solid_surface';
+      return `${bodyContext}<section class="card"><div class="card-heading"><h3>${esc(map.display_name)} 地表</h3></div><div class="empty-state">${noSurface?'固体地表がありません。地表地域の開発・設立はできません。周回軌道の物理Contextと科学探査を確認してください。':'固体地表はありますが、地域（Surface Cell）が登録されていません。'}</div></section>${nonSurface}`;
     }
+    const layout=surfaceDecisionLayout(cells),pos=layout.positions;
+    const links=surfaceAdjacencyLines(cells,pos);
     const buttons=cells.map((cell)=>{
       const classes=['surface-cell-button',cell.developed?'is-developed':'',cell.is_location_core?'is-core':'',state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''].filter(Boolean).join(' ');
       const owner=cell.location_id?locationName(cell.location_id):'未所属';
-      return `<div class="surface-cell-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><button type="button" class="${classes}" data-inspect="surface-cell" data-id="${esc(cell.id)}"><span class="surface-cell-name">${esc(surfaceCellLabel(cell.id))}</span><span class="surface-cell-meta">${esc(owner)} · ${fmt(cell.area_km2,0)} km²</span></button></div>`;
+      return `<div class="surface-cell-node" style="left:${pos[cell.id].x}%;top:${pos[cell.id].y}%"><button type="button" class="${classes}" data-inspect="surface-cell" data-id="${esc(cell.id)}" aria-pressed="${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'true':'false'}"><span class="surface-cell-name">${esc(surfaceCellLabel(cell.id))}</span><span class="surface-cell-meta">${esc(owner)} · ${fmt(cell.area_km2,0)} km²</span></button></div>`;
     }).join('');
+    const cellIndex=cells.map((cell)=>`<button type="button" class="surface-cell-index-item ${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'is-selected':''}" data-inspect="surface-cell" data-id="${esc(cell.id)}" data-surface-choice-kind="index" aria-pressed="${state.inspector?.type==='surface-cell'&&state.inspector.id===cell.id?'true':'false'}">${esc(surfaceCellLabel(cell.id))}</button>`).join('');
     const locations=(map.locations||[]).map((loc)=>`<span class="badge">${esc(loc.display_name)} ${loc.developed_cell_ids?.length||0} 地域</span>`).join(' ');
-    return `<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-stage"><svg class="surface-map-links" viewBox="0 0 1000 480" preserveAspectRatio="none" aria-hidden="true">${lines.join('')}</svg><div class="surface-map-nodes">${buttons}</div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>`;
+    return `${bodyContext}<div class="surface-layout"><section class="card surface-map-card"><div class="card-heading"><div><h3>${esc(map.display_name)} 地表</h3><div class="cell-sub">地域を選択してSurvey・開発・位置依存設備・新拠点設立を判断します。</div></div><span class="badge">${cells.length} 地域</span></div><div class="surface-map-viewport"><div class="surface-map-stage" style="min-width:${layout.width}px;height:${layout.height}px"><svg class="surface-map-links" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${links}</svg><div class="surface-map-nodes">${buttons}</div></div></div><div class="surface-map-legend"><span><i class="legend-dot core"></i>拠点中心</span><span><i class="legend-dot developed"></i>開発済み</span><span><i class="legend-dot undeveloped"></i>未開発</span></div><div class="cell-sub surface-map-caption">位置は地理的関係の概略です。緯度・経度は地域詳細の数値を参照してください。</div><div class="surface-cell-index" aria-label="地表地域の一覧">${cellIndex}</div></section><section class="card"><div class="card-heading"><h3>拠点領域</h3></div><div class="card-body">${locations||'<div class="empty-state">拠点なし</div>'}</div></section></div>${nonSurface}`;
   }
 
   function patchSurveyDecisionSurface(root,html){
@@ -632,15 +709,71 @@
     return true;
   }
 
+  function patchResearchTab(root,html){
+    if(root.dataset.renderedTab!=='research')return false;
+    const card=root.querySelector(':scope > .research-tree-card');
+    const provider=root.querySelector(':scope > .research-provider-summary');
+    const scroll=card?.querySelector(':scope > #researchTreeScroll');
+    const stage=scroll?.querySelector(':scope > #researchTree');
+    if(!card||!provider||!scroll||!stage)return false;
+    const template=document.createElement('template');
+    template.innerHTML=html.trim();
+    const nextCard=template.content.querySelector('.research-tree-card');
+    const nextProvider=template.content.querySelector('.research-provider-summary');
+    const nextScroll=nextCard?.querySelector(':scope > #researchTreeScroll');
+    const nextStage=nextScroll?.querySelector(':scope > #researchTree');
+    if(!nextCard||!nextProvider||!nextScroll||!nextStage)return false;
+    const oldChildren=[...card.children],newChildren=[...nextCard.children];
+    if(oldChildren.length!==newChildren.length||oldChildren.indexOf(scroll)!==newChildren.indexOf(nextScroll))return false;
+
+    // Keep the real scroll container and its stage connected throughout the
+    // authoritative refresh. Replacing an ancestor can discard a just-applied
+    // user scroll in WebKit before the next capture, even when we restore offsets.
+    if(stage.getAttribute('style')!==nextStage.getAttribute('style'))stage.setAttribute('style',nextStage.getAttribute('style'));
+    A.replaceHtmlPreservingKeyed(stage,nextStage.innerHTML,[
+      {selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id']},
+    ]);
+    for(let index=0;index<oldChildren.length;index++){
+      const live=oldChildren[index],next=newChildren[index];
+      if(live===scroll)continue;
+      if(live.outerHTML!==next.outerHTML)live.replaceWith(next);
+    }
+    if(provider.innerHTML!==nextProvider.innerHTML){
+      A.replaceHtmlPreservingKeyed(provider,nextProvider.innerHTML,[
+        {selector:'[data-draft-key]',attributes:['data-draft-key','data-draft-scope']},
+      ]);
+    }
+    return true;
+  }
+
   function renderActiveTab(){
     const renderers={overview:renderOverviewTab,facilities:renderFacilitiesTab,inventory:renderInventoryTab,construction:renderConstructionTab,research:renderResearchTab,'scientific-exploration':renderScientificExplorationTab,survey:renderSurveyTab,surface:renderSurfaceTab};
     const root=$('#operationsTabContent');
     const html=(renderers[state.activeTab]||renderOverviewTab)();
     if(state.activeTab==='survey'&&patchSurveyDecisionSurface(root,html)){root.dataset.renderedTab=state.activeTab;return;}
+    if(state.activeTab==='research'&&patchResearchTab(root,html)){root.dataset.renderedTab=state.activeTab;return;}
+    const viewport=root.querySelector('.surface-map-viewport');
+    const oldScrollKey=root.dataset.surfaceMapScrollKey;
+    if(viewport&&oldScrollKey)surfaceMapScrollByContext.set(oldScrollKey,{left:viewport.scrollLeft,top:viewport.scrollTop});
+    const scrollKey=['surface','survey'].includes(state.activeTab)&&state.surfaceMap?.body_id
+      ?`${state.activeTab}:${state.surfaceMap.body_id}`:null;
+    const focused=root.contains(document.activeElement)?document.activeElement:null;
+    const focusKey=focused?.getAttribute('data-id')&&focused?.getAttribute('data-inspect')
+      ?{id:focused.dataset.id,type:focused.dataset.inspect,onMap:focused.classList.contains('surface-cell-button')}:null;
     if(root.dataset.renderedTab===state.activeTab){
-      A.replaceHtmlPreservingKeyed(root,html,[{selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id']}]);
+      A.replaceHtmlPreservingKeyed(root,html,[{selector:'[data-inspect][data-id]',attributes:['data-inspect','data-id','data-surface-choice-kind']}]);
     }else if(root.innerHTML!==html){
       root.innerHTML=html;
+    }
+    const nextViewport=root.querySelector('.surface-map-viewport');
+    const mapScroll=scrollKey?surfaceMapScrollByContext.get(scrollKey):null;
+    if(mapScroll&&nextViewport){nextViewport.scrollLeft=mapScroll.left;nextViewport.scrollTop=mapScroll.top;}
+    if(scrollKey)root.dataset.surfaceMapScrollKey=scrollKey;else delete root.dataset.surfaceMapScrollKey;
+    if(focusKey&&!root.contains(focused)){
+      const target=[...root.querySelectorAll('[data-inspect][data-id]')].find((node)=>
+        node.dataset.id===focusKey.id&&node.dataset.inspect===focusKey.type
+          &&node.classList.contains('surface-cell-button')===focusKey.onMap);
+      target?.focus({preventScroll:true});
     }
     root.dataset.renderedTab=state.activeTab;
   }
@@ -671,13 +804,17 @@
         const outputs=(option.output_rates_per_day||[]).map(([resourceId,rate])=>`${resourceName(resourceId)} ${fmt(rate,3)} t/日`).join(' / ')||'産出なし';
         const services=(option.service_requirements||[]).map(([serviceId,rate])=>`${serviceName(serviceId)} ${fmt(rate,2)}`).join(' / ')||'追加Service要求なし';
         const compareAction=comparisonAvailable?`<button type="button" data-process-compare-pin="${esc(f.id)}" data-comparison-key="${esc(option.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
-        return `<div class="detail-card ${selected?'is-usable':''}" data-process-option="${esc(option.process_id)}"><div class="mode-title"><span>${esc(option.display_name||definitionName(option.process_id))}</span><span class="badge ${selected?'ok':(option.blockers||[]).length?'warn':''}">${selected?'現在の工程':(option.blockers||[]).length?'実行制約あり':'切替候補'}</span></div><div class="cell-sub">投入: ${esc(inputs)}</div><div class="cell-sub">産出: ${esc(outputs)}</div><div class="cell-sub">必要能力: ${esc(services)}</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-facility-process="${esc(f.id)}" data-process-id="${esc(option.process_id)}" aria-pressed="${selected?'true':'false'}" ${selected?'disabled':''}>${selected?'選択中':'この工程へ切替'}</button></div></div>`;
+        return `<div class="detail-card ${selected?'is-usable':''}" data-process-option="${esc(option.process_id)}"><div class="mode-title"><span>${esc(option.display_name||definitionName(option.process_id))}</span><span class="badge ${selected?'ok':(option.blockers||[]).length?'warn':''}">${selected?'現在の工程':(option.blockers||[]).length?'実行制約あり':'切替候補'}</span></div><div class="cell-sub">投入: ${esc(inputs)}</div><div class="cell-sub">産出: ${esc(outputs)}</div><div class="cell-sub">必要能力: ${esc(services)}</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-facility-process="${esc(f.id)}" data-process-id="${esc(option.process_id)}" aria-pressed="${selected?'true':'false'}" ${selected||!option.can_select?'disabled':''}>${selected?'選択中':'この工程へ切替'}</button></div></div>`;
       }).join('');
       const processControl=`<div class="choice-section"><div class="choice-label">生産工程を選択</div><div class="choice-grid facility-process-choices">${processOptions||'<div class="empty-state">候補なし</div>'}</div></div>${comparisonAvailable?`<h4>工程比較</h4>${processComparisonHtml(industry)}`:''}`;
       productionSection+=section('生産工程',kv([['現在の工程',esc(industry.process_display_name||'未選択')],['工程選択',industry.selection_required?'選択が必要':'確定'],['実効稼働率',pct(industry.scale)]])+processControl+`<h4>現在工程の投入/日</h4>${rateCards(industry.input_rates_per_day)}<h4>現在工程の生産物/日</h4>${rateCards(industry.output_rates_per_day)}<h4>現在の主な制約</h4>${limitingHtml(industry.limiting_factors)}`);
     }
     if(extraction){
-      productionSection+=section('採掘',kv([['対象資源',esc(resourceName(extraction.resource_id))],['基準能力',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['有効採掘機会',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',esc(resourceName(extraction.output_resource_id))],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<h4>主な制約</h4>${limitingHtml(extraction.limiting_factors)}`);
+      const methodOptions=(extraction.method_options||[]).map(option=>{
+        const selected=option.method_id===extraction.method_id;
+        return `<div class="detail-card ${selected?'is-usable':''}"><div class="mode-title"><strong>${esc(option.display_name)}</strong><span class="badge ${selected?'ok':option.can_select?'':'warn'}">${selected?'現在の方式':option.can_select?'切替候補':'解禁条件不足'}</span></div><div class="cell-sub">対象: ${esc(option.resource_name)} / 産出: ${esc(option.output_resource_name)}</div><div class="cell-sub">有効採掘機会: ${fmt(option.potential_opportunity,3)} / 基準見込み: ${fmt(option.nominal_output_t_per_day,3)} t/日（有限配分前）</div>${(option.blockers||[]).length?`<div class="issue-stack">${option.blockers.map(issueHtml).join('')}</div>`:''}<div class="action-row"><button type="button" data-facility-extraction="${esc(extraction.facility_id)}" data-extraction-method="${esc(option.method_id)}" ${selected||!option.can_select?'disabled':''}>${selected?'選択中':'この方式へ切替'}</button></div></div>`;
+      }).join('');
+      productionSection+=section('採掘',kv([['対象資源',extraction.method_id?esc(extraction.resource_name):'未選択'],['方式選択',!extraction.method_options?.length?'対応方式なし':(extraction.selection_required?'選択が必要':'確定')],['基準能力',`${fmt(extraction.nominal_capacity_t_per_day,3)} t/日`],['有効採掘機会',fmt(extraction.effective_opportunity,3)],['限界効率',pct(extraction.marginal_efficiency)],['産出資源',extraction.method_id?esc(extraction.output_resource_name):'未選択'],['生産物/日',`${fmt(extraction.output_t_per_day,3)} t/日`],['実効稼働率',pct(extraction.scale)]])+`<div class="choice-section"><div class="choice-label">採掘方式を選択</div><div class="choice-grid">${methodOptions||'<div class="empty-state">候補なし</div>'}</div></div><h4>主な制約</h4>${limitingHtml(extraction.limiting_factors)}`);
     }
     if(!productionSection)productionSection=section('生産・採掘','<div class="empty-state">この設備には現在の生産・採掘工程がありません。</div>');
     let upgradeSection='';
@@ -706,12 +843,12 @@
     const row=state.operationalNode?.extraction_resources?.find((item)=>item.resource_id===id);if(!row)return false;
     const infra=state.operationalNode?.surface_infrastructure;
     const infraLimit=infra?.limiting_factors?.some((factor)=>factor.code==='surface_infrastructure');
-    setInspector(row.resource_name,section('資源機会 / 採掘',kv([['有効採掘機会',fmt(row.effective_opportunity,3)],['設置採掘能力',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['実採掘量',`${fmt(row.output_t_per_day,3)} t/日`],['規模逓減効率',pct(row.diminishing_efficiency)],['限界効率',pct(row.marginal_efficiency)],['運用充足率',pct(row.operational_fulfillment)]]))+section('地表インフラ',infra?kv([['充足率',pct(infra.fulfillment)],['主な制約',infraLimit?'<span class="badge warn">地表インフラ</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
+    setInspector(row.resource_name,section('資源機会 / 採掘',kv([['静的資源機会',fmt(row.static_opportunity,3)],['Knowledge適格後の採掘機会',fmt(row.effective_opportunity,3)],['Knowledge適格Cell',fmt(row.knowledge_eligible_cell_count,0)],['Knowledge不足Cell',fmt(row.knowledge_blocked_cell_count,0)],['設置採掘能力',`${fmt(row.installed_nominal_capacity_t_per_day,3)} t/日`],['実採掘量',`${fmt(row.output_t_per_day,3)} t/日`],['規模逓減効率',pct(row.diminishing_efficiency)],['限界効率',pct(row.marginal_efficiency)],['運用充足率',pct(row.operational_fulfillment)]]))+section('地表インフラ',infra?kv([['充足率',pct(infra.fulfillment)],['主な制約',infraLimit?'<span class="badge warn">地表インフラ</span>':'<span class="badge ok">なし</span>']]):'<div class="empty-state">非地表Location</div>'));
     return true;
   }
   function renderResourceInspector(id){
     const inv=state.operationalNode?.inventory?.find((x)=>x.resource_id===id),f=state.flow?.resources?.find((x)=>x.resource_id===id);if(!inv)return false;
-    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['物理容量',fmt(inv.physical_capacity)],['利用可能容量',fmt(inv.usable_capacity)],['入庫可能量',fmt(inv.admission_capacity)],['容量超過',fmt(inv.over_capacity)],['制限要因',esc((inv.limiting_factors||[]).map(A.constraintSummary).join(' / ')||'なし')],['入庫制約',esc((inv.admission_blockers||[]).map(A.constraintSummary).join(' / ')||'なし')]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['純変化/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]])));
+    setInspector(inv.display_name,section('在庫',kv([['在庫',fmt(inv.amount)],['予約',fmt(inv.reserved)],['利用可能',fmt(inv.available)],['物理容量',fmt(inv.physical_capacity)],['利用可能容量',fmt(inv.usable_capacity)],['入庫可能量',fmt(inv.admission_capacity)],['容量超過',fmt(inv.over_capacity)],['制限要因',esc((inv.limiting_factors||[]).map(A.constraintSummary).join(' / ')||'なし')],['入庫制約',esc((inv.admission_blockers||[]).map(A.constraintSummary).join(' / ')||'なし')]]))+section('フロー',kv([['生産/日',signed(f?.local_production_per_day)],['消費/日',signed(f?.local_consumption_per_day)],['純変化/日',signed(f?.local_net_per_day)],['入荷中',fmt(f?.inbound_in_transit_t)],['出荷中',fmt(f?.outbound_in_transit_t)],['到着待機',fmt(f?.arrival_waiting_t)]]))+section('関連する輸送',`<button type="button" data-issue-area="logistics" data-issue-node="${esc(state.operationalNodeId)}" data-issue-subject-kind="dependency_resource" data-issue-resource-id="${esc(id)}">この拠点・Resourceの輸送状態を確認</button>`));
     return true;
   }
   function renderDependencyResourceInspector(id){
@@ -723,19 +860,21 @@
       ['生産',`${fmt(current.production_per_day,2)} /日`],
       ['消費',`${fmt(current.consumption_per_day,2)} /日`],
       ['需要',`${fmt(current.demand_per_day,2)} /日`],
-      ['外部依存',`${fmt(current.external_dependency_per_day,2)} /日`],
+      ['現地生産差',`${fmt(current.local_production_gap_per_day,2)} /日`],
       ['流入',`${fmt(current.imports_per_day,2)} /日`],
       ['流出',`${fmt(current.exports_per_day,2)} /日`],
       ['流入中',`${fmt(current.imports_pipeline_t,2)} t`],
       ['流出中',`${fmt(current.exports_pipeline_t,2)} t`],
-      ['未充足',`${fmt(current.unmet_demand_t,2)} t`],
+      ['範囲内拠点間発送',`${fmt(current.internal_dispatch_per_day,2)} /日`],
+      ['範囲内拠点間輸送中',`${fmt(current.internal_pipeline_t,2)} t`],
+      ['未発送',`${fmt(current.unmet_demand_t,2)} t`],
       ['依存元',esc((current.dependency_source_node_ids||[]).map(locationName).join(' / ')||'なし')],
     ])+`<h4>主な制約</h4>${limitingHtml(current.limiting_factors)}`):section('現在','<div class="empty-state">現在の依存状態はありません。</div>');
     const forecastSection=forecast?section('予測',kv([
       ['計画需要',`${fmt(forecast.planned_requirement_t,2)} t`],
       ['継続消費',`${fmt(forecast.recurring_consumption_per_day,2)} /日`],
-      ['外部必要量',`${fmt(forecast.external_requirement_t,2)} t`],
-      ['継続外部依存',`${fmt(forecast.external_recurring_dependency_per_day,2)} /日`],
+      ['現地在庫外需要',`${fmt(forecast.offsite_requirement_t,2)} t`],
+      ['継続現地生産差',`${fmt(forecast.recurring_local_production_gap_per_day,2)} /日`],
       ['追加備蓄目標',`${fmt(forecast.target_stock_t,2)} t`],
       ['最早必要日',forecast.earliest_requirement_day==null?'未定':`Day ${fmt(forecast.earliest_requirement_day,0)}`],
       ['依存元',esc((forecast.dependency_source_node_ids||[]).map(locationName).join(' / ')||'なし')],
@@ -777,7 +916,7 @@
     const p=state.projects?.items?.find((x)=>x.id===id);if(!p)return false;
     const target=projectTargetLabel(p);
     const readiness=p.projected_material_readiness_day==null?'未確定':`Day ${fmt(p.projected_material_readiness_day,0)}`;
-    const targetRows=[['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||(p.paused?'停止':'進行中'))],['優先度',esc(priorityName(p.priority))],['施工充足',pct(p.construction_fulfillment??1)],['資材準備見込',esc(readiness)],['調達方針',esc(procurementPolicyName(p.procurement_policy))],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
+    const targetRows=[['種別',esc(target)],['状態',esc(stateLabels[p.status]||p.status||'進行中')+(p.paused?' · 手動停止':'')],['優先度',esc(priorityName(p.priority))],['施工充足',pct(p.construction_fulfillment??1)],['資材準備見込',esc(readiness)],['調達方針',esc(procurementPolicyName(p.procurement_policy))],['工数',`${fmt(p.progress??p.construction_done??0)}/${fmt(p.construction_required??0)}`]];
     if(p.target_facility_id){const facility=state.operationalNode?.facilities?.find((row)=>row.id===p.target_facility_id);targetRows.push(['対象設備',esc(facility?.display_name||'設備')]);}
     if(p.target_cell_id)targetRows.push(['対象Cell',esc(surfaceCellLabel(p.target_cell_id))]);
     if(p.target_location_id)targetRows.push(['対象Location',esc(locationName(p.target_location_id))]);
@@ -791,7 +930,7 @@
       return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(r.resource_id))}</span><span>${fmt(r.required_t)} t</span></div><div class="cell-sub">${securedLabel} · ${committedLabel} ${fmt(r.committed_t)} t · 不足 ${fmt(r.shortage_t)} t</div></div>`;
     }).join('');
     const requirements=(state.logistics?.requirements||[]).filter((d)=>d.owner_kind===(foundingProject?'founding':'project')&&d.owner_id===p.id);
-    const requirementHtml=requirements.length?requirements.map((d)=>{const forecast=d.forecast_requirement_day==null?'指定なし':`Day ${fmt(d.forecast_requirement_day,0)}`,arrival=d.projected_arrival_day==null?(d.earliest_confirmed_arrival_day==null?'未確定':`Day ${fmt(d.earliest_confirmed_arrival_day,0)}`):`Day ${fmt(d.projected_arrival_day,0)}`;const source=d.selected_source_id?locationName(d.selected_source_id):'未選択';const services=(d.selected_service_ids||[]).map(definitionName).join(' → ')||'経路未確定';const constrained=Boolean(d.routing_constraint_source_id||(d.routing_constraint_via_node_ids||[]).length||(d.routing_constraint_transport_allocation_ids||[]).length);return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-main">${esc(source)} → ${esc(locationName(d.destination_id))}</div><div class="cell-sub">${esc(services)} · 輸送系内 ${fmt(d.pipeline_t)} t</div><div class="cell-sub">必要時期 ${esc(forecast)} · 予測到着 ${esc(arrival)}${d.selected_latency_days==null?'':` · 輸送 ${fmt(d.selected_latency_days,1)}日`}${d.selected_handoff_count==null?'':` · 積替 ${fmt(d.selected_handoff_count,0)}`}</div>${constrained?`<div class="cell-sub">固定条件: 供給元 ${esc(d.routing_constraint_source_id?locationName(d.routing_constraint_source_id):'自動')} / 経由 ${esc((d.routing_constraint_via_node_ids||[]).map(locationName).join(', ')||'なし')} / 固定輸送区間 ${(d.routing_constraint_transport_allocation_ids||[]).length} 件</div>`:''}<button type="button" data-project-routing-constraint data-owner-kind="${esc(d.owner_kind)}" data-owner-id="${esc(d.owner_id)}" data-destination-id="${esc(d.destination_id)}" data-resource-id="${esc(d.resource_id)}">${constrained?'固定条件を編集':'固定条件を設定'}</button></div>`;}).join(''):'<div class="empty-state">現在の補給需要なし</div>';
+    const requirementHtml=requirements.length?requirements.map((d)=>{const forecast=d.forecast_requirement_day==null?'指定なし':`Day ${fmt(d.forecast_requirement_day,0)}`,arrival=d.earliest_in_transit_arrival_day==null?'未確定':`Day ${fmt(d.earliest_in_transit_arrival_day,0)}`,candidateArrival=d.projected_arrival_day==null?'未確定':`Day ${fmt(d.projected_arrival_day,0)}`;const source=d.selected_source_id?locationName(d.selected_source_id):'未選択';const services=(d.selected_service_ids||[]).map(definitionName).join(' → ')||'経路未確定';const constrained=Boolean(d.routing_constraint_source_id||(d.routing_constraint_via_node_ids||[]).length||(d.routing_constraint_transport_allocation_ids||[]).length);return `<div class="detail-card"><div class="mode-title"><span>${esc(resourceName(d.resource_id))}</span><span>${fmt(d.remaining_t)} t 待ち</span></div><div class="cell-main">${esc(source)} → ${esc(locationName(d.destination_id))}</div><div class="cell-sub">${esc(services)} · 輸送系内 ${fmt(d.pipeline_t)} t</div><div class="cell-sub">必要時期 ${esc(forecast)} · 輸送中の最短到着 ${esc(arrival)} · 未発送候補最短 ${esc(candidateArrival)}${d.selected_latency_days==null?'':` · 輸送 ${fmt(d.selected_latency_days,1)}日`}${d.selected_handoff_count==null?'':` · 積替 ${fmt(d.selected_handoff_count,0)}`}</div>${constrained?`<div class="cell-sub">固定条件: 供給元 ${esc(d.routing_constraint_source_id?locationName(d.routing_constraint_source_id):'自動')} / 経由 ${esc((d.routing_constraint_via_node_ids||[]).map(locationName).join(', ')||'なし')} / 固定輸送区間 ${(d.routing_constraint_transport_allocation_ids||[]).length} 件</div>`:''}<button type="button" data-issue-area="logistics" data-issue-node="${esc(d.destination_id)}" data-issue-subject-kind="supply_requirement" data-issue-subject-id="${esc(d.id)}" data-issue-resource-id="${esc(d.resource_id)}">輸送網でこの需要を確認</button><button type="button" data-project-routing-constraint data-owner-kind="${esc(d.owner_kind)}" data-owner-id="${esc(d.owner_id)}" data-destination-id="${esc(d.destination_id)}" data-resource-id="${esc(d.resource_id)}">${constrained?'固定条件を編集':'固定条件を設定'}</button></div>`;}).join(''):'<div class="empty-state">現在の補給需要なし</div>';
     const settingsDisabled=p.settings_editable?'':'disabled';
     const procurementDisabled=p.procurement_editable?'':'disabled';
     const procurementOptions=(p.procurement_policy_options||[]).map((value)=>`<option value="${esc(value)}" ${value===p.procurement_policy?'selected':''}>${esc(procurementPolicyName(value))}</option>`).join('');
@@ -820,7 +959,7 @@
     const compareAction=comparisonAvailable?`<button type="button" data-construction-compare-pin="${esc(o.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
-      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],['計画可否',esc(plan.label)]]))+
+      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${compareAction}${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
       (comparisonAvailable?section('建設候補比較',constructionComparisonHtml()):'')+
@@ -830,19 +969,51 @@
     return true;
   }
 
-  function lifecycleButton({domain,id,canStart,canPause,canResume,complete=false,startLabel,pauseLabel,resumeLabel,completeLabel='完了'}){
-    let action='start',label=startLabel,enabled=Boolean(canStart),primary=Boolean(canStart);
-    if(canPause){action='pause';label=pauseLabel;enabled=true;primary=false;}
-    else if(canResume){action='resume';label=resumeLabel;enabled=true;primary=true;}
-    else if(complete)return `<button type="button" data-lifecycle-control="${esc(domain)}" disabled>${esc(completeLabel)}</button>`;
-    return `<button type="button" ${primary?'class="primary" ':''}data-lifecycle-control="${esc(domain)}" data-${domain}-action="${action}" data-id="${esc(id)}" ${enabled?'':'disabled'}>${label}</button>`;
+  function lifecycleButton({domain,id,started=false,paused=false,canStart,canPause,canResume,complete=false,startLabel,pauseLabel,resumeLabel,completeLabel='完了'}){
+    if(complete)return `<button type="button" data-lifecycle-control="${esc(domain)}" disabled>${esc(completeLabel)}</button>`;
+    // The operation identity comes from the authoritative lifecycle phase, not
+    // from current eligibility. Otherwise a blocked active campaign misleadingly
+    // changes into a disabled "Start" button during a refresh.
+    const action=!started?'start':paused?'resume':'pause';
+    const label=action==='start'?startLabel:action==='resume'?resumeLabel:pauseLabel;
+    const enabled=action==='start'?canStart:action==='resume'?canResume:canPause;
+    return `<button type="button" ${action!=='pause'?'class="primary" ':''}data-lifecycle-control="${esc(domain)}" data-${domain}-action="${action}" data-id="${esc(id)}" ${enabled?'':'disabled'}>${esc(label)}</button>`;
   }
   function researchBlockers(r){return r.current_blockers||[];}
   function researchSiteLabel(site){if(!site)return '未選択';return `${locationName(site.operational_node_id)}${site.surface_cell_id?` / ${surfaceCellLabel(site.surface_cell_id)}`:''}`;}
+  function researchSiteResourceHtml(site){
+    const rows=site.resources||[];
+    if(!rows.length)return '';
+    return `<div class="cell-sub">試作Resource（地点選択後の予約を考慮）</div>`+
+      rows.map((item)=>`<div class="cell-sub">${esc(resourceName(item.resource_id))}: 必要 ${fmt(item.required_t)} t · 予約済 ${fmt(item.reserved_t)} t · 利用可能 ${fmt(item.available_t)} t · 不足 ${fmt(item.shortfall_t)} t</div>`).join('');
+  }
   function siteOptionsHtml(r,kind){
-    const options=r.execution_context_options||[],selected=r.execution_context,comparisonAvailable=(r.execution_context_comparison_axes||[]).length>0,pins=new Set(researchComparisonPinnedKeys(r));
+    const options=r.execution_context_options||[];
+    const selected=r.execution_context;
+    const comparisonAvailable=(r.execution_context_comparison_axes||[]).length>0;
+    const pins=new Set(researchComparisonPinnedKeys(r));
     if(!options.length)return '<div class="empty-state">候補地点なし</div>';
-    return options.map((site)=>{const blockers=site.blockers||[],blocked=blockers.length,isSelected=Boolean(selected)&&site.operational_node_id===selected.operational_node_id&&(site.surface_cell_id||null)===(selected.surface_cell_id||null),canSelect=Boolean(site.can_select),attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site',pinned=pins.has(site.comparison_key),pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働制約`:'選択可'):`${blocked||1} 制約`;const compareAction=comparisonAvailable?`<button type="button" data-research-compare-pin="${esc(r.id)}" data-comparison-key="${esc(site.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>${blocked?`<div class="issue-stack">${blockers.map((x)=>issueHtml(x)).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div></div>`;}).join('');
+    return options.map((site)=>{
+      const blockers=site.blockers||[];
+      const blocked=blockers.length;
+      const isSelected=Boolean(selected)&&site.operational_node_id===selected.operational_node_id&&
+        (site.surface_cell_id||null)===(selected.surface_cell_id||null);
+      const canSelect=Boolean(site.can_select);
+      const attr=kind==='prototype'?'data-research-prototype-site':'data-research-demo-site';
+      const pinned=pins.has(site.comparison_key);
+      const pinDisabled=comparisonAvailable&&!pinned&&pins.size>=4;
+      const badge=isSelected?'選択中':canSelect?(blocked?`選択可 · ${blocked} 稼働制約`:'選択可'):`${blocked||1} 制約`;
+      const compareAction=comparisonAvailable
+        ?`<button type="button" data-research-compare-pin="${esc(r.id)}" data-comparison-key="${esc(site.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`
+        :'';
+      const estimate=comparisonValue(site,'estimated_days');
+      const timeLabel=estimate?.text_value||
+        (estimate?.number_value==null?'—':`${fmt(estimate.number_value,2)} 日`);
+      return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>`+
+        `${blocked?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}`+
+        `${researchSiteResourceHtml(site)}<div class="cell-sub">現在条件での参考所要日数: ${timeLabel}</div>`+
+        `<div class="action-row">${compareAction}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div></div>`;
+    }).join('');
   }
   function prototypeResourceHtml(r){
     const rows=r.stage_resources||[];
@@ -855,9 +1026,9 @@
     return rows.map((x)=>`<div class="detail-card"><div class="mode-title"><span>${esc(definitionName(x.category_id))}</span><span>${fmt(x.current,1)} / ${fmt(x.required,1)}</span></div><div class="cell-sub">残り ${fmt(x.unmet,1)}</div></div>`).join('');
   }
   function researchUnlocksHtml(r){
-    const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去'};
+    const kindLabels={research:'次の研究',facility:'設備',facility_upgrade:'設備更新',surface_development:'地表開発',facility_decommission:'設備撤去',process:'製法',vehicle_production:'機体製造',survey_mode:'観測方式',scientific_exploration:'科学探査'};
     const rows=r.unlocks||[];
-    if(!rows.length)return '<div class="empty-state">この研究から直接つながる新しい研究・設備・開発操作はありません。</div>';
+    if(!rows.length)return '<div class="empty-state">この研究から直接つながる利用手段はありません。</div>';
     return rows.map((row)=>{
       const remaining=row.remaining_prerequisite_ids||[];
       const stateBadge=remaining.length
@@ -871,7 +1042,7 @@
   }
   function renderResearchInspector(id){
     const r=state.research?.items?.find((x)=>x.id===id);if(!r)return false;
-    const action=lifecycleButton({domain:'research',id:r.id,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
+    const action=lifecycleButton({domain:'research',id:r.id,started:!['available','locked'].includes(r.status),paused:r.paused,canStart:r.can_start,canPause:r.can_pause,canResume:r.can_resume,complete:r.status==='complete',startLabel:'研究開始',pauseLabel:'研究停止',resumeLabel:'研究再開',completeLabel:'研究完了'});
     const phaseBlockers=researchBlockers(r);let phase='';
     if(r.status==='theory'){
       phase=section('理論研究',kv([['進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)} RP`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)} /日`],['残りRP',`${fmt(r.rp_remaining,1)} RP`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)} /日`]]));
@@ -890,7 +1061,7 @@
     const researchPriorityAttributes=r.can_set_priority?`id="researchPriorityInput" data-priority-direct="research" data-priority-id="${esc(r.id)}"`:`id="researchPriorityInput" data-draft-key="research:${esc(r.id)}:priority"`;
     const priorityControlHtml=`<div class="form-row">${priorityControl(r.priority??3,researchPriorityAttributes,'研究優先度',!(r.can_start||r.can_set_priority))}</div>`;
     setInspector(r.display_name,
-      section('研究状態',kv([['段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
+      section('研究状態',kv([['研究段階',r.progression_stage==null?'—':fmt(r.progression_stage,0)],['Category',esc(r.category||'—')],['Series',esc(r.series||'—')],['現在段階',esc(stateLabels[r.status]||A.userFacingText(r.status))],['優先度',esc(priorityName(r.priority??3))],['段階進捗',`${fmt(r.stage_progress,1)} / ${fmt(r.stage_required,1)}`],['RP要求 / 割当',`${fmt(r.rp_requested,2)} / ${fmt(r.rp_allocated,2)}`],['研究実行要求 / 割当',`${fmt(r.execution_requested,2)} / ${fmt(r.execution_allocated,2)}`]]))+
       section('解禁内容',researchUnlocksHtml(r))+
       section('現在の制約',phaseBlockers.length?`<div class="issue-stack">${phaseBlockers.map((x)=>issueHtml(x)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('研究操作',`<div class="action-stack">${priorityControlHtml}${action}</div>`)+
@@ -908,6 +1079,7 @@
       return `<div class="detail-card"><div class="mode-title"><span>${esc(v.display_name)}</span><span class="badge ${selected||v.can_assign?'ok':blockers.length?'warn':''}">${badge}</span></div><div class="cell-sub">${esc(locationName(v.operational_node_id))} · 保有 ${fmt(v.total_units,0)} / 空き ${fmt(v.free_units,0)} / 必要 ${fmt(v.required_units,0)}</div><div class="cell-sub">往路 ${v.outbound_latency_days==null?'—':`${fmt(v.outbound_latency_days,0)}日`}${v.return_latency_days==null?'':` / 復路 ${fmt(v.return_latency_days,0)}日`}</div>${blockers.length?`<div class="issue-stack" style="margin-top:7px">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:''}<div class="action-row" style="margin-top:8px"><button type="button" data-exploration-assign="${esc(x.id)}" data-vehicle-definition-id="${esc(v.vehicle_definition_id)}" ${v.can_assign?'':'disabled'}>このFleetを配備</button></div></div>`;
     }).join('')||'<div class="empty-state">利用可能なFleet候補なし</div>';
     const inputs=(x.consumable_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount)}t`).join(' / ')||'追加消耗資源なし';
+    const onboard=(x.onboard_resources||[]).map(([rid,amount])=>`${esc(resourceName(rid))} ${fmt(amount,3)}t`).join(' / ')||'搭載済みResourceなし';
     const operations=(x.movement_operations||[]).map(([op,dv])=>`${esc(A.operationName(op))} ${fmt(dv,2)} km/s`).join(' / ')||'Fleet配備前は未確定';
     const vehicleCapabilities=(x.required_vehicle_capabilities||[]).map((capabilityId)=>esc(capabilityName(capabilityId))).join(' / ')||'追加能力要件なし';
     const blockers=x.blockers||[];
@@ -915,17 +1087,26 @@
     const transitions=(x.transition_options||[]).map((option)=>transitionLabels[option]||A.userFacingText(option)).join(' / ')||'なし';
     const dispositionLabels={return_to_origin_then_release:'出発地へ帰還後にFleet解放',release_at_destination:'到着地点でFleet解放'};
     const disposition=dispositionLabels[x.completion_disposition]||A.userFacingText(x.completion_disposition)||'—';
-    let action=lifecycleButton({domain:'exploration',id:x.id,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:['complete','aborted'].includes(x.status),startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:x.status==='aborted'?'探査中止済み':'探査完了'});
-    if(x.can_return)action+=`<button type="button" data-exploration-return="${esc(x.id)}">出発地へ帰還</button>`;
-    if(x.can_abort)action+=`<button type="button" class="danger" data-exploration-abort="${esc(x.id)}">探査を中止</button>`;
-    if(x.can_unassign)action+=`<button type="button" data-exploration-unassign="${esc(x.id)}">Fleet配備を解除</button>`;
+    const targetKindLabels={operational_node:'運用拠点',surface_cell:'未運用の地表',non_surface_spatial_node:'非地表の物理Context'};
+    const fleetPosition=x.fleet_location_kind==='physical_target'?`物理目標で滞在中 · ${esc(locationName(x.fleet_location_id))}`:x.fleet_location_kind==='in_transit'?'航行中':x.fleet_location_kind==='operational_node'?esc(locationName(x.fleet_location_id)):'未配備／帰還済み';
+    let action=lifecycleButton({domain:'exploration',id:x.id,started:x.status!=='available',paused:x.paused,canStart:x.can_start,canPause:x.can_pause,canResume:x.can_resume,complete:['complete','aborted'].includes(x.status),startLabel:'探査開始',pauseLabel:'探査停止',resumeLabel:'探査再開',completeLabel:x.status==='aborted'?'探査中止済み':'探査完了'});
+    if(x.status!=='available'&&!['complete','aborted'].includes(x.status)){
+      // The Application exposes transition-specific reasons. Keep disabled
+      // choices visible without reinterpreting physical phases in the UI.
+      const transitionAction=(attribute,label,enabled,blockers,danger=false)=>
+        `<div class="action-stack"><button type="button" ${danger?'class="danger" ':''}${attribute}="${esc(x.id)}" ${enabled?'':'disabled'}>${label}</button>`+
+        (!enabled&&(blockers||[]).length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'')+'</div>';
+      action+=transitionAction('data-exploration-return','出発地へ帰還',x.can_return,x.return_action_blockers);
+      action+=transitionAction('data-exploration-abort','探査を中止',x.can_abort,x.abort_action_blockers,true);
+      action+=transitionAction('data-exploration-unassign','Fleet配備を解除',x.can_unassign,x.unassign_action_blockers);
+    }
     const dispositionControl=x.can_set_completion_disposition?`<label class="form-field"><span>完了時のFleet</span><select data-exploration-disposition="${esc(x.id)}"><option value="release_at_destination" ${x.completion_disposition==='release_at_destination'?'selected':''}>探査先に残して解放</option><option value="return_to_origin" ${x.completion_disposition==='return_to_origin_then_release'?'selected':''}>出発地へ帰還して解放</option></select></label>`:'';
     setInspector(x.display_name,
-      section('探査状態',kv([['出発地',esc(locationName(x.origin_id))],['探査先',esc(locationName(x.destination_id))],['往路時間',x.outbound_latency_days==null?'未確定':`${fmt(x.outbound_latency_days,0)}日`],['復路時間',x.return_latency_days==null?(x.assigned_vehicle_definition_id?'なし':'未確定'):`${fmt(x.return_latency_days,0)}日`],['現地活動期間',`${fmt(x.duration_days,1)}日`],['活動進捗',`${fmt(x.progress_days,1)}日`],['獲得RP',`${fmt(x.research_points_awarded,1)} / ${fmt(x.research_points_total,1)}`],['RP獲得速度',`${fmt(x.research_points_per_day,2)} /日`],['本日のRP要求 / 受入',`${fmt(x.rp_requested_today,2)} / ${fmt(x.rp_admitted_today,2)}`],['RP受入余力',fmt(x.rp_admission_headroom,2)],['RP受入制約',x.rp_admission_blocker?esc(A.constraintSummary(x.rp_admission_blocker)):'なし'],['必要機数',fmt(x.required_units,0)],['活動優先度',esc(priorityName(x.priority??3))],['配備Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.committed_units,0)} 機`:'未配備'],['完了時のFleet',esc(disposition)],['現在可能な操作',esc(transitions)]]))+
+      section('探査状態',kv([['物理Phase',esc(stateLabels[x.status]||x.status)],['手動停止',x.paused?'あり（進行を停止）':'なし'],['終了Intent',x.termination_intent?esc(A.userFacingText(x.termination_intent)):'なし'],['出発地',esc(locationName(x.origin_id))],['探査先',esc(locationName(x.destination_id))],['目的地種別',esc(targetKindLabels[x.destination_kind]||x.destination_kind)],['Fleet現在地',fleetPosition],['往路時間',x.outbound_latency_days==null?'未確定':`${fmt(x.outbound_latency_days,0)}日`],['復路時間',x.return_latency_days==null?(x.assigned_vehicle_definition_id?'なし':'未確定'):`${fmt(x.return_latency_days,0)}日`],['現地活動期間',`${fmt(x.duration_days,1)}日`],['活動進捗',`${fmt(x.progress_days,1)}日`],['獲得RP',`${fmt(x.research_points_awarded,1)} / ${fmt(x.research_points_total,1)}`],['RP獲得速度',`${fmt(x.research_points_per_day,2)} /日`],['本日のRP要求 / 受入',`${fmt(x.rp_requested_today,2)} / ${fmt(x.rp_admitted_today,2)}`],['RP受入余力',fmt(x.rp_admission_headroom,2)],['RP受入制約',x.rp_admission_blocker?esc(A.constraintSummary(x.rp_admission_blocker)):'なし'],['必要Crew',fmt(x.required_crew,0)],['拘束Crew',fmt(x.committed_crew,0)],['航行中Crew',fmt(x.crew_in_transit,0)],['船内Resource',onboard],['必要機数',fmt(x.required_units,0)],['活動優先度',esc(priorityName(x.priority??3))],['配備Fleet',x.assigned_vehicle_definition_id?`${esc(definitionName(x.assigned_vehicle_definition_id))} · ${fmt(x.committed_units,0)} 機`:'未配備'],['完了時のFleet',esc(disposition)],['現在可能な操作',esc(transitions)]]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack"><div class="form-row">${priorityControl(x.priority??3,x.can_set_priority?`id="explorationPriorityInput" data-priority-direct="exploration" data-priority-id="${esc(x.id)}"`:`id="explorationPriorityInput" data-draft-key="exploration:${esc(x.id)}:priority"`,'活動優先度',!(x.can_start||x.can_set_priority))}</div>${dispositionControl}${action||'<span class="badge">操作なし</span>'}</div>`)+
       section('Fleet適合性',vehicleRows)+
-      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)
+      section('必要条件',`<div class="cell-sub">移動要件: ${operations}</div><div class="cell-sub">最低搭載量: ${fmt(x.minimum_payload_t,2)} t</div><div class="cell-sub">必要機体能力: ${vehicleCapabilities}</div><div class="cell-sub">必要技術: ${(x.prerequisite_technologies||[]).map((id)=>esc(definitionName(id))).join(' / ')||'なし'}</div><div class="cell-sub">消耗資源: ${inputs}</div><h3>${esc(locationName(x.origin_id))} の地点条件</h3>${siteRequirementsHtml(x.origin_requirements)}<h3>${esc(locationName(x.destination_id))} の地点条件</h3>${siteRequirementsHtml(x.destination_requirements)}`)
     );
     return true;
   }
@@ -953,7 +1134,7 @@
       const pinned=pinnedComparisonKeys.has(row.comparison_key);
       const pinDisabled=comparisonAvailable&&!pinned&&pinnedComparisonKeys.size>=4;
       const compareAction=comparisonAvailable?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}" ${pinDisabled?'disabled':''}>${pinned?'比較から外す':'比較に追加'}</button>`:'';
-      return `<div class="detail-card"><div class="mode-title"><span>${esc(row.provider_display_name||'調査手段')} / ${esc(row.observation_mode_display_name||'観測方式')}</span><span class="badge ${row.viable?'ok':'warn'}">${row.viable?'利用可能':'利用不可'}</span></div><div class="cell-sub">${esc(locationName(row.provider_operational_node_id))} · ${esc(A.userFacingText(row.provider_source_kind))} · 調査速度 ${fmt(row.survey_rate,2)} · 到達可能 Lv ${fmt(row.max_knowledge_level,0)}</div><div class="cell-sub">配備 ${fmt(row.assigned_source_units,0)} / 最低 ${fmt(row.minimum_source_units,0)} · 能力 ${fmt(row.capacity_units_per_day,2)}/日</div><div class="cell-sub">推定精度 ±${pct(row.estimate_uncertainty_fraction)} / 測定精度 ±${pct(row.measurement_precision_fraction)}</div>${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(b)).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-survey-candidate-detail="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}">この観測手段に固定</button></div></div>`;
+      return `<div class="detail-card"><div class="mode-title"><span>${esc(row.provider_display_name||'調査手段')} / ${esc(row.observation_mode_display_name||'観測方式')}</span><span class="badge ${row.viable?'ok':'warn'}">${row.viable?'利用可能':'利用不可'}</span></div><div class="cell-sub">${esc(locationName(row.provider_operational_node_id))} · ${esc(A.userFacingText(row.provider_source_kind))} · 調査速度 ${fmt(row.survey_rate,2)} · 到達可能 Lv ${fmt(row.max_knowledge_level,0)}</div><div class="cell-sub">配備 ${fmt(row.assigned_source_units,0)} / 最低 ${fmt(row.minimum_source_units,0)} · 能力 ${fmt(row.capacity_units_per_day,2)}/日</div><div class="cell-sub">推定精度 ±${pct(row.estimate_uncertainty_fraction)} / 測定精度 ±${pct(row.measurement_precision_fraction)}</div>${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map((b)=>issueHtml(b)).join('')}</div>`:''}<div class="action-row">${compareAction}<button type="button" data-survey-candidate-detail="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}">詳細</button><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}" data-source-definition-id="${esc(row.source_definition_id)}">この観測手段に固定</button></div></div>`;
     }).join('')||'<div class="empty-state">現在利用可能な観測手段はありません。</div>';
     const targetCards=(c.targets||[]).map((row)=>{
       const ratio=Number(row.target_threshold)>0?Math.max(0,Math.min(1,Number(row.progress||0)/Number(row.target_threshold))):(row.complete?1:0);
@@ -961,7 +1142,7 @@
     }).join('');
     const blockers=c.blockers||[];
     const provider=c.projected_provider_definition_id?`${c.projected_provider_display_name||'調査手段'} @ ${locationName(c.projected_provider_operational_node_id)} / ${c.projected_observation_mode_display_name||'観測方式'}`:'未解決';
-    const actions=lifecycleButton({domain:'survey-campaign',id:c.id,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'調査停止',resumeLabel:'調査再開',completeLabel:'調査完了'});
+    const actions=lifecycleButton({domain:'survey-campaign',id:c.id,started:true,paused:c.paused,canStart:false,canPause:c.can_pause,canResume:c.can_resume,complete:c.status==='completed',pauseLabel:'調査停止',resumeLabel:'調査再開',completeLabel:'調査完了'});
     setInspector(`地表調査 · ${knowledgeGoalName(c.goal_knowledge_level)}`,
       section('調査状態',kv([['状態',esc(stateLabels[c.status]||A.userFacingText(c.status))],['調査目標',esc(knowledgeGoalName(c.goal_knowledge_level))],['完了 / 残り対象',`${fmt(c.covered_targets,0)} / ${fmt(c.remaining_targets,0)}`],['解決された観測手段',esc(provider)],['能力要求 / 割当',`${fmt(c.requested_service_units_per_day,2)} / ${fmt(c.allocated_service_units_per_day,2)}`],['調査進行能力',`${fmt(c.capacity_points_per_day,2)} /日`],['必要 / 配備Fleet',c.required_fleet_units==null?'—':`${fmt(c.required_fleet_units,0)} / ${fmt(c.assigned_fleet_units,0)}`],['予測残り時間',c.projected_remaining_days==null?'—':`${fmt(c.projected_remaining_days,1)}日`],['優先度',esc(priorityName(c.priority??3))]]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+
@@ -970,7 +1151,7 @@
       section('対象ごとの進捗',`<div class="survey-target-progress-grid">${targetCards||'<div class="empty-state">調査対象はありません。</div>'}</div>`)+
       section('観測手段の候補',candidates)+
       (comparisonAvailable?section('候補比較',surveyComparisonHtml(c)):'')+
-      section('観測手段の固定',`<div class="cell-sub">観測手段: ${esc(c.provider_constraint_definition_id?`${definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'自動')} · 観測方式: ${esc(c.observation_mode_constraint?(c.observation_mode_constraint_display_name||'観測方式'):'自動')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">自動選択へ戻す</button>`)
+      section('観測手段の固定',`<div class="cell-sub">観測手段: ${esc(c.provider_constraint_definition_id?`${c.provider_constraint_source_definition_id?definitionName(c.provider_constraint_source_definition_id):definitionName(c.provider_constraint_definition_id)} @ ${locationName(c.provider_constraint_operational_node_id)}`:'自動')} · 観測方式: ${esc(c.observation_mode_constraint?(c.observation_mode_constraint_display_name||'観測方式'):'自動')}</div><button type="button" data-clear-survey-constraint="${esc(c.id)}">自動選択へ戻す</button>`)
     );return true;
   }
 
@@ -987,7 +1168,7 @@
     setInspector(`${row.provider_display_name||'調査手段'} · ${row.observation_mode_display_name||'観測方式'}`,
       section('観測手段の状態',kv([['提供地点',esc(locationName(row.provider_operational_node_id))],['提供方式',esc(A.userFacingText(row.provider_source_kind))],['利用可否',row.viable?'利用可能':'利用不可'],['現在の固定条件に一致',row.matches_constraints?'一致':'不一致']]))+
       section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map((b)=>issueHtml(b)).join('')}</div>`:'<span class="badge ok">なし</span>')+
-      section('操作',`<div class="action-stack"><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}">この観測手段に固定</button>${(c.comparison_axes||[]).length?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}">${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="survey-campaign" data-id="${esc(c.id)}">調査判断へ戻る</button></div>`)+
+      section('操作',`<div class="action-stack"><button type="button" data-survey-constrain-candidate="${esc(c.id)}" data-provider-definition-id="${esc(row.provider_definition_id)}" data-operational-node-id="${esc(row.provider_operational_node_id)}" data-observation-mode-id="${esc(row.observation_mode_id)}" data-source-definition-id="${esc(row.source_definition_id)}">この観測手段に固定</button>${(c.comparison_axes||[]).length?`<button type="button" data-survey-compare-pin="${esc(c.id)}" data-comparison-key="${esc(row.comparison_key)}" aria-pressed="${pinned?'true':'false'}">${pinned?'比較から外す':'比較に追加'}</button>`:''}<button type="button" data-inspect="survey-campaign" data-id="${esc(c.id)}">調査判断へ戻る</button></div>`)+
       section('比較軸の詳細',details)
     );
     return true;
@@ -1103,10 +1284,13 @@
       setInspector('選択項目','<div class="empty-state">地点状態の取得後に操作できます。</div>');
       return;
     }
-    $('#locationTitle').textContent=loc.display_name;
+    const bodyContext=state.activeSection==='exploration'&&['surface','survey'].includes(state.activeTab);
+    const bodyId=state.selectedSurfaceBodyId||state.surfaceMap?.body_id||null;
+    const bodyName=(state.catalog?.celestial_bodies||[]).find((body)=>body.id===bodyId)?.display_name||bodyId;
+    $('#locationTitle').textContent=bodyContext&&bodyName?bodyName:loc.display_name;
     const kind=(state.world?.operational_nodes||[]).find((x)=>x.id===loc.id)?.kind;
-    $('#locationKind').textContent=`${A.locationKindName(kind)}拠点`;
-    $('#headlineMetrics').innerHTML=[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
+    $('#locationKind').textContent=bodyContext?`地表判断 · 実行拠点 ${loc.display_name}`:`${A.locationKindName(kind)}拠点`;
+    $('#headlineMetrics').innerHTML=bodyContext?'':[['発電',`${fmt(loc.power_generation_mw)} MW`],['需要',`${fmt(loc.power_demand_mw)} MW`],['建設能力',`${fmt(loc.construction_capacity_per_day)} /日`],['設備',`${loc.facilities.length}`]].map(A.metricHtml).join('');
     $$('.tab-button').forEach((b)=>b.classList.toggle('is-active',b.dataset.tab===state.activeTab));
     renderActiveTab();renderInspector();queueMicrotask(refreshVisibleSurveyIntentPreview);
   }
@@ -1147,19 +1331,56 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
+    const popSet=event.target.closest('[data-set-population-target]');
+    if(popSet){
+      const input=$('[data-population-target-input]');
+      const value=Number(input?.value);
+      if(!input||input.value.trim()===''||!Number.isSafeInteger(value)||value<0){banner('人口目標には0以上の整数を指定してください','error');return;}
+      try{await command('SetPopulationTarget',{operational_node_id:state.operationalNodeId,desired_count:value});await A.completeActiveDraft(`population:${state.operationalNodeId}`);banner('人口目標を設定しました');}catch{}
+      return;
+    }
+    const popClear=event.target.closest('[data-clear-population-target]');
+    if(popClear){try{await command('ClearPopulationTarget',{operational_node_id:state.operationalNodeId});await A.completeActiveDraft(`population:${state.operationalNodeId}`);banner('人口目標を解除しました');}catch{}return;}
     const surveyLayer=event.target.closest('[data-survey-map-layer]');if(surveyLayer){surveyMapLayer=surveyLayer.dataset.surveyMapLayer||'knowledge';const map=$('.survey-scope-map');if(map)map.dataset.surveyLayer=surveyMapLayer;$$('[data-survey-map-layer]').forEach((button)=>{const active=button.dataset.surveyMapLayer===surveyMapLayer;button.classList.toggle('is-active',active);button.setAttribute('aria-pressed',active?'true':'false');});return;}
+    const surveyCellIndex=event.target.closest('[data-survey-focus-cell]');
+    if(surveyCellIndex){
+      const input=$$('[data-survey-draft-cell]').find((node)=>node.value===surveyCellIndex.dataset.surveyFocusCell);
+      if(input){input.click();input.focus({preventScroll:true});input.closest('.survey-scope-node')?.scrollIntoView({block:'nearest',inline:'nearest'});}
+      return;
+    }
     const dependencyToggle=event.target.closest('[data-dependency-view]');if(dependencyToggle){dependencyView=dependencyToggle.dataset.dependencyView==='forecast'?'forecast':'current';renderActiveTab();renderInspector();return;}
     const dependencyTransport=event.target.closest('[data-dependency-transport]');if(dependencyTransport){const id=state.inspector?.type==='dependency-resource'?state.inspector.id:null;if(!id)return;const rows=dependencyTransport.dataset.dependencyTransport==='forecast'?(state.dependencyAnalyticsForecast?.forecast_resources||[]):(state.dependencyAnalyticsCurrent?.current_resources||[]);const row=rows.find((item)=>item.id===id);if(row?.navigation)await A.openDecisionContext(row.navigation);return;}
     const forecastHorizon=event.target.closest('[data-detailed-forecast-horizon]');if(forecastHorizon){detailedForecastHorizon=forecastHorizon.dataset.detailedForecastHorizon||'SHORT_TERM';renderActiveTab();return;}
     const runForecast=event.target.closest('[data-run-detailed-forecast]');if(runForecast){if(detailedForecastLoading)return;detailedForecastLoading=true;renderActiveTab();try{const nodeId=state.operationalNodeId;detailedForecast=await api(`/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id=${encodeURIComponent(nodeId)}&horizon=${encodeURIComponent(detailedForecastHorizon)}`);}catch(error){banner(error.message||'詳細予測の取得に失敗しました','error');}finally{detailedForecastLoading=false;renderActiveTab();}return;}
     const tab=event.target.closest('[data-tab]');if(tab){state.activeTab=tab.dataset.tab;state.inspector=null;render();if(['surface','survey'].includes(state.activeTab)){try{await A.loadUiSnapshot({preserveInteraction:false});}catch(e){banner(e.message,'error');}}return;}
-    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell')render();else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
+    const contextPick=event.target.closest('[data-nonsurface-context]');if(contextPick){state.selectedNonSurfaceContextId=contextPick.dataset.nonsurfaceContext;await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));return;}
+    const inspect=event.target.closest('[data-inspect]');if(inspect){state.inspector={type:inspect.dataset.inspect,id:inspect.dataset.id};if(inspect.dataset.inspect==='surface-cell'){render();await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));}else{renderInspector();$$('#operationsTabContent [data-inspect]').forEach((target)=>{const selected=target.dataset.inspect===inspect.dataset.inspect&&target.dataset.id===inspect.dataset.id;target.classList.toggle('is-selected',selected);if(target.hasAttribute('aria-pressed'))target.setAttribute('aria-pressed',selected?'true':'false');});}return;}
     const foundingCandidateDetail=event.target.closest('[data-founding-candidate-detail]');if(foundingCandidateDetail){state.inspector={type:'founding-candidate',id:foundingCandidateDetail.dataset.foundingCandidateDetail};renderInspector();return;}
-    const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);renderInspector();return;}
+    const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));renderInspector();return;}
     const constructionComparePin=event.target.closest('[data-construction-compare-pin]');if(constructionComparePin){toggleComparisonPin(constructionComparisonScope(),constructionComparisonCandidates(),constructionComparePin.dataset.constructionComparePin);renderInspector();return;}
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const cellId=surfaceDevelop.dataset.cellId,plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:cellId,...plan});await A.completeActiveDraft(`development:${cellId}:${surfaceDevelop.dataset.surfaceDevelop}`);preserveSurfaceDecision(cellId);banner('地表地域の開発案件を作成しました');}catch{}return;}
+    const nonSurfaceFound=event.target.closest('[data-nonsurface-found]');
+    if(nonSurfaceFound){
+      const card=nonSurfaceFound.closest('.surface-action-card');
+      const displayName=card?.querySelector('[data-new-location-name]')?.value.trim();
+      if(!displayName){banner('拠点名を入力してください','error');return;}
+      const priority=Number(card?.querySelector('[data-founding-priority]')?.value??3);
+      try{
+        await command('PlanOperationalNodeFounding',{
+          staging_node_id:nonSurfaceFound.dataset.stagingNodeId,
+          display_name:displayName,
+          target_spec:{target_type:'non_surface_operational_node',spatial_node_id:nonSurfaceFound.dataset.spatialNodeId},
+          deployment_recipe_id:nonSurfaceFound.dataset.recipeId,
+          vehicle_definition_id:nonSurfaceFound.dataset.vehicleId,
+          priority,
+        });
+        await A.completeActiveDraft(`foundation:${nonSurfaceFound.dataset.spatialNodeId}:${nonSurfaceFound.dataset.stagingNodeId}:${nonSurfaceFound.dataset.recipeId}:${nonSurfaceFound.dataset.vehicleId}`);
+        banner('非地表拠点の設立を開始しました');
+      }catch{}
+      return;
+    }
     const surfaceFound=event.target.closest('[data-surface-found]');if(surfaceFound){const cellId=surfaceFound.dataset.cellId,card=surfaceFound.closest('.surface-action-card'),displayName=card?.querySelector('[data-new-location-name]')?.value.trim();if(!displayName){banner('拠点名を入力してください','error');return;}const priority=Number(card?.querySelector('[data-founding-priority]')?.value??3);try{await command('PlanOperationalNodeFounding',{staging_node_id:surfaceFound.dataset.stagingNodeId,display_name:displayName,target_spec:{target_type:'surface_location',body_id:surfaceFound.dataset.bodyId,core_cell_id:cellId},deployment_recipe_id:surfaceFound.dataset.recipeId,vehicle_definition_id:surfaceFound.dataset.vehicleId,priority});await A.completeActiveDraft(`foundation:${cellId}:${surfaceFound.dataset.stagingNodeId}:${surfaceFound.dataset.recipeId}:${surfaceFound.dataset.vehicleId}`);preserveSurfaceDecision(cellId);banner('拠点設立を開始しました');}catch{}return;}
     const build=event.target.closest('[data-build]');if(build){const prefix=build.dataset.planPrefix||'buildPlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanBuild',{operational_node_id:state.operationalNodeId,facility_id:build.dataset.build,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-build:${build.dataset.build}`);banner('建設計画を作成しました');}catch{}return;}
     const upgrade=event.target.closest('[data-upgrade]');if(upgrade){const prefix=upgrade.dataset.planPrefix||'upgradePlan',priority=Number($(`#${prefix}PriorityInput`)?.value??3),procurementPolicy=$(`#${prefix}ProcurementTimingPolicy`)?.value||'standard_wait';try{await command('PlanFacilityUpgrade',{facility_id:upgrade.dataset.upgrade,priority,procurement_policy:procurementPolicy});await A.completeActiveDraft(`facility-upgrade:${upgrade.dataset.upgrade}`);banner('設備更新案件を作成しました');}catch{}return;}
@@ -1167,6 +1388,7 @@
     const cmd=event.target.closest('[data-command]');if(cmd){const payload={};if(cmd.dataset.facilityId)payload.facility_id=cmd.dataset.facilityId;if(cmd.dataset.projectId)payload.project_id=cmd.dataset.projectId;try{await command(cmd.dataset.command,payload);}catch{}return;}
     const processComparePin=event.target.closest('[data-process-compare-pin]');if(processComparePin){const industry=(state.operationalNode?.industry||[]).find((row)=>row.facility_id===processComparePin.dataset.processComparePin);if(!industry)return;toggleComparisonPin(processComparisonScope(industry),industry.process_options||[],processComparePin.dataset.comparisonKey);renderInspector();return;}
     const process=event.target.closest('[data-facility-process]');if(process){try{await command('SetFacilityProcess',{facility_id:process.dataset.facilityProcess,process_id:process.dataset.processId});state.inspector={type:'facility',id:process.dataset.facilityProcess};renderInspector();banner('生産工程を更新しました');}catch{}return;}
+    const extractionMethod=event.target.closest('[data-facility-extraction]');if(extractionMethod){try{await command('SetFacilityExtractionMethod',{facility_id:extractionMethod.dataset.facilityExtraction,method_id:extractionMethod.dataset.extractionMethod});state.inspector={type:'facility',id:extractionMethod.dataset.facilityExtraction};renderInspector();banner('採掘方式を更新しました');}catch{}return;}
     const projectSourcing=event.target.closest('[data-set-project-procurement]');if(projectSourcing){try{await command('SetProjectProcurementPolicy',{project_id:projectSourcing.dataset.setProjectProcurement,procurement_policy:$('#projectProcurementTimingPolicy').value});}catch{}return;}
     const projectRouting=event.target.closest('[data-project-routing-constraint]');if(projectRouting){const prefill={destination_id:projectRouting.dataset.destinationId,owner_kind:projectRouting.dataset.ownerKind,owner_id:projectRouting.dataset.ownerId,resource_id:projectRouting.dataset.resourceId};const existing=(state.logistics?.routing_constraints||[]).find((x)=>x.destination_id===prefill.destination_id&&x.owner_kind===prefill.owner_kind&&x.owner_id===prefill.owner_id&&x.resource_id===prefill.resource_id);window.SpaceIdleLogistics?.openRoutingConstraintDialog(existing||null,prefill);return;}
     const ra=event.target.closest('[data-research-action]');if(ra){const map={start:'StartResearch',pause:'PauseResearch',resume:'ResumeResearch'},payload={research_id:ra.dataset.id};if(ra.dataset.researchAction==='start')payload.priority=Number($('#researchPriorityInput')?.value??3);try{await command(map[ra.dataset.researchAction],payload);}catch{}return;}
@@ -1184,10 +1406,10 @@
     const unassign=event.target.closest('[data-exploration-unassign]');if(unassign){try{await command('UnassignExplorationFleet',{exploration_id:unassign.dataset.explorationUnassign});}catch{}return;}
     const startSurvey=event.target.closest('[data-start-survey-campaign]');if(startSurvey){const target_cell_ids=$$('[data-survey-draft-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-draft-resource]:checked').map((x)=>x.value);if(!target_cell_ids.length||!resource_ids.length){banner('対象地域と資源を1つ以上選択してください','error');return;}try{const result=await command('StartSurvey',{target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyDraftGoal')?.value??1),priority:Number($('#surveyDraftPriority')?.value??3),provider_constraint:null,observation_mode_constraint:null});await A.completeActiveDraft('survey:new');banner('地表調査を開始しました');}catch{}return;}
     const campaignAction=event.target.closest('[data-survey-campaign-action]');if(campaignAction){const map={pause:'PauseSurvey',resume:'ResumeSurvey'};try{await command(map[campaignAction.dataset.surveyCampaignAction],{campaign_id:campaignAction.dataset.id});}catch{}return;}
-    const updateSurvey=event.target.closest('[data-update-survey-campaign]');if(updateSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===updateSurvey.dataset.updateSurveyCampaign);if(!c)return;const target_cell_ids=$$('[data-survey-campaign-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-campaign-resource]:checked').map((x)=>x.value);try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyCampaignGoal')?.value??c.goal_knowledge_level),provider_constraint:c.provider_constraint_definition_id?{provider_definition_id:c.provider_constraint_definition_id,operational_node_id:c.provider_constraint_operational_node_id}:null,observation_mode_constraint:c.observation_mode_constraint});await A.completeActiveDraft(`survey:${c.id}`);}catch{}return;}
+    const updateSurvey=event.target.closest('[data-update-survey-campaign]');if(updateSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===updateSurvey.dataset.updateSurveyCampaign);if(!c)return;const target_cell_ids=$$('[data-survey-campaign-cell]:checked').map((x)=>x.value),resource_ids=$$('[data-survey-campaign-resource]:checked').map((x)=>x.value);try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids,resource_ids,goal_knowledge_level:Number($('#surveyCampaignGoal')?.value??c.goal_knowledge_level),provider_constraint:c.provider_constraint_definition_id?{provider_definition_id:c.provider_constraint_definition_id,operational_node_id:c.provider_constraint_operational_node_id,source_definition_id:c.provider_constraint_source_definition_id}:null,observation_mode_constraint:c.observation_mode_constraint});await A.completeActiveDraft(`survey:${c.id}`);}catch{}return;}
     const candidateDetail=event.target.closest('[data-survey-candidate-detail]');if(candidateDetail){state.inspector={type:'survey-candidate',id:`${candidateDetail.dataset.surveyCandidateDetail}@@${candidateDetail.dataset.comparisonKey}`};renderInspector();return;}
     const comparePin=event.target.closest('[data-survey-compare-pin]');if(comparePin){const campaignId=comparePin.dataset.surveyComparePin,key=comparePin.dataset.comparisonKey;const c=(state.surveys?.campaigns||[]).find((row)=>row.id===campaignId);if(!c)return;toggleComparisonPin(surveyComparisonScope(c),c.candidates||[],key);if(state.inspector?.type==='survey-candidate')renderInspector();else{state.inspector={type:'survey-campaign',id:campaignId};renderInspector();}return;}
-    const constrainSurvey=event.target.closest('[data-survey-constrain-candidate]');if(constrainSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===constrainSurvey.dataset.surveyConstrainCandidate);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:{provider_definition_id:constrainSurvey.dataset.providerDefinitionId,operational_node_id:constrainSurvey.dataset.operationalNodeId},observation_mode_constraint:constrainSurvey.dataset.observationModeId});}catch{}return;}
+    const constrainSurvey=event.target.closest('[data-survey-constrain-candidate]');if(constrainSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===constrainSurvey.dataset.surveyConstrainCandidate);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:{provider_definition_id:constrainSurvey.dataset.providerDefinitionId,operational_node_id:constrainSurvey.dataset.operationalNodeId,source_definition_id:constrainSurvey.dataset.sourceDefinitionId},observation_mode_constraint:constrainSurvey.dataset.observationModeId});}catch{}return;}
     const clearSurvey=event.target.closest('[data-clear-survey-constraint]');if(clearSurvey){const c=(state.surveys?.campaigns||[]).find((row)=>row.id===clearSurvey.dataset.clearSurveyConstraint);if(!c)return;try{await command('UpdateSurvey',{campaign_id:c.id,target_cell_ids:c.target_cell_ids,resource_ids:c.resource_ids,goal_knowledge_level:c.goal_knowledge_level,provider_constraint:null,observation_mode_constraint:null});}catch{}return;}
   });
 

@@ -100,6 +100,27 @@ class LogisticsFlowMixin:
                 return cached
         rows: list[TransportServiceSupply] = []
         backpressure = self._arrival_backpressure_by_service()
+        for transit in self.transport.passenger_service_transits.values():
+            if transit.arrival_day <= day:
+                leg = transit.legs[-1]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError("Passenger transit references missing Transport Allocation")
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
+            # A missed intermediate handoff keeps the preceding Service's
+            # cabin occupied.  It cannot be counted as available Cargo mass.
+            for index, delay in enumerate(transit.handoff_wait_days):
+                if not delay or transit.last_settled_day >= transit.transfer_boundary_day(index):
+                    continue
+                leg = transit.legs[index]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError('Passenger handoff references missing Transport Allocation')
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
         for edge in self.transport.transport_service_supplies(day):
             occupied = backpressure.get(self._capacity_owner_key_from_supply(edge), 0.0)
             if occupied <= 1e-12:
@@ -649,6 +670,21 @@ class LogisticsFlowMixin:
                 raise
             raise ValueError("routing hard constraint has no matching transport path") from exc
         return tuple(row[0] for row in selected)
+
+    def passenger_service_path(
+        self, origin: SpatialNodeId, destination: SpatialNodeId, day: int,
+        allowed_allocation_ids: frozenset[EntityId] | None = None,
+    ) -> tuple[TransportServiceSupply, ...]:
+        """Find a physical Service route through the existing Cargo path rules.
+
+        A hard choice filters eligible allocations rather than creating another
+        passenger router or Transport capacity source.
+        """
+        edges = tuple(edge for edge in self._service_edges(day)
+                      if edge.capacity_t_per_day > 1e-12
+                      and (allowed_allocation_ids is None or edge.allocation_id in allowed_allocation_ids)
+                      and self.transport.service_vehicle(edge.allocation_id).passengers.seats > 0)
+        return self._automatic_service_path(origin, destination, edges, None)
 
     def supply_service_path(
         self,
@@ -1254,7 +1290,11 @@ class LogisticsFlowMixin:
                     legs=waiting.remaining_legs, dispatch_day=day,
                 )
             else:
-                admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount)
+                admission = self.inventory.admit(
+                    waiting.node_id, waiting.resource_id, amount,
+                    source_owner=f"logistics_cargo:{waiting.requirement_id}",
+                    activity_id=f"cargo_arrival:{waiting.id}",
+                )
                 if abs(admission.admitted_t - amount) > 1e-7:
                     raise RuntimeError("boundary Cargo allocation exceeded Inventory Admission")
             waiting.amount_t = max(0.0, waiting.amount_t - amount)
@@ -1334,7 +1374,11 @@ class LogisticsFlowMixin:
         activities: list[DomainActivity] = []
         for row, amount in execution.executable_dispatches:
             requirement = row.requirement
-            self.inventory.consume_allocated(row.source_id, requirement.resource_id, amount)
+            self.inventory.consume_allocated(
+                row.source_id, requirement.resource_id, amount,
+                destination_owner=f"logistics_cargo:{requirement.id}",
+                activity_id=f"cargo_dispatch:{requirement.id}",
+            )
 
             activities.append(
                 DomainActivity(
@@ -1356,7 +1400,11 @@ class LogisticsFlowMixin:
         for allocation_id, location_id, resource_id, amount in (
             execution.operational_resource_use_by_allocation
         ):
-            self.inventory.consume_allocated(location_id, resource_id, amount)
+            self.inventory.consume_allocated(
+                location_id, resource_id, amount,
+                destination_owner=f"transport_allocation:{allocation_id}",
+                activity_id=f"transport_operation:{allocation_id}",
+            )
 
         for allocation_id, directional in execution.used_by_allocation:
             if (
@@ -1470,18 +1518,28 @@ class LogisticsFlowMixin:
             if not selected_path
             else min(float(edge.capacity_t_per_day) for edge in selected_path)
         )
-        arrivals = [
-            flow.first_arrival_day
-            for flow in self.cargo_flows.values()
+        committed_flows = (
+            flow for flow in self.cargo_flows.values()
             if flow.requirement_id == requirement.id
-        ]
+        )
+        arrivals = sorted(
+            (flow.first_final_arrival_day, flow.last_final_arrival_day)
+            for flow in committed_flows
+        )
+        # Arrival waiting has no reliable onward/admission date.  In particular,
+        # a trailing dispatched slice does not imply complete material readiness.
+        waiting_for_requirement = any(
+            waiting.requirement_id == requirement.id
+            for waiting in self.arrival_waiting.values()
+        )
         return SupplyPlanningOptions(
             tuple(candidates),
             tuple(operational),
             tuple(stocked),
             tuple(path_candidates),
             tuple(dict.fromkeys(blockers)),
-            min(arrivals) if arrivals else None,
+            min(first for first, _last in arrivals) if arrivals else None,
+            max(last for _first, last in arrivals) if arrivals and not waiting_for_requirement else None,
             selected_source_id=selected_source_id,
             selected_service_ids=tuple(edge.key for edge in selected_path),
             selected_movement_plan_ids=tuple(

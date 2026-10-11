@@ -96,6 +96,7 @@ class SurveyObservationModeSpec:
     required_source_capabilities: frozenset[str] = frozenset()
     minimum_source_units: int = 1
     display_name: str | None = None
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -129,11 +130,13 @@ class SurveyObservationModeSpec:
 class SurveyProviderSpec:
     id: DefinitionId
     source_kind: SurveyProviderSourceKind
-    source_definition_id: DefinitionId
+    required_source_capabilities: frozenset[str]
     observation_modes: tuple[SurveyObservationModeSpec, ...]
     capacity_units_per_source_per_day: float = 1.0
 
     def __post_init__(self) -> None:
+        if not self.required_source_capabilities or any(not item for item in self.required_source_capabilities):
+            raise ValueError("survey provider requires physical source capabilities")
         if not self.observation_modes:
             raise ValueError("survey provider must define at least one observation mode")
         if self.capacity_units_per_source_per_day <= 0:
@@ -159,6 +162,7 @@ class SurveyCampaignControlState(str, Enum):
 class SurveyProviderConstraint:
     provider_definition_id: DefinitionId
     operational_node_id: SpatialNodeId
+    source_definition_id: DefinitionId | None = None
 
 
 @dataclass
@@ -207,27 +211,39 @@ class SurveyProviderAssignmentState:
 
 @dataclass(frozen=True)
 class ExtractionSpec:
-    facility_def_id: DefinitionId
+    id: DefinitionId
+    required_capabilities: frozenset[str]
     resource_id: DefinitionId
     output_resource_id: DefinitionId
-    nominal_capacity_t_per_day: float
     opportunity_requirements: SiteRequirements = SiteRequirements()
     geology_accessibility_key: str | None = None
     terrain_accessibility_attribute: str | None = None
+    minimum_knowledge_level: KnowledgeLevel | None = None
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    display_name: str | None = None
 
     def __post_init__(self) -> None:
-        if self.nominal_capacity_t_per_day < 0:
-            raise ValueError("nominal extraction capacity must be non-negative")
+        if self.display_name is not None and not self.display_name:
+            raise ValueError("extraction method display name must not be empty")
+        if not self.required_capabilities or any(not capability for capability in self.required_capabilities):
+            raise ValueError("extraction method requires explicit capability")
         if self.geology_accessibility_key is not None and not self.geology_accessibility_key:
             raise ValueError("geology accessibility key must not be empty")
         if self.terrain_accessibility_attribute is not None and not self.terrain_accessibility_attribute:
             raise ValueError("terrain accessibility attribute must not be empty")
+        if self.minimum_knowledge_level is not None:
+            object.__setattr__(self, "minimum_knowledge_level", KnowledgeLevel(self.minimum_knowledge_level))
+            if self.minimum_knowledge_level is KnowledgeLevel.UNKNOWN:
+                raise ValueError("minimum extraction knowledge level must be positive")
 
 
 @dataclass(frozen=True)
 class ExtractionResourceSnapshot:
     resource_id: DefinitionId
+    static_opportunity: float
     effective_opportunity: float
+    knowledge_eligible_cell_count: int
+    knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
     diminishing_efficiency: float
@@ -247,3 +263,4 @@ class ExtractionSnapshot:
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[str, ...]
+    method_id: DefinitionId

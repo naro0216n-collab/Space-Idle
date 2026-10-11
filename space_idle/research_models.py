@@ -61,6 +61,17 @@ class ResearchPrototypeStageSpec:
 
 
 @dataclass(frozen=True)
+class ResearchPrototypeSiteResource:
+    """Resource readiness at a candidate site after any site-switch reservation release."""
+
+    resource_id: DefinitionId
+    required_t: float
+    reserved_t: float
+    available_t: float
+    shortfall_t: float
+
+
+@dataclass(frozen=True)
 class ResearchDemonstrationStageSpec:
     stage_id: str
     required_work: float
@@ -112,12 +123,21 @@ class ResearchDefinition:
     display_name: str
     stage_specs: tuple[ResearchStageSpec, ...]
     prerequisites: frozenset[DefinitionId] = frozenset()
+    progression_stage: int | None = None
+    category: str | None = None
+    series: str | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("research display name must not be empty")
         if not self.stage_specs:
             raise ValueError("research definition must explicitly define its stages")
+        if self.progression_stage is not None and self.progression_stage < 1:
+            raise ValueError("research progression stage must be positive")
+        if self.category is not None and not self.category:
+            raise ValueError("research category must not be empty")
+        if self.series is not None and not self.series:
+            raise ValueError("research series must not be empty")
         ids = tuple(spec.stage_id for spec in self.stage_specs)
         if len(set(ids)) != len(ids):
             raise ValueError("research definition stage ids must be unique")
@@ -163,12 +183,18 @@ class ResearchProviderSourceKind(str, Enum):
 class ResearchProviderSpec:
     id: DefinitionId
     source_kind: ResearchProviderSourceKind
-    source_definition_id: DefinitionId
+    required_source_capabilities: frozenset[str]
     tier: int
     levels: tuple[ResearchProviderLevelSpec, ...]
     site_requirements: SiteRequirements = SiteRequirements()
+    crew_person_days_per_research_point: float = 0.0
 
     def __post_init__(self) -> None:
+        import math
+        if not math.isfinite(self.crew_person_days_per_research_point) or self.crew_person_days_per_research_point < 0:
+            raise ValueError("research provider Crew requirement must be finite and nonnegative")
+        if not self.required_source_capabilities or any(not item for item in self.required_source_capabilities):
+            raise ValueError("research provider requires nonempty physical source capabilities")
         if self.tier < 1:
             raise ValueError("research provider tier must be positive")
         if not self.levels:
@@ -178,6 +204,9 @@ class ResearchProviderSpec:
             if level.level in seen:
                 raise ValueError(f"duplicate research provider level: {level.level}")
             seen.add(level.level)
+
+    def accepts_source(self, capabilities) -> bool:
+        return self.required_source_capabilities.issubset(set(capabilities))
 
     def level_spec(self, level: int) -> ResearchProviderLevelSpec:
         for spec in self.levels:

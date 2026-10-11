@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from ..facilities import FacilityBook, FacilityState
-from ..inventory import InventoryBook
-from ..power import PowerSnapshot
-from ..shared import DefinitionId, EntityId, SpatialNodeId
-from .models import ProcessSpec, ProcessSnapshot
+from ..facilities import FacilityState
+from ..shared import DefinitionId
+from .models import ProcessSpec
 
 
 class ProcessSelectionMixin:
+    def missing_process_technologies(self, process: ProcessSpec) -> tuple[DefinitionId, ...]:
+        return self.technology_state.missing(process.prerequisite_technologies)
+
     def compatible_processes(self, facility_def_id: DefinitionId) -> tuple[ProcessSpec, ...]:
-        return tuple(process for process in self.processes.values() if process.facility_def_id == facility_def_id)
+        """Content-defined interface compatibility, independent of Facility identity."""
+        definition = self.facility_defs[facility_def_id]
+        capabilities = frozenset(supply.id for supply in definition.capability_supplies)
+        return tuple(sorted((
+            process for process in self.processes.values()
+            if process.required_capabilities <= capabilities
+        ), key=lambda process: str(process.id)))
 
     def process_for(self, facility: FacilityState) -> ProcessSpec | None:
         compatible = self.compatible_processes(facility.definition_id)
@@ -18,18 +25,18 @@ class ProcessSelectionMixin:
         selected = facility.selected_process_id
         if selected is not None:
             process = self.processes.get(selected)
-            if process is None or process.facility_def_id != facility.definition_id:
+            if process is None or process not in compatible:
                 raise RuntimeError("selected process is incompatible with facility")
             return process
-        # A single compatible recipe needs no per-instance state. If more are
-        # added later, explicit player selection is required rather than relying
-        # on definition/registration order.
+        # Single candidate needs no saved selection; multiple candidates require intent.
         if len(compatible) == 1:
             return compatible[0]
         return None
 
     def set_process(self, facility: FacilityState, process_id: DefinitionId) -> None:
-        process = self.processes[process_id]
-        if process.facility_def_id != facility.definition_id:
+        if process_id not in {row.id for row in self.compatible_processes(facility.definition_id)}:
             raise ValueError("process is incompatible with facility")
+        missing = self.missing_process_technologies(self.processes[process_id])
+        if missing:
+            raise ValueError("process technology requirements not met: " + ", ".join(map(str, missing)))
         facility.selected_process_id = process_id

@@ -13,6 +13,7 @@ from ..transport.service import TransportService
 from ..maintenance import FacilityMaintenanceService
 from ..power import PowerService
 from ..projects import ProjectService
+from ..population import PopulationService, PopulationRules, ExternalPopulationSourceDefinition
 from ..research import ResearchService
 from ..service_capacity import ServiceCapacityRegistry
 from ..simulation import Simulation
@@ -60,7 +61,10 @@ from ..content.base_transport import (
 )
 
 
-def build_base_simulation(catalog: GameCatalog) -> Simulation:
+def build_base_simulation(
+    catalog: GameCatalog, *, population_rules: PopulationRules,
+    external_population_sources: tuple[ExternalPopulationSourceDefinition, ...],
+) -> Simulation:
     """Compose static base-game definitions with empty authoritative runtime State."""
     graph, environment = build_world_definition()
 
@@ -84,7 +88,7 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         power=power,
         service_capacity_registry=service_capacity_registry,
         surface_movement_rules=build_surface_movement_rules(),
-        surface_access_movement_rules=build_surface_access_movement_rules(),
+        surface_access_movement_rules=build_surface_access_movement_rules(graph, environment),
         spaceflight_movement_rules=build_spaceflight_movement_rules(),
         technology_state=technology,
     )
@@ -96,12 +100,12 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         facilities=facilities,
     )
 
-    industry = IndustryService(build_process_specs())
+    industry = IndustryService(build_process_specs(), facilities.definitions, technology)
 
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    survey = SurveyService(build_survey_targets(), build_survey_providers(), facilities, graph, transport)
+    survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport, technology)
 
     storage = StorageService(build_storage_provider_specs(), inventory, facilities)
 
@@ -143,10 +147,6 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         build_research_definitions(), build_research_providers(),
         facilities, inventory, power, service_capacity_registry, transport, technology_state=technology,
         experience_rules=build_experience_contribution_rules(),
-    )
-    scientific_exploration = ScientificExplorationService(
-        build_scientific_exploration_definitions(),
-        facilities, inventory, power, transport, research, service_capacity_registry,
     )
     transport.register_fleet_commitment_owner_resolver(
         "founding", lambda owner_id: owner_id in founding.projects
@@ -204,7 +204,7 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
     logistics.register_supply_owner_resolver(
         "scientific_exploration", exploration_owner_exists
     )
-    extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure)
+    extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure, survey, facilities.definitions, technology)
 
     # Keep the Contract Domain composed and available for future events,
     # collaboration, or scenario content. Base Game starts with no offers.
@@ -212,11 +212,26 @@ def build_base_simulation(catalog: GameCatalog) -> Simulation:
         build_contract_templates(), facilities, power, service_capacity_registry
     )
 
+    population = PopulationService(
+        facilities, inventory, graph, population_rules,
+        {source.id: source for source in external_population_sources},
+    )
+    population.transport = transport
+    population.logistics = logistics
+    population.technology_state = technology
+    scientific_exploration = ScientificExplorationService(
+        build_scientific_exploration_definitions(),
+        facilities, inventory, power, transport, research, service_capacity_registry, population, technology,
+    )
+    transport.register_fleet_commitment_owner_resolver(
+        'passenger_transfer', lambda owner_id: owner_id in population.transfer_orders,
+    )
+    facility_lifecycle_registry.register_blocker_provider('population', population)
     sim = Simulation(
         day=0, market=market, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding, contracts=contracts,
-        service_capacity_registry=service_capacity_registry,
+        service_capacity_registry=service_capacity_registry, population=population,
         research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,

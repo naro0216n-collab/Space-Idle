@@ -5,8 +5,9 @@ from .application_commands import (
     GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, Query,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, Query,
     GetMarket,
+    GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -46,6 +47,10 @@ class ApplicationQueryRouterMixin:
                 self._query_projection_cache = None
 
     def _query(self, query: Query) -> QueryResult:
+        if isinstance(query, GetPassengerTransferPreview):
+            return self._passenger_transfer_preview_view(query)
+        if isinstance(query, GetPassengerTransfers):
+            return self._passenger_transfers_view(query)
         if isinstance(query, GetCatalog):
             return self._catalog_view()
         if isinstance(query, GetWorld):
@@ -55,7 +60,22 @@ class ApplicationQueryRouterMixin:
             body_id = CelestialBodyId(query.body_id)
             if body_id not in self._simulation.graph.bodies:
                 raise KeyError(body_id)
-            return self._surface_map_view(body_id)
+            if not set(query.founding_cell_ids) <= {
+                str(cell.id) for cell in self._simulation.graph.cells_for_body(body_id)
+            }:
+                raise ValueError("founding Cell must belong to the selected body")
+            return self._surface_map_view(body_id, founding_cell_ids=query.founding_cell_ids)
+        if isinstance(query, GetNonSurfaceFoundingOptions):
+            from .shared import CelestialBodyId
+            body_id = CelestialBodyId(query.body_id)
+            if body_id not in self._simulation.graph.bodies:
+                raise KeyError(body_id)
+            if query.founding_context_id and query.founding_context_id not in {
+                str(node.id) for node in self._simulation.graph.nodes.values()
+                if node.body_id == body_id
+            }:
+                raise ValueError("founding Context must belong to the selected body")
+            return self._non_surface_founding_view(body_id, founding_context_id=query.founding_context_id)
         if isinstance(query, GetOperationalNode):
             return self._operational_node_view(self._require_operational_node(query.operational_node_id))
         if isinstance(query, GetFlowReport):
@@ -78,6 +98,10 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetLogisticsSummary):
             return self._logistics_summary_view()
         if isinstance(query, GetMovementPlans):
+            if query.touching_node_id is not None:
+                if query.origin_id is not None or query.destination_id is not None or query.movement_plan_id is not None:
+                    raise ApplicationError("invalid_query", "touching_node_id cannot be combined with a Movement Plan or OD scope")
+                self._require_operational_node(query.touching_node_id)
             if query.origin_id is not None:
                 self._require_operational_node(query.origin_id)
             if query.destination_id is not None:
@@ -130,8 +154,13 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetScientificExplorations):
             return self._scientific_explorations_view()
         if isinstance(query, GetSurveys):
+            from .shared import CelestialBodyId
+            body_id = None if query.body_id is None else CelestialBodyId(query.body_id)
+            if body_id is not None and body_id not in self._simulation.graph.bodies:
+                raise KeyError(body_id)
             return self._surveys_view(
-                None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id)
+                None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id),
+                body_id=body_id,
             )
         if isinstance(query, GetSurveyCampaignIntentPreview):
             return self._survey_campaign_intent_preview_view(query)

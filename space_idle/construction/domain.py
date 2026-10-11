@@ -108,6 +108,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
 def restore_projects(sim: Any, data: dict[str, Any]) -> None:
     sim.projects._counter = decode_int(data["counter"], "construction counter")
     sim.projects.projects.clear()
+    sim.projects.__dict__.pop("_retired_facility_definitions", None)
     project_fields = {
         "id", "target", "operational_node_id", "site_cell_id", "priority",
         "procurement_policy", "status", "procurement_started_day", "construction_done",
@@ -282,8 +283,14 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 def validate_runtime(sim: Any) -> None:
     _validate_counter(sim.projects._counter, sim.projects.projects, "project.", "construction project")
-    active_upgrade_targets: set[EntityId] = set()
-    active_decommission_targets: set[EntityId] = set()
+    active_facility_targets: set[EntityId] = set()
+    completed_decommissions: dict[EntityId, ConstructionProject] = {}
+    for historical in sim.projects.projects.values():
+        if (isinstance(historical.target, FacilityDecommissionTarget)
+                and historical.status is ProjectStatus.COMPLETE):
+            old_id = historical.target.facility_id
+            _require(old_id not in completed_decommissions, f"duplicate completed decommission: {old_id}")
+            completed_decommissions[old_id] = historical
     active_spatial_cells: set[SurfaceCellId] = set()
     for project_id, project in sim.projects.projects.items():
         _require(sim.graph.has_operational_node(project.operational_node_id), f"project references unknown host location: {project_id}")
@@ -294,18 +301,31 @@ def validate_runtime(sim: Any) -> None:
             _require(not sim.facilities.placement_failures(target.facility_def_id, project.operational_node_id, project.site_cell_id), f"project has invalid facility placement: {project_id}")
         elif isinstance(target, FacilityUpgradeTarget):
             _require(project.site_cell_id is None, f"upgrade project duplicates facility site cell: {project_id}")
-            _require(target.facility_id in sim.facilities.facilities, f"upgrade project references unknown facility: {project_id}")
-            facility = sim.facilities.facilities[target.facility_id]
-            _require(facility.operational_node_id == project.operational_node_id, f"upgrade project location mismatch: {project_id}")
-            key = (facility.definition_id, target.target_level)
+            facility = sim.facilities.facilities.get(target.facility_id)
+            removed = completed_decommissions.get(target.facility_id)
+            _require(facility is not None or removed is not None,
+                     f"upgrade project references unknown facility: {project_id}")
+            if facility is not None:
+                _require(facility.operational_node_id == project.operational_node_id,
+                         f"upgrade project location mismatch: {project_id}")
+                definition_id = facility.definition_id
+            else:
+                _require(project.status in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED},
+                         f"active upgrade references removed facility: {project_id}")
+                _require(removed.operational_node_id == project.operational_node_id,
+                         f"historical upgrade location mismatch: {project_id}")
+                definition_id = removed.target.facility_definition_id
+            key = (definition_id, target.target_level)
             _require(key in sim.projects.upgrade_recipes, f"upgrade project references unknown recipe: {project_id}")
             recipe = sim.projects.upgrade_recipes[key]
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
-                _require(target.facility_id not in active_upgrade_targets, f"duplicate active facility upgrade: {target.facility_id}")
-                active_upgrade_targets.add(target.facility_id)
+                _require(target.facility_id not in active_facility_targets,
+                         f"overlapping active facility projects: {target.facility_id}")
+                active_facility_targets.add(target.facility_id)
                 _require(facility.level == target.target_level - 1, f"active upgrade target level mismatch: {project_id}")
-            if project.status is ProjectStatus.COMPLETE:
-                _require(facility.level == target.target_level, f"completed upgrade did not apply target level: {project_id}")
+            if project.status is ProjectStatus.COMPLETE and facility is not None:
+                _require(facility.level >= target.target_level,
+                         f"completed upgrade did not apply target level: {project_id}")
         elif isinstance(target, FacilityDecommissionTarget):
             _require(project.site_cell_id is None, f"decommission project duplicates facility site cell: {project_id}")
             if project.status is ProjectStatus.COMPLETE:
@@ -323,18 +343,32 @@ def validate_runtime(sim: Any) -> None:
                     f"completed decommission has negative salvage result: {project_id}",
                 )
             else:
-                _require(target.facility_id in sim.facilities.facilities, f"decommission project references unknown facility: {project_id}")
-                facility = sim.facilities.facilities[target.facility_id]
-                _require(facility.operational_node_id == project.operational_node_id, f"decommission project location mismatch: {project_id}")
-                _require(facility.definition_id == target.facility_definition_id, f"decommission target definition mismatch: {project_id}")
-                _require(target.facility_definition_id in sim.projects.decommission_recipes, f"decommission project references unknown recipe: {project_id}")
+                facility = sim.facilities.facilities.get(target.facility_id)
+                _require(facility is not None or
+                         (project.status is ProjectStatus.CANCELLED
+                          and target.facility_id in completed_decommissions),
+                         f"decommission project references unknown facility: {project_id}")
+                if facility is not None:
+                    _require(facility.operational_node_id == project.operational_node_id,
+                             f"decommission project location mismatch: {project_id}")
+                    _require(facility.definition_id == target.facility_definition_id,
+                             f"decommission target definition mismatch: {project_id}")
+                else:
+                    historical = completed_decommissions[target.facility_id]
+                    _require(historical.operational_node_id == project.operational_node_id
+                             and historical.target.facility_definition_id == target.facility_definition_id,
+                             f"historical decommission target mismatch: {project_id}")
+                _require(target.facility_definition_id in sim.projects.decommission_recipes,
+                         f"decommission project references unknown recipe: {project_id}")
                 recipe = sim.projects.decommission_recipes[target.facility_definition_id]
                 if project.status is not ProjectStatus.CANCELLED:
-                    _require(target.facility_id not in active_decommission_targets, f"duplicate active facility decommission: {target.facility_id}")
-                    active_decommission_targets.add(target.facility_id)
+                    _require(target.facility_id not in active_facility_targets,
+                             f"overlapping active facility projects: {target.facility_id}")
+                    active_facility_targets.add(target.facility_id)
                 if project.irreversible_started:
                     from ..facilities import FacilityLifecycle
-                    _require(facility.lifecycle is FacilityLifecycle.DECOMMISSIONING, f"irreversible decommission facility lifecycle mismatch: {project_id}")
+                    _require(facility.lifecycle is FacilityLifecycle.DECOMMISSIONING,
+                             f"irreversible decommission facility lifecycle mismatch: {project_id}")
         else:
             _require(project.site_cell_id is None, f"surface development duplicates target cell: {project_id}")
             _require(target.recipe_id in sim.projects.spatial_recipes, f"development project references unknown recipe: {project_id}")
@@ -375,14 +409,27 @@ def validate_runtime(sim: Any) -> None:
                 )
         if isinstance(target, (NewFacilityTarget, FacilityUpgradeTarget)):
             if project.status is ProjectStatus.COMPLETE:
-                _require(project.completed_facility_id in sim.facilities.facilities, f"complete project lacks affected facility: {project_id}")
-                completed = sim.facilities.facilities[project.completed_facility_id]
-                _require(completed.operational_node_id == project.operational_node_id, f"completed facility location mismatch: {project_id}")
-                _require(completed.definition_id == recipe.facility_def_id, f"completed facility definition mismatch: {project_id}")
-                if isinstance(target, NewFacilityTarget):
-                    _require(completed.site_cell_id == project.site_cell_id, f"completed facility site mismatch: {project_id}")
+                _require(project.completed_facility_id is not None,
+                         f"complete project lacks affected facility reference: {project_id}")
+                completed = sim.facilities.facilities.get(project.completed_facility_id)
+                if completed is not None:
+                    _require(completed.operational_node_id == project.operational_node_id,
+                             f"completed facility location mismatch: {project_id}")
+                    _require(completed.definition_id == recipe.facility_def_id,
+                             f"completed facility definition mismatch: {project_id}")
+                    if isinstance(target, NewFacilityTarget):
+                        _require(completed.site_cell_id == project.site_cell_id,
+                                 f"completed facility site mismatch: {project_id}")
                 else:
-                    _require(project.completed_facility_id == target.facility_id, f"upgrade completed wrong facility: {project_id}")
+                    historical = completed_decommissions.get(project.completed_facility_id)
+                    _require(historical is not None,
+                             f"complete project lacks affected facility/decommission record: {project_id}")
+                    _require(historical.operational_node_id == project.operational_node_id
+                             and historical.target.facility_definition_id == recipe.facility_def_id,
+                             f"completed facility history mismatch: {project_id}")
+                if isinstance(target, FacilityUpgradeTarget):
+                    _require(project.completed_facility_id == target.facility_id,
+                             f"upgrade completed wrong facility: {project_id}")
             else:
                 _require(project.completed_facility_id is None, f"incomplete project has completed facility: {project_id}")
         else:

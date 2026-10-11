@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
 from .application_comparison import project_comparison_axes
 from .app_contracts.ui_reports import ComparisonValueRow
@@ -59,6 +61,12 @@ class LogisticsMovementPlanProjectorMixin:
         return fleet, presets, suggested_max
 
     def _movement_service_mode_rows(self, movement_plan) -> tuple[MovementServiceModeRow, ...]:
+        # Multiple read models (summary, logistics detail, comparison) refer to
+        # the same physical Movement Plan within a single query snapshot.
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("movement_service_modes", movement_plan.id)
+        if cache is not None and key in cache:
+            return cache[key]
         sim = self._simulation
         rows: list[MovementServiceModeRow] = []
 
@@ -109,7 +117,10 @@ class LogisticsMovementPlanProjectorMixin:
                 )
             )
 
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _movement_plan_rows(
         self,
@@ -117,13 +128,31 @@ class LogisticsMovementPlanProjectorMixin:
         origin_id: str | None = None,
         destination_id: str | None = None,
         movement_plan_id: str | None = None,
+        touching_node_id: str | None = None,
         include_modes: bool = True,
         comparison_vehicle_definition_id: str | None = None,
     ) -> tuple[MovementPlanRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = (
+            "movement_plan_rows", origin_id, destination_id, touching_node_id,
+            movement_plan_id, comparison_vehicle_definition_id,
+        )
+        # The summary only suppresses mode details in presentation; it still
+        # needs the same service feasibility derivation as the detailed view.
+        if cache is not None and key in cache:
+            complete_rows = cache[key]
+            return complete_rows if include_modes else tuple(
+                replace(row, modes=()) for row in complete_rows
+            )
         sim = self._simulation
         if movement_plan_id is not None:
             movement_plan = sim.transport.movement_plan(movement_plan_id)
             candidates = () if movement_plan is None else (movement_plan,)
+        elif touching_node_id is not None:
+            outbound = sim.transport.outbound_movement_plans(touching_node_id)
+            inbound = sim.transport.inbound_movement_plans(touching_node_id)
+            by_id = {str(plan.id): plan for plan in (*outbound, *inbound)}
+            candidates = tuple(by_id[plan_id] for plan_id in sorted(by_id))
         elif origin_id is not None and destination_id is not None:
             candidates = sim.transport.movement_plan_candidates(origin_id, destination_id)
         elif origin_id is not None:
@@ -210,18 +239,24 @@ class LogisticsMovementPlanProjectorMixin:
                         related_entity_kind="movement_plan",
                         related_entity_id=str(movement_plan.id),
                     ),
-                    modes=mode_rows if include_modes else (),
+                    modes=mode_rows,
                     comparison_key=str(movement_plan.id),
                     comparison_values=tuple(comparison_values),
                 )
             )
-        return tuple(rows)
+        complete_rows = tuple(rows)
+        if cache is not None:
+            cache[key] = complete_rows
+        return complete_rows if include_modes else tuple(
+            replace(row, modes=()) for row in complete_rows
+        )
 
     def _movement_plans_view(self, query) -> MovementPlansView:
         rows = self._movement_plan_rows(
             origin_id=query.origin_id,
             destination_id=query.destination_id,
             movement_plan_id=query.movement_plan_id,
+            touching_node_id=query.touching_node_id,
             include_modes=query.include_modes,
             comparison_vehicle_definition_id=query.vehicle_definition_id,
         )

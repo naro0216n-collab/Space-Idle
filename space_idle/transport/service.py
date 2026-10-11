@@ -29,6 +29,7 @@ from .models import (
     TransportOperationUsageRequirements,
     TransportServicePlan,
     TransportServiceSupply,
+    PassengerServiceTransit,
     VehicleDef,
 )
 from .operations import OperationEvaluatorRegistry, build_default_operation_registry
@@ -93,6 +94,7 @@ class TransportService(
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
     fleet_relocations: dict[EntityId, FleetRelocation] = field(default_factory=dict)
     movement_executions: dict[EntityId, MovementExecution] = field(default_factory=dict)
+    passenger_service_transits: dict[EntityId, PassengerServiceTransit] = field(default_factory=dict)
     fleet_releases: dict[EntityId, FleetRelease] = field(default_factory=dict)
     technology_state: TechnologyState = field(default_factory=TechnologyState)
     vehicle_production_projects: dict[EntityId, VehicleProductionState] = field(default_factory=dict)
@@ -143,6 +145,11 @@ class TransportService(
     def vehicle_definition(self, vehicle_definition_id: DefinitionId) -> VehicleDef | None:
         """Return the immutable Vehicle definition through the Transport facade."""
         return self.vehicle_defs.get(vehicle_definition_id)
+
+    def service_vehicle(self, allocation_id: EntityId) -> VehicleDef:
+        """Resolve Vehicle from a player-owned Transport Allocation."""
+        allocation = self.transport_allocations[allocation_id]
+        return self.vehicle_defs[allocation.vehicle_definition_id]
 
     def vehicle_definitions(self) -> tuple[VehicleDef, ...]:
         """Return immutable Vehicle definitions in deterministic order."""
@@ -335,6 +342,36 @@ class TransportService(
             metric_capacity_burden=lambda plan: 1.0 / max(
                 vehicle.max_cargo_for_movement(plan), 1.0e-12
             ),
+            stable_key=lambda plan: str(plan.id),
+        )
+
+    def movement_plan_from_physical_target_for_vehicle(
+        self,
+        target: MovementEndpoint,
+        destination_id: SpatialNodeId,
+        vehicle_definition_id: DefinitionId,
+        *,
+        payload_t_per_unit: float = 0.0,
+        day: int = 0,
+    ) -> MovementPlan:
+        if vehicle_definition_id not in self.vehicle_defs:
+            raise KeyError(vehicle_definition_id)
+        vehicle = self.vehicle_defs[vehicle_definition_id]
+        candidates = self.movement_resolver().plans_from_physical_target(target, destination_id)
+        self._movement_plan_cache.update((plan.id, plan) for plan in candidates)
+        usable = [plan for plan in candidates
+                  if not self.vehicle_movement_physical_failures(plan.id, vehicle_definition_id, day)
+                  and vehicle.max_cargo_for_movement(plan) + 1e-9 >= payload_t_per_unit
+                  and vehicle.movement_asset_disposition(plan).value == "destination"]
+        if not usable:
+            raise ValueError(f"no executable physical return {target.locator_id} -> {destination_id}")
+        from ..path_selection import select_canonical_candidate
+        return select_canonical_candidate(
+            usable,
+            metric_time=lambda plan: self.performance_movement_transit_days(plan, vehicle.performance),
+            metric_propellant=lambda plan: vehicle.propellant_t(plan, payload_t_per_unit),
+            metric_handoffs=lambda _plan: 0.0,
+            metric_capacity_burden=lambda plan: 1.0 / max(vehicle.max_cargo_for_movement(plan), 1.e-12),
             stable_key=lambda plan: str(plan.id),
         )
 

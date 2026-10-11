@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..contracts_domain import DOMAIN_EXTENSION as CONTRACTS_EXTENSION
 from ..construction.domain import DOMAIN_EXTENSION as CONSTRUCTION_EXTENSION
 from ..core_domain import DOMAIN_EXTENSION as CORE_EXTENSION
+from ..population_domain import DOMAIN_EXTENSION as POPULATION_EXTENSION
 from ..domain import DomainExtension
 from ..facilities_domain import DOMAIN_EXTENSION as FACILITIES_EXTENSION
 from ..market_domain import DOMAIN_EXTENSION as MARKET_EXTENSION
@@ -38,4 +39,5 @@ BASE_DOMAIN_EXTENSIONS: tuple[DomainExtension, ...] = (
     SCIENTIFIC_EXPLORATION_EXTENSION,
     SURVEY_EXTENSION,
     EXTRACTION_EXTENSION,
+    POPULATION_EXTENSION,
 )

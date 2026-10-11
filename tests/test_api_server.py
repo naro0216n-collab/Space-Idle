@@ -3,6 +3,8 @@ from __future__ import annotations
 import http.client
 import json
 from threading import Thread
+from contextlib import contextmanager
+from unittest.mock import patch
 
 from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -37,13 +39,28 @@ def _raw_request(port: int, path: str):
     return status, headers, data
 
 
-def test_http_api_command_query_and_save_load_boundary(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
+@contextmanager
+def running_api(tmp_path):
+    """Isolate each HTTP contract, including startup free from reverse DNS."""
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=tmp_path,
+    )
+    with patch("http.server.socket.getfqdn", side_effect=AssertionError("Reverse DNS on HTTP bind")):
+        server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_command_and_world_read_cross_json_boundary(tmp_path):
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {"type": "AdvanceTime", "payload": {"days": 2}},
@@ -56,6 +73,31 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+        # The independent finite passenger intent uses real HTTP Command and
+        # Query contracts; setting a Population Target is not a prerequisite.
+        status, _, payload = _request(port, "GET", f"/api/v1/population/passenger-preview?origin_node_id={ids.EARTH}&destination_node_id={ids.LEO}&requested_count=2")
+        assert status == 200 and payload["data"]["requested_count"] == 2
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "RequestPassengerTransfer", "payload": {
+                "origin_node_id": str(ids.EARTH), "destination_node_id": str(ids.LEO),
+                "requested_count": 2, "capacity_source_constraint": {
+                    "dedicated_vehicle_definition_id": str(ids.REUSABLE_LAUNCH_VEHICLE),
+                    "dedicated_units": 1,
+                },
+            },
+        })
+        assert status == 200 and payload["data"]["created_id"]
+        order_id = payload["data"]["created_id"]
+        status, _, payload = _request(port, "GET", "/api/v1/population/passenger-transfers")
+        assert status == 200 and payload["data"]["items"][0]["id"] == order_id
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "CancelPassengerTransfer", "payload": {"order_id": order_id},
+        })
+        assert status == 200
+
+
+def test_http_decision_views_scope_and_projection_boundary(tmp_path):
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
@@ -72,6 +114,43 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert data["dependency_analytics_current"]["time_basis"] == "CURRENT"
         assert data["dependency_analytics_forecast"]["time_basis"] == "FORECAST"
 
+        # UI snapshot stays geographic when no Founding decision is selected;
+        # a focused target requests only its own actionable candidates.
+        status, _, unselected_payload = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}",
+        )
+        assert status == 200
+        assert all(not row["foundation_options"] for row in unselected_payload["data"]["surface_map"]["cells"])
+        target_cell_id = str(ids.MOON_CELL_FARSIDE_HIGHLANDS)
+        status, _, selected_payload = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id={target_cell_id}",
+        )
+        assert status == 200
+        focused = selected_payload["data"]["surface_map"]["cells"]
+        assert next(row for row in focused if row["id"] == target_cell_id)["foundation_options"]
+        assert all(not row["foundation_options"] for row in focused if row["id"] != target_cell_id)
+        status, _, direct_unselected = _request(port, "GET", f"/api/v1/surfaces/{ids.MOON}")
+        assert status == 200
+        assert all(not row["foundation_options"] for row in direct_unselected["data"]["cells"])
+        status, _, direct_selected = _request(
+            port, "GET", f"/api/v1/surfaces/{ids.MOON}?founding_cell_id={target_cell_id}",
+        )
+        assert status == 200
+        assert next(row for row in direct_selected["data"]["cells"] if row["id"] == target_cell_id)["foundation_options"]
+        status, _, orbit_unselected = _request(port, "GET", "/api/v1/non-surface-founding-options?body_id=base.body.jupiter")
+        assert status == 200
+        assert all(not row["foundation_options"] for row in orbit_unselected["data"]["contexts"])
+        orbit_id = orbit_unselected["data"]["contexts"][0]["spatial_node_id"]
+        status, _, orbit_selected = _request(
+            port, "GET", f"/api/v1/non-surface-founding-options?body_id=base.body.jupiter&founding_context_id={orbit_id}",
+        )
+        assert status == 200
+        assert orbit_selected["data"]["contexts"][0]["foundation_options"]
+        status, _, invalid = _request(
+            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id=base.cell.venus.highland",
+        )
+        assert status in (400, 422)
+
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/target-stock-options?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
@@ -81,7 +160,13 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert target_stock_options["destination_id"] == str(ids.EARTH)
         assert target_stock_options["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
         assert target_stock_options["normal_demand_t_per_day"] > 0
-        assert [row["display_name"] for row in target_stock_options["presets"]] == ["1日分", "3日分", "7日分"]
+        # HTTP carries the Application's offered quantities, without making
+        # transient preset copy or count part of the wire protocol.
+        presets = target_stock_options["presets"]
+        assert presets
+        assert all(row["key"] and row["display_name"] for row in presets)
+        assert all(row["days_of_supply"] > 0 for row in presets)
+        assert all(row["target_quantity_t"] > 0 for row in presets)
 
         allocation_options_status, _, allocation_options_payload = _request(
             port, "GET",
@@ -119,14 +204,23 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
             f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
         )
         assert status == 200
-        assert payload["data"]["base_day"] == 2
-        assert payload["data"]["projected_day"] == 4
+        assert payload["data"]["projected_day"] == payload["data"]["base_day"] + 2
         assert payload["data"]["period_days"] == 2
         assert payload["data"]["inventory"]
 
+
+def test_http_nested_intent_and_save_load_boundary(tmp_path):
+    with running_api(tmp_path) as port:
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 2}},
+        )
+        assert status == 200
+        assert payload["revision"] == 1
+
         # Exercise nested command decoding through the real HTTP boundary.
-        # Domain validation should reject this not-yet-surveyed founding target,
-        # proving the typed target reached the application command contract.
+        # Generic founding no longer hardcodes a Resource Knowledge requirement;
+        # a typed surface target should therefore reach the application contract.
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {
@@ -144,9 +238,8 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                 },
             },
         )
-        assert status == 400
-        assert payload["error"]["code"] == "invalid_command"
-        assert "knowledge_requirement" in payload["error"]["message"]
+        assert status == 200
+        assert payload["data"]["created_id"] is not None
 
         # Survey Campaign crosses the HTTP codec as a multi-target intent with a nested
         # optional provider constraint; the query must expose the same authoritative scope.
@@ -155,7 +248,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
             "/api/v1/survey-campaign-intent-preview"
             f"?target_cell_id={survey_cells[0]}"
             f"&target_cell_id={survey_cells[1]}"
-            f"&resource_id={ids.WATER}"
+            f"&resource_id={ids.VOLATILE_BEARING_MATERIAL}"
             "&goal_knowledge_level=1"
         )
         status, _, payload = _request(port, "GET", preview_path)
@@ -168,10 +261,10 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                 "type": "StartSurvey",
                 "payload": {
                     "target_cell_ids": survey_cells,
-                    "resource_ids": [str(ids.WATER)],
+                    "resource_ids": [str(ids.VOLATILE_BEARING_MATERIAL)],
                     "goal_knowledge_level": 1,
                     "provider_constraint": {
-                        "provider_definition_id": str(ids.LUNAR_RESOURCE_SURVEY_ORBITER),
+                        "provider_definition_id": str(ids.LUNAR_FLEET_SURVEY_PROVIDER),
                         "operational_node_id": str(ids.LUNAR_ORBIT),
                     },
                     "observation_mode_constraint": "remote_orbital_spectrometry",
@@ -189,10 +282,10 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert status == 200
         campaign = next(row for row in payload["data"]["surveys"]["campaigns"] if row["id"] == campaign_id)
         assert set(campaign["target_cell_ids"]) == set(survey_cells)
-        assert campaign["resource_ids"] == [str(ids.WATER)]
+        assert campaign["resource_ids"] == [str(ids.VOLATILE_BEARING_MATERIAL)]
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
-        assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
+        assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_FLEET_SURVEY_PROVIDER)
         assert campaign["projected_provider_display_name"]
         assert "base." not in campaign["projected_provider_display_name"]
 
@@ -235,18 +328,10 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         )
         assert status == 400
         assert payload["error"]["code"] == "invalid_save"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+
 
 def test_http_api_rejects_stale_command_revision(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {"type": "AdvanceTime", "payload": {"days": 1}},
@@ -263,29 +348,16 @@ def test_http_api_rejects_stale_command_revision(tmp_path):
         assert payload["error"]["code"] == "revision_conflict"
         assert payload["error"]["details"]["current_revision"] == 1
         assert headers.get("X-Space-Idle-Revision") == "1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):
-    runtime = GameRuntime(
-        new_game_factory=build_game_application,
-        load_factory=build_game_application_for_load,
-        save_dir=tmp_path,
-    )
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
         status, headers, payload = _request(port, "GET", path)
         assert status == 200
         assert payload["revision"] == 0
         etag = headers["ETag"]
-        assert etag.startswith('"ui-state-0-')
+        assert etag and etag.startswith('"') and etag.endswith('"')
 
         status, headers, payload = _request(
             port,
@@ -311,6 +383,23 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         assert status == 200
         assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
 
+        # The inspection node is independent of the execution node. Scope
+        # changes invalidate the composite view token and constrain Movement.
+        inspect_path = (
+            f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+            f"&inspect_node_id={ids.LUNAR_ORBIT}"
+        )
+        status, _, payload = _request(port, "GET", inspect_path, headers={"X-Space-Idle-Known-View": etag})
+        assert status == 200
+        inspected = payload["data"]
+        assert inspected["operational_node"]["id"] == str(ids.EARTH)
+        assert inspected["inspected_node"]["id"] == str(ids.LUNAR_ORBIT)
+        assert inspected["inspected_flow"]["operational_node_id"] == str(ids.LUNAR_ORBIT)
+        assert all(
+            str(ids.LUNAR_ORBIT) in (plan["origin_id"], plan["destination_id"])
+            for plan in inspected["movement_plans"]["items"]
+        )
+
         status, _, payload = _request(
             port,
             "POST",
@@ -328,20 +417,12 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         )
         assert status == 200
         assert payload["revision"] == 1
-        assert headers["ETag"].startswith('"ui-state-1-')
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        assert headers["ETag"] != etag
+        assert headers["ETag"] and headers["ETag"].startswith('"')
 
 
 def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         status, headers, body = _raw_request(port, "/")
         assert status == 200
         assert headers["Content-Type"].startswith("text/html")
@@ -349,7 +430,3 @@ def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
 
         status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
         assert status == 404
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)

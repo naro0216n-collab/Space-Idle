@@ -10,11 +10,11 @@ from .application_views import (
     ResearchProviderFleetRow, ResearchProviderRow, ResearchStageRow, ResearchUnlockRow,
     ResearchRow, ResearchView,
 )
-from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow
+from .app_contracts.progression_views import ResearchExecutionSiteRow, ResearchSiteOptionRow, ResearchSiteResourceRow
 from .research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
     ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
-    ResearchProviderSourceKind,
+    ResearchProviderSourceKind, ResearchExecutionSite,
 )
 from .site import requires_surface_cell_context
 
@@ -74,8 +74,32 @@ class ResearchProgressionProjectorMixin:
                 recipe.prerequisite_technologies,
             )
 
+        for process in sim.industry.processes.values():
+            append("process", str(process.id), process.display_name, process.prerequisite_technologies)
+        if sim.extraction is not None:
+            for method in sim.extraction.specs.values():
+                append("extraction_method", str(method.id), method.display_name or str(method.id),
+                       method.prerequisite_technologies)
+        for vehicle in sim.transport.vehicle_definitions():
+            append("vehicle_production", str(vehicle.id), vehicle.display_name,
+                   vehicle.production.prerequisite_technologies)
+        if sim.survey is not None:
+            for provider in sim.survey.providers.values():
+                for mode in provider.observation_modes:
+                    append("survey_mode", f"{provider.id}:{mode.id}",
+                           mode.display_name or mode.id, mode.prerequisite_technologies)
+        if sim.scientific_exploration is not None:
+            for definition in sim.scientific_exploration.definitions.values():
+                append("scientific_exploration", str(definition.id), definition.display_name,
+                       definition.prerequisite_technologies)
+
         kind_order = {
             "research": 0,
+            "process": 1,
+            "extraction_method": 1,
+            "vehicle_production": 2,
+            "survey_mode": 2,
+            "scientific_exploration": 2,
             "facility": 1,
             "facility_upgrade": 2,
             "surface_development": 3,
@@ -110,11 +134,17 @@ class ResearchProgressionProjectorMixin:
                 else:
                     blockers = sim.research.demonstration_site_blockers(definition.id, node.id, sim.day, power_by_location.get(node.id), surface_cell_id)
                     can_select = sim.research.can_select_demonstration_site(definition.id, node.id, sim.day, surface_cell_id)
-                resource_required = sum(spec.resources.values()) if isinstance(spec, ResearchPrototypeStageSpec) else 0.0
-                resource_available = (
-                    sum(sim.inventory.available(node.id, resource_id) for resource_id in spec.resources)
-                    if isinstance(spec, ResearchPrototypeStageSpec) else 0.0
+                resource_status = (
+                    sim.research.prototype_site_resources(
+                        definition.id, ResearchExecutionSite(node.id, surface_cell_id)
+                    ) if isinstance(spec, ResearchPrototypeStageSpec) else ()
                 )
+                resource_rows = tuple(ResearchSiteResourceRow(
+                    str(item.resource_id), item.required_t, item.reserved_t,
+                    item.available_t, item.shortfall_t,
+                ) for item in resource_status)
+                resource_required = sum(item.required_t for item in resource_status)
+                resource_shortfall = sum(item.shortfall_t for item in resource_status)
                 service_requirements = tuple(
                     requirement for requirement in spec.execution_requirements
                     if isinstance(requirement, ServiceCapacityRequirement)
@@ -145,14 +175,21 @@ class ResearchProgressionProjectorMixin:
                     for assignment in sim.research.provider_assignments.values()
                     if assignment.operational_node_id == node.id
                 )
-                estimated_days = None if service_work_capacity <= 1e-12 else float(remaining_work) / service_work_capacity
+                estimated_days = (
+                    None if blockers or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
+                    else float(remaining_work) / service_work_capacity
+                )
                 comparison_values = (
                     ComparisonValueRow("location", text_value=str(node.display_name)),
                     ComparisonValueRow("fleet_commitment", number_value=float(committed_fleet)),
                     ComparisonValueRow("resource_required_t", number_value=float(resource_required)),
-                    ComparisonValueRow("resource_available_t", number_value=float(resource_available)),
+                    ComparisonValueRow("resource_shortfall_t", number_value=float(resource_shortfall)),
                     ComparisonValueRow("service_work_capacity", number_value=float(service_work_capacity)),
-                    ComparisonValueRow("estimated_days", number_value=None if estimated_days is None else float(estimated_days)),
+                    ComparisonValueRow(
+                        "estimated_days",
+                        number_value=None if estimated_days is None else float(estimated_days),
+                        text_value="算定不可" if estimated_days is None else None,
+                    ),
                 )
                 rows.append(ResearchSiteOptionRow(
                     str(node.id), None if surface_cell_id is None else str(surface_cell_id),
@@ -165,6 +202,7 @@ class ResearchProgressionProjectorMixin:
                     can_select,
                     comparison_key=f"{node.id}|{surface_cell_id or ''}",
                     comparison_values=comparison_values,
+                    resources=resource_rows,
                 ))
         return tuple(rows)
 
@@ -178,45 +216,46 @@ class ResearchProgressionProjectorMixin:
             if provider.source_kind is ResearchProviderSourceKind.FLEET
         )
         for provider in sorted(fleet_providers, key=lambda row: str(row.id)):
-            for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
-                assignment = sim.research.provider_assignment_for(
-                    provider.id, node.id, provider.source_definition_id
-                )
-                committed_units = (
-                    0 if assignment is None
-                    else sim.research.provider_assignment_quantity(assignment.id)
-                )
-                free_units = sim.transport.fleet_free_units(
-                    provider.source_definition_id, node.id
-                )
-                failures = sim.research.provider_assignment_site_failures(
-                    provider.id, node.id, day=sim.day
-                )
-                blocker_rows = [(failure.code, failure.detail) for failure in failures]
-                if committed_units == 0 and free_units == 0:
-                    blocker_rows.append((
-                        "fleet_unavailable",
-                        "No free compatible Fleet units are available at this operational node",
+            for vehicle in sorted(sim.research.compatible_vehicle_definitions(provider.id), key=lambda row: str(row.id)):
+                for node in sorted(sim.graph.operational_nodes(), key=lambda row: str(row.id)):
+                    assignment = sim.research.provider_assignment_for(
+                        provider.id, node.id, vehicle.id
+                    )
+                    committed_units = (
+                        0 if assignment is None
+                        else sim.research.provider_assignment_quantity(assignment.id)
+                    )
+                    free_units = sim.transport.fleet_free_units(
+                        vehicle.id, node.id
+                    )
+                    failures = sim.research.provider_assignment_site_failures(
+                        provider.id, node.id, day=sim.day
+                    )
+                    blocker_rows = [(failure.code, failure.detail) for failure in failures]
+                    if committed_units == 0 and free_units == 0:
+                        blocker_rows.append((
+                            "fleet_unavailable",
+                            "No free compatible Fleet units are available at this operational node",
+                        ))
+                    blockers = tuple(blocker_rows)
+                    max_units = committed_units if failures else committed_units + free_units
+                    rows.append(ResearchProviderFleetRow(
+                        provider_definition_id=str(provider.id),
+                        vehicle_definition_id=str(vehicle.id),
+                        operational_node_id=str(node.id),
+                        tier=provider.tier,
+                        assignment_id=None if assignment is None else str(assignment.id),
+                        committed_units=committed_units,
+                        free_units=free_units,
+                        max_units=max_units,
+                        blockers=constraints_from_pairs(
+                            blockers,
+                            affected_action="set_research_provider_fleet",
+                            related_entity_kind="research_provider",
+                            related_entity_id=str(provider.id),
+                        ),
+                        can_set_quantity=(committed_units > 0 or max_units > 0),
                     ))
-                blockers = tuple(blocker_rows)
-                max_units = committed_units if failures else committed_units + free_units
-                rows.append(ResearchProviderFleetRow(
-                    provider_definition_id=str(provider.id),
-                    vehicle_definition_id=str(provider.source_definition_id),
-                    operational_node_id=str(node.id),
-                    tier=provider.tier,
-                    assignment_id=None if assignment is None else str(assignment.id),
-                    committed_units=committed_units,
-                    free_units=free_units,
-                    max_units=max_units,
-                    blockers=constraints_from_pairs(
-                        blockers,
-                        affected_action="set_research_provider_fleet",
-                        related_entity_kind="research_provider",
-                        related_entity_id=str(provider.id),
-                    ),
-                    can_set_quantity=(committed_units > 0 or max_units > 0),
-                ))
         return tuple(rows)
 
     def _research_provider_rows(self, power_by_location, execution_allocations) -> tuple[ResearchProviderRow, ...]:
@@ -247,7 +286,7 @@ class ResearchProgressionProjectorMixin:
                 id=str(facility.id),
                 provider_definition_id=str(provider.id),
                 source_kind=provider.source_kind.value,
-                source_definition_id=str(provider.source_definition_id),
+                source_definition_id=str(facility.definition_id),
                 operational_node_id=str(facility.operational_node_id),
                 tier=provider.tier,
                 level=facility.level,
@@ -388,9 +427,9 @@ class ResearchProgressionProjectorMixin:
                         ("location", "Location", "text", None),
                         ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
                         ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_available_t", "現地利用可能Resource", "number", "t"),
+                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
-                        ("estimated_days", "推定所要時間", "number", "日"),
+                        ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))
                     location_id = None if state.execution_context is None else state.execution_context.operational_node_id
                     for resource_id, required in sorted(current_spec.resources.items(), key=lambda row: str(row[0])):
@@ -422,9 +461,9 @@ class ResearchProgressionProjectorMixin:
                         ("location", "Location", "text", None),
                         ("fleet_commitment", "研究Fleet拘束", "integer", "機"),
                         ("resource_required_t", "必要Resource", "number", "t"),
-                        ("resource_available_t", "現地利用可能Resource", "number", "t"),
+                        ("resource_shortfall_t", "現地Resource不足", "number", "t"),
                         ("service_work_capacity", "Service供給による実行能力", "number", "work/日"),
-                        ("estimated_days", "推定所要時間", "number", "日"),
+                        ("estimated_days", "現在条件での参考所要日数", "number", "日"),
                     ), (option.comparison_values for option in execution_context_options))
                 elif isinstance(current_spec, ResearchOperationalExperienceStageSpec):
                     stage_required = sum(current_spec.requirements.values())
@@ -436,6 +475,12 @@ class ResearchProgressionProjectorMixin:
             total_theory_cost = sum(
                 spec.research_point_cost for spec in definition.stage_specs
                 if isinstance(spec, ResearchTheoryStageSpec)
+            )
+            projected_current_blockers = constraints_from_pairs(
+                current_blockers,
+                affected_action="progress_research",
+                related_entity_kind="research",
+                related_entity_id=str(definition.id),
             )
             rows.append(ResearchRow(
                 id=str(definition.id), display_name=definition.display_name, status=status,
@@ -450,12 +495,8 @@ class ResearchProgressionProjectorMixin:
                 rp_allocated=point_allocations.get(definition.id, 0.0),
                 rp_remaining=sim.research.theory_remaining(definition.id),
                 execution_requested=execution_requested, execution_allocated=execution_allocated,
-                current_blockers=constraints_from_pairs(
-                    current_blockers,
-                    affected_action="progress_research",
-                    related_entity_kind="research",
-                    related_entity_id=str(definition.id),
-                ),
+                current_blockers=projected_current_blockers,
+                primary_blocker=(projected_current_blockers[0] if projected_current_blockers else None),
                 start_blockers=constraints_from_pairs(
                     start_blockers,
                     affected_action="start_research",
@@ -467,6 +508,9 @@ class ResearchProgressionProjectorMixin:
                 execution_context_comparison_axes=execution_context_comparison_axes,
                 operational_experience=tuple(experience_rows),
                 prerequisites=tuple(sorted(str(item) for item in definition.prerequisites)),
+                progression_stage=definition.progression_stage,
+                category=definition.category,
+                series=definition.series,
                 unlocks=unlocks_by_id.get(definition.id, ()),
             ))
         return ResearchView(

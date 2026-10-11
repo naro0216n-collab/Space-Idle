@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
 from space_idle import (
     AdvanceTime,
@@ -106,7 +107,7 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
             endurance_days=30.0,
             operation_capabilities=(
                 PoweredAscentCapability(
-                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0
+                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0, 400.0
                 ),
             ),
         ),
@@ -209,6 +210,14 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
             "infrastructure_count",
         } <= value_keys
 
+    # Node-neighbourhood and OD views share the scoped Movement contract.
+    touching = app.query(GetMovementPlans(
+        touching_node_id=str(EARTH), include_modes=True,
+    )).items
+    assert touching
+    assert all(str(EARTH) in (row.origin_id, row.destination_id) for row in touching)
+    assert len({row.id for row in touching}) == len(touching)
+
 def test_application_decision_queries_are_observational_and_reuse_projection_within_query(monkeypatch):
     app = build_game_application()
     sim = app._simulation
@@ -298,8 +307,13 @@ def test_target_stock_options_project_current_state_and_application_owned_preset
         app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     )
     assert view.normal_demand_t_per_day > 0
-    assert [preset.days_of_supply for preset in view.presets] == [1.0, 3.0, 7.0]
+    # Application owns the preset choices; a transient UI assortment is not a
+    # gameplay contract. Every offered quantity must match its time basis.
+    assert view.presets
+    assert len({preset.key for preset in view.presets}) == len(view.presets)
     for preset in view.presets:
+        assert preset.display_name
+        assert preset.days_of_supply is not None and preset.days_of_supply > 0
         assert preset.target_quantity_t == pytest.approx(
             view.normal_demand_t_per_day * preset.days_of_supply
         )
@@ -555,15 +569,68 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     assert "items" in payload["cargo_flows"]
 
 
+def test_logistics_projections_share_scoped_derivations_without_changing_read_contracts():
+    app = build_game_application()
+    sim = app._simulation
+    # A logistics-only read does not need to generate unrelated Movement modes.
+    with patch.object(app, "_movement_plan_rows", side_effect=AssertionError(
+        "logistics summary/details must not expand Movement candidates",
+    )):
+        logistics_only = app.query_many({
+            "logistics": GetLogistics(), "summary": GetLogisticsSummary(),
+        })
+    assert logistics_only["logistics"].fleet_pools
+    assert logistics_only["summary"].fleet_units >= 0
+
+    plan_count = len(sim.transport.movement_plan_options())
+    vehicle_count = len(sim.transport.vehicle_definitions())
+    from space_idle import application_project_movement_plans
+
+    # A snapshot that uses the logistics summary, details, and Movement view
+    # must expand each plan's vehicle modes only once, not once per consumer.
+    with patch.object(
+        application_project_movement_plans, "vehicle_concept",
+        wraps=application_project_movement_plans.vehicle_concept,
+    ) as modes, patch.object(
+        sim.transport, "movement_geometry",
+        wraps=sim.transport.movement_geometry,
+    ) as geometries, patch.object(
+        sim.transport, "fleet_commitment_snapshots",
+        wraps=sim.transport.fleet_commitment_snapshots,
+    ) as commitments:
+        batched = app.query_many({
+            "summary": GetLogisticsSummary(),
+            "logistics": GetLogistics(),
+            "movement": GetMovementPlans(include_modes=True),
+            "fleet": GetFleet(),
+            "allocations": GetTransportAllocations(),
+            "cargo": GetCargoFlows(),
+        })
+        assert modes.call_count == plan_count * vehicle_count
+        assert geometries.call_count == plan_count
+        # Fleet pools aggregate commitments once, not once for each pool or
+        # every read model. GetFleet commitments are projected separately.
+        assert commitments.call_count == 2
+
+    assert batched["logistics"] == app.query(GetLogistics())
+    assert batched["movement"] == app.query(GetMovementPlans(include_modes=True))
+    assert batched["fleet"] == app.query(GetFleet())
+    assert batched["allocations"] == app.query(GetTransportAllocations())
+    assert batched["cargo"] == app.query(GetCargoFlows())
+
+    # The cache belongs to one query snapshot, not the authoritative state.
+    app.execute(AdvanceTime(1))
+    assert app.query(GetLogisticsSummary()) == app.query_many({"summary": GetLogisticsSummary()})["summary"]
+
+
 def test_construction_queries_expose_authoritative_project_controls():
     app = build_game_application()
     build_options = app.query(GetBuildOptions(str(EARTH)))
     assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
 
     project_id = app.execute(PlanBuild(
-        str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
+        str(EARTH), str(ids.CONSTRUCTION_YARD), priority=2,
         procurement_policy="immediate",
-        site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
@@ -588,3 +655,38 @@ def test_construction_queries_expose_authoritative_project_controls():
     app.execute(SetProjectProcurementPolicy(project_id, "extended_wait"))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert (updated.priority, updated.procurement_policy) == (5, "extended_wait")
+
+
+def test_survey_service_catalog_uses_physical_source_names_for_new_content():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.survey is not None
+
+    catalog = app.query(GetCatalog())
+    projected = {row.id: row.display_name for row in catalog.service_capacities}
+    assert set(projected) == set(sim.survey.service_capacity_types())
+    assert all("survey_observation:" not in name for name in projected.values())
+    assert all(name.endswith(" 調査能力") for name in projected.values())
+
+    source_id = DefinitionId("test.vehicle.survey_platform")
+    sim.transport.vehicle_defs[source_id] = VehicleDef(
+        id=source_id,
+        display_name="追加観測プラットフォーム",
+        performance=TransportPerformanceProfile(
+            dry_mass_t=2.0, payload_t=0.0,
+            generic_capabilities=("survey_sensor",),
+        ),
+    )
+    expanded = {row.id: row.display_name for row in app.query(GetCatalog()).service_capacities}
+    assert len(expanded) == len(projected) + 1
+    provider = next(row for row in sim.survey.providers.values()
+                    if row.source_kind.value == "fleet"
+                    and row.required_source_capabilities <= {"survey_sensor"})
+    service_id = sim.survey.service_type_for_provider(provider.id, source_id)
+    assert expanded[service_id] == "追加観測プラットフォーム 調査能力"
+    assert all(expanded[key] == name for key, name in projected.items())
+    assert service_id in sim.survey.service_capacity_types()
+
+    payload = to_jsonable(app.query(GetCatalog()))
+    assert any(row == {"id": service_id, "display_name": "追加観測プラットフォーム 調査能力"}
+               for row in payload["service_capacities"])

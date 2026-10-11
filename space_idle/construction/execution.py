@@ -60,6 +60,8 @@ class ConstructionExecutionMixin:
                 facility.operational_node_id,
                 recovery_potential,
                 decommission_recoverable_fraction,
+                source_owner=f"decommissioned_facility:{target.facility_id}",
+                activity_id=f"facility_decommission:{project.id}",
             )
             project.salvage_recovered_fraction = min(
                 1.0, max(0.0, float(decommission_recoverable_fraction))
@@ -72,6 +74,8 @@ class ConstructionExecutionMixin:
                 project.operational_node_id, target.cell_id
             )
         project.status = ProjectStatus.COMPLETE
+        if isinstance(target, FacilityDecommissionTarget):
+            self.__dict__.pop("_retired_facility_definitions", None)
 
     def _target_ready_for_execution(self, project: ConstructionProject) -> bool:
         target = project.target

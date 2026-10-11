@@ -94,14 +94,25 @@ class FleetCommitmentState:
     quantity: int
     operational_node_id: SpatialNodeId | None = None
     movement_execution_id: EntityId | None = None
+    physical_target: MovementEndpoint | None = None
+    # Finite shipboard Resources remain Transport-owned while an Activity
+    # retains this Fleet, including at an unestablished physical target.
+    onboard_resources: dict[DefinitionId, float] = field(default_factory=dict)
+    onboard_accommodation: PassengerAccommodation | None = None
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
             raise ValueError("fleet commitment quantity must be positive")
-        if (self.operational_node_id is None) == (self.movement_execution_id is None):
+        if sum(value is not None for value in (
+            self.operational_node_id, self.movement_execution_id, self.physical_target,
+        )) != 1:
             raise ValueError(
-                "fleet commitment must be at exactly one Operational Node or Movement execution"
+                "fleet commitment must occupy one Operational Node, Movement or physical target"
             )
+        if self.physical_target is not None and self.physical_target.operational_node_id is not None:
+            raise ValueError("fleet physical target must not be an Operational Node")
+        if any(not math.isfinite(value) or value < 0 for value in self.onboard_resources.values()):
+            raise ValueError("fleet onboard Resource must be finite and nonnegative")
 
     @property
     def in_movement(self) -> bool:
@@ -116,6 +127,9 @@ class FleetCommitmentSnapshot:
     quantity: int
     operational_node_id: SpatialNodeId | None
     movement_execution_id: EntityId | None
+    physical_target: MovementEndpoint | None = None
+    onboard_resources: tuple[tuple[DefinitionId, float], ...] = ()
+    onboard_accommodation: PassengerAccommodation | None = None
 
     @property
     def in_movement(self) -> bool:
@@ -146,8 +160,17 @@ class FleetRelocation:
     resource_needs: tuple[FleetRelocationResourceNeed, ...] = ()
     priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
     movement_execution_id: EntityId | None = None
+    carrier_vehicle_definition_id: DefinitionId | None = None
+    carrier_units: int = 0
+    carrier_fleet_commitment_id: EntityId | None = None
 
     def __post_init__(self) -> None:
+        if (self.carrier_vehicle_definition_id is None) != (self.carrier_fleet_commitment_id is None):
+            raise ValueError("carrier Vehicle and commitment must be specified together")
+        if self.carrier_units < 0 or (self.carrier_vehicle_definition_id is not None and self.carrier_units <= 0):
+            raise ValueError("carrier unit count must be positive when carrying Fleet")
+        if self.carrier_vehicle_definition_id is None and self.carrier_units:
+            raise ValueError("carrier units without a carrier Vehicle")
         self.priority = ActivityPriority(self.priority)
         if self.requested_units <= 0:
             raise ValueError("fleet relocation requested units must be positive")
@@ -182,6 +205,9 @@ class FleetRelocationPlan:
     resource_requirements: tuple[FleetRelocationResourceRequirement, ...] = ()
     infrastructure_requirements: tuple[tuple[SpatialNodeId, str, str], ...] = ()
     blockers: tuple[str, ...] = ()
+    carrier_vehicle_definition_id: DefinitionId | None = None
+    carrier_units: int = 0
+    payload_mass_t: float = 0.0
 
     @property
     def feasible(self) -> bool:
@@ -300,6 +326,81 @@ class TransportServiceSupply:
             raise ValueError("transport service supply direction must be forward or reverse")
         if self.propellant_t_per_t < 0:
             raise ValueError("transport service supply propellant must be non-negative")
+
+
+@dataclass(frozen=True)
+class PassengerServiceLeg:
+    """One fixed leg of a Transport-owned service transit obligation."""
+
+    service_key: str
+    allocation_id: EntityId
+    origin_id: SpatialNodeId
+    destination_id: SpatialNodeId
+    duration_days: int
+    passenger_accommodation: PassengerAccommodation
+    payload_mass_t: float
+
+    def __post_init__(self) -> None:
+        if not self.service_key or self.duration_days <= 0 or self.payload_mass_t <= 0:
+            raise ValueError('invalid fixed passenger service leg')
+        if self.origin_id == self.destination_id:
+            raise ValueError('passenger service leg has identical endpoints')
+
+
+@dataclass
+class PassengerServiceTransit:
+    """Physical Transit obligation, not an alternative authoritative people Stock.
+
+    Population owns group counts; Transport owns fixed route, on-board
+    Resource quantities and temporal obligations of the allocated service.
+    """
+
+    id: EntityId
+    order_id: EntityId | None
+    passenger_group_refs: tuple[EntityId, ...]
+    legs: tuple[PassengerServiceLeg, ...]
+    started_day: int
+    last_settled_day: int
+    onboard_resources: dict[DefinitionId, float]
+    # Time spent physically aboard the preceding Service at intermediate
+    # transfer endpoints.  A transfer never teleports to a missing next Service.
+    handoff_wait_days: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.legs or self.started_day < 0:
+            raise ValueError('passenger service transit needs actual legs')
+        if self.last_settled_day < self.started_day:
+            raise ValueError('invalid passenger transit settlement day')
+        if len(set(self.passenger_group_refs)) != len(self.passenger_group_refs):
+            raise ValueError('duplicate passenger group in service manifest')
+        if any(not math.isfinite(value) or value < 0 for value in self.onboard_resources.values()):
+            raise ValueError('invalid onboard Resource Stock')
+        for left, right in zip(self.legs, self.legs[1:]):
+            if left.destination_id != right.origin_id:
+                raise ValueError('non-contiguous passenger service legs')
+        if not self.handoff_wait_days:
+            self.handoff_wait_days = [0] * (len(self.legs) - 1)
+        if (len(self.handoff_wait_days) != len(self.legs) - 1
+                or any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+                       for value in self.handoff_wait_days)):
+            raise ValueError('invalid intermediate Service waiting durations')
+
+    @property
+    def arrival_day(self) -> int:
+        return self.started_day + sum(leg.duration_days for leg in self.legs) + sum(self.handoff_wait_days)
+
+    def transfer_boundary_day(self, completed_leg_index: int) -> int:
+        return (self.started_day + sum(leg.duration_days for leg in self.legs[:completed_leg_index + 1])
+                + sum(self.handoff_wait_days[:completed_leg_index + 1]))
+
+    def active_leg(self, day: int) -> PassengerServiceLeg:
+        elapsed = max(0, day - self.started_day - 1)
+        for index, leg in enumerate(self.legs):
+            days = leg.duration_days + (self.handoff_wait_days[index] if index < len(self.handoff_wait_days) else 0)
+            if elapsed < days:
+                return leg
+            elapsed -= days
+        return self.legs[-1]  # real onboard holding uses the final vehicle
 
 
 @dataclass(frozen=True)
@@ -507,6 +608,7 @@ class MovementExecutionKind(str, Enum):
     FLEET_RELOCATION = "fleet_relocation"
     FOUNDING_DEPLOYMENT = "founding_deployment"
     SCIENTIFIC_EXPLORATION = "scientific_exploration"
+    PASSENGER_TRANSFER = "passenger_transfer"
 
 
 @dataclass(frozen=True)
@@ -577,8 +679,14 @@ class MovementExecution:
     started_day: int
     completion_day: int
     payload_resources: tuple[MovementExecutionPayloadResource, ...] = ()
+    passenger_accommodation: PassengerAccommodation | None = None
+    payload_fleet_commitment_id: EntityId | None = None
 
     def __post_init__(self) -> None:
+        if self.payload_fleet_commitment_id == self.fleet_commitment_id:
+            raise ValueError("a Carrier cannot carry its own Fleet commitment")
+        if self.payload_fleet_commitment_id is not None and self.kind is not MovementExecutionKind.FLEET_RELOCATION:
+            raise ValueError("carried Fleet payload requires Fleet relocation")
         if not self.legs:
             raise ValueError("movement execution requires at least one leg")
         if self.payload_t_per_unit < -1e-9:
@@ -612,6 +720,7 @@ class PoweredAscentCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=POWERED_ASCENT)
 
@@ -628,6 +737,7 @@ class LandingCapability:
     max_delta_v_km_s: float
     max_surface_gravity_m_s2: float
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=LANDING)
 
@@ -635,6 +745,8 @@ class LandingCapability:
 @dataclass(frozen=True)
 class AtmosphericEntryCapability:
     max_surface_pressure_pa: float
+    max_surface_temperature_k: float
+    max_entry_specific_energy_mj_per_kg: float
     asset_disposition: OperationAssetDisposition = OperationAssetDisposition.DESTINATION
     operation_type: str = field(init=False, default=ATMOSPHERIC_ENTRY)
 
@@ -722,6 +834,7 @@ class VehicleProductionSpec:
     days: float = 0.0
     resources: tuple[tuple[DefinitionId, float], ...] = ()
     site_requirements: SiteRequirements = SiteRequirements()
+    prerequisite_technologies: frozenset[DefinitionId] = frozenset()
 
 
 class FleetRetirementPhase(str, Enum):
@@ -784,6 +897,97 @@ class VehicleMaintenanceSpec:
 
 
 @dataclass(frozen=True)
+class PassengerAccommodation:
+    """Vehicle-installed physical seats, protected living and onboard services.
+
+    The capacity of a vehicle is fixed by its real Definition, not by a
+    Population-owned virtual seat Stock or a Cargo-equivalent people Resource.
+    """
+
+    seats: int = 0
+    person_mass_t: float = 0.1
+    life_support_person_days_per_day: float = 0.0
+    onboard_power_mw: float = 0.0
+    power_mw_per_person: float = 0.0
+    net_resources_per_person_day: tuple[tuple[DefinitionId, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.seats, bool) or not isinstance(self.seats, int) or self.seats < 0:
+            raise ValueError('passenger seats must be a nonnegative integer')
+        numeric = (self.person_mass_t, self.life_support_person_days_per_day,
+                   self.onboard_power_mw, self.power_mw_per_person)
+        if any(not math.isfinite(value) or value < 0 for value in numeric) or self.person_mass_t <= 0:
+            raise ValueError('passenger accommodation values must be nonnegative and finite')
+        if self.seats > 0 and (self.life_support_person_days_per_day <= 0 or self.onboard_power_mw <= 0
+                               or self.power_mw_per_person <= 0):
+            raise ValueError('crew-rated vehicles require finite life support and onboard power')
+        if len({name for name, _ in self.net_resources_per_person_day}) != len(self.net_resources_per_person_day):
+            raise ValueError('duplicate onboard life support Resource')
+        if any(not math.isfinite(rate) or rate < 0 for _, rate in self.net_resources_per_person_day):
+            raise ValueError('invalid onboard Resource rate')
+
+    def supportable_seats(self, units: int) -> int:
+        if units <= 0:
+            return 0
+        per_unit = min(
+            self.seats,
+            math.floor(self.life_support_person_days_per_day + 1e-9),
+            math.floor(self.onboard_power_mw / self.power_mw_per_person + 1e-9)
+            if self.power_mw_per_person > 0 else 0,
+        )
+        return max(0, per_unit * units)
+
+    def required_provisions(self, people: int, days: float) -> dict[DefinitionId, float]:
+        """Physical onboard net consumption, independent of the activity owner."""
+        if people < 0 or not math.isfinite(days) or days < 0:
+            raise ValueError('invalid passenger provisioning demand')
+        return {resource: people * days * rate
+                for resource, rate in self.net_resources_per_person_day if rate > 0}
+
+    def loaded_payload_mass(self, people: int, provisions: dict[DefinitionId, float]) -> float:
+        return people * self.person_mass_t + sum(provisions.values())
+
+
+def consume_onboard_life_support(
+    accommodation: PassengerAccommodation,
+    onboard: dict[DefinitionId, float],
+    people: int,
+    *,
+    units: int | None = None,
+) -> float:
+    """One physical cabin's daily fulfillment and Resource settlement.
+
+    Fleet commitments specify their physical unit count. Scheduled Service
+    transits carry a departure-frozen accommodation whose shared seat/power
+    allocation was already committed for the leg, so their unit count is not
+    re-derived from a later Transport Allocation.
+    """
+    if isinstance(people, bool) or not isinstance(people, int) or people < 0:
+        raise ValueError('shipboard population must be a nonnegative integer')
+    if people == 0:
+        return 1.0
+    fulfillment = 1.0
+    if units is not None:
+        if units < 0:
+            raise ValueError('invalid onboard Fleet count')
+        fulfillment = min(1.0, accommodation.seats * units / people,
+                          accommodation.life_support_person_days_per_day * units / people)
+        if accommodation.power_mw_per_person > 0:
+            fulfillment = min(fulfillment, accommodation.onboard_power_mw * units
+                              / (accommodation.power_mw_per_person * people))
+    for resource, rate in accommodation.net_resources_per_person_day:
+        needed = people * rate
+        if needed > 1e-12:
+            fulfillment = min(fulfillment, max(0.0, onboard.get(resource, 0.0)) / needed)
+    fulfillment = max(0.0, min(1.0, fulfillment))
+    for resource, rate in accommodation.net_resources_per_person_day:
+        consumed = people * rate * fulfillment
+        if consumed > 1e-12:
+            onboard[resource] = max(0.0, onboard.get(resource, 0.0) - consumed)
+    return fulfillment
+
+
+@dataclass(frozen=True)
 class VehicleDef:
     id: DefinitionId
     display_name: str
@@ -791,6 +995,7 @@ class VehicleDef:
     production: VehicleProductionSpec = VehicleProductionSpec()
     retirement: VehicleRetirementSpec = VehicleRetirementSpec()
     maintenance: VehicleMaintenanceSpec = VehicleMaintenanceSpec()
+    passengers: PassengerAccommodation = PassengerAccommodation()
 
     @property
     def dry_mass_t(self) -> float: return self.performance.dry_mass_t

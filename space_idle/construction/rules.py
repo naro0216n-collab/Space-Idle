@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import cached_property
+
 from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
 from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityScope
@@ -20,6 +22,22 @@ from .models import (
 
 
 class ConstructionRulesMixin:
+    @cached_property
+    def _retired_facility_definitions(self) -> dict[EntityId, DefinitionId]:
+        """Read index of completed removal records; never a saved facility owner."""
+        return {
+            project.target.facility_id: project.target.facility_definition_id
+            for project in self.projects.values()
+            if isinstance(project.target, FacilityDecommissionTarget)
+            and project.status is ProjectStatus.COMPLETE
+        }
+
+    def _upgrade_definition_id(self, facility_id: EntityId) -> DefinitionId:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is not None:
+            return facility.definition_id
+        return self._retired_facility_definitions[facility_id]
+
     def target_facility_definition_id(self, project: ConstructionProject) -> DefinitionId | None:
         return self._target_facility_def_id(project)
 
@@ -31,10 +49,7 @@ class ConstructionRulesMixin:
         if isinstance(target, NewFacilityTarget):
             return target.facility_def_id
         if isinstance(target, FacilityUpgradeTarget):
-            facility = self.facilities.facilities.get(target.facility_id)
-            if facility is None:
-                raise KeyError(target.facility_id)
-            return facility.definition_id
+            return self._upgrade_definition_id(target.facility_id)
         if isinstance(target, FacilityDecommissionTarget):
             return target.facility_definition_id
         return None
@@ -44,10 +59,7 @@ class ConstructionRulesMixin:
         if isinstance(target, NewFacilityTarget):
             return self.recipes[target.facility_def_id]
         if isinstance(target, FacilityUpgradeTarget):
-            facility = self.facilities.facilities.get(target.facility_id)
-            if facility is None:
-                raise KeyError(target.facility_id)
-            return self.upgrade_recipes[(facility.definition_id, target.target_level)]
+            return self.upgrade_recipes[(self._upgrade_definition_id(target.facility_id), target.target_level)]
         if isinstance(target, FacilityDecommissionTarget):
             return self.decommission_recipes[target.facility_definition_id]
         return self.spatial_recipes[target.recipe_id]

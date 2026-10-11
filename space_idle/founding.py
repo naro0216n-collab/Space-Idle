@@ -624,14 +624,16 @@ class OperationalNodeFoundingService:
         project.inputs_consumed = all_committed
         return all_committed
 
-    def _release_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
+    def _release_prepared_payload(self, project: OperationalNodeFoundingProject, movement_execution_id: EntityId) -> None:
         payload_owner = self.payload_owner_id(project.id)
         for requirement in self.project_resource_requirements(project.id):
             resource_id = requirement.resource_id
             staged = self.staged_payload_t(project.id, resource_id)
             if staged > 1e-12:
                 self.inventory.release_storage_occupancy(
-                    payload_owner, project.staging_node_id, resource_id, staged
+                    payload_owner, project.staging_node_id, resource_id, staged,
+                    destination_owner=f"movement:{movement_execution_id}",
+                    activity_id=f"founding_dispatch:{project.id}",
                 )
 
     def _restore_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
@@ -797,7 +799,7 @@ class OperationalNodeFoundingService:
                     except Exception:
                         self.transport.finish_movement_execution(execution.id)
                         raise
-                    self._release_prepared_payload(project)
+                    self._release_prepared_payload(project, execution.id)
                     project.status = FoundingStatus.DEPLOYING
                     project.movement_execution_id = execution.id
 
@@ -1039,10 +1041,14 @@ class OperationalNodeFoundingService:
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
-        destination_id = execution.destination.operational_node_id
-        if destination_id is not None and destination_id != final_location:
+        destination = execution.destination
+        if isinstance(project.target_spec, SurfaceLocationTargetSpec):
+            target_matches = destination.physical_target_cell_id == project.target_spec.core_cell_id
+        else:
+            target_matches = destination.physical_target_node_id == project.target_spec.spatial_node_id
+        if not target_matches:
             failures.append(FoundingBlocker(
-                "fleet_settlement", "MovementExecution arrival location mismatch"
+                "fleet_settlement", "MovementExecution physical target mismatch"
             ))
         if final_location != target_node_id and not self.facilities.environment.graph.has_operational_node(final_location):
             failures.append(FoundingBlocker(
@@ -1098,7 +1104,11 @@ class OperationalNodeFoundingService:
         target_power = self.power.snapshot(target_node_id, self.facilities, day)
         self.storage.refresh_node(target_node_id, day, target_power)
         for resource_id, amount_t in recipe.initial_inventory_totals().items():
-            admission = self.inventory.admit(target_node_id, resource_id, amount_t)
+            admission = self.inventory.admit(
+                target_node_id, resource_id, amount_t,
+                source_owner=f"founding_manifest:{project.id}",
+                activity_id=f"founding_deployment:{project.id}",
+            )
             if not admission.fully_admitted:
                 raise RuntimeError(
                     f"Founding settlement diverged from preflight Inventory Admission: {resource_id}"

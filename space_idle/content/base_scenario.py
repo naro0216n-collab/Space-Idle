@@ -4,12 +4,15 @@ from ..scenario import (
     ScenarioDefinition,
     ScenarioFacility,
     ScenarioFleet,
+    ScenarioProviderFleetAssignment,
     ScenarioInventoryStock,
     ScenarioMarketInterface,
     ScenarioStorageInfrastructure,
     ScenarioSurfaceLocation,
+    ScenarioPopulation,
 )
 from . import base_ids as ids
+from ..population import PopulationRules, ExternalPopulationSourceDefinition
 from .base_market import EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER
 
 STANDARD_SCENARIO_ID = "base.scenario.standard"
@@ -18,14 +21,14 @@ STANDARD_SCENARIO_ID = "base.scenario.standard"
 def build_standard_scenario_definition() -> ScenarioDefinition:
     S, M, E = ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS
     facilities = (
+        ScenarioFacility(ids.EARTH_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
+        ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.EARTH_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
-        ScenarioFacility(ids.EARTH_OBSERVATION_SATELLITE, ids.LEO, invested_resources=((S, 1.5), (M, 1.0), (E, 1.0))),
-        ScenarioFacility(ids.LUNAR_RESOURCE_SURVEY_ORBITER, ids.LUNAR_ORBIT, invested_resources=((S, 1.5), (M, 1.0), (E, 1.5))),
         ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT, invested_resources=((S, 3.0), (M, 2.0), (E, 1.0))),
-        ScenarioFacility(ids.GRID_POWER_SUPPLY, ids.EARTH, invested_resources=((S, 8.0), (M, 6.0))),
+        ScenarioFacility(ids.GRID_POWER_SUPPLY, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 8.0), (M, 6.0))),
         ScenarioFacility(ids.EARTH_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 10.0), (M, 8.0), (E, 2.0))),
         ScenarioFacility(ids.VEHICLE_ASSEMBLY_FACILITY, ids.EARTH, invested_resources=((S, 10.0), (M, 10.0), (E, 3.0))),
-        ScenarioFacility(ids.SURFACE_AGGREGATE_QUARRY, ids.EARTH, invested_resources=((S, 5.0), (M, 7.0))),
+        ScenarioFacility(ids.MINERAL_QUARRY, ids.EARTH, invested_resources=((S, 5.0), (M, 7.0))),
         ScenarioFacility(ids.METAL_ORE_MINE, ids.EARTH, invested_resources=((S, 6.0), (M, 8.0))),
         ScenarioFacility(ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH, invested_resources=((S, 5.0), (M, 5.0))),
         ScenarioFacility(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, invested_resources=((S, 8.0), (M, 8.0))),
@@ -44,6 +47,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioInventoryStock(ids.EARTH, ids.MACHINERY, 100.0),
         ScenarioInventoryStock(ids.EARTH, ids.PRECISION_ELECTRONICS, 70.0),
         ScenarioInventoryStock(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 120.0),
+        ScenarioInventoryStock(ids.EARTH, ids.FOOD, 500.0),
         ScenarioInventoryStock(ids.EARTH, ids.WATER, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.OXYGEN, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.HYDROGEN, 2000.0),
@@ -58,7 +62,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
     known = tuple(
         (cell_id, resource_id)
         for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND)
-        for resource_id in (ids.AGGREGATE, ids.METAL_ORE, ids.WATER)
+        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER)
     )
     return ScenarioDefinition(
         id=STANDARD_SCENARIO_ID,
@@ -74,9 +78,22 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         fleet=(
             ScenarioFleet(ids.REUSABLE_LAUNCH_VEHICLE, 1, ids.EARTH),
             ScenarioFleet(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO),
+            ScenarioFleet(ids.ORBITAL_OBSERVATION_SPACECRAFT, 1, ids.LEO),
             ScenarioFleet(ids.REUSABLE_SURFACE_CARGO_LANDER, 1, ids.LUNAR_ORBIT),
+            ScenarioFleet(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT),
+        ),
+        survey_fleet_assignments=(
+            ScenarioProviderFleetAssignment(ids.LUNAR_FLEET_SURVEY_PROVIDER, ids.LUNAR_ORBIT, ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1),
+        ),
+        research_fleet_assignments=(
+            ScenarioProviderFleetAssignment(ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER, ids.LEO, ids.ORBITAL_OBSERVATION_SPACECRAFT, 1),
         ),
         known_surface_resources=known,
+        initial_population=(ScenarioPopulation(ids.EARTH, 30),),
+        external_population_sources=(
+            ExternalPopulationSourceDefinition('base.population.earth_recruitment', ids.EARTH, 5000, 8),
+        ),
+        population_rules=PopulationRules(0.25, 0.05, 2.0, 3.0),
         funds_balance_musd=1800.0,
         market_provider_ids=(EARTH_MARKET_PROVIDER,),
         market_interfaces=(

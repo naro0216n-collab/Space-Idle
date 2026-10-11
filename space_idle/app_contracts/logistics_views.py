@@ -97,6 +97,16 @@ class FleetCommitmentRow:
     quantity: int
     operational_node_id: str | None
     movement_execution_id: str | None
+    movement_origin_id: str | None
+    movement_destination_id: str | None
+    movement_completion_day: int | None
+    # Fleet ownership remains visible when neither endpoint is an owned Node.
+    # These are projections of the Fleet Domain's single authoritative commitment.
+    location_kind: str
+    physical_target_kind: str | None
+    physical_target_id: str | None
+    onboard_resources: tuple[tuple[str, float], ...]
+    onboard_seat_capacity: int | None
 
 
 @dataclass(frozen=True)
@@ -139,6 +149,8 @@ class FleetRelocationRow:
     destination_id: str
     departure_day: int | None
     arrival_day: int | None
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 0
 
 
 @dataclass(frozen=True)
@@ -269,7 +281,8 @@ class SupplyRequirementRow:
     forecast_requirement_day: int | None = None
     recurring_rate_t_per_day: float | None = None
     local_runway_days: float | None = None
-    earliest_confirmed_arrival_day: int | None = None
+    earliest_in_transit_arrival_day: int | None = None
+    latest_in_transit_arrival_day: int | None = None
     projected_gap_days: float | None = None
     candidate_source_count: int = 0
     operational_source_count: int = 0
@@ -321,7 +334,6 @@ class TargetStockOptionsView:
 
 @dataclass(frozen=True)
 class LogisticsView:
-    movement_plans: tuple[MovementPlanRow, ...]
     fleet_pools: tuple[FleetPoolRow, ...]
     relocations: tuple[FleetRelocationRow, ...]
     releases: tuple[FleetReleaseRow, ...]

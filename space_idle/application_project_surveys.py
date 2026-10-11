@@ -28,17 +28,13 @@ def _survey_observation_mode_display_name(mode) -> str:
 
 
 class SurveyProgressionProjectorMixin:
-    def _survey_provider_display_name(self, provider_definition_id: DefinitionId) -> str:
+    def _survey_source_display_name(self, source_kind: SurveyProviderSourceKind, source_definition_id: DefinitionId) -> str:
         sim = self._simulation
-        provider = sim.survey.providers[provider_definition_id]
-        if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            definition = sim.facilities.definitions.get(provider.source_definition_id)
-            if definition is not None:
-                return definition.display_name
-        vehicle = sim.transport.vehicle_definition(provider.source_definition_id)
-        if vehicle is not None:
-            return vehicle.display_name
-        return "調査Provider"
+        if source_kind is SurveyProviderSourceKind.FACILITY:
+            definition = sim.facilities.definitions.get(source_definition_id)
+        else:
+            definition = sim.transport.vehicle_definition(source_definition_id)
+        return str(source_definition_id) if definition is None else definition.display_name
 
     def _survey_campaign_intent_preview_view(self, query) -> SurveyCampaignIntentPreviewView:
         sim = self._simulation
@@ -99,37 +95,27 @@ class SurveyProgressionProjectorMixin:
         for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id)):
             if provider.source_kind is not SurveyProviderSourceKind.FLEET:
                 continue
-            assignment = sim.survey.provider_assignment_for(
-                provider.id, provider_operational_node_id, provider.source_definition_id
-            )
-            committed_units = (
-                0 if assignment is None
-                else sim.survey.provider_assignment_quantity(assignment.id)
-            )
-            free_units = sim.transport.fleet_free_units(
-                provider.source_definition_id, provider_operational_node_id
-            )
-            max_units = committed_units + free_units
-            blockers = ("fleet_unavailable",) if max_units == 0 else ()
-            rows.append(SurveyProviderFleetRow(
-                provider_definition_id=str(provider.id),
-                provider_display_name=self._survey_provider_display_name(provider.id),
-                vehicle_definition_id=str(provider.source_definition_id),
-                operational_node_id=str(provider_operational_node_id),
-                committed_units=committed_units,
-                free_units=free_units,
-                max_units=max_units,
-                capacity_units_per_day=(
-                    committed_units * provider.capacity_units_per_source_per_day
-                ),
-                blockers=constraints_from_codes(
-                    blockers,
-                    affected_action="set_survey_provider_fleet",
-                    related_entity_kind="survey_provider",
-                    related_entity_id=str(provider.id),
-                ),
-                can_set_quantity=(committed_units > 0 or max_units > 0),
-            ))
+            for vehicle_id in sim.survey.compatible_source_definition_ids(provider):
+                assignment = sim.survey.provider_assignment_for(
+                    provider.id, provider_operational_node_id, vehicle_id)
+                committed_units = 0 if assignment is None else sim.survey.provider_assignment_quantity(assignment.id)
+                free_units = sim.transport.fleet_free_units(vehicle_id, provider_operational_node_id)
+                max_units = committed_units + free_units
+                blockers = ("fleet_unavailable",) if max_units == 0 else ()
+                rows.append(SurveyProviderFleetRow(
+                    provider_definition_id=str(provider.id),
+                    provider_display_name=self._survey_source_display_name(provider.source_kind, vehicle_id),
+                    vehicle_definition_id=str(vehicle_id),
+                    operational_node_id=str(provider_operational_node_id),
+                    committed_units=committed_units,
+                    free_units=free_units,
+                    max_units=max_units,
+                    capacity_units_per_day=committed_units * provider.capacity_units_per_source_per_day,
+                    blockers=constraints_from_codes(
+                        blockers, affected_action="set_survey_provider_fleet",
+                        related_entity_kind="survey_provider", related_entity_id=str(provider.id)),
+                    can_set_quantity=(max_units > 0),
+                ))
         return tuple(rows)
 
     def _survey_mode_display_name(
@@ -164,7 +150,7 @@ class SurveyProgressionProjectorMixin:
         for row in projection.candidates:
             capacity_units_per_day = service_plan.summary(
                 row.provider_operational_node_id,
-                sim.survey.service_type_for_provider(row.provider_definition_id),
+                sim.survey.service_type_for_provider(row.provider_definition_id, row.source_definition_id),
             ).enabled_rate
             comparison_values = (
                 ComparisonValueRow(axis_key="survey_rate", number_value=row.survey_rate),
@@ -189,11 +175,11 @@ class SurveyProgressionProjectorMixin:
             candidate_rows.append(SurveyCandidateRow(
                 comparison_key=(
                     f"{row.provider_operational_node_id}|{row.provider_definition_id}|"
-                    f"{row.observation_mode_id}"
+                    f"{row.source_definition_id}|{row.observation_mode_id}"
                 ),
                 provider_operational_node_id=str(row.provider_operational_node_id),
                 provider_definition_id=str(row.provider_definition_id),
-                provider_display_name=self._survey_provider_display_name(row.provider_definition_id),
+                provider_display_name=self._survey_source_display_name(row.source_kind, row.source_definition_id),
                 provider_source_kind=row.source_kind.value,
                 source_definition_id=str(row.source_definition_id),
                 observation_mode_id=row.observation_mode_id,
@@ -264,7 +250,7 @@ class SurveyProgressionProjectorMixin:
             )
             capacity_points = service_plan.summary(
                 candidate.provider_operational_node_id,
-                sim.survey.service_type_for_provider(candidate.provider_definition_id),
+                sim.survey.service_type_for_provider(candidate.provider_definition_id, candidate.source_definition_id),
             ).enabled_rate * mode.survey_rate
             if candidate.source_kind is SurveyProviderSourceKind.FLEET:
                 required_fleet = candidate.minimum_source_units
@@ -293,15 +279,21 @@ class SurveyProgressionProjectorMixin:
             provider_constraint_operational_node_id=(
                 None if constraint is None else str(constraint.operational_node_id)
             ),
+            provider_constraint_source_definition_id=(
+                None if constraint is None or constraint.source_definition_id is None else str(constraint.source_definition_id)
+            ),
             observation_mode_constraint=campaign.observation_mode_constraint,
             projected_provider_definition_id=(
                 None if candidate is None else str(candidate.provider_definition_id)
             ),
             projected_provider_display_name=(
-                None if candidate is None else self._survey_provider_display_name(candidate.provider_definition_id)
+                None if candidate is None else self._survey_source_display_name(candidate.source_kind, candidate.source_definition_id)
             ),
             projected_provider_operational_node_id=(
                 None if candidate is None else str(candidate.provider_operational_node_id)
+            ),
+            projected_source_definition_id=(
+                None if candidate is None else str(candidate.source_definition_id)
             ),
             projected_observation_mode_id=(
                 None if candidate is None else candidate.observation_mode_id
@@ -339,7 +331,7 @@ class SurveyProgressionProjectorMixin:
             comparison_axes=comparison_axes,
         )
 
-    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None) -> SurveysView:
+    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None, *, body_id=None) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
             return SurveysView((), (), ())
@@ -349,8 +341,16 @@ class SurveyProgressionProjectorMixin:
         service_plan = decision.allocations.services
         powers = decision.allocations.power_by_location
         knowledge_rows: list[SurveyRow] = []
+        # Filter before projecting knowledge and provider decisions. A body-scoped
+        # UI query must never request derived candidates for unrelated worlds.
+        target_items = (
+            sim.survey.targets.items() if body_id is None else (
+                (key, target) for key, target in sim.survey.targets.items()
+                if sim.graph.surface_cells[key[0]].body_id == body_id
+            )
+        )
         for (cell_id, resource_id), _target in sorted(
-            sim.survey.targets.items(), key=lambda row: (str(row[0][0]), str(row[0][1]))
+            target_items, key=lambda row: (str(row[0][0]), str(row[0][1]))
         ):
             cell = sim.graph.surface_cells[cell_id]
             owner = sim.graph.owner_of_cell(cell_id)
@@ -370,5 +370,9 @@ class SurveyProgressionProjectorMixin:
         campaign_rows = tuple(
             self._survey_campaign_row(campaign, execution_plan, service_plan, powers)
             for campaign in sorted(sim.survey.campaigns.values(), key=lambda row: str(row.id))
+            if body_id is None or any(
+                sim.graph.surface_cells[cell_id].body_id == body_id
+                for cell_id in campaign.target_cell_ids
+            )
         )
         return SurveysView(provider_fleet, tuple(knowledge_rows), campaign_rows)

@@ -325,6 +325,27 @@ class MarketService:
     def buy_boundary_execution_id(commitment_id: EntityId) -> EntityId:
         return EntityId(f"boundary.market.buy:{commitment_id}")
 
+    def order_offer_blockers(
+        self,
+        *,
+        direction: TradeDirection,
+        resource_id: DefinitionId,
+        market_interface_id: EntityId,
+    ) -> tuple[str, ...]:
+        """Offer eligibility only; capacity, Funds and stock are execution constraints."""
+        interface = self.interfaces.get(market_interface_id)
+        if interface is None:
+            return ("market_interface_disabled",)
+        definition = self.provider_defs[interface.provider_id]
+        direction = TradeDirection(direction)
+        price = definition.buy_price(resource_id) if direction is TradeDirection.BUY else definition.sell_price(resource_id)
+        blockers = []
+        if not interface.enabled:
+            blockers.append("market_interface_disabled")
+        if price is None:
+            blockers.append("offer_unavailable")
+        return tuple(blockers)
+
     def create_order(
         self,
         *,
@@ -337,17 +358,16 @@ class MarketService:
         rate_target_t_per_day: float | None = None,
         price_limit_musd_per_t: float | None = None,
     ) -> EntityId:
-        interface = self.interfaces.get(market_interface_id)
-        if interface is None or not interface.enabled:
+        blockers = self.order_offer_blockers(
+            direction=direction, resource_id=resource_id, market_interface_id=market_interface_id,
+        )
+        if "market_interface_disabled" in blockers:
             raise ValueError("market interface is unavailable")
-        definition = self.provider_defs[interface.provider_id]
-        direction = TradeDirection(direction)
-        offer = definition.buy_price(resource_id) if direction is TradeDirection.BUY else definition.sell_price(resource_id)
-        if offer is None:
+        if blockers:
             raise ValueError("market provider has no offer for resource")
-        self._order_counter += 1
-        order_id = EntityId(f"trade.order.{self._order_counter}")
-        self.orders[order_id] = TradeOrderState(
+        direction = TradeDirection(direction)
+        order_id = EntityId(f"trade.order.{self._order_counter + 1}")
+        order = TradeOrderState(
             order_id,
             direction,
             resource_id,
@@ -358,6 +378,8 @@ class MarketService:
             rate_target_t_per_day,
             price_limit_musd_per_t,
         )
+        self._order_counter += 1
+        self.orders[order_id] = order
         return order_id
 
     def update_order(
@@ -546,7 +568,11 @@ class MarketService:
             provider_supply = provider_state.supply_available_t.get(commitment.resource_id, 0.0)
             if provider_supply + _EPS < amount:
                 raise RuntimeError("reserved provider supply disappeared before settlement")
-            admission = inventory.admit(interface.operational_node_id, commitment.resource_id, amount)
+            admission = inventory.admit(
+                interface.operational_node_id, commitment.resource_id, amount,
+                source_owner=f"market_provider:{interface.provider_id}",
+                activity_id=f"market_buy:{commitment.id}",
+            )
             if abs(admission.admitted_t - amount) > 1e-7:
                 raise RuntimeError("market buy boundary allocation exceeded Inventory Admission")
             self.funds.balance -= cost
@@ -657,7 +683,11 @@ class MarketService:
             demand = self.provider_states[interface.provider_id].demand_available_t.get(order.resource_id, 0.0)
             if demand + _EPS < amount:
                 raise RuntimeError("market sell allocation exceeded provider demand")
-            inventory.consume_allocated(interface.operational_node_id, order.resource_id, amount)
+            inventory.consume_allocated(
+                interface.operational_node_id, order.resource_id, amount,
+                destination_owner=f"market_provider:{interface.provider_id}",
+                activity_id=f"market_sell:{order.id}",
+            )
             self.provider_states[interface.provider_id].demand_available_t[order.resource_id] = max(0.0, demand - amount)
             self.funds.balance += amount * price
             order.settled_quantity_t += amount

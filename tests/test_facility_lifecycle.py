@@ -9,19 +9,23 @@ from space_idle import (
     GetOperationalNode,
     GetProjects,
     PlanFacilityUpgrade,
+    PlanBuild,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
+from space_idle.catalog import ResourceDef
 from space_idle.app_contracts.construction import CancelBuild, PlanFacilityDecommission
 from space_idle.application_commands import ApplicationError
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle.content import base_ids as ids
 from space_idle.construction import (
     BuildResourceRequirement,
+    ConstructionRecipe,
     ConstructionProviderSpec,
     FacilityDecommissionRecipe,
     FacilityUpgradeRecipe,
 )
-from space_idle.facilities import FacilityDef, FacilityLifecycle
+from space_idle.facilities import CapabilitySupply, FacilityDef, FacilityLifecycle
 from space_idle.facility_lifecycle import FacilityLifecycleBlocker
 from space_idle.persistence import load_game, save_game
 from space_idle.research import (
@@ -42,11 +46,15 @@ SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 def _build_decommission_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    app._catalog.resources[SALVAGE_RESOURCE] = ResourceDef(SALVAGE_RESOURCE, "Recoverable components")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
     )
     sim.projects.decommission_recipes[DECOMMISSION_TARGET] = FacilityDecommissionRecipe(
         DECOMMISSION_TARGET, construction_work=12.0
+    )
+    sim.projects.recipes[DECOMMISSION_TARGET] = ConstructionRecipe(
+        DECOMMISSION_TARGET, (), construction_work=1.0
     )
     sim.facilities.definitions[STORAGE_DECOMMISSION_TARGET] = FacilityDef(
         STORAGE_DECOMMISSION_TARGET,
@@ -122,6 +130,46 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert dict(completed.actual_salvage) == {str(SALVAGE_RESOURCE): pytest.approx(5.0)}
     assert facility_id not in loaded._simulation.facilities.facilities
     assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(before_stock + 5.0)
+
+    # Cancelled plans are historical, not live assets. After actual removal,
+    # persistence must retain their records without recreating the facility.
+    removed_path = tmp_path / "removed-facility.json"
+    save_game(loaded, removed_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    restored, offline = load_game(
+        removed_path, lambda: _build_decommission_fixture_application(for_load=True)
+    )
+    assert offline is None
+    assert facility_id not in restored._simulation.facilities.facilities
+    assert _project_row(restored, project_id).status == "complete"
+    assert restored._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(
+        before_stock + 5.0
+    )
+
+    # The same definition can be acquired by normal construction rather than
+    # scenario initialization, then retired without orphaning the build record.
+    built_project_id = restored.execute(PlanBuild(str(ids.EARTH), str(DECOMMISSION_TARGET))).created_id
+    assert built_project_id is not None
+    for _ in range(10):
+        if _project_row(restored, built_project_id).status == "complete":
+            break
+        restored.execute(AdvanceTime(1))
+    built_facility_id = _project_row(restored, built_project_id).completed_facility_id
+    assert built_facility_id is not None
+    removed_built = restored.execute(PlanFacilityDecommission(built_facility_id)).created_id
+    assert removed_built is not None
+    for _ in range(30):
+        if _project_row(restored, removed_built).status == "complete":
+            break
+        restored.execute(AdvanceTime(1))
+    assert _project_row(restored, removed_built).status == "complete"
+    assert EntityId(built_facility_id) not in restored._simulation.facilities.facilities
+    again_path = tmp_path / "constructed-then-retired.json"
+    save_game(restored, again_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    final, offline = load_game(again_path, lambda: _build_decommission_fixture_application(for_load=True))
+    assert offline is None
+    assert _project_row(final, built_project_id).completed_facility_id == built_facility_id
+    assert _project_row(final, removed_built).status == "complete"
+    assert EntityId(built_facility_id) not in final._simulation.facilities.facilities
 
 
 def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settles_partial_salvage():
@@ -217,7 +265,14 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
     assert 0.0 < expected_fraction < 1.0
     stock_before = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
 
-    app.execute(AdvanceTime(1))
+    with observe_canonical_day(sim) as trace:
+        app.execute(AdvanceTime(1))
+    recovered = tuple(flow for flow in trace.activity_flows()
+                      if flow.activity_id == f"facility_decommission:{project_id}")
+    assert len(recovered) == 1
+    assert recovered[0].source_owner == f"decommissioned_facility:{facility_id}"
+    assert recovered[0].destination_owner == f"inventory:{ids.EARTH}"
+    assert recovered[0].quantity_t == pytest.approx(4.0 * expected_fraction)
     completed = _project_row(app, project_id)
     assert completed.status == "complete"
     assert completed.actual_salvage_fraction == pytest.approx(expected_fraction)
@@ -296,10 +351,13 @@ UPGRADE_RESOURCE_B = DefinitionId("test.resource.upgrade_b")
 def _build_upgrade_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    for resource_id in (UPGRADE_RESOURCE_A, UPGRADE_RESOURCE_B):
+        app._catalog.resources[resource_id] = ResourceDef(resource_id, str(resource_id))
 
     sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
         UPGRADE_FACILITY,
         "Upgrade target fixture",
+        capability_supplies=(CapabilitySupply("test_upgrade_research_instrument"),),
     )
     sim.facilities.definitions[UPGRADE_CONTRACTOR] = FacilityDef(
         UPGRADE_CONTRACTOR,
@@ -309,12 +367,15 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
     sim.research.providers[UPGRADE_FACILITY] = ResearchProviderSpec(
         UPGRADE_FACILITY,
         ResearchProviderSourceKind.FACILITY,
-        UPGRADE_FACILITY,
+        frozenset({"test_upgrade_research_instrument"}),
         tier=1,
         levels=(
             ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),
             ResearchProviderLevelSpec(2, 5.0, 25.0, 1.0),
         ),
+    )
+    sim.projects.decommission_recipes[UPGRADE_FACILITY] = FacilityDecommissionRecipe(
+        UPGRADE_FACILITY, construction_work=1.0,
     )
     sim.projects.upgrade_recipes[(UPGRADE_FACILITY, 2)] = FacilityUpgradeRecipe(
         UPGRADE_FACILITY,
@@ -378,11 +439,43 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
     assert ("service", 0.5, 1.0) in difference_values
     _seed_upgrade_materials(app, facility, recipe)
 
+    # Both intents refer to one physical Facility: a pending, reversible
+    # decommission cannot be overlapped by an upgrade, or vice versa.
+    pending_removal = app.execute(PlanFacilityDecommission(before_row.id)).created_id
+    blocked_upgrade = _upgrade_target(app)[0].next_upgrade
+    assert blocked_upgrade is not None and not blocked_upgrade.can_plan
+    assert any(b.code == "active_facility_project" and b.subject_id == pending_removal
+               for b in blocked_upgrade.blockers)
+    with pytest.raises(ApplicationError, match="active_facility_project"):
+        app.execute(PlanFacilityUpgrade(before_row.id))
+    app.execute(CancelBuild(pending_removal))
+    assert _upgrade_target(app)[0].next_upgrade.can_plan
+
     provider = app._simulation.research.providers[facility.definition_id]
     before_provider_spec = provider.level_spec(facility.level)
     next_provider_spec = provider.level_spec(facility.level + 1)
     assert before_provider_spec != next_provider_spec
     investment_before = dict(facility.invested_resources)
+    # An invalid investment must not partially modify the Facility's physical
+    # investment history or level before the real Project settlement runs.
+    with pytest.raises(ValueError, match="finite"):
+        app._simulation.facilities.upgrade_to(
+            facility.id, 2, invested_resources={
+                ids.STRUCTURAL_COMPONENTS: 1.0,
+                ids.MACHINERY: float("nan"),
+            },
+        )
+    assert facility.level == 1
+    assert facility.invested_resources == investment_before
+    with pytest.raises(ValueError, match="sequential"):
+        app._simulation.facilities.upgrade_to(facility.id, True)
+    assert facility.invested_resources == investment_before
+    from space_idle.facilities_domain import validate_runtime as validate_facility_runtime
+    from space_idle.validation_support import ConfigurationError
+    facility.invested_resources[ids.MACHINERY] = float("nan")
+    with pytest.raises(ConfigurationError, match="nonfinite"):
+        validate_facility_runtime(app._simulation)
+    facility.invested_resources = dict(investment_before)
 
     result = app.execute(
         PlanFacilityUpgrade(before_row.id, priority=5, procurement_policy="extended_wait")
@@ -401,6 +494,10 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
     )
     with pytest.raises(ApplicationError):
         app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
+    assert not next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                    if row.id == before_row.id).can_decommission
+    with pytest.raises(ApplicationError, match="active_facility_project"):
+        app.execute(PlanFacilityDecommission(before_row.id))
 
     # The first canonical boundary acquires the inputs; level application belongs
     # to the following construction boundary. Persist between those boundaries so
@@ -460,3 +557,26 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
         before_row.research_generation_points_per_day,
         before_row.research_storage_capacity_points,
     )
+
+
+    # Completed upgrades remain construction history, not a second live owner.
+    # Decommissioning the upgraded facility must not invalidate the past upgrade
+    # record or cause Save/Load to resurrect the removed asset.
+    decommission_id = loaded.execute(PlanFacilityDecommission(after_row.id)).created_id
+    assert decommission_id is not None
+    for _ in range(10):
+        if _project_row(loaded, decommission_id).status == "complete":
+            break
+        loaded.execute(AdvanceTime(1))
+    assert _project_row(loaded, decommission_id).status == "complete"
+    assert EntityId(after_row.id) not in loaded._simulation.facilities.facilities
+    assert _project_row(loaded, project_id).status == "complete"
+    final_path = tmp_path / "upgraded-then-retired.json"
+    save_game(loaded, final_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    restored, offline = load_game(
+        final_path, lambda: _build_upgrade_fixture_application(for_load=True)
+    )
+    assert offline is None
+    assert EntityId(after_row.id) not in restored._simulation.facilities.facilities
+    assert _project_row(restored, project_id).status == "complete"
+    assert _project_row(restored, decommission_id).status == "complete"

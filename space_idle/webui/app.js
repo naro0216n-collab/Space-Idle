@@ -4,9 +4,9 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
-    fleet:null, transportAllocations:null, cargoFlows:null, market:null,
-    selectedMovementPlanId:null, selectedGlobalNodeId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, selectedNonSurfaceContextId:null, foundingPinnedCellIds:[], contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
+    fleet:null, transportAllocations:null, cargoFlows:null, market:null, inspectedNode:null, inspectedFlow:null,
+    selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
     activeDraft:null, busy:false, syncInFlight:null,
   };
@@ -14,6 +14,7 @@
   const $ = (sel, root=document) => root.querySelector(sel);
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
   const preservedScrollPositions = new Map();
+  let rememberedLogisticsContext = null;
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c]));
   const fmt = (v, digits=1) => Number.isFinite(Number(v)) ? Number(v).toLocaleString('ja-JP',{maximumFractionDigits:digits}) : '—';
   const pct = (v) => Number.isFinite(Number(v)) ? `${Math.round(Number(v)*100)}%` : '—';
@@ -22,7 +23,7 @@
   const locationMap = () => byId(state.world?.operational_nodes || []);
   const definitionMaps = () => [
     state.catalog?.resources, state.catalog?.facilities, state.catalog?.vehicles,
-    state.catalog?.operational_nodes, state.catalog?.processes, state.catalog?.research,
+    state.catalog?.operational_nodes, state.catalog?.celestial_bodies, state.catalog?.processes, state.catalog?.research,
     state.catalog?.movement_plans,
   ].filter(Boolean).map(byId);
   const definitionName = (id) => {
@@ -40,14 +41,15 @@
     cargo_storage:'一般貨物保管',cargo_transfer:'貨物移送',construction_yard:'建設ヤード',
     cryogenic_storage:'極低温保管',grid_power:'外部電力網',heavy_equipment_assembly:'重機組立',
     basic_machinery_production:'基礎機械製造',basic_structural_material:'基礎構造材製造',
-    industrial_water_supply:'工業用水供給',metal_ore_extraction:'金属鉱石採掘',aggregate_extraction:'骨材採掘',
-    industrial_electrolysis:'工業電解',industrial_power:'産業電力',launch_operations:'打上げ運用',
+    industrial_water_supply:'工業用水供給',metal_ore_extraction:'金属鉱石採掘',mineral_extraction:'鉱物原料採掘',
+    industrial_electrolysis:'工業電解',industrial_power:'産業電力',
+    fission_reactor_control_instrumentation:'原子炉制御・計測装置',launch_operations:'打上げ運用',
     launch_vehicle_servicing:'打上げ機整備',metallurgy:'金属精錬',ore_processing:'鉱石処理',
-    power_grid:'電力網',propellant_production:'推進剤製造',regolith_excavation:'レゴリス採掘',
-    research_lab:'研究設備',robotic_operations:'ロボット運用',sintering:'焼結',
+    power_grid:'電力網',propellant_production:'推進剤製造',granular_mineral_extraction:'真空粒状鉱物採掘',
+    research_lab:'研究設備',robotic_operations:'ロボット運用',mineral_sintering:'鉱物焼結',
     spacecraft_servicing:'宇宙船整備',structural_fabrication:'構造材加工',surface_survey:'地表探査',
     refueling_interface:'補給インターフェース',docking_interface:'ドッキングインターフェース',
-    vehicle_assembly:'輸送機組立',vehicle_refueling:'輸送機補給',water_extraction:'水抽出',water_storage:'水保管',
+    vehicle_assembly:'輸送機組立',vehicle_refueling:'輸送機補給',volatile_extraction:'揮発性原料採取',volatile_processing:'揮発性成分回収',water_storage:'水保管',
   };
   const operationLabels={powered_ascent:'動力離昇',launch:'打上げ',spaceflight:'宇宙航行',landing:'着陸',atmospheric_entry:'大気圏突入'};
   const locationKindLabels={surface:'地表',orbital:'軌道',orbit:'軌道'};
@@ -64,20 +66,27 @@
     in_transit:'輸送中',arrival_waiting:'到着待機',theory:'理論',prototype:'試作',demonstration:'実証',operational_experience:'運用経験',
     planned:'計画',procuring:'調達中',ready:'施工待ち',building:'施工中',cancelled:'取消済み',
     awaiting_inputs:'資材待ち',awaiting_vehicle:'Vehicle待ち',awaiting_fleet:'Fleet待ち',
-    preparing:'出発準備',outbound:'往路移動中',exploration:'科学探査中',return_preparing:'復路準備',returning:'復路移動中',aborted:'中止済み',
+    preparing:'出発準備',outbound:'往路移動中',exploration:'科学探査中',return_preparing:'復路準備',returning:'復路移動中',recovering:'船内Resource荷卸し',aborted:'中止済み',
   };
   const capabilityName=(id)=>capabilityLabels[id]||id||'—';
   const serviceLabels={
     construction_work:'建設施工能力',research_execution:'研究実行能力',surface_distribution:'地表物流能力',
+    life_support:'生命維持能力',crew:'活動可能Crew',
     cargo_transfer:'貨物移送能力',vehicle_assembly:'輸送機組立能力',launch_vehicle_servicing:'打上げ機整備能力',
     spacecraft_servicing:'宇宙船整備能力',
   };
+  let serviceCapacityCatalog=null;
+  let serviceCapacityNames={};
   const serviceName=(id)=>{
     if(!id)return '—';
+    if(serviceCapacityCatalog!==state.catalog){
+      serviceCapacityCatalog=state.catalog;
+      serviceCapacityNames=Object.fromEntries((state.catalog?.service_capacities||[]).map((row)=>[row.id,row.display_name]));
+    }
+    if(serviceCapacityNames[id])return serviceCapacityNames[id];
     if(serviceLabels[id])return serviceLabels[id];
     if(id.startsWith('process:'))return `${definitionName(id.slice('process:'.length))} 工程能力`;
     if(id.startsWith('extraction:'))return `${resourceName(id.slice('extraction:'.length))} 採掘能力`;
-    if(id.startsWith('survey_observation:'))return `${definitionName(id.slice('survey_observation:'.length))} 調査能力`;
     return capabilityName(id);
   };
   const operationName=(id)=>operationLabels[id]||id||'—';
@@ -110,6 +119,7 @@
   }
 
   const responseViewTokens=new Map();
+  let appliedUiSnapshotPath=null;
 
   async function api(path,options={}){
     const {viewTokenKey=null,...fetchOptions}=options;
@@ -355,6 +365,7 @@
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
     state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.movementPlans=data.movement_plans; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
+    state.inspectedNode=data.inspected_node??null; state.inspectedFlow=data.inspected_flow??null;
     state.market=data.market??state.market;
     if(data.operational_node!==undefined)state.operationalNode=data.operational_node;
     if(data.flow!==undefined)state.flow=data.flow;
@@ -365,7 +376,9 @@
     if(data.bottlenecks!==undefined)state.bottlenecks=data.bottlenecks;
     if(data.surveys!==undefined)state.surveys=data.surveys;
     if(data.surface_map!==undefined)state.surfaceMap=data.surface_map;
-    if(state.selectedMovementPlanId&&!(state.movementPlans?.items||[]).some((r)=>r.id===state.selectedMovementPlanId))state.selectedMovementPlanId=null;
+    if(data.non_surface_founding!==undefined)state.nonSurfaceFounding=data.non_surface_founding;
+    // A plan outside the currently selected node's projection remains the
+    // player's selection until a deliberate selection change, not a deletion.
   }
 
   async function beginMutation(){
@@ -405,6 +418,7 @@
     physical_storage_full:'物理保管容量不足',usable_storage_full:'利用可能保管容量不足',
     knowledge_goal_reached:'調査目標へ到達済み',survey_decision_required:'観測手段の選択が必要',
     campaign_scope_conflict:'既存調査との対象重複',survey_candidate_unavailable:'利用可能な調査手段なし',
+    scientific_exploration_not_started:'探査開始前',scientific_exploration_phase_restricts_action:'現在の探査段階では操作不可',scientific_exploration_fleet_already_in_use:'探査に機体・資源を投入済み',fleet_unassigned:'Fleet未配備',
     no_transport_capacity:'輸送能力不足',market_interface_disabled:'市場接続停止中',offer_unavailable:'Market offerなし',
     price_condition:'価格条件外',provider_supply:'市場供給不足',provider_demand:'市場需要不足',
     resource_not_at_market_interface:'市場接続拠点に売却対象資源なし',paused_plan:'計画停止中',
@@ -418,7 +432,7 @@
     plan_facility_upgrade:'設備更新',plan_build:'建設計画',progress_construction_project:'建設進行',develop_surface_cell:'地域開発',
     plan_founding:'拠点設立',select_research_execution_site:'研究地点選択',set_research_provider_fleet:'研究Fleet配備',
     operate_research_provider:'研究実行',progress_research:'研究進行',start_research:'研究開始',start_survey:'調査開始',
-    progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',plan_vehicle_production:'輸送機生産計画',
+    progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',return_scientific_exploration:'科学探査の帰還',abort_scientific_exploration:'科学探査の中止',unassign_scientific_exploration_fleet:'科学探査Fleet解除',plan_vehicle_production:'輸送機生産計画',
     progress_vehicle_production:'輸送機生産',use_movement_plan:'移動',operate_transport_allocation:'輸送運用',
     satisfy_supply_requirement:'補給',satisfy_service_demand:'サービス需要',satisfy_forecast_service_demand:'将来サービス需要',
   };
@@ -516,6 +530,8 @@
   function replaceHtmlPreservingKeyed(root,html,specs=[]){
     if(!root||root.innerHTML===html)return false;
     if(!specs.length){root.innerHTML=html;return true;}
+    const focused=document.activeElement;
+    const focusedWithin=focused&&root.contains(focused);
     const template=document.createElement('template');
     template.innerHTML=html;
     for(const spec of specs){
@@ -530,6 +546,12 @@
       }
     }
     root.replaceChildren(template.content);
+    // Moving a keyed control through the detached template can blur it even
+    // though the exact DOM node survives. Restore focus only when that same
+    // control still belongs to the rendered surface.
+    if(focusedWithin&&focused.isConnected&&root.contains(focused)&&document.activeElement!==focused){
+      focused.focus({preventScroll:true});
+    }
     return true;
   }
 
@@ -557,28 +579,6 @@
     setHtmlIfChanged($('#globalIssues'),issues.length?issues.slice(0,8).map(issueHtml).join('')+(issues.length>8?`<div class="cell-sub">ほか ${issues.length-8} 件</div>`:''):'<div class="empty-state">現在、全体制約はありません。</div>');
   }
   const kvHtml=(rows)=>`<dl class="kv-grid">${rows.map(([key,value])=>`<dt>${key}</dt><dd>${value}</dd>`).join('')}</dl>`;
-  function globalMapPositions(nodes){
-    const order={surface:0,orbital:1,orbit:1};
-    const rows=new Map();
-    [...nodes].sort((a,b)=>{
-      const ka=order[a.kind]??2,kb=order[b.kind]??2;
-      if(ka!==kb)return ka-kb;
-      return String(a.display_name||a.id).localeCompare(String(b.display_name||b.id),'ja');
-    }).forEach((node)=>{
-      const band=order[node.kind]??2;
-      if(!rows.has(band))rows.set(band,[]);
-      rows.get(band).push(node);
-    });
-    const positions={};
-    [...rows.entries()].sort(([a],[b])=>a-b).forEach(([band,items],rowIndex)=>{
-      const y=[72,42,18][Math.min(rowIndex,2)];
-      items.forEach((node,index)=>{
-        const x=items.length===1?50:14+(72*index/(items.length-1));
-        positions[node.id]=[x,y];
-      });
-    });
-    return positions;
-  }
   const activeResearchStatuses=new Set(['theory','prototype','demonstration','operational_experience']);
   const inactiveExplorationStatuses=new Set(['complete','completed','aborted','cancelled','failed']);
   const inactiveSurveyStatuses=new Set(['complete','completed','cancelled','failed']);
@@ -605,32 +605,6 @@
     }
     return signals;
   }
-  function globalSignalHtml(signal){
-    if(!signal)return'';
-    const rows=[
-      ['attention','要確認',signal.attention],['projects','案件',signal.projects],['founding','設立',signal.founding],['research','研究',signal.research],
-      ['survey','調査',signal.survey],['exploration','探査',signal.exploration],
-    ].filter(([, ,count])=>Number(count)>0);
-    return rows.length?`<span class="global-map-node-signals">${rows.map(([kind,label,count])=>`<span class="global-map-signal is-${kind}">${esc(label)} ${fmt(count,0)}</span>`).join('')}</span>`:'';
-  }
-  function renderGlobalMap(nodes,signals){
-    const positions=globalMapPositions(nodes);
-    const selected=state.selectedGlobalNodeId||state.operationalNodeId||nodes[0]?.id||null;
-    if(selected&&!state.selectedGlobalNodeId)state.selectedGlobalNodeId=selected;
-    const edges=(state.movementPlans?.items||[]).map((plan)=>{
-      const a=positions[plan.origin_id],b=positions[plan.destination_id];
-      if(!a||!b)return'';
-      const className=plan.service_feasible_now?'global-map-link is-available':'global-map-link';
-      return `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" class="${className}"><title>${esc(locationName(plan.origin_id))} → ${esc(locationName(plan.destination_id))}</title></line>`;
-    }).join('');
-    const nodeHtml=nodes.map((node)=>{
-      const [x,y]=positions[node.id]||[50,50];
-      const active=node.id===selected,signal=signals?.[node.id]||{};
-      const signalClass=signal.attention?'has-attention':(signal.projects||signal.founding||signal.research||signal.survey||signal.exploration)?'has-activity':'';
-      return `<div class="global-map-node-shell" style="left:${x}%;top:${y}%"><button type="button" class="global-map-node ${active?'is-selected':''} ${signalClass}" data-global-node-id="${esc(node.id)}" aria-pressed="${active?'true':'false'}"><span class="global-map-node-name">${esc(node.display_name)}</span><span class="global-map-node-meta">${esc(locationKindName(node.kind))} · 設備 ${node.facility_count}</span>${globalSignalHtml(signal)}</button></div>`;
-    }).join('');
-    return `<section class="global-map-card"><div class="global-map-toolbar"><div><div class="eyebrow">SYSTEM MAP</div><h2>活動領域</h2></div><div class="global-map-toolbar-meta"><span class="badge">${nodes.length} 拠点</span><div class="global-map-legend"><span class="is-attention">要確認</span><span>案件</span><span>設立</span><span>研究</span><span>調査</span><span>探査</span></div></div></div><div class="global-map-stage" role="group" aria-label="全体Map"><svg class="global-map-links" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${edges}</svg><div class="global-map-nodes">${nodeHtml||'<div class="empty-state">拠点なし</div>'}</div></div></section>`;
-  }
   function renderGlobalView(){
     const canvas=$('#globalCanvasContent'),inspector=$('#globalInspectorContent');
     if(!canvas||!inspector)return;
@@ -642,8 +616,8 @@
     const nodeSignals=globalNodeSignals(nodes,issues,researchItems,explorations,campaigns);
     const fleetTotal=Number(state.logisticsSummary?.fleet_units||0),fleetFree=Number(state.logisticsSummary?.free_fleet_units||0);
     const headlineHtml=[['拠点',nodes.length],['要確認',issues.length],['研究中',activeResearch],['Fleet',`${fleetFree}/${fleetTotal} 空き`]].map(metricHtml).join('');
-    const attentionItems=issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在、判断を必要とする全体制約はありません。</div>';
-    const canvasHtml=`<div class="global-decision-grid">${renderGlobalMap(nodes,nodeSignals)}<section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / 地表調査</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>空きFleet</small></button></div>`;
+    const attentionItems=issues.length?issues.slice(0,8).map(issueHtml).join(''):'<div class="empty-state">現在の全体制約なし</div>';
+    const canvasHtml=`<div class="global-decision-grid"><div id="systemMapMountGlobal" class="system-map-host"></div><section class="card global-attention-card"><div class="card-heading"><h3>要確認</h3><span class="badge ${issues.length?'warn':'ok'}">${issues.length}</span></div><div class="card-body global-attention-list">${attentionItems}</div></section></div><div class="global-domain-strip"><button type="button" class="domain-entry" data-section="research"><span>研究</span><strong>${activeResearch}</strong><small>進行中</small></button><button type="button" class="domain-entry" data-section="exploration"><span>探査</span><strong>${activeExploration+activeSurvey}</strong><small>科学探査 / 地表調査</small></button><button type="button" class="domain-entry" data-section="logistics"><span>輸送</span><strong>${fleetFree}/${fleetTotal}</strong><small>空きFleet</small></button></div>`;
     const selectedId=state.selectedGlobalNodeId||state.operationalNodeId;
     const selectedNode=nodes.find((row)=>row.id===selectedId)||nodes[0]||null;
     const relatedPlans=(state.movementPlans?.items||[]).filter((row)=>selectedNode&&(row.origin_id===selectedNode.id||row.destination_id===selectedNode.id));
@@ -652,12 +626,25 @@
     const activityRows=[['進行中案件',selectedSignals.projects||0],['拠点設立',selectedSignals.founding||0],['研究',selectedSignals.research||0],['地表調査',selectedSignals.survey||0],['科学探査',selectedSignals.exploration||0]];
     const activityActions=[selectedSignals.research?'<button type="button" data-section="research">研究を見る</button>':'',selectedSignals.survey||selectedSignals.exploration?'<button type="button" data-section="exploration">探査を見る</button>':''].filter(Boolean).join('');
     const inspectorTitle=selectedNode?.display_name||'全体状況';
-    const inspectorHtml=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindName(selectedNode.kind))],['設備',fmt(selectedNode.facility_count,0)],['進行中案件',fmt(selectedSignals.projects||0,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>活動</h3>${kvHtml(activityRows.map(([label,value])=>[label,fmt(value,0)]))}${activityActions?`<div class="action-stack global-activity-actions">${activityActions}</div>`:''}</section>${relatedIssues.length?`<section class="inspector-section"><h3>この拠点の要確認</h3><div class="issue-stack">${relatedIssues.slice(0,4).map(issueHtml).join('')}</div></section>`:''}<section class="inspector-section"><h3>次の操作</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
+    const inspectorHtml=selectedNode?`<section class="inspector-section"><h3>拠点状況</h3>${kvHtml([['種別',esc(locationKindName(selectedNode.kind))],['設備',fmt(selectedNode.facility_count,0)],['進行中案件',fmt(selectedSignals.projects||0,0)],['接続経路',fmt(relatedPlans.length,0)],['要確認',fmt(relatedIssues.length,0)]])}</section><section class="inspector-section"><h3>活動</h3>${kvHtml(activityRows.map(([label,value])=>[label,fmt(value,0)]))}${activityActions?`<div class="action-stack global-activity-actions">${activityActions}</div>`:''}</section>${relatedIssues.length?`<section class="inspector-section"><h3>この拠点の制約</h3><div class="issue-stack">${relatedIssues.slice(0,4).map(issueHtml).join('')}</div></section>`:''}<section class="inspector-section"><h3>関連画面</h3><div class="action-stack"><button type="button" class="primary" data-open-location="${esc(selectedNode.id)}">この拠点を開く</button><button type="button" data-open-node-logistics="${esc(selectedNode.id)}">関連輸送を見る</button></div></section><section class="inspector-section"><h3>選択の引き継ぎ</h3><div class="section-context-note">Map選択を維持したまま拠点・輸送へ移動します。内部IDを覚えて入力する必要はありません。</div></section>`:`<section class="inspector-section"><h3>組織全体</h3><div class="kv-grid"><dt>Research Point</dt><dd>${fmt(state.research?.stored_points,1)} / ${fmt(state.research?.storage_capacity_points,1)}</dd><dt>Fleet</dt><dd>${fleetFree} 機空き / ${fleetTotal} 機</dd></div></section>`;
     setHtmlIfChanged($('#globalHeadlineMetrics'),headlineHtml);
-    replaceHtmlPreservingKeyed(canvas,canvasHtml,[
-      {selector:'.global-map-node[data-global-node-id]',attributes:['data-global-node-id']},
-      {selector:'.domain-entry[data-section]',attributes:['data-section']},
-    ]);
+    // The Map host is a persistent part of the decision canvas. Replacing the
+    // surrounding HTML on every authoritative snapshot removes the focused Map
+    // control from the document even if its selection and viewport survive.
+    if(!canvas.querySelector('#systemMapMountGlobal')){
+      canvas.innerHTML=canvasHtml;
+    }else{
+      const attention=canvas.querySelector('.global-attention-card');
+      const badge=attention.querySelector('.badge');
+      badge.className=`badge ${issues.length?'warn':'ok'}`;
+      badge.textContent=String(issues.length);
+      setHtmlIfChanged(attention.querySelector('.global-attention-list'),attentionItems);
+      const next=document.createElement('template');
+      next.innerHTML=canvasHtml;
+      replaceHtmlPreservingKeyed(canvas.querySelector('.global-domain-strip'),next.content.querySelector('.global-domain-strip').innerHTML,[
+        {selector:'.domain-entry[data-section]',attributes:['data-section']},
+      ]);
+    }
     $('#globalInspectorTitle').textContent=inspectorTitle;
     setHtmlIfChanged(inspector,inspectorHtml);
   }
@@ -727,34 +714,64 @@
     renderHeader(); renderLocations(); renderGlobalIssues(); renderSectionChrome(); renderGlobalView(); renderEconomyContext();
     if(['location','research','exploration'].includes(state.activeSection))window.SpaceIdleOperations?.render();
     if(['logistics','economy'].includes(state.activeSection))window.SpaceIdleLogistics?.render();
+    // Offscreen map geometry is UI-derived; rebuild it only when a map entrance
+    // is visible. Reactivating Overview/Transport always refreshes from the
+    // latest authoritative snapshot without resetting the shared viewport.
+    if(['global','logistics'].includes(state.activeSection)){
+      window.SpaceIdleSystemMap?.render(globalNodeSignals(state.world?.operational_nodes||[],state.globalIssues?.items||[],state.research?.items||[],state.scientificExplorations?.items||[],state.surveys?.campaigns||[]));
+    }
+    window.SpaceIdlePassengers?.render();
     restoreActiveDraftValues(); renderActiveDraftBar(); restorePreservedScrollRegions();
   }
 
   function clearLocationSnapshot(){
     state.operationalNode=null; state.flow=null; state.dependencyAnalyticsCurrent=null; state.dependencyAnalyticsForecast=null; state.bottlenecks=null; state.projects=null;
-    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.inspector=null;state.decisionContext=null;
+    state.buildOptions=null; state.surveys=null; state.surfaceMap=null; state.nonSurfaceFounding=null; state.selectedNonSurfaceContextId=null; state.foundingPinnedCellIds=[]; state.inspector=null;state.decisionContext=null;
     if(state.sectionContexts.location)state.sectionContexts.location={...state.sectionContexts.location,inspector:null,decisionContext:null};
   }
+  function requestedSurfaceBodyId(){
+    if(state.activeSection!=='exploration'||!['surface','survey'].includes(state.activeTab))return null;
+    const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===state.operationalNodeId);
+    return state.selectedSurfaceBodyId||locationSummary?.body_id||null;
+  }
   async function loadUiSnapshot({preserveInteraction=true}={}){
+    const surfaceBodyId=requestedSurfaceBodyId();
+    const inspectedNodeId=state.selectedGlobalNodeId||state.operationalNodeId;
+    const foundingCellId=state.inspector?.type==='surface-cell'
+      ?state.inspector.id:(state.inspector?.type==='founding-candidate'?state.inspector.id.split('|')[0]:'');
+    const foundingCellIds=[...new Set([foundingCellId,...(state.foundingPinnedCellIds||[])].filter(Boolean))].sort();
+    const foundingContextId=state.selectedNonSurfaceContextId||'';
     while(state.syncInFlight){
       const pending=state.syncInFlight;
-      if(pending.operationalNodeId===state.operationalNodeId)return pending.promise;
+      if(pending.operationalNodeId===state.operationalNodeId&&pending.surfaceBodyId===surfaceBodyId&&pending.inspectedNodeId===inspectedNodeId&&pending.foundingCellIds.join('|')===foundingCellIds.join('|')&&pending.foundingContextId===foundingContextId)return pending.promise;
       try{await pending.promise;}catch{}
       if(state.syncInFlight===pending)state.syncInFlight=null;
     }
     const locationId=state.operationalNodeId;
-    const request={operationalNodeId:locationId,promise:null};
+    const request={operationalNodeId:locationId,surfaceBodyId,inspectedNodeId,foundingCellIds,foundingContextId,promise:null};
     request.promise=(async()=>{
-      const locationSummary=(state.world?.operational_nodes||[]).find((row)=>row.id===locationId);
       const params=new URLSearchParams();
       if(locationId)params.set('operational_node_id',locationId);
-      if(locationSummary?.body_id&&['surface','survey'].includes(state.activeTab))params.set('surface_body_id',locationSummary.body_id);
+      if(surfaceBodyId){
+        params.set('surface_body_id',surfaceBodyId);
+        for(const cellId of foundingCellIds)params.append('founding_cell_id',cellId);
+        if(foundingContextId)params.set('founding_context_id',foundingContextId);
+      }
+      if(inspectedNodeId)params.set('inspect_node_id',inspectedNodeId);
       const suffix=params.size?`?${params.toString()}`:'';
       const snapshotPath=`/api/v1/ui-state${suffix}`;
+      // A revision token is valid only while its full scoped projection is in memory.
+      // Returning to a previously visited body/node must fetch the complete view.
+      if(appliedUiSnapshotPath!==snapshotPath)responseViewTokens.delete(snapshotPath);
       const data=await api(snapshotPath,{viewTokenKey:snapshotPath});
       if(data?.unchanged===true){setConnection('ok','PC Server');return data;}
-      if(locationId!==state.operationalNodeId)return data;
+      if(locationId!==state.operationalNodeId||surfaceBodyId!==requestedSurfaceBodyId()||inspectedNodeId!==(state.selectedGlobalNodeId||state.operationalNodeId)||
+        foundingCellIds.join('|')!==[...new Set([
+          state.inspector?.type==='surface-cell'?state.inspector.id:state.inspector?.type==='founding-candidate'?state.inspector.id.split('|')[0]:'',
+          ...(state.foundingPinnedCellIds||[])].filter(Boolean))].sort().join('|')||
+        foundingContextId!==(state.selectedNonSurfaceContextId||''))return data;
       applyUiSnapshot(data);
+      appliedUiSnapshotPath=snapshotPath;
       if(!state.operationalNodeId||!(state.world?.operational_nodes||[]).some((x)=>x.id===state.operationalNodeId)){
         state.operationalNodeId=state.world?.operational_nodes?.[0]?.id??null;
         if(state.operationalNodeId&&data.operational_node===undefined){const nested=await api(`/api/v1/ui-state?operational_node_id=${encodeURIComponent(state.operationalNodeId)}`);applyUiSnapshot(nested);}
@@ -769,8 +786,19 @@
   }
   async function loadLocation(locationId){
     if(!locationId||locationId===state.operationalNodeId)return;
+    // Selecting a different working node must not discard the physical target.
+    // Surface geometry/knowledge is body-scoped; Location reports are node-scoped.
+    const retainSurface=state.activeSection==='exploration'&&['surface','survey'].includes(state.activeTab)
+      &&state.surfaceMap?.body_id===requestedSurfaceBodyId();
+    const surfaceMap=retainSurface?state.surfaceMap:null;
+    const surfaceInspector=retainSurface&&state.inspector?.type==='surface-cell'?{...state.inspector}:null;
+    const bodyContext=retainSurface&&state.decisionContext?.subject_kind==='celestial_body'
+      ?{...state.decisionContext}:null;
     state.operationalNodeId=locationId;
     clearLocationSnapshot();
+    if(surfaceMap)state.surfaceMap=surfaceMap;
+    if(surfaceInspector)state.inspector=surfaceInspector;
+    if(bodyContext)state.decisionContext=bodyContext;
     renderAll();
     await loadUiSnapshot({preserveInteraction:false});
   }
@@ -778,10 +806,20 @@
     if(!['global','location','research','exploration','logistics','economy'].includes(section))return;
     const previous=state.activeSection;
     saveSectionContext(previous);
+    if(previous==='logistics'&&state.decisionContext?.decision_area==='logistics'){
+      rememberedLogisticsContext={nodeId:state.selectedGlobalNodeId,context:{...state.decisionContext}};
+    }
     state.activeSection=section;
     state.activeView=['logistics','economy'].includes(section)?'logistics':section==='global'?'global':'operations';
     if(operationsSections.has(section))restoreSectionContext(section);
-    else{state.inspector=null;state.decisionContext=null;}
+    else{
+      state.inspector=null;
+      state.decisionContext=section==='logistics'
+        ?(rememberedLogisticsContext?.nodeId===state.selectedGlobalNodeId
+          ?{...rememberedLogisticsContext.context}
+          :state.selectedGlobalNodeId?{decision_area:'logistics',subject_kind:'operational_node',subject_id:state.selectedGlobalNodeId}:null)
+        :null;
+    }
     renderAll();
   }
 
@@ -793,17 +831,32 @@
       return 'overview';
     }
     if(target.decision_area==='research')return 'research';
-    if(target.decision_area==='exploration')return target.subject_kind==='survey_campaign'?'survey':'scientific-exploration';
+    if(target.decision_area==='exploration'){
+      if(target.subject_kind==='celestial_body')return 'surface';
+      return target.subject_kind==='survey_campaign'?'survey':'scientific-exploration';
+    }
     return null;
   }
 
   async function openDecisionContext(target){
     if(!target?.decision_area)return;
+    const changedBody=target.decision_area==='exploration'&&target.subject_kind==='celestial_body'
+      &&state.selectedSurfaceBodyId!==target.subject_id;
     if(target.operational_node_id&&target.operational_node_id!==state.operationalNodeId){
       await loadLocation(target.operational_node_id);
     }
+    if(target.decision_area==='exploration'&&target.subject_kind==='celestial_body'){
+      if(!(state.catalog?.celestial_bodies||[]).some((body)=>body.id===target.subject_id))return;
+      if(changedBody){state.surfaceMap=null;state.nonSurfaceFounding=null;state.selectedNonSurfaceContextId=null;state.foundingPinnedCellIds=[];}
+      state.selectedSurfaceBodyId=target.subject_id;
+    }
     setActiveSection(target.decision_area);
     state.decisionContext={...target};
+    if(target.decision_area==='logistics'&&target.resource_id)state.systemMapResourceId=target.resource_id;
+    if(target.decision_area==='logistics'&&target.operational_node_id){
+      state.selectedGlobalNodeId=target.operational_node_id;
+      void loadUiSnapshot().catch((error)=>banner(error.message,'error'));
+    }
     const tab=decisionContextTab(target);
     if(tab)state.activeTab=tab;
     if(['surface','survey'].includes(state.activeTab))await loadUiSnapshot({preserveInteraction:false});
@@ -813,6 +866,7 @@
     else if(target.subject_kind==='scientific_exploration'&&target.subject_id)state.inspector={type:'scientific-exploration',id:target.subject_id};
     else if(target.subject_kind==='survey_campaign'&&target.subject_id)state.inspector={type:'survey-campaign',id:target.subject_id};
     else if(target.subject_kind==='inventory'&&target.resource_id)state.inspector={type:'resource',id:target.resource_id};
+    else if(target.subject_kind==='celestial_body'&&changedBody)state.inspector=null;
     if(target.subject_kind==='movement_plan'&&target.subject_id)state.selectedMovementPlanId=target.subject_id;
     renderAll();
     queueMicrotask(()=>{
@@ -829,6 +883,8 @@
     await loadUiSnapshot({preserveInteraction:false}); $('#app').setAttribute('aria-busy','false');
   }
 
+  document.addEventListener('DOMContentLoaded',()=>{if(window.SpaceIdleSystemMap)window.SpaceIdleSystemMap.onSelect=()=>{renderAll();void loadUiSnapshot().catch((error)=>banner(error.message,'error'));};});
+
   window.SpaceIdleApp={
     state,$,$$,esc,fmt,pct,byId,definitionName,locationName,resourceName,capabilityName,serviceName,operationName,
     locationKindLabels,locationKindName,stateLabels,playerTerms,playerTerm,userFacingText,constraintSummary,issueHtml,metricHtml,statHtml,signed,stableUiSignature,setHtmlIfChanged,replaceHtmlPreservingKeyed,prioritySegmentedHtml,
@@ -841,9 +897,8 @@
     const priorityChoice=event.target.closest('[data-priority-choice]');if(priorityChoice){const group=priorityChoice.closest('.priority-segment');const holder=group?.querySelector('[data-priority-value-holder]');if(holder){holder.value=priorityChoice.dataset.priorityChoice;syncPrioritySegment(holder);holder.dispatchEvent(new Event('change',{bubbles:true}));}return;}
     const inspectorToggle=event.target.closest('[data-toggle-inspector]');if(inspectorToggle){state.inspectorExpanded=!state.inspectorExpanded;renderInspectorWidth();return;}
     const sectionBtn=event.target.closest('[data-section]'); if(sectionBtn){setActiveSection(sectionBtn.dataset.section);return;}
-    const openLocation=event.target.closest('[data-open-location]'); if(openLocation){await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');return;}
-    const globalNode=event.target.closest('[data-global-node-id]'); if(globalNode){state.selectedGlobalNodeId=globalNode.dataset.globalNodeId;renderGlobalView();return;}
-    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){const nodeId=globalLogistics.dataset.openNodeLogistics;state.selectedGlobalNodeId=nodeId;setActiveSection('logistics');state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:nodeId};renderAll();return;}
+    const openLocation=event.target.closest('[data-open-location]'); if(openLocation){const resourceId=state.activeSection==='logistics'?state.systemMapResourceId:null;await loadLocation(openLocation.dataset.openLocation);setActiveSection('location');if(resourceId){state.activeTab='inventory';state.inspector={type:'resource',id:resourceId};renderAll();}return;}
+    const globalLogistics=event.target.closest('[data-open-node-logistics]'); if(globalLogistics){const nodeId=globalLogistics.dataset.openNodeLogistics;state.selectedGlobalNodeId=nodeId;setActiveSection('logistics');state.decisionContext={decision_area:'logistics',subject_kind:'operational_node',subject_id:nodeId,resource_id:state.systemMapResourceId};renderAll();void loadUiSnapshot().catch((error)=>banner(error.message,'error'));return;}
     const issueLink=event.target.closest('[data-issue-area]'); if(issueLink){await openDecisionContext({decision_area:issueLink.dataset.issueArea,operational_node_id:issueLink.dataset.issueNode||null,subject_kind:issueLink.dataset.issueSubjectKind||null,subject_id:issueLink.dataset.issueSubjectId||null,resource_id:issueLink.dataset.issueResourceId||null});return;}
     if(event.target.closest('#attentionButton')){setActiveSection('global');return;}
     const locBtn=event.target.closest('[data-location-id]'); if(locBtn){await loadLocation(locBtn.dataset.locationId);return;}

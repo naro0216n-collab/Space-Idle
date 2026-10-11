@@ -11,7 +11,7 @@ from .scientific_exploration import (
     ScientificExplorationState, ScientificExplorationTerminationIntent,
 )
 from .shared import DefinitionId, EntityId
-from .transport.models import FleetActivityRef, MovementExecutionKind
+from .transport.models import FleetActivityRef, MovementExecutionKind, MovementEndpoint
 from .validation_support import ValidationContext, require as _require, validate_site_requirements
 
 
@@ -102,7 +102,15 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     nodes = ctx.spatial_nodes
     for definition_id, definition in sim.scientific_exploration.definitions.items():
         _require(definition_id == definition.id, f"scientific exploration key mismatch: {definition_id}")
-        _require(definition.origin_id in nodes and definition.destination_id in nodes, f"scientific exploration references unknown endpoint: {definition_id}")
+        _require(definition.prerequisite_technologies.issubset(ctx.known_technologies),
+                 f"scientific exploration references unknown Technology: {definition_id}")
+        graph = sim.graph
+        _require(definition.origin_id in nodes or graph.has_operational_node(definition.origin_id),
+                 f"scientific exploration origin is not a configured spatial context: {definition_id}")
+        _require(definition.destination_id in nodes or definition.destination_id in graph.surface_cells,
+                 f"scientific exploration references unknown physical subject: {definition_id}")
+        if sim.scientific_exploration._physical_target(definition) is None:
+            _require(definition.destination_id in nodes, f"science operational target is not a configured Node: {definition_id}")
         _require(definition.duration_days > 0, f"scientific exploration has non-positive campaign duration: {definition_id}")
         _require(definition.research_points_total > 0, f"scientific exploration has non-positive RP reward: {definition_id}")
         _require(definition.required_units > 0, f"scientific exploration has non-positive Fleet requirement: {definition_id}")
@@ -132,6 +140,33 @@ def validate_runtime(sim: Any) -> None:
         _require(1 <= int(state.priority) <= 5, f"scientific exploration priority must be 1..5: {definition_id}")
         _require(definition_id in service.definitions, f"scientific exploration state references unknown definition: {definition_id}")
         definition = service.definitions[definition_id]
+        # Only Population owns real crew counts and coordinates. The Activity
+        # may own requirements and an exclusive reference, never another stock.
+        crew = sim.population.activity_groups(service._crew_owner(definition))
+        crew_count = sum(group.count for group in crew)
+        _require(crew_count <= definition.required_crew,
+                 f"scientific exploration over-committed crew: {definition_id}")
+        needs_crew = state.phase in {
+            ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.ACTIVE,
+            ScientificExplorationPhase.RETURN_PREPARING, ScientificExplorationPhase.RETURNING,
+        }
+        if not needs_crew:
+            _require(crew_count == 0,
+                     f"inactive scientific exploration retains crew: {definition_id}")
+        if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
+            _require(all(group.position.kind == 'transport_execution'
+                         and group.position.ref == str(state.movement_execution_id) for group in crew),
+                     f"scientific exploration crew Movement reference mismatch: {definition_id}")
+        if state.phase in {ScientificExplorationPhase.ACTIVE, ScientificExplorationPhase.RETURN_PREPARING}:
+            expected_kind = ('physical_target' if isinstance(definition.destination, MovementEndpoint)
+                             else 'operational_node')
+            _require(all(group.position.kind == expected_kind
+                         and group.position.ref == str(definition.destination_id) for group in crew),
+                     f"scientific exploration crew destination mismatch: {definition_id}")
+        physical_target = service._physical_target(definition)
+        if physical_target is not None:
+            _require(state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN,
+                     f"unoperated scientific target cannot release Fleet: {definition_id}")
         _require(-1e-9 <= state.progress_days <= definition.duration_days + 1e-8, f"invalid scientific exploration progress: {definition_id}")
         _require(-1e-9 <= state.research_points_awarded <= definition.research_points_total + 1e-8, f"invalid scientific exploration RP award: {definition_id}")
 
@@ -158,18 +193,26 @@ def validate_runtime(sim: Any) -> None:
                     ScientificExplorationPhase.PREPARING,
                     ScientificExplorationPhase.ACTIVE,
                     ScientificExplorationPhase.RETURN_PREPARING,
+                    ScientificExplorationPhase.RECOVERING,
                 }
                 if stationary:
-                    expected_node = (
-                        definition.origin_id
-                        if state.phase is ScientificExplorationPhase.PREPARING
-                        else definition.destination_id
-                    )
-                    _require(commitment.operational_node_id == expected_node, f"scientific exploration Fleet commitment location mismatch: {definition_id}")
+                    if state.phase is ScientificExplorationPhase.PREPARING:
+                        _require(commitment.operational_node_id == definition.origin_id,
+                                 f"scientific exploration Fleet commitment origin mismatch: {definition_id}")
+                    elif state.phase is ScientificExplorationPhase.RECOVERING:
+                        _require(commitment.operational_node_id in {definition.origin_id, definition.destination_id},
+                                 f"scientific exploration Fleet recovery location mismatch: {definition_id}")
+                    elif physical_target is None:
+                        _require(commitment.operational_node_id == definition.destination_id,
+                                 f"scientific exploration Fleet commitment location mismatch: {definition_id}")
+                    else:
+                        _require(commitment.physical_target == physical_target,
+                                 f"scientific exploration Fleet physical position mismatch: {definition_id}")
                     _require(commitment.movement_execution_id is None, f"stationary scientific exploration Fleet commitment is moving: {definition_id}")
                 else:
                     _require(commitment.operational_node_id is None, f"moving scientific exploration Fleet commitment remains node-local: {definition_id}")
                     _require(commitment.movement_execution_id == state.movement_execution_id, f"scientific exploration Fleet commitment movement mismatch: {definition_id}")
+                    _require(commitment.physical_target is None, f"moving scientific exploration retains stationary physical location: {definition_id}")
 
         if state.phase in {ScientificExplorationPhase.OUTBOUND, ScientificExplorationPhase.RETURNING}:
             _require(state.movement_execution_id is not None, f"moving scientific exploration lacks MovementExecution: {definition_id}")
@@ -184,9 +227,13 @@ def validate_runtime(sim: Any) -> None:
                 _require(execution.fleet_commitment_id == state.fleet_commitment_id, f"scientific exploration MovementExecution Fleet commitment mismatch: {definition_id}")
                 if state.phase is ScientificExplorationPhase.OUTBOUND:
                     _require(execution.origin.operational_node_id == definition.origin_id, f"scientific exploration outbound origin mismatch: {definition_id}")
-                    _require(execution.destination.operational_node_id == definition.destination_id, f"scientific exploration outbound destination mismatch: {definition_id}")
+                    _require((execution.destination == physical_target if physical_target is not None
+                              else execution.destination.operational_node_id == definition.destination_id),
+                             f"scientific exploration outbound destination mismatch: {definition_id}")
                 else:
-                    _require(execution.origin.operational_node_id == definition.destination_id, f"scientific exploration return origin mismatch: {definition_id}")
+                    _require((execution.origin == physical_target if physical_target is not None
+                              else execution.origin.operational_node_id == definition.destination_id),
+                             f"scientific exploration return origin mismatch: {definition_id}")
                     _require(execution.destination.operational_node_id == definition.origin_id, f"scientific exploration return destination mismatch: {definition_id}")
         else:
             _require(state.movement_execution_id is None, f"stationary scientific exploration retains MovementExecution: {definition_id}")

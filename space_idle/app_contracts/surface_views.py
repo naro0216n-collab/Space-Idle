@@ -33,7 +33,7 @@ class SurfaceFacilityPlacementOption:
 
 
 @dataclass(frozen=True)
-class SurfaceCellFoundationOption:
+class FoundingOption:
     staging_node_id: str
     deployment_recipe_id: str
     recipe_display_name: str
@@ -83,7 +83,7 @@ class SurfaceCellRow:
     foundation_blockers: tuple[DecisionConstraintRow, ...]
     development_options: tuple[SurfaceCellDevelopmentOption, ...]
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
-    foundation_options: tuple[SurfaceCellFoundationOption, ...] = ()
+    foundation_options: tuple[FoundingOption, ...] = ()
     display_name: str = ""
     movement_accessible: bool | None = None
     minimum_transit_days: int | None = None
@@ -105,3 +105,19 @@ class SurfaceMapView:
     cells: tuple[SurfaceCellRow, ...]
     locations: tuple[SurfaceLocationTerritoryRow, ...]
     founding_comparison_axes: tuple[ComparisonAxisRow, ...] = ()
+    physical_surface: str = "solid"
+
+
+@dataclass(frozen=True)
+class NonSurfaceFoundingContextRow:
+    spatial_node_id: str
+    display_name: str
+    kind: str
+    operational: bool
+    foundation_options: tuple[FoundingOption, ...]
+
+
+@dataclass(frozen=True)
+class NonSurfaceFoundingView:
+    body_id: str
+    contexts: tuple[NonSurfaceFoundingContextRow, ...]

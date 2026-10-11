@@ -144,21 +144,10 @@ class FacilityMaintenanceService:
         ``advance_day``. Allocated material that cannot participate because a
         co-input is short remains stock and is not reported as consumption.
         """
-        satisfaction = self.satisfaction_projection(allocations)
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        for facility in sorted(
-            self.facilities.facilities.values(), key=lambda row: str(row.id)
-        ):
-            factor = satisfaction[facility.id]
-            for resource_id, required in sorted(
-                self.facilities.maintenance_requirements_per_day(facility.id).items(),
-                key=lambda row: str(row[0]),
-            ):
-                amount = required * factor
-                if amount <= 1e-12:
-                    continue
-                key = (facility.operational_node_id, resource_id)
-                totals[key] = totals.get(key, 0.0) + amount
+        for _facility_id, node_id, resource_id, amount in self._settled_facility_consumption(allocations):
+            key = (node_id, resource_id)
+            totals[key] = totals.get(key, 0.0) + amount
         return tuple(
             (node_id, resource_id, amount)
             for (node_id, resource_id), amount in sorted(
@@ -166,8 +155,28 @@ class FacilityMaintenanceService:
             )
         )
 
+    def _settled_facility_consumption(
+        self, allocations: ExecutionAllocationPlan,
+    ) -> tuple[tuple[EntityId, SpatialNodeId, DefinitionId, float], ...]:
+        satisfaction = self.satisfaction_projection(allocations)
+        rows = []
+        for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
+            factor = satisfaction[facility.id]
+            for resource_id, required in sorted(
+                self.facilities.maintenance_requirements_per_day(facility.id).items(),
+                key=lambda row: str(row[0]),
+            ):
+                amount = required * factor
+                if amount > 1e-12:
+                    rows.append((facility.id, facility.operational_node_id, resource_id, amount))
+        return tuple(rows)
+
     def advance_day(
         self, allocations: ExecutionAllocationPlan, day: int = 0
     ) -> None:
-        for node_id, resource_id, amount in self.resource_consumption_projection(allocations):
-            self.inventory.consume_allocated(node_id, resource_id, amount)
+        for facility_id, node_id, resource_id, amount in self._settled_facility_consumption(allocations):
+            self.inventory.consume_allocated(
+                node_id, resource_id, amount,
+                destination_owner=f"maintained_facility:{facility_id}",
+                activity_id=f"facility_maintenance:{facility_id}",
+            )

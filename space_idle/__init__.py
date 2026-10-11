@@ -1,7 +1,7 @@
 """Space Idle public application boundary."""
 
 from .version import VERSION as __version__
-from .bootstrap import build_game_application
+from .bootstrap import build_game_application, build_game_application_for_scenario
 from .application import (
     AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CancelBuild,
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
@@ -11,17 +11,19 @@ from .application import (
     GetCargoFlows, GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions,
-    GetWorld, GetSurfaceMap, PauseBuild, PauseFacility, PauseResearch,
+    GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, PauseBuild, PauseFacility, PauseResearch,
     PauseScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, PauseSurvey, PauseTransportAllocation,
     PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
-    ResumeVehicleProduction, SetFacilityProcess,
+    ResumeVehicleProduction, SetFacilityProcess, SetFacilityExtractionMethod,
     SetMaintenancePriority, SetFacilityActivityPriority, SetProjectPriority,
     SetProjectProcurementPolicy, SetResearchDemonstrationSite, SetResearchPrototypeSite,
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet,
     UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
+    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

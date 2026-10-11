@@ -10,7 +10,7 @@ from .models import (
     SpaceflightCapability, LandingCapability, AtmosphericEntryCapability, SurfaceTransportCapability,
     TransportPerformanceProfile, VehicleProductionSpec,
     VehicleRetirementSpec, FleetRetirementPhase, FleetRetirementState,
-    VehicleMaintenanceSpec, VehicleDef,
+    VehicleMaintenanceSpec, PassengerAccommodation, VehicleDef,
     FleetPool, FleetRelocation, FleetRelease,
     DirectionalCapacity, TransportAllocation, TransportServicePlan,
     TransportCapacitySnapshot, TransportServiceSupply,
@@ -18,7 +18,7 @@ from .models import (
 )
 from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .operations import (
-    OperationEvaluationContext, OperationEvaluatorRegistry,
+    OperationEvaluationContext, SurfaceOperationEnvironment, OperationEvaluatorRegistry,
     build_default_operation_registry,
 )
 
@@ -34,13 +34,13 @@ __all__ = [
     'SpaceflightCapability', 'LandingCapability', 'AtmosphericEntryCapability', 'SurfaceTransportCapability',
     'TransportPerformanceProfile', 'VehicleProductionSpec',
     'VehicleRetirementSpec', 'FleetRetirementPhase', 'FleetRetirementState',
-    'VehicleMaintenanceSpec', 'VehicleDef',
+    'VehicleMaintenanceSpec', 'PassengerAccommodation', 'VehicleDef',
     'FleetPool', 'FleetRelocation', 'FleetRelease',
     'DirectionalCapacity', 'TransportAllocation', 'TransportServicePlan',
     'TransportCapacitySnapshot', 'TransportServiceSupply',
     'TransportOperationDependencyProjection', 'TransportOperationUsageRequirements',
     'MovementResolver', 'SpaceflightMovementRule', 'SurfaceAccessMovementRule', 'SurfaceTransportMovementRule',
-    'OperationEvaluationContext', 'OperationEvaluatorRegistry',
+    'OperationEvaluationContext', 'SurfaceOperationEnvironment', 'OperationEvaluatorRegistry',
     'build_default_operation_registry', 'TransportService',
 ]
 

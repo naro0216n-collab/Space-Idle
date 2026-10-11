@@ -6,7 +6,7 @@
 
 正式対応対象は **iPad横画面** とする。Portrait専用Layoutや狭幅Desktop向けLayoutは本書の対象外とする。
 
-UIは内部Domain、DTO、永続Stateの構造をそのまま画面へ露出せず、Playerが「何を判断するか」を単位に構成する。情報量を減らすこと自体を目的にせず、判断に必要なstate、requirement、blocker、limiting factor、Resource、Capacity、時間、progress、commitment、候補差を判断地点で確認できることを優先する。
+UIは内部Domain、DTO、永続Stateの構造をそのまま画面へ露出せず、Playerが「何を判断するか」を単位に構成する。 表示の主軸は数値、単位付きrate、現在/目標の差、時系列、拠点間Resourceフローとする。状態名や制約の説明は測定値の意味と操作不能理由を理解するために付し、活動・投資・物流への改善優先順位や最善手を文章・色・並び順によって暗示しない。情報量を減らすこと自体を目的にせず、判断に必要なstate、requirement、blocker、limiting factor、Resource、Capacity、時間、progress、commitment、候補差を判断地点で確認できることを優先する。
 
 本ゲームは輸送計画そのものを主目的としない。研究、産業、拠点開発、建設、探査、物流、Fleet運用、経済を一つの宇宙開発ゲームとして接続し、特定Domainの操作様式を全体へ一般化しない。
 
@@ -262,7 +262,7 @@ UIはこれらをDomain ruleから独自計算しない。
 - Forecast
 - Draft / Preview
 
-単位と時間基準を併記する。
+単位と時間基準を併記する。 収支の増減とその戦略的価値は同一視しない。注意色は未充足・ブロック・容量超過等の客観的成立差に用い、外部依存や在庫減少の存在だけで警告にしない。
 
 ### 6.3 Current / Target / Preview
 
@@ -299,7 +299,7 @@ Player hard constraintがある場合は自動選択結果と明示constraintを
 
 ## 7. Attention
 
-Global Attentionはlogや全warning一覧ではなく、Player判断が必要な事象を扱う。
+Global Attentionはlogや全warning一覧ではなく、Player設定に対して成立しない活動・状態変化・完了イベントを扱う。通知はプレイヤーに取るべき行動を指定しない。
 
 主対象:
 
@@ -318,19 +318,19 @@ Global Attentionはlogや全warning一覧ではなく、Player判断が必要な
 
 ## 8. 全体Map / Location
 
-### 8.1 全体Map
+### 8.1 共通System Map
 
-「全体」はStar System / Operational Node / Locationの空間関係と主要状態を把握する入口とする。
+「全体」と「輸送」は別の地理を再描画する画面ではなく、同一System Mapを異なるDecision Contextで開く入口とする。Operational Nodeを軸に、Star System・Celestial Body・non-surface Spatial contextとの所属関係を理解できる概略配置を共有する。概略図の画面上の距離を実距離・latency・移動可否と解釈させず、それらはApplication Queryの数値・条件で示す。Surface Cellや未設立Founding targetは通常輸送Nodeへ混入させない。
 
-Map上で少なくとも次を識別できるようにする。
+物理Body・衛星の階層はOperational Nodeの有無に関わらず選択でき、同じInspector Contextから物理環境、Surface Cell登録状況、科学観測、Movement、Foundingの状況と必要条件を確認できる。固体地表のない天体には空の地表Mapを単なる読み込み失敗として表示せず、軌道・科学対象を提示する。未設立のBody/Cell/軌道Contextを通常のCargo配送先やTransport Allocation先の選択肢と混同しない。天体に関する物理値と判定はApplicationの同じWorld/Catalog投影を使い、地図内で再計算しない。
 
-- Operational Node / Surface Location
-- active founding / development
-- 主要Movement / logistics connection
-- Attentionを持つLocation
-- Research / Survey / Exploration等の主要active activity
+物理天体階層の表示位置とOperational Nodeの表示位置は別レイヤーとし、母天体接続を物流経路の実線として表さない。天体は未運用でも選択でき、地表の有無、代表重力・日射、登録された地域、非地表Contextの有無を区別して表示する。選択BodyのSurveyと非地表Founding候補はそのBodyの範囲で取得し、別Bodyの候補やKnowledgeを無条件に列挙しない。Founding操作は地表／非地表とも同じCommandへ接続し、Vehicle・staging・Recipeごとの準備、輸送、Resource、Fleetとblockerを判断点に提示する。
 
-詳細数値をMapへ過密表示せず、選択した対象をInspectorへ展開する。
+Mapの位置、拡大率・pan、表示階層、選択Node／OD関係、Resource filterを画面入口で共有する。OverviewではOperational Node、Attention、進行中のResearch・Survey・Exploration・Constructionと主要接続を示し、物流Contextでは実際のTransport Allocation、方向別Current / Target / Available / Used / Spareと選択されたSupply Requirement・Cargo Flowを区別する。Movement候補の成立性はTransportの稼働・配備を意味しないため、未配備候補の全線表示を避けて、選択した関係の候補として示す。
+
+同一ODに複数Allocation／Movement候補があり得る。Map上の集約エッジは表示上の関係でありDomain Stateではない。方向、複数設定、配送済Cargoと未dispatch需要をInspectorまたは一覧で分解し、個別操作へ到達できるようにする。線の直接ヒットを唯一の操作手段とせず、キーボード・タッチ対応の関係一覧を設ける。色とともに線種、ラベル、凡例、数値・単位で意味を示す。
+
+Mapは場所と関係の発見、比較一覧は多拠点の数値・設定と一括確認、Context Inspectorは選択対象の現在値・必要条件・blocker・Draft・Preview・操作を担う。同じ選択ContextをMap・一覧・Inspectorが参照し、どの入口からでも対象を再選択させない。別Canvasへの遷移とperiodic syncでは、対象・スクロール・Draft・pan／zoomを維持する。選択／pan／filterだけでは時間進行を停止せず、基準時点固定が必要なStructured Decisionでのみ既存Planning Modeを使う。
 
 ### 8.2 Location Overview
 
@@ -349,6 +349,16 @@ Location Inspectorは次の固定カテゴリから、そのLocationで意味の
 Locationを開いた後は設備、建設、Inventory、依存関係等を同じLocation Context内で切り替えられるようにする。
 
 ---
+
+### 8.3 Population / 居住と生命維持
+
+Location Overviewでは現在人数、任意の人口目標、Activity拘束人員、Inbound / Outbound、Housingの物理／利用可能／占有数、Life Supportの人数比例需要と実割当、生活Resourceごとの正味消費・現地在庫・補給中量、累積不足・翌日Crew能力、受入blockerを表示する。Earth外部人員供給元には有限残員・日次上限・当日取得可能数を表示する。現在値、次tick配分見込み、到着時点期待人数、将来Forecastを区別する。人口目標設定・解除の位置は固定し、目標を下げても人口消去や自動退去を意味しない。人口目標Previewには人数の出所、既Inbound、輸送時間・座席・質量、必要生活Resource、到着先Housing / Life Support、競合するCapacityを示す。
+
+Location OverviewとTransportの双方で、任意のorigin / destinationと正の整数人数を指定する一回限りの旅客移送を独立操作として提供する。未設定の人口目標やMission作成を要求しない。Transport Serviceの便とfree Fleetによる専用便を選択候補として並べ、所要日数、使用Fleet・Service、出発確定人数、未出発待機人数、共通Cargo Capacityへの影響、必要Resource、到着先受入余力、出発元の人口目標への影響、blockerをApplication Previewから表示する。Order一覧には要求／未出発／Transit／到着受入済み／取消済み人数を示し、未発送人数の取消操作を固定位置に置く。明示した輸送方法が使えなくなれば別の方法へ無断切替しない。
+
+旅客Orderの輸送終了は到着人数と死亡人数を区別して表示し、死亡があっただけで独立のランダム事故・失敗状態として表示しない。
+
+Facility InspectorはHousing人数容量、Life Support Providerの人日/日供給、正味Resource・Power負荷、Pause・Decommissionの人員影響を表示する。Fleet / Transport Inspectorは共通Mass Capacity・seatと貨物／旅客の使用内訳、船内Resource、専用便によるfree Fleet拘束を表示する。Mission Inspectorでは必要Crew、拘束済み人数、Transit中乗員、船内Resource、帰還条件を表示する。操作可否と不足理由はApplication DTOを正本とし、UIで別の人口・輸送可否ルールを組み立てない。
 
 ## 9. Facility
 
@@ -410,9 +420,11 @@ Current LevelとUpgrade後の主要差を同じInspectorで示し、変化しな
 
 ## 11. Research
 
-ResearchはDAG / Treeを主要Canvasとする。
+ResearchはDAG / Treeを主要Canvasとする。DAG全体を保ちながら名称・分類で検索し、選択Nodeへのジャンプ、direct prerequisiteと後続関係の強調を提供する。検索で一致がなくても選択とスクロールを破棄しない。研究からLocationやFleetへ遷移した場合は同じ研究Nodeへ戻れる。
 
 Node上ではunavailable、available、active、blocked、completed、current stage、progress、primary blockerを簡潔に区別し、Requirement全文はInspectorへ置く。
+
+RPの貯蔵表示は `stored < capacity`、`stored == capacity`、`stored > capacity` の実値を区別し、満杯だけでAttentionにしない。受入値がゼロなら「受入余力あり」と表示しない。Stage別所要時間は現在の供給・条件に基づく参考値と明示し、全Stageの確定完了日とはしない。
 
 Research Inspectorは次を優先する。
 
@@ -439,7 +451,9 @@ active Researchでは完了済みStage詳細より、次に必要なStage条件�
 
 Surface Mapを主要Canvasとし、Cellまたは地域scope、Resource scope、goal Knowledge Levelを直接指定する。
 
-Applicationがresolved provider / observation modeを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。
+Surface MapとSurveyのCell選択は共通の地理的概略配置を使う。緯度・経度の表示点に可変サイズの操作カードを直接重ねるのではなく、各Cellの操作領域が重複しない配置を導出し、隣接関係を示す。表示の間隔・画面上の距離は実際の距離や移動所要時間を意味しない。Cellが増加した場合も隣の操作領域を覆わせず、Canvas内のスクロールと全Cellに到達できる選択一覧を提供する。選択一覧とMapは同一のCell選択／調査scopeを操作し、別の正本を持たない。地表の再描画や同期で選択、フォーカス、マップ内スクロール、調査Draftを失わない。
+
+Applicationがresolved provider / observation modeと実際のFacility / Vehicle供給元、拠点、配備数、利用可能Service Capacityを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。異なる機種の候補や排他的Fleet Commitmentは同じProvider名にまとめて隠さず、供給元のhard constraintはCampaignの他の設定とともに保持する。
 
 Map LayerはEnvironment、Knowledge、Resource Potential、Location territory、Movement accessibility等を切り替え、全情報を常時重ねない。選択Cell Inspectorでは判断情報を統合する。
 
@@ -449,13 +463,21 @@ Survey Inspectorではselected scope、Resource scope、goal、completed / remai
 
 ### 12.2 Scientific Exploration
 
+科学活動の実行可否はRequirementとFleet・Crew実在状態から示す。確率的成功率・事故率ではなく、進行量・Crew充足・船内Resourceと帰還blockerを判断地点で公開する。
+
+帰還後に船内Resourceの荷卸し待ちとなった場合は、Crewの降機済み状態とFleetのResource保管blockerを別々に示す。
+
 同じContextでtarget / mission、phase、science progress、RP budget / admission、Fleet commitment、Movement / return、Pause / Abort / Return / completion dispositionを確認する。Fleet数量だけの設定画面にしない。
+
+未開発のBody/Cell/軌道Contextも対象候補として提示し、観測対象とFleetが訪れる物理endpointを明示する。Outbound・観測中・帰還中の実Fleet所在、往復の推進剤・所要日数、帰還可否とblocker、出発元での補給量をApplication projectionから示す。未運用地点でのFleet滞在は通常FleetPoolや物流ノードとして表示しない。
 
 ---
 
 ## 13. Founding / Surface Development
 
 Surface Locationが存在しない天体でもRemote SurveyからFoundingまで同じMap文脈で追えるようにする。
+
+共通System MapではCelestial Bodyを物理的な対象として選択し、その天体のSurface Map／Surveyへ直接降りられるようにする。未設立天体をOperational Nodeへ昇格させず、地表の表示対象と、Fleet・Inventory・Founding準備を所有するstaging Operational Nodeを別の選択Contextとして保持する。同一の天体へ戻った場合は地表Cellの選択とMap表示位置を復元し、別天体へ切り替える場合は旧天体のCell選択や地表Projectionを新天体の状態として表示しない。対象天体の地表情報はその判断領域で取得し、他の画面の通常同期に含めない。
 
 基本動線:
 
@@ -492,10 +514,9 @@ Research / Survey等でFleet quantityが直接Player intentならStepper等を�
 
 ## 15. Transport / Logistics
 
-Transport UIは輸送計画作成そのものを主ゲームプレイにしない。Playerが成立させたNetworkについてdemand、Target Stock、Transport Capacity、Fleet provisioning、Cargo Flow、auto-selected routing、bottleneckを確認し、必要な箇所だけ調整する。
+Transport UIは輸送計画作成そのものを主ゲームプレイにしない。共通System Mapの物流Contextと、需要・Allocation・Fleet・Target Stock・Cargo・制約の比較一覧／Inspectorを併用する。Mapで対象ODやNodeを選ぶと関連一覧も選択状態となり、一覧から選ぶとMapの対象を強調する。既存の比較・編集機能はMapへ吸収して消さない。未配備Movement候補と実際に稼働するTransport Serviceは表示を区別する。
 
-Attentionまたは選択Contextがある場合は関係する需要、Allocation、path、bottleneckを強調したNetworkを初期表示し、Contextがない場合だけNetwork overviewを表示する。
-
+Attentionまたは選択Contextがある場合は関係する需要、Allocation、path、bottleneckを強調し、Contextがない場合だけ物流overviewを表示する。通常source/path選択とCargo dispatchの自動化を維持し、必要なhard constraintのみPlayerが編集する。
 代表的な動線:
 
 1. LocationまたはAttentionでResource不足を発見する。
@@ -507,7 +528,7 @@ Attentionまたは選択Contextがある場合は関係する需要、Allocation
 
 Transport Allocationではorigin / destination、selected Movement / Service、Directional Capacity target、Provisioning Priority、Required Fleet Units、Assigned / available units、Nominal / Available / Used / Spare Capacity、latency、operational Resource demand、blocker / limiting factorを表示する。
 
-Resource需要ではlocal stock、normal demand、Target Stock追加需要、inbound、active shipping demand、unmet demandを区別する。
+Resource需要ではlocal stock、normal demand、Target Stock追加需要、inbound、active shipping demand、unmet demandを区別する。 輸送中Cargoは最終destinationとLeg chainから到着時点の最短見込み・Segment最後の見込みを示し、handoff待機・入庫制約があるときの見込みは確定到着として表示しない。runwayは現地在庫のみからの計算であることを明示する。
 
 通常routingはselected source、selected path、latency、主要operational Resource burden、handoff、limiting factorを表示し、hard constraintはPlayerが自動選択を戦略的に制限する場合だけNode / Edgeから設定する。
 
@@ -538,7 +559,7 @@ Buyではreserved Funds / provider supplyを、SellではInterfaceへ実際に�
 - imports
 - exports
 - unmet demand
-- critical external Resource
+- external Resource dependency quantity / rate (unmet demandとは区別)
 - forecast requirement
 
 該当Resource、Facility、Construction、TransportへContext付きで移動できるようにする。
@@ -565,9 +586,11 @@ Fast Previewは実行可否、Targetから導出されるCapacity / required uni
 
 ### 18.3 Detailed Forecast
 
-future Inventory、downstream impact、multi-hop logistics impact、long-term steady state、Location dependency forecast等はFast Previewから分離する。
+future Inventory、downstream impact、multi-hop logistics impact、Location dependency forecast等はFast Previewから分離する。期間末日時点の生産・消費・入出荷収支は数値で表し、期間末日の収支符号のみから長期均衡・枯渇の成否を断定しない。 期間中の在庫変化は、拠点・Resource単位で最小利用可能量とその時点も表示できるようにする。複数拠点の残高を合計することで各拠点固有の制約を打ち消さない。利用可能在庫が0になった事実だけをResource需要の未充足と同一視せず、それぞれ別の指標として扱う。
 
-UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / steady-state等の意味的horizonを選び、実期間はApplication Query filterとして扱う。
+期間中の実行配分未達、期限到来Supply Requirementの未発送、中継／入庫arrival waitingを別系列にし、対象拠点・Resourceごとの初回観測日、最大未達量・発生日、到着待機の期間末残量を表示する。実行配分未達はResource以外のRequirement制約も含み得るため、現地Resource在庫不足と同一視しない。依存分析では現地生産差とscope内発送・輸送中量を分離し、外部供給に依存するだけで警告表示にしない。
+
+UIは固定日数を正準仕様として持たず、必要に応じて短期 / 中期 / 長期等の期間を選び、実期間はApplication Query filterとして扱う。
 
 ### 18.4 Draft
 
@@ -651,6 +674,9 @@ UIは見た目だけでなく、少なくとも次の契約を検証する。
 
 - blockerから原因と解決対象へ数値暗記なしで到達できる。
 - 関連Canvasへ移っても選択Contextが保持される。
+- 全体・輸送で共通System MapのNode位置・pan／zoom・選択が一致し、実AllocationとMovement候補を区別できる。
+- Mapと輸送一覧が同じNode／OD／Allocationを相互参照し、複数Allocationを集約した表示からも個別設定へ進める。
+- Research検索・前後関係の確認と復帰、RP上限状態の実値表示、Scientific Explorationのphaseとpauseを混同しない。
 - Current / Target / Previewを誤認しない。
 - Stock / Flow / Capacity / Commitmentを区別できる。
 - disabled actionでも必要条件とblockerを確認できる。

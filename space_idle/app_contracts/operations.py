@@ -23,6 +23,12 @@ class SetFacilityProcess:
 
 
 @dataclass(frozen=True)
+class SetFacilityExtractionMethod:
+    facility_id: str
+    method_id: str
+
+
+@dataclass(frozen=True)
 class SetFacilityActivityPriority:
     facility_id: str
     priority: ActivityPriority

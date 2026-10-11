@@ -5,10 +5,10 @@ from ..service_capacity import ServiceCapacityScope
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import (
-    CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
+    AtmosphericPartialPressureRange, CapabilityRequirement, CapabilityRequirementState, FacetValueRange, RequiresFacet, SiteRequirements,
     SpatialClassification, SpatialClassificationRequirement,
 )
-from ..spatial import AtmosphereField, ThermalField
+from ..spatial import AtmosphereField, RadiationField, ThermalField, ExternalGridConnectionField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
 SURFACE_CLASSIFICATION = (
@@ -31,8 +31,24 @@ COLD_VOLATILE_ENV = VACUUM_ENV + (
         ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0
     ),
 )
+# Radiation sensitivity is equipment-specific. This is an Eligibility check,
+# not an independent dose penalty; protective capacity is separately supplied.
+LOW_RADIATION_ENV = (
+    FacetValueRange(
+        RadiationField, "dose_equivalent_msv_per_day",
+        "environment:radiation_tolerance", "設備の耐放射線上限を超過", maximum=5.0,
+    ),
+)
 SURFACE_SITE = SiteRequirements(spatial_classification_requirements=SURFACE_CLASSIFICATION)
 ORBIT_SITE = SiteRequirements(spatial_classification_requirements=ORBIT_CLASSIFICATION)
+EXTERNAL_GRID_SITE = SiteRequirements(
+    environment=(RequiresFacet(
+        ExternalGridConnectionField, "world:external_grid_connection",
+        "外部電力網との実在接続が必要",
+    ),),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+
 ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
     environment=(
         FacetValueRange(
@@ -41,6 +57,16 @@ ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
             "environment:atmospheric_surface",
             "十分な大気圧を持つ地表が必要",
             minimum=50000.0,
+        ),
+    ),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+BREATHABLE_SURFACE_SITE = SiteRequirements(
+    environment=(
+        AtmosphericPartialPressureRange(
+            DefinitionId('base.species.o2'),
+            'environment:breathable_oxygen', '呼吸可能な酸素分圧が必要',
+            minimum_pa=16000.0,
         ),
     ),
     spatial_classification_requirements=SURFACE_CLASSIFICATION,

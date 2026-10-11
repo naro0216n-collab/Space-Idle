@@ -110,7 +110,7 @@ class ApplicationReportProjectorMixin:
         nodes = self._dependency_scope_nodes(query)
         requirement_rows = self._requirement_rows()
         if basis == "CURRENT":
-            rows, group_rows, critical = self._current_dependency_rows(nodes)
+            rows, group_rows = self._current_dependency_rows(nodes)
             rows = [
                 replace(
                     row,
@@ -120,7 +120,7 @@ class ApplicationReportProjectorMixin:
                 )
                 for row in rows
             ]
-            service_rows, critical_services = self._current_service_dependency_rows(nodes)
+            service_rows = self._current_service_dependency_rows(nodes)
             return DependencyAnalyticsView(
                 scope_kind=query.scope_kind,
                 scope_id=query.scope_id,
@@ -130,10 +130,8 @@ class ApplicationReportProjectorMixin:
                 current_resources=tuple(rows),
                 current_resource_groups=tuple(group_rows),
                 current_services=tuple(service_rows),
-                critical_dependency_resource_ids=tuple(critical),
-                critical_dependency_service_types=tuple(critical_services),
             )
-        rows, group_rows, critical = self._forecast_dependency_rows(nodes)
+        rows, group_rows = self._forecast_dependency_rows(nodes)
         rows = [
             replace(
                 row,
@@ -143,7 +141,7 @@ class ApplicationReportProjectorMixin:
             )
             for row in rows
         ]
-        service_rows, critical_services = self._forecast_service_dependency_rows(nodes)
+        service_rows = self._forecast_service_dependency_rows(nodes)
         return DependencyAnalyticsView(
             scope_kind=query.scope_kind,
             scope_id=query.scope_id,
@@ -153,13 +151,11 @@ class ApplicationReportProjectorMixin:
             forecast_resources=tuple(rows),
             forecast_resource_groups=tuple(group_rows),
             forecast_services=tuple(service_rows),
-            critical_dependency_resource_ids=tuple(critical),
-            critical_dependency_service_types=tuple(critical_services),
         )
 
     def _current_service_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[CurrentServiceDependencyMetricRow], list[str]]:
+    ) -> list[CurrentServiceDependencyMetricRow]:
         sim = self._simulation
         decision = self._tick_decision_projection()
         plan = decision.allocations.services
@@ -222,7 +218,6 @@ class ApplicationReportProjectorMixin:
             if node_id in selected
         )
         rows: list[CurrentServiceDependencyMetricRow] = []
-        critical: list[str] = []
         for service_type in sorted(service_types):
             scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
             local_nominal = sum(
@@ -266,8 +261,6 @@ class ApplicationReportProjectorMixin:
             if external_dependency > 1e-9:
                 limiting.append("outside_scope_service_dependency")
             limiting = list(dict.fromkeys(limiting))
-            if unmet > 1e-9 or external_dependency > 1e-9:
-                critical.append(service_type)
             if requested <= 1e-12 and unmet <= 1e-12 and external_dependency <= 1e-12:
                 continue
             rows.append(CurrentServiceDependencyMetricRow(
@@ -288,11 +281,11 @@ class ApplicationReportProjectorMixin:
                     related_entity_id=service_type,
                 ),
             ))
-        return rows, critical
+        return rows
 
     def _forecast_service_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[ForecastServiceDependencyMetricRow], list[str]]:
+    ) -> list[ForecastServiceDependencyMetricRow]:
         sim = self._simulation
         decision = self._tick_decision_projection()
         plan = decision.allocations.services
@@ -321,7 +314,6 @@ class ApplicationReportProjectorMixin:
                     paused.add(service_type)
 
         rows: list[ForecastServiceDependencyMetricRow] = []
-        critical: list[str] = []
         for service_type in sorted(planned):
             scope = provider_scopes.get(service_type, ServiceCapacityScope.OPERATIONAL_NODE)
             local_enabled = sum(
@@ -343,8 +335,6 @@ class ApplicationReportProjectorMixin:
                 limiting.append("no_organization_service_capacity")
             if service_type in paused:
                 limiting.append("paused_plan")
-            if any(value.startswith("no_") for value in limiting):
-                critical.append(service_type)
             rows.append(ForecastServiceDependencyMetricRow(
                 service_type=service_type,
                 scope=scope.value,
@@ -359,11 +349,11 @@ class ApplicationReportProjectorMixin:
                     related_entity_id=service_type,
                 ),
             ))
-        return rows, critical
+        return rows
 
     def _current_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[CurrentDependencyMetricRow], list[CurrentDependencyMetricRow], list[str]]:
+    ) -> tuple[list[CurrentDependencyMetricRow], list[CurrentDependencyMetricRow]]:
         sim = self._simulation
         scope = set(nodes)
         decision = self._tick_decision_projection()
@@ -374,8 +364,12 @@ class ApplicationReportProjectorMixin:
         )
 
         production: dict[object, float] = defaultdict(float)
+        node_production: dict[tuple[object, object], float] = defaultdict(float)
         consumption: dict[object, float] = defaultdict(float)
         current_demand: dict[object, float] = defaultdict(float)
+        node_demand: dict[tuple[object, object], float] = defaultdict(float)
+        internal_dispatch: dict[object, float] = defaultdict(float)
+        internal_pipeline: dict[object, float] = defaultdict(float)
         external_inflow: dict[object, float] = defaultdict(float)
         external_outflow: dict[object, float] = defaultdict(float)
         imports_pipeline: dict[object, float] = defaultdict(float)
@@ -390,6 +384,7 @@ class ApplicationReportProjectorMixin:
             ):
                 for resource_id, amount in snap.output_rates_per_day.items():
                     production[resource_id] += amount
+                    node_production[(node_id, resource_id)] += amount
                 for resource_id, amount in snap.input_rates_per_day.items():
                     consumption[resource_id] += amount
             if sim.extraction is not None:
@@ -397,6 +392,7 @@ class ApplicationReportProjectorMixin:
                     node_id, sim.facilities, sim.inventory, power, sim.day, execution_allocations,
                 ):
                     production[snap.output_resource_id] += snap.output_t_per_day
+                    node_production[(node_id, snap.output_resource_id)] += snap.output_t_per_day
 
         if sim.maintenance is not None:
             for node_id, resource_id, amount in sim.maintenance.resource_consumption_projection(
@@ -410,7 +406,6 @@ class ApplicationReportProjectorMixin:
 
         # CURRENT demand is limited to requirements that are due in the snapshot.
         # Target Stock is a future planning intent and therefore belongs to FORECAST.
-        current_requirement_ids: set[object] = set()
         for requirement in decision.intents.supplys:
             if requirement.destination_id not in scope or requirement.owner_kind == "target_stock":
                 continue
@@ -419,8 +414,12 @@ class ApplicationReportProjectorMixin:
                 and requirement.forecast_requirement_day > sim.day
             ):
                 continue
-            current_requirement_ids.add(requirement.id)
             current_demand[requirement.resource_id] += (
+                requirement.recurring_rate_t_per_day
+                if requirement.recurring_rate_t_per_day is not None
+                else requirement.amount_t
+            )
+            node_demand[(requirement.destination_id, requirement.resource_id)] += (
                 requirement.recurring_rate_t_per_day
                 if requirement.recurring_rate_t_per_day is not None
                 else requirement.amount_t
@@ -431,13 +430,14 @@ class ApplicationReportProjectorMixin:
                 and allocation.operational_node_id in scope
             ):
                 current_demand[allocation.resource_id] += allocation.requested_amount
+                node_demand[(allocation.operational_node_id, allocation.resource_id)] += allocation.requested_amount
 
-        projected_dispatch_by_requirement: dict[object, float] = defaultdict(float)
         for dispatch in logistics_execution.dispatches:
-            projected_dispatch_by_requirement[dispatch.requirement_id] += dispatch.amount_t
             source_inside = dispatch.source_id in scope
             destination_inside = dispatch.destination_id in scope
             if source_inside == destination_inside:
+                if source_inside and dispatch.source_id != dispatch.destination_id:
+                    internal_dispatch[dispatch.resource_id] += dispatch.amount_t
                 continue
             if destination_inside:
                 external_inflow[dispatch.resource_id] += dispatch.amount_t
@@ -466,8 +466,10 @@ class ApplicationReportProjectorMixin:
 
         for flow in sim.logistics.cargo_flow_snapshots():
             source_inside = flow.source_id in scope
-            destination_inside = flow.destination_id in scope
+            destination_inside = flow.final_destination_id in scope
             if source_inside == destination_inside:
+                if source_inside and flow.source_id != flow.final_destination_id:
+                    internal_pipeline[flow.resource_id] += flow.amount_t
                 continue
             if destination_inside:
                 imports_pipeline[flow.resource_id] += flow.amount_t
@@ -476,8 +478,10 @@ class ApplicationReportProjectorMixin:
                 exports_pipeline[flow.resource_id] += flow.amount_t
         for waiting in sim.logistics.arrival_waiting_snapshots():
             source_inside = waiting.arrival_leg.source_id in scope
-            destination_inside = waiting.node_id in scope
+            destination_inside = waiting.final_destination_id in scope
             if source_inside == destination_inside:
+                if source_inside and waiting.arrival_leg.source_id != waiting.final_destination_id:
+                    internal_pipeline[waiting.resource_id] += waiting.amount_t
                 continue
             if destination_inside:
                 imports_pipeline[waiting.resource_id] += waiting.amount_t
@@ -485,15 +489,11 @@ class ApplicationReportProjectorMixin:
             else:
                 exports_pipeline[waiting.resource_id] += waiting.amount_t
 
-        for requirement in decision.plan.external_requirements:
-            if requirement.id not in current_requirement_ids or requirement.destination_id not in scope:
-                continue
-            remaining = max(
-                0.0,
-                sim.logistics.requirement_remaining_t(requirement)
-                - projected_dispatch_by_requirement[requirement.id],
-            )
-            if remaining <= 1e-12:
+        for requirement, remaining in sim.logistics.unshipped_due_supply(
+            sim.day, decision.intents.supplys, decision.plan.external_requirements,
+            ((dispatch.requirement_id, dispatch.amount_t) for dispatch in logistics_execution.dispatches),
+        ):
+            if requirement.destination_id not in scope:
                 continue
             unmet[requirement.resource_id] += remaining
             constraint = sim.logistics.routing_constraint_for(requirement)
@@ -511,13 +511,17 @@ class ApplicationReportProjectorMixin:
             definition = self._catalog.resources.get(resource_id)
             produced = production[resource_id]
             demand_rate = current_demand[resource_id]
-            dependency_rate = max(0.0, demand_rate - produced)
-            coverage = None if demand_rate <= 1e-12 else min(1.0, produced / demand_rate)
+            # Local production cannot cover demand at another node without an
+            # actual transport service. Do not cancel a local deficit with a
+            # remote surplus when aggregating selected nodes.
+            dependency_rate = sum(
+                max(0.0, node_demand[(node_id, resource_id)] - node_production[(node_id, resource_id)])
+                for node_id in nodes
+            )
+            coverage = None if demand_rate <= 1e-12 else max(0.0, 1.0 - dependency_rate / demand_rate)
             limiting: list[str] = []
             if unmet[resource_id] > 1e-9:
                 limiting.append("unmet_demand")
-            if dependency_rate > 1e-9:
-                limiting.append("external_dependency")
             rows.append(CurrentDependencyMetricRow(
                 str(resource_id), str(resource_id) if definition is None else definition.display_name,
                 "t" if definition is None else definition.unit, (str(resource_id),),
@@ -531,6 +535,8 @@ class ApplicationReportProjectorMixin:
                     related_entity_kind="resource",
                     related_entity_id=str(resource_id),
                 ),
+                internal_dispatch_per_day=internal_dispatch[resource_id],
+                internal_pipeline_t=internal_pipeline[resource_id],
             ))
 
         by_id = {row.id: row for row in rows}
@@ -543,24 +549,25 @@ class ApplicationReportProjectorMixin:
             if len(units) != 1:
                 raise ValueError(f"resource group {group_id} mixes incompatible units")
             demand = sum(row.demand_per_day for row in members)
-            dependency = sum(row.external_dependency_per_day for row in members)
+            dependency = sum(row.local_production_gap_per_day for row in members)
             produced = sum(row.production_per_day for row in members)
             group_rows.append(CurrentDependencyMetricRow(
                 str(group_id), group.display_name, next(iter(units)), tuple(row.id for row in members),
                 produced, sum(row.consumption_per_day for row in members), demand, dependency,
-                None if demand <= 1e-12 else min(1.0, sum(max(0.0, row.demand_per_day - row.external_dependency_per_day) for row in members) / demand),
+                None if demand <= 1e-12 else max(0.0, 1.0 - dependency / demand),
                 sum(row.imports_per_day for row in members), sum(row.exports_per_day for row in members),
                 sum(row.imports_pipeline_t for row in members), sum(row.exports_pipeline_t for row in members),
                 sum(row.unmet_demand_t for row in members),
                 tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
                 tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
+                internal_dispatch_per_day=sum(row.internal_dispatch_per_day for row in members),
+                internal_pipeline_t=sum(row.internal_pipeline_t for row in members),
             ))
-        critical = [row.id for row in rows if row.external_dependency_per_day > 1e-9 or row.unmet_demand_t > 1e-9]
-        return rows, group_rows, critical
+        return rows, group_rows
 
     def _forecast_dependency_rows(
         self, nodes: tuple[SpatialNodeId, ...]
-    ) -> tuple[list[ForecastDependencyMetricRow], list[ForecastDependencyMetricRow], list[str]]:
+    ) -> tuple[list[ForecastDependencyMetricRow], list[ForecastDependencyMetricRow]]:
         sim = self._simulation
         scope = set(nodes)
         decision = self._tick_decision_projection()
@@ -581,6 +588,7 @@ class ApplicationReportProjectorMixin:
 
         planned: dict[object, float] = defaultdict(float)
         recurring: dict[object, float] = defaultdict(float)
+        node_recurring: dict[tuple[object, object], float] = defaultdict(float)
         external: dict[object, float] = defaultdict(float)
         target_stock: dict[object, float] = defaultdict(float)
         earliest_day: dict[object, int | None] = {}
@@ -592,6 +600,7 @@ class ApplicationReportProjectorMixin:
             external[resource_id] += external_by_id.get(requirement.id, requirement.amount_t)
             if requirement.recurring_rate_t_per_day is not None:
                 recurring[resource_id] += requirement.recurring_rate_t_per_day
+                node_recurring[(requirement.destination_id, resource_id)] += requirement.recurring_rate_t_per_day
             if requirement.owner_kind == "target_stock":
                 target_stock[resource_id] += requirement.amount_t
             if requirement.forecast_requirement_day is not None:
@@ -605,26 +614,28 @@ class ApplicationReportProjectorMixin:
         # Use snapshot production only to identify recurring future dependence;
         # unbuilt future facilities are never predicted.
         production: dict[object, float] = defaultdict(float)
+        node_production: dict[tuple[object, object], float] = defaultdict(float)
         execution_allocations = decision.allocations.execution
         for node_id in nodes:
             power = decision.allocations.power_by_location[node_id]
             for snap in sim.industry.snapshots(node_id, sim.facilities, sim.inventory, sim.day, execution_allocations):
                 for resource_id, amount in snap.output_rates_per_day.items():
                     production[resource_id] += amount
+                    node_production[(node_id, resource_id)] += amount
             if sim.extraction is not None:
                 for snap in sim.extraction.snapshots(node_id, sim.facilities, sim.inventory, power, sim.day, execution_allocations):
                     production[snap.output_resource_id] += snap.output_t_per_day
+                    node_production[(node_id, snap.output_resource_id)] += snap.output_t_per_day
 
         resource_ids = set(planned) | set(recurring) | set(external) | set(target_stock)
         rows: list[ForecastDependencyMetricRow] = []
         for resource_id in sorted(resource_ids, key=str):
             definition = self._catalog.resources.get(resource_id)
-            recurring_dependency = max(0.0, recurring[resource_id] - production[resource_id])
+            recurring_dependency = sum(
+                max(0.0, node_recurring[(node_id, resource_id)] - node_production[(node_id, resource_id)])
+                for node_id in nodes
+            )
             limiting: list[str] = []
-            if external[resource_id] > 1e-9:
-                limiting.append("external_requirement")
-            if recurring_dependency > 1e-9:
-                limiting.append("external_recurring_dependency")
             rows.append(ForecastDependencyMetricRow(
                 str(resource_id), str(resource_id) if definition is None else definition.display_name,
                 "t" if definition is None else definition.unit, (str(resource_id),),
@@ -653,14 +664,13 @@ class ApplicationReportProjectorMixin:
                 str(group_id), group.display_name, next(iter(units)), tuple(row.id for row in members),
                 sum(row.planned_requirement_t for row in members),
                 sum(row.recurring_consumption_per_day for row in members),
-                sum(row.external_requirement_t for row in members),
-                sum(row.external_recurring_dependency_per_day for row in members),
+                sum(row.offsite_requirement_t for row in members),
+                sum(row.recurring_local_production_gap_per_day for row in members),
                 sum(row.target_stock_t for row in members), min(days) if days else None,
                 tuple(sorted({source for row in members for source in row.dependency_source_node_ids})),
                 tuple(dict.fromkeys(factor for row in members for factor in row.limiting_factors)),
             ))
-        critical = [row.id for row in rows if row.external_requirement_t > 1e-9 or row.external_recurring_dependency_per_day > 1e-9]
-        return rows, group_rows, critical
+        return rows, group_rows
 
     @staticmethod
     def _issue_navigation(
@@ -1129,7 +1139,7 @@ class ApplicationReportProjectorMixin:
         for flow in sim.logistics.cargo_flow_snapshots():
             if flow.source_id == location_id:
                 outbound_transit[flow.resource_id] += flow.amount_t
-            if flow.destination_id == location_id:
+            if flow.final_destination_id == location_id:
                 inbound_transit[flow.resource_id] += flow.amount_t
         for waiting in sim.logistics.arrival_waiting_snapshots():
             if waiting.node_id == location_id:

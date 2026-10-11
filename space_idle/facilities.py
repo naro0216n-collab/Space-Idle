@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 import math
@@ -53,6 +54,20 @@ class ServiceCapacitySupply:
 
 
 @dataclass(frozen=True)
+class LifeSupportSpec:
+    person_days_per_day: float
+    net_resources: tuple[tuple[DefinitionId, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.person_days_per_day) or self.person_days_per_day <= 0:
+            raise ValueError('life support service rate must be positive and finite')
+        if len({item[0] for item in self.net_resources}) != len(self.net_resources):
+            raise ValueError('duplicate net life support Resource')
+        if any(not math.isfinite(rate) or rate < 0 for _, rate in self.net_resources):
+            raise ValueError('invalid net life support Resource rate')
+
+
+@dataclass(frozen=True)
 class FacilityDef:
     id: DefinitionId
     display_name: str
@@ -65,10 +80,22 @@ class FacilityDef:
     placement_scope: FacilityPlacementScope = FacilityPlacementScope.OPERATIONAL_NODE
     service_capacity_supplies: tuple[ServiceCapacitySupply, ...] = ()
     decommission_recovery_fraction: float = 0.0
+    housing_capacity: int = 0
+    life_support: LifeSupportSpec | None = None
+    # Nominal units of the selected Process executed per canonical day.
+    process_throughput_per_day: float = 1.0
+    # Installed capacity for a compatible extraction method; not a method-owned rate.
+    extraction_capacity_t_per_day: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.maintenance_fraction_per_year < 0:
+        if isinstance(self.housing_capacity, bool) or not isinstance(self.housing_capacity, int) or self.housing_capacity < 0:
+            raise ValueError("housing must be a nonnegative integer capacity")
+        if not math.isfinite(self.maintenance_fraction_per_year) or self.maintenance_fraction_per_year < 0:
             raise ValueError("facility maintenance fraction must be non-negative")
+        if not math.isfinite(self.process_throughput_per_day) or self.process_throughput_per_day < 0:
+            raise ValueError("facility process throughput must be finite and nonnegative")
+        if not math.isfinite(self.extraction_capacity_t_per_day) or self.extraction_capacity_t_per_day < 0:
+            raise ValueError("facility extraction capacity must be finite and nonnegative")
         if not isinstance(self.placement_scope, FacilityPlacementScope):
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
         if not 0.0 <= self.decommission_recovery_fraction <= 1.0:
@@ -88,6 +115,7 @@ class FacilityState:
     site_cell_id: SurfaceCellId | None = None
     lifecycle: FacilityLifecycle = FacilityLifecycle.NORMAL
     selected_process_id: DefinitionId | None = None
+    selected_extraction_method_id: DefinitionId | None = None
 
     def __post_init__(self) -> None:
         self.activity_priority = ActivityPriority(self.activity_priority)
@@ -106,6 +134,24 @@ class FacilityBook:
     environment: EnvironmentResolver
     facilities: dict[EntityId, FacilityState] = field(default_factory=dict)
     _counter: int = 0
+    _compatible_projection: dict[tuple[SpatialNodeId, int], tuple[FacilityState, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @contextmanager
+    def compatible_projection_scope(self):
+        """Reuse facility eligibility only within one read-only allocation.
+
+        Eligibility depends on mutable Facility and Environment state. Keeping
+        this derivation inside an allocation call, not across canonical phases
+        or Commands, avoids stale results and adds no saved domain state.
+        """
+        previous = self._compatible_projection
+        self._compatible_projection = {}
+        try:
+            yield
+        finally:
+            self._compatible_projection = previous
 
     def copy_for_environment(self, environment: EnvironmentResolver) -> "FacilityBook":
         """Create an isolated mutable facility snapshot bound to another environment.
@@ -185,11 +231,12 @@ class FacilityBook:
             if placement_failures[0][0] == "unknown_site_cell":
                 raise KeyError(site_cell_id)
             raise ValueError("; ".join(detail for _code, detail in placement_failures))
-        if level < 1:
-            raise ValueError("facility level must be positive")
+        if type(level) is not int or level < 1:
+            raise ValueError("facility level must be a positive integer")
         investment = dict(invested_resources or {})
-        if any(amount < 0 for amount in investment.values()):
-            raise ValueError("facility invested resources must be non-negative")
+        if any(type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
+               for amount in investment.values()):
+            raise ValueError("facility invested resources must be finite and non-negative")
         self._counter += 1
         entity_id = EntityId(f"facility.{self._counter}")
         self.facilities[entity_id] = FacilityState(
@@ -214,14 +261,21 @@ class FacilityBook:
     ) -> None:
         """Apply one completed level transition and retain physical investment history."""
         facility = self.facilities[facility_id]
-        if target_level != facility.level + 1:
+        if type(target_level) is not int or target_level != facility.level + 1:
             raise ValueError(
                 f"facility level transition must be sequential: {facility.level} -> {target_level}"
             )
-        for resource_id, amount in (invested_resources or {}).items():
-            if amount < 0:
-                raise ValueError("facility invested resources must be non-negative")
-            facility.invested_resources[resource_id] = facility.invested_resources.get(resource_id, 0.0) + amount
+        investment = dict(invested_resources or {})
+        if any(type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
+               for amount in investment.values()):
+            raise ValueError("facility invested resources must be finite and non-negative")
+        updated = dict(facility.invested_resources)
+        for resource_id, amount in investment.items():
+            total = updated.get(resource_id, 0.0) + amount
+            if not math.isfinite(total):
+                raise ValueError("facility invested resources must remain finite")
+            updated[resource_id] = total
+        facility.invested_resources = updated
         facility.level = target_level
 
     def pause(self, facility_id: EntityId) -> None:
@@ -299,7 +353,14 @@ class FacilityBook:
         return not self.activation_failures(facility, day)
 
     def active_compatible_at(self, operational_node_id: SpatialNodeId, day: int) -> list[FacilityState]:
-        return [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
+        scope = self._compatible_projection
+        key = (operational_node_id, day)
+        if scope is not None and key in scope:
+            return list(scope[key])
+        active = [f for f in self.all_at(operational_node_id) if self.is_active_and_compatible(f, day)]
+        if scope is not None:
+            scope[key] = tuple(active)
+        return active
 
     def maintenance_requirements_per_day(self, facility_id: EntityId) -> dict[DefinitionId, float]:
         facility = self.facilities[facility_id]

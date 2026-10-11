@@ -22,6 +22,7 @@ MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
 CONNECTOR_SUMMARY_NAME = "summary.json"
+CONNECTOR_EXECUTION_INDEX_NAME = "execution-index.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
 WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
 MANIFEST_NAME = "manifest.json"
@@ -851,6 +852,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     state["tree_packets"] = tree_packets
     state["commit_packet"] = commit_packet
     _write_connector_state(repo, state)
+    execution_index = _write_execution_index(repo, state)
     summary = {
         "stage": state["stage"],
         "request_id": prepared["request_id"],
@@ -863,6 +865,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "tree_call_bytes": tree_call_bytes,
         "tree_expected_shas": [batch["expected_tree"] for batch in plan["batches"]],
         "commit_packet": commit_packet,
+        "execution_index": execution_index,
         "stale_transport_path_count": plan["stale_transport_path_count"],
         "normal_pre_ref_helper_round_trips": 0,
         "normal_pre_ref_verification_reads": 0,
@@ -874,17 +877,98 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             "force": False,
         },
         "next": (
-            "execute the generated GitHub.create_tree packets in order; each packet carries its expected_tree and "
-            "the next packet is based on that precomputed object identity. If a returned tree SHA differs, retry that "
-            "same packet and do not advance. Then execute GitHub.create_commit and immediately use its returned SHA "
-            "in one non-force GitHub.update_ref of publish. No helper call is required between these writes. After the "
-            "Publish Gateway run completes successfully, call record with that run evidence."
+            "Run the fixed scripts/publish_connector_launch.js in functions.exec using execution_index. "
+            "It reads the exact packets by temporary Library registration, verifies and trashes all before "
+            "GitHub writes, checks each returned tree SHA, then commits and non-force updates publish. "
+            "After Gateway success call record with the run evidence."
         ),
         "verified": True,
     }
     _write_summary(repo, summary)
     print(json.dumps(summary, indent=2))
     return 0
+
+
+
+def _tool_call_fingerprint(text: str) -> int:
+    """Compact copy-integrity check; the Git tree SHA remains authoritative."""
+    value = 2166136261
+    for byte in text.encode("utf-8"):
+        value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
+    return value
+
+
+def _verified_execution_packets(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
+    """Read every original packet and validate it against the immutable execution plan."""
+    plan = state["plan"]
+    assert isinstance(plan, dict)
+    batches = plan["batches"]
+    files = state["tree_packets"]
+    if not isinstance(batches, list) or not isinstance(files, list) or len(batches) != len(files) or not files:
+        raise PublishStateError("invalid Connector execution plan")
+    packets: list[dict[str, object]] = []
+    for index, (file, batch) in enumerate(zip(files, batches)):
+        if not isinstance(batch, dict):
+            raise PublishStateError("invalid Connector tree batch")
+        packet = json.loads(Path(str(file)).read_text(encoding="utf-8"))
+        expected = _tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), index,
+            str(batch["expected_tree"]),
+        )
+        if packet != expected:
+            raise PublishStateError(f"tree packet no longer matches the active plan: index {index}")
+        packets.append(packet)
+
+    commit_packet = json.loads(Path(str(state["commit_packet"])).read_text(encoding="utf-8"))
+    expected_commit = {
+        "stage": "create-publish-transport-commit",
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": f"Publish transport {state['request_id']}",
+            "tree_sha": plan["final_tree"],
+            "parent_sha": state["publish_base_head"],
+        },
+    }
+    if commit_packet != expected_commit:
+        raise PublishStateError("commit packet no longer matches the active plan")
+    packets.append(commit_packet)
+    return packets
+
+
+def _write_execution_index(repo: Path, state: dict[str, object]) -> str:
+    """Index the original verified Connector packet files, without copying their contents."""
+    _verified_execution_packets(repo, state)
+    paths = [*state["tree_packets"], state["commit_packet"]]
+    directory = _connector_dir(repo)
+    entries: list[dict[str, object]] = []
+    for path in paths:
+        file = Path(str(path))
+        if file.parent.resolve() != directory.resolve():
+            raise PublishStateError("Connector packet path escapes active transaction")
+        raw = file.read_bytes()
+        raw.decode("ascii")
+        entries.append({
+            "name": file.name,
+            "size": len(raw),
+            "fnv32": _tool_call_fingerprint(raw.decode("ascii")),
+        })
+    index = {
+        "version": 1,
+        "request_id": state["request_id"],
+        "repository": GITHUB_REPOSITORY,
+        "develop_head": state["develop_head"],
+        "publish_base_head": state["publish_base_head"],
+        "publish_base_tree": state["publish_base_tree"],
+        "packets": entries,
+    }
+    path = directory / CONNECTOR_EXECUTION_INDEX_NAME
+    encoded = json.dumps(index, indent=2, sort_keys=True) + "\n"
+    if path.exists() and path.read_text(encoding="ascii") != encoded:
+        raise PublishStateError("active Connector execution index differs from verified plan")
+    if not path.exists():
+        path.write_text(encoded, encoding="ascii")
+    return str(path)
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:

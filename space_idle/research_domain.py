@@ -192,6 +192,15 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(research_id == research.id, f"research definition key mismatch: {research_id}")
         _require(research.prerequisites.issubset(definitions), f"unknown research prerequisite: {research_id}")
         _require(research_id not in research.prerequisites, f"self research prerequisite: {research_id}")
+        for prerequisite_id in research.prerequisites:
+            prerequisite = definitions[prerequisite_id]
+            if research.progression_stage is not None and prerequisite.progression_stage is not None:
+                _require(
+                    prerequisite.progression_stage <= research.progression_stage,
+                    "research display stage contradicts prerequisite direction: "
+                    + f"{research_id} stage {research.progression_stage} depends on "
+                    + f"{prerequisite_id} stage {prerequisite.progression_stage}",
+                )
         _require(bool(research.stage_specs), f"research has no stages: {research_id}")
         stage_ids = [spec.stage_id for spec in research.stage_specs]
         _require(len(stage_ids) == len(set(stage_ids)), f"research repeats stage id: {research_id}")
@@ -232,18 +241,18 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             provider.site_requirements, ctx.known_capabilities, f"research_provider:{provider_id}"
         )
         if provider.source_kind is ResearchProviderSourceKind.FACILITY:
-            _require(provider.source_definition_id in ctx.facility_defs, f"research provider references unknown facility: {provider_id}")
-            _require(
-                provider.source_definition_id not in facility_provider_sources,
-                f"multiple Research Providers reference one facility definition: {provider.source_definition_id}",
-            )
-            facility_provider_sources.add(provider.source_definition_id)
+            matching_facilities = sim.research.compatible_facility_definition_ids(provider_id)
+            for definition_id in matching_facilities:
+                _require(
+                    definition_id not in facility_provider_sources,
+                    f"multiple Research Providers match one Facility definition: {definition_id}",
+                )
+            facility_provider_sources.update(matching_facilities)
         else:
             _require(
                 not requires_surface_cell_context(provider.site_requirements),
                 f"Fleet Research Provider cannot require a surface-cell execution context: {provider_id}",
             )
-            _require(sim.transport.vehicle_definition(provider.source_definition_id) is not None, f"research provider references unknown vehicle: {provider_id}")
             _require(
                 len(provider.levels) == 1 and provider.levels[0].level == 1,
                 f"Fleet research provider must define one per-unit level: {provider_id}",
@@ -306,7 +315,7 @@ def validate_runtime(sim: Any) -> None:
         if commitment is not None:
             _require(commitment.owner_activity_ref.activity_type == "research_provider_assignment", f"research assignment Fleet owner type mismatch: {assignment_id}")
             _require(commitment.owner_activity_ref.activity_id == assignment_id, f"research assignment Fleet owner id mismatch: {assignment_id}")
-            _require(assignment.vehicle_definition_id == provider.source_definition_id, f"research assignment Provider vehicle mismatch: {assignment_id}")
+            _require(sim.research.vehicle_satisfies_provider(assignment.provider_definition_id, assignment.vehicle_definition_id), f"research assignment Provider vehicle capabilities mismatch: {assignment_id}")
             _require(commitment.vehicle_definition_id == assignment.vehicle_definition_id, f"research assignment Fleet definition mismatch: {assignment_id}")
             _require(commitment.operational_node_id == assignment.operational_node_id, f"research assignment Fleet location mismatch: {assignment_id}")
             _require(commitment.quantity > 0, f"research assignment has empty Fleet commitment: {assignment_id}")
