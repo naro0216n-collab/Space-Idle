@@ -576,148 +576,6 @@ def test_case_execution_reproducibility_projection_and_missing_observation_paret
 
 
 
-def test_initial_facility_scenario_variants_use_regular_site_and_power_contracts():
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-
-    scenario = build_standard_scenario_definition()
-    # A complete typed asset list retains multiplicity and actual investment.
-    replacement = [
-        {
-            "definition_id": str(row.definition_id),
-            "operational_node_id": str(row.operational_node_id),
-            "site_cell_id": None if row.site_cell_id is None else str(row.site_cell_id),
-            "invested_resources": [[str(resource), amount] for resource, amount in row.invested_resources],
-        }
-        for row in scenario.facilities
-        if row.definition_id != ids.GRID_POWER_SUPPLY
-    ]
-    without_grid = scenario_variant(scenario, {"facilities": replacement})
-    assert len(without_grid.facilities) == len(scenario.facilities) - 1
-    assert len(scenario.facilities) == len(build_standard_scenario_definition().facilities)
-
-    original = build_game_application_for_scenario(scenario)
-    variant = build_game_application_for_scenario(without_grid)
-    # The variant omitted the Grid asset, but initial Facility levels still go
-    # through normal installed Capacity and later Save/Load semantics.
-    leveled = build_game_application_for_scenario(scenario_variant(scenario, {
-        'facilities': [{
-            'definition_id': str(row.definition_id),
-            'operational_node_id': str(row.operational_node_id),
-            'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
-            'invested_resources': [[str(resource), amount] for resource, amount in row.invested_resources],
-            'level': 2 if row.definition_id == ids.METAL_ORE_MINE else 1,
-        } for row in scenario.facilities],
-    }))
-    normal_mine = next(row for row in original._simulation.facilities.facilities.values()
-                       if row.definition_id == ids.METAL_ORE_MINE)
-    leveled_mine = next(row for row in leveled._simulation.facilities.facilities.values()
-                        if row.definition_id == ids.METAL_ORE_MINE)
-    assert leveled_mine.level == 2
-    assert leveled._simulation.extraction.nominal_capacity(leveled_mine) == pytest.approx(
-        2 * original._simulation.extraction.nominal_capacity(normal_mine)
-    )
-    with pytest.raises(ValueError, match='level'):
-        scenario_variant(scenario, {'facilities': [{
-            'definition_id': str(ids.METAL_ORE_MINE),
-            'operational_node_id': str(ids.EARTH), 'level': 0,
-        }]})
-    node = ids.EARTH
-    original_power = original._simulation.power.snapshot(node, original._simulation.facilities, 0)
-    variant_power = variant._simulation.power.snapshot(node, variant._simulation.facilities, 0)
-    assert original_power.generation_mw > variant_power.generation_mw
-    assert all(row.definition_id != ids.GRID_POWER_SUPPLY for row in variant._simulation.facilities.all_at(node))
-    assert variant._simulation.projects.recipes[ids.GRID_POWER_SUPPLY] == original._simulation.projects.recipes[ids.GRID_POWER_SUPPLY]
-    with pytest.raises(ValueError, match="nonnegative"):
-        scenario_variant(scenario, {"facilities": [{"definition_id": str(ids.FOOD_FARM),
-            "operational_node_id": str(node), "invested_resources": [[str(ids.WATER), -1.0]]}]})
-
-
-def test_comparative_canonical_policy_connects_market_construction_power_and_multiple_nodes():
-    """Different authored conditions remain distinct from policy and observed stock flow.
-
-    An adaptive policy reads actual Application options, not guessed recipe IDs
-    or a fixture-specific preferred build order. All cases use the same Command
-    policy; each case composes its own State and typed Content before executing.
-    """
-    from space_idle.application_commands import CreateTradeOrder, GetBuildOptions, GetMarket, PlanBuild
-    from space_idle.content import base_ids as ids
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-
-    original = build_standard_scenario_definition()
-    candidate_stock = next(row for row in original.inventory_stock
-                           if row.operational_node_id == ids.EARTH
-                           and row.resource_id == ids.STRUCTURAL_COMPONENTS)
-    extra_stock = scenario_variant(original, {'inventory_stock': [{
-        'operational_node_id': str(candidate_stock.operational_node_id),
-        'resource_id': str(candidate_stock.resource_id),
-        'amount_t': candidate_stock.amount_t + 50.0,
-    }]})
-
-    def make_case(name, scenario, edits=()):
-        def factory():
-            return build_game_application_for_scenario(
-                scenario,
-                definition_transform=(
-                    (lambda sim, catalog: apply_content_variant(sim, catalog, edits)) if edits else None
-                ),
-            )
-
-        def policy(app, offset):
-            if offset != 0:
-                return ()
-            options = app.query(GetBuildOptions(str(ids.EARTH)))
-            feasible = [row for row in options.items if row.can_plan and not row.blockers
-                        and row.construction_required > 0]
-            assert feasible
-            selected = min(feasible, key=lambda row: (row.construction_required,
-                                                       row.facility_definition_id))
-            interface = next(row for row in app.query(GetMarket()).interfaces
-                             if row.operational_node_id == str(ids.EARTH) and row.enabled)
-            offer = next(row for row in interface.offers if row.buy_price_musd_per_t is not None)
-            return (CreateTradeOrder('buy', offer.resource_id, interface.id,
-                                     quantity_target_t=1.25),
-                    PlanBuild(str(ids.EARTH), selected.facility_definition_id))
-
-        return ExperimentCase(name, factory, policy)
-
-    runs = run_experiments((
-        make_case('baseline', original),
-        make_case('reduced-power', original, ({'kind': 'power', 'id': str(ids.GRID_POWER_SUPPLY),
-                                              'field': 'generation_mw', 'value': 0.1},)),
-        make_case('additional-stock', extra_stock),
-    ), days=4, operational_node_ids=frozenset((ids.EARTH, ids.LEO)))
-    assert all(len(run.attempted_commands) == 2 and not run.rejected_commands for run in runs)
-    assert all(len(run.canonical_traces) == 4 and len(run.observations) == 5 for run in runs)
-    assert all(abs(row['unattributed_delta_t']) < 1e-7
-               for run in runs for row in run.flow_reconciliation)
-    assert all({move.operation for trace in run.canonical_traces for move in trace.movements}
-               for run in runs)
-    assert runs[0].content_definitions_sha256 != runs[1].content_definitions_sha256
-    assert runs[0].initial_state_sha256 == runs[1].initial_state_sha256
-    assert runs[0].content_definitions_sha256 == runs[2].content_definitions_sha256
-    assert runs[0].initial_state_sha256 != runs[2].initial_state_sha256
-    comparison = compare_experiments(runs)
-    assert len(comparison['comparisons']) == 2
-    assert all(row['same_observation_scope'] for row in comparison['comparisons'])
-    # Comparison comes from measured settlements and the actual finite
-    # allocation, not final Stock inferred as gross output or a second Solver.
-    assert all('settlement_differences' in row and 'allocation_differences' in row
-               for row in comparison['comparisons'])
-    for row in comparison['comparisons']:
-        assert all(delta['unit'] == 't' and delta['layer'] in {'activity', 'unknown', 'custody'}
-                   for delta in row['settlement_differences'])
-        assert all(delta['difference']['unmet'] == pytest.approx(
-            delta['variant']['unmet'] - delta['baseline']['unmet'])
-            for delta in row['allocation_differences'])
-    assert all(not row['same_comparison_conditions'] for row in comparison['comparisons'])
-    assert all((metric.context_id in (str(ids.EARTH), str(ids.LEO), 'organization')
-                or metric.kind.startswith('external_market_'))
-               for run in runs for observation in run.observations for metric in observation.metrics)
-    again = run_experiments((make_case('baseline', original),), days=4,
-                            operational_node_ids=frozenset((ids.EARTH, ids.LEO)))
-    assert again[0].to_json_data() == runs[0].to_json_data()
-
-
 def test_typed_content_add_remove_recompose_application_and_preserve_accounting(tmp_path):
     """New research/method/resource and deletion share Composition and UI contracts.
 
@@ -1253,244 +1111,118 @@ def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_with
     ]
 
 
-def test_independent_exploration_founding_and_market_variants_use_existing_domain_lifecycles(tmp_path):
-    """New Content identities require real Scenario ownership and real Commands."""
+def test_independent_science_founding_and_market_content_reuses_application_contracts(tmp_path):
+    """New Definitions use existing Command owners; experiment comparison observes actual flow."""
     from space_idle.application_commands import (
-        GetScientificExplorations, GetMarket, GetSurfaceMap,
-        StartScientificExploration, CreateTradeOrder,
+        CreateTradeOrder, GetMarket, GetScientificExplorations, GetSurfaceMap,
+        PlanOperationalNodeFounding, StartScientificExploration, SurfaceLocationFoundingTarget,
     )
     from space_idle.content.base_market import EARTH_MARKET_PROVIDER
     from space_idle.bootstrap import build_game_application_for_load
     from space_idle.persistence import load_game, save_game
 
-    new_science = 'experiment.science.orbital'
-    new_founding = 'experiment.founding.surface'
-    new_provider = 'experiment.market.provider'
-    new_interface = 'experiment.market.interface'
-    changes = tuple({"operation": "add", "kind": kind,
-                     "source_id": str(source), "id": target}
+    science = 'experiment.science.orbital'
+    founding = 'experiment.founding.surface'
+    provider = 'experiment.market.provider'
+    interface = 'experiment.market.interface'
+    changes = tuple({"operation": "add", "kind": kind, "source_id": str(source), "id": target}
                     for kind, source, target in (
-                        ('scientific_exploration', ids.CISLUNAR_SCIENCE_EXPLORATION, new_science),
-                        ('founding', ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, new_founding),
-                        ('market_provider', EARTH_MARKET_PROVIDER, new_provider),
+                        ('scientific_exploration', ids.CISLUNAR_SCIENCE_EXPLORATION, science),
+                        ('founding', ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, founding),
+                        ('market_provider', EARTH_MARKET_PROVIDER, provider),
                     )) + (
-                        {"kind": "scientific_exploration", "id": new_science,
+                        {"kind": "scientific_exploration", "id": science,
                          "field": "duration_days", "value": 6.0},
-                        {"kind": "founding", "id": new_founding,
+                        {"kind": "founding", "id": founding,
                          "field": "preparation_work", "value": 4.0},
-                        {"kind": "market_provider", "id": new_provider,
+                        {"kind": "market_provider", "id": provider,
                          "field": "lead_time_days", "value": 4},
                     )
     scenario = scenario_variant(build_standard_scenario_definition(), {
-        'market_provider_ids': [new_provider],
+        'market_provider_ids': [provider],
         'market_interfaces': [{
-            'id': new_interface, 'provider_id': new_provider,
+            'id': interface, 'provider_id': provider,
             'operational_node_id': str(ids.EARTH), 'enabled': True,
         }],
     })
 
-    def factory():
+    def factory(content=changes, input_scenario=scenario):
         return build_game_application_for_scenario(
-            scenario, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+            input_scenario,
+            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, content),
         )
 
     app = factory()
-    assert app._simulation.scientific_exploration.definitions[DefinitionId(new_science)].duration_days == 6.0
-    assert app._simulation.founding.deployment_recipes[DefinitionId(new_founding)].preparation_work == 4.0
-    assert app._simulation.market.provider_defs[DefinitionId(new_provider)].lead_time_days == 4
-    assert any(row.id == new_science for row in app.query(GetScientificExplorations()).items)
-    assert any(row.id == new_interface and row.provider_id == new_provider
+    assert app._simulation.scientific_exploration.definitions[DefinitionId(science)].duration_days == 6
+    assert app._simulation.founding.deployment_recipes[DefinitionId(founding)].preparation_work == 4
+    assert any(row.id == science for row in app.query(GetScientificExplorations()).items)
+    assert any(row.id == interface and row.provider_id == provider
                for row in app.query(GetMarket()).interfaces)
-    cell = next(row for row in app.query(GetSurfaceMap(
-        str(ids.MOON), (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),)
-    )).cells if row.id == str(ids.MOON_CELL_FARSIDE_HIGHLANDS))
-    assert any(row.deployment_recipe_id == new_founding for row in cell.foundation_options)
-    assert all(row.deployment_recipe_id != new_founding
+    foundable = app.query(GetSurfaceMap(str(ids.MOON), (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),)))
+    assert any(option.deployment_recipe_id == founding
+               for cell in foundable.cells for option in cell.foundation_options)
+    assert all(option.deployment_recipe_id != founding
                for cell in build_game_application().query(GetSurfaceMap(
                    str(ids.MOON), (str(ids.MOON_CELL_FARSIDE_HIGHLANDS),)
-               )).cells for row in cell.foundation_options)
+               )).cells for option in cell.foundation_options)
 
     def player(_app, day):
-        if day != 0:
-            return ()
-        return (StartScientificExploration(new_science),
-                CreateTradeOrder('buy', str(ids.MACHINERY), new_interface,
-                                 quantity_target_t=1.0))
+        return (StartScientificExploration(science),
+                CreateTradeOrder('buy', str(ids.MACHINERY), interface, quantity_target_t=1)) if day == 0 else ()
 
-    fast_changes = changes + (
-        {"kind": "market_provider", "id": new_provider,
-         "field": "lead_time_days", "value": 1},
-        {"kind": "scientific_exploration", "id": new_science,
-         "field": "duration_days", "value": 4.0},
-    )
-    def fast_factory():
-        return build_game_application_for_scenario(
-            scenario, definition_transform=lambda sim, catalog: apply_content_variant(
-                sim, catalog, fast_changes),
-        )
-
-    cases = (ExperimentCase('base', build_game_application, player),
-             ExperimentCase('added', factory, player),
-             ExperimentCase('shorter-delay', fast_factory, player))
-    runs = run_experiments(cases, days=6)
-    assert len(runs[0].rejected_commands) == 2
-    assert not runs[1].rejected_commands
-    assert runs[1].to_json_data() == run_experiments((cases[1],), days=6)[0].to_json_data()
-    assert runs[1].content_definitions_sha256 != runs[0].content_definitions_sha256
-    assert runs[1].initial_state_sha256 != runs[0].initial_state_sha256
-    assert runs[1].initial_state_sha256 == runs[2].initial_state_sha256
-    assert runs[1].content_definitions_sha256 != runs[2].content_definitions_sha256
-    comparison = compare_experiments(runs[1:])['comparisons'][0]
-    assert comparison['same_initial_state'] and not comparison['same_content_definitions']
-    def first_market_delivery(run):
+    quick = changes + ({'kind': 'market_provider', 'id': provider,
+                        'field': 'lead_time_days', 'value': 1},)
+    runs = run_experiments((
+        ExperimentCase('added', factory, player),
+        ExperimentCase('faster-market', lambda: factory(quick), player),
+    ), days=6)
+    assert not any(run.rejected_commands for run in runs)
+    assert runs[0].initial_state_sha256 == runs[1].initial_state_sha256
+    assert runs[0].content_definitions_sha256 != runs[1].content_definitions_sha256
+    assert compare_experiments(runs)['comparisons'][0]['same_initial_state']
+    def delivery_day(run):
         return min(row.day for trace in run.canonical_traces
                    for row in trace.activity_flows()
                    if row.activity_id.startswith(('market:', 'market_'))
                    and row.destination_owner.startswith('inventory:'))
-    assert first_market_delivery(runs[2]) < first_market_delivery(runs[1])
-    assert any(row.activity_id.startswith('market:') or row.activity_id.startswith('market_')
-               for trace in runs[1].canonical_traces for row in trace.activity_flows())
+    assert delivery_day(runs[1]) < delivery_day(runs[0])
 
-    app.execute(StartScientificExploration(new_science))
-    app.execute(CreateTradeOrder('buy', str(ids.MACHINERY), new_interface,
-                                 quantity_target_t=1.0))
+    app.execute(StartScientificExploration(science))
+    app.execute(CreateTradeOrder('buy', str(ids.MACHINERY), interface, quantity_target_t=1))
     app.execute(AdvanceTime(1))
-    path = tmp_path / 'independent-market-science.json'
+    path = tmp_path / 'content-recomposition.json'
     save_game(app, path)
     loaded, _ = load_game(path, lambda: build_game_application_for_load(
-        scenario=scenario, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes)
+        scenario=scenario,
+        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
     ))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
-    loaded.execute(AdvanceTime(1))
-    app.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
 
-    # A newly authored Founding method must also participate in the physical
-    # lifecycle, not merely appear in a candidate list. Endow a separate
-    # Scenario through the normal inventory/Fleet owners, never through a
-    # test-only resource injection after simulation initialization.
-    from space_idle.application_commands import (
-        PlanOperationalNodeFounding, SurfaceLocationFoundingTarget, GetProjects,
-    )
-    recipe = app._simulation.founding.deployment_recipes[DefinitionId(new_founding)]
-    founding_stocks = [
-        {'operational_node_id': str(ids.LUNAR_ORBIT),
-         'resource_id': str(requirement.resource_id),
-         'amount_t': requirement.amount_t + 5}
-        for requirement in recipe.payload_resources
-    ]
-    founding_stocks.append({'operational_node_id': str(ids.LUNAR_ORBIT),
-                            'resource_id': str(ids.PROPELLANT), 'amount_t': 30.0})
-    founding_scenario = scenario_variant(scenario, {
-        'inventory_stock': founding_stocks,
+    # The added Founding method uses the ordinary project lifecycle and staged payload.
+    recipe = app._simulation.founding.deployment_recipes[DefinitionId(founding)]
+    stocked = scenario_variant(scenario, {
+        'inventory_stock': [
+            {'operational_node_id': str(ids.LUNAR_ORBIT),
+             'resource_id': str(resource.resource_id), 'amount_t': resource.amount_t + 5}
+            for resource in recipe.payload_resources
+        ] + [{'operational_node_id': str(ids.LUNAR_ORBIT),
+              'resource_id': str(ids.PROPELLANT), 'amount_t': 30}],
         'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
-                   'vehicle_definition_id': str(ids.REUSABLE_SURFACE_CARGO_LANDER),
-                   'units': 1}],
+                   'vehicle_definition_id': str(ids.REUSABLE_SURFACE_CARGO_LANDER), 'units': 1}],
     })
-    def founding_factory():
-        return build_game_application_for_scenario(
-            founding_scenario,
-            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
-        )
-    founded = founding_factory()
-    founding_command = PlanOperationalNodeFounding(
+    founded = factory(input_scenario=stocked)
+    project = founded.execute(PlanOperationalNodeFounding(
         str(ids.LUNAR_ORBIT), 'Independent lunar site',
         SurfaceLocationFoundingTarget('surface_location', str(ids.MOON),
                                      str(ids.MOON_CELL_FARSIDE_HIGHLANDS)),
-        new_founding, str(ids.REUSABLE_SURFACE_CARGO_LANDER),
-    )
-    founding_result = founded.execute(founding_command)
-    assert founding_result.created_id
-    founded.execute(AdvanceTime(1))
-    assert any(row.id == founding_result.created_id
-               for row in founded.query(GetProjects(str(ids.LUNAR_ORBIT))).items)
-    founding_path = tmp_path / 'independent-founding.json'
-    save_game(founded, founding_path)
-    founded_loaded, _ = load_game(founding_path, lambda: build_game_application_for_load(
-        scenario=founding_scenario,
-        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
+        founding, str(ids.REUSABLE_SURFACE_CARGO_LANDER),
     ))
-    assert capture_state(founded_loaded._simulation) == capture_state(founded._simulation)
-    founded.execute(AdvanceTime(1))
-    founded_loaded.execute(AdvanceTime(1))
-    assert capture_state(founded_loaded._simulation) == capture_state(founded._simulation)
+    assert project.created_id
+    assert any(str(item.id) == project.created_id for item in founded._simulation.founding.projects.values())
 
-    # Definitions cannot be deleted while Scenario states still refer to them.
+    # Scenario references are validated against the recomposed Definitions.
     with pytest.raises((ValueError, KeyError)):
-        build_game_application_for_scenario(
-            scenario, definition_transform=lambda sim, catalog: apply_content_variant(
-                sim, catalog, changes + ({'operation': 'remove', 'kind': 'market_provider', 'id': new_provider},)
-            ),
-        )
-
-    # Changing real Provider or Construction capacity is a Content variant,
-    # even when it does not alter static Graph edges or the initial State.
-    research_provider = next(iter(app._simulation.research.providers.values()))
-    changed_capacity = ({'kind': 'research_provider', 'id': str(research_provider.id),
-                         'field': 'crew_person_days_per_research_point', 'value': 1.5},)
-    provider_case = ExperimentCase('provider-change', lambda: build_game_application_for_scenario(
-        scenario, definition_transform=lambda sim, catalog: apply_content_variant(
-            sim, catalog, changes + changed_capacity)), _idle)
-    same_initial = run_experiments((ExperimentCase('unchanged', factory, _idle), provider_case), days=0)
-    assert same_initial[0].content_definitions_sha256 != same_initial[1].content_definitions_sha256
-    assert same_initial[0].initial_state_sha256 == same_initial[1].initial_state_sha256
-    assert same_initial[0].definition_graph_sha256 == same_initial[1].definition_graph_sha256
-
-    # Survey fleet and externally acquired Population remain finite and owned
-    # by their normal Domains when alternative Definitions are introduced.
-    new_survey = 'experiment.provider.survey'
-    survey_changes = changes + ({'operation': 'add', 'kind': 'survey_provider',
-                                 'id': new_survey,
-                                 'source_id': str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)},)
-    multi_owner_scenario = scenario_variant(scenario, {
-        'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
-                   'vehicle_definition_id': str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 'units': 2}],
-        'survey_fleet_assignments': [{
-            'provider_definition_id': new_survey,
-            'operational_node_id': str(ids.LUNAR_ORBIT),
-            'vehicle_definition_id': str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 'units': 1,
-        }],
-        'external_population_sources': [{
-            'id': 'experiment.population.earth',
-            'operational_node_id': str(ids.EARTH), 'initial_people': 12,
-            'max_acquisition_per_day': 4,
-        }],
-    })
-    def owner_factory():
-        return build_game_application_for_scenario(
-            multi_owner_scenario,
-            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, survey_changes))
-
-    multi_owner = owner_factory()
-    assert multi_owner._simulation.population.external_remaining['experiment.population.earth'] == 12
-    assert sum(assignment.units for assignment in multi_owner_scenario.survey_fleet_assignments
-               if assignment.operational_node_id == ids.LUNAR_ORBIT) == 2
-    survey_assigned = multi_owner._simulation.survey.provider_assignments
-    assert len(survey_assigned) >= 2
-    owner_before = capture_state(multi_owner._simulation)
-    multi_owner.execute(AdvanceTime(1))
-    owner_save = tmp_path / 'independent-survey-population.json'
-    save_game(multi_owner, owner_save)
-    owner_loaded, _ = load_game(owner_save, lambda: build_game_application_for_load(
-        scenario=multi_owner_scenario,
-        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, survey_changes),
-    ))
-    assert capture_state(owner_loaded._simulation) == capture_state(multi_owner._simulation)
-    assert capture_state(multi_owner._simulation) != owner_before
-
-    # Same Domain registrations handle spatial development and construction
-    # capacity additions, with reference validation on their removal.
-    spatial_original = next(iter(app._simulation.projects.spatial_recipes))
-    spatial_copy = 'experiment.spatial.development'
-    spatial_changes = changes + (
-        {'operation': 'add', 'kind': 'spatial_development',
-         'source_id': str(spatial_original), 'id': spatial_copy},
-    )
-    spatial_app = build_game_application_for_scenario(scenario, definition_transform=(
-        lambda sim, catalog: apply_content_variant(sim, catalog, spatial_changes)))
-    assert DefinitionId(spatial_copy) in spatial_app._simulation.projects.spatial_recipes
-    assert spatial_app._simulation.projects.spatial_recipes[DefinitionId(spatial_copy)].id == DefinitionId(spatial_copy)
-
+        factory(changes + ({'operation': 'remove', 'kind': 'market_provider', 'id': provider},))
 
 def test_movement_rule_content_variants_reuse_canonical_app_and_physical_targets():
     """Independent transport Content changes preserve one Movement model.

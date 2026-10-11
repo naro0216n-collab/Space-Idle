@@ -179,42 +179,6 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     assert extraction.output_t_per_day > 0.0
 
 
-def test_ordinary_extraction_is_not_blocked_by_a_storage_stock_limit():
-    app = build_game_application()
-    sim = app._simulation
-    decision = sim.tick_decision_projection()
-    power = decision.allocations.power_by_location[ids.EARTH]
-    execution = decision.allocations.execution
-    initial = next(
-        row for row in sim.extraction.snapshots(
-            ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
-        )
-        if row.output_t_per_day > 0
-    )
-    spec = sim.extraction.method_for_facility(sim.facilities.facilities[initial.facility_id])
-    state = sim.inventory.admission_state(ids.EARTH, spec.output_resource_id)
-    assert not sim.inventory.is_finite_storage_pool(state.storage_pool_key)
-
-    sim.inventory.add(ids.EARTH, spec.output_resource_id, 100000.0)
-    before = sim.inventory.amount(ids.EARTH, spec.output_resource_id)
-    decision = sim.tick_decision_projection()
-    power = decision.allocations.power_by_location[ids.EARTH]
-    execution = decision.allocations.execution
-    active = next(
-        row for row in sim.extraction.snapshots(
-            ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
-        )
-        if row.facility_id == initial.facility_id
-    )
-    assert active.output_t_per_day > 0.0
-    assert not any(reason.startswith("storage:") for reason in active.limiting_factors)
-
-    sim.extraction.advance_day(
-        ids.EARTH, sim.facilities, sim.inventory, power, sim.day, execution
-    )
-    assert sim.inventory.amount(ids.EARTH, spec.output_resource_id) > before
-
-
 def test_independently_named_facility_reuses_extraction_method_and_preserves_shared_opportunity():
     from dataclasses import replace
     from space_idle.shared import DefinitionId

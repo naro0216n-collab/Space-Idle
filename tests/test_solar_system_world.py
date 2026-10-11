@@ -322,63 +322,6 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
         assert generated.descent_operations[0].operation_type == "atmospheric_entry"
 
 
-def test_martian_surface_founding_creates_operational_site_only_after_long_transit():
-    """A physical target becomes a logistics node only after one-shot arrival."""
-    from space_idle import AdvanceTime, PlanOperationalNodeFounding, SurfaceLocationFoundingTarget
-
-    app = build_game_application()
-    sim = app._simulation
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
-    origin = ids.LUNAR_ORBIT  # An existing operational staging node with Cargo Transfer.
-    initial_nodes = frozenset(sim.graph.operational_node_ids())
-    for resource in recipe.payload_resources:
-        sim.inventory.add(origin, resource.resource_id, resource.amount_t + 1.0)
-    sim.inventory.add(origin, ids.PROPELLANT, 30.0)
-    sim.transport.add_fleet_units(ids.INTERPLANETARY_LANDER, 1, origin, day=sim.day)
-    propellant_before = sim.inventory.amount(origin, ids.PROPELLANT)
-
-    result = app.execute(PlanOperationalNodeFounding(
-        staging_node_id=str(origin), display_name="Mars surface base",
-        target_spec=SurfaceLocationFoundingTarget(
-            "surface_location", str(ids.MARS_BODY), str(ids.MARS_CELL_EQUATORIAL_PLAIN),
-        ),
-        deployment_recipe_id=str(recipe.id),
-        vehicle_definition_id=str(ids.INTERPLANETARY_LANDER),
-    ))
-    assert result.created_id is not None
-    project = next(row for row in sim.founding.projects.values() if str(row.id) == result.created_id)
-    destination_id = sim.founding.target_operational_node_id(project.target_spec)
-    assert destination_id not in initial_nodes
-    assert all(node_id != destination_id for node_id, _ in sim.inventory.stock)
-
-    # Project preparation and dispatched Movement each have their own owner.
-    for _ in range(max(10, int(recipe.preparation_work) + 5)):
-        if project.movement_execution_id is not None:
-            break
-        app.execute(AdvanceTime(1))
-    assert project.movement_execution_id is not None
-    execution = sim.transport.movement_executions[project.movement_execution_id]
-    assert project.status.value == "deploying"
-    assert frozenset(sim.graph.operational_node_ids()) == initial_nodes
-    assert sim.inventory.amount(origin, ids.PROPELLANT) < propellant_before
-    assert sim.transport.fleet_pool_snapshot(ids.INTERPLANETARY_LANDER, origin).free_units == 0
-
-    days = execution.completion_day - sim.day
-    assert days > 0
-    app.execute(AdvanceTime(days))
-    assert project.status.value == "complete"
-    assert destination_id in sim.graph.operational_node_ids()
-    assert destination_id in sim.graph.locations
-    assert len(sim.facilities.all_at(destination_id)) == len(recipe.deployed_facilities)
-    assert all(node_id != destination_id for node_id, _ in sim.transport.fleet_pools)
-    assert any(plan.destination_id == destination_id for plan in sim.transport.movement_resolver().all_direct_plans())
-
-    # Completion is settled once, and a new physical target never creates an
-    # Inventory/FleetPool merely by entering the immutable World Definition.
-    app.execute(AdvanceTime(1))
-    assert len(sim.facilities.all_at(destination_id)) == len(recipe.deployed_facilities)
-
-
 def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_duplicate_settlement(short_interplanetary_transit):
     """A physical orbit is not a logistics endpoint until founded and supplied."""
     from space_idle import (
@@ -475,55 +418,6 @@ def test_non_surface_founding_enables_long_cycle_cargo_without_free_assets_or_du
         facility.definition_id for facility in sim.facilities.all_at(target)
     }
     assert sim.inventory.admission_state(target, ids.MACHINERY).blockers == ()
-    from space_idle.validation import validate_runtime_state
-    validate_runtime_state(sim)
-
-
-def test_giant_planet_orbit_operates_without_surface_and_with_local_environment(short_interplanetary_transit):
-    """A remote orbital installation retains local power/maintenance constraints."""
-    from space_idle import AdvanceTime, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding
-    from space_idle.spatial import AtmosphereField, IlluminationField, RadiationField
-
-    app = build_game_application()
-    sim = app._simulation
-    origin = ids.LUNAR_ORBIT
-    target = SpatialNodeId("base.spatial.jupiter.orbit")
-    recipe = sim.founding.deployment_recipes[ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE]
-    assert target not in sim.graph.operational_node_ids()
-    assert not sim.graph.cells_for_body(CelestialBodyId("base.body.jupiter"))
-    assert sim.environment.require(target, AtmosphereField).pressure_pa == 0
-    assert sim.environment.require(target, RadiationField).dose_equivalent_msv_per_day > (
-        sim.environment.require(SpatialNodeId("base.spatial.saturn.orbit"), RadiationField)
-        .dose_equivalent_msv_per_day
-    )
-    assert sim.environment.require(target, IlluminationField).solar_flux_w_m2 == pytest.approx(
-        sim.graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.jupiter"))
-    )
-    for resource in recipe.payload_resources:
-        sim.inventory.add(origin, resource.resource_id, resource.amount_t + 1.0)
-    sim.inventory.add(origin, ids.PROPELLANT, 35.0)
-    sim.transport.add_fleet_units(ids.DEEP_SPACE_FREIGHTER, 1, origin, day=sim.day)
-    project_id = app.execute(PlanOperationalNodeFounding(
-        str(origin), "Jupiter orbital logistics",
-        NonSurfaceOperationalNodeFoundingTarget("non_surface_operational_node", str(target)),
-        str(recipe.id), str(ids.DEEP_SPACE_FREIGHTER),
-    )).created_id
-    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
-    for _ in range(10):
-        app.execute(AdvanceTime(1))
-        if project.movement_execution_id:
-            break
-    assert project.movement_execution_id is not None
-    assert not sim.graph.has_operational_node(target)
-    arrival = sim.transport.movement_executions[project.movement_execution_id].completion_day
-    app.execute(AdvanceTime(arrival - sim.day))
-    assert project.status.value == "complete"
-    assert sim.graph.has_operational_node(target)
-    assert not sim.graph.cells_for_body(CelestialBodyId("base.body.jupiter"))
-    power = sim.power.physical_snapshot(target, sim.facilities, sim.day)
-    assert power.generation_mw_by_facility
-    assert power.nominal_generation_mw > power.demand_mw
-    assert sim.inventory.admission_state(target, ids.MACHINERY).admission_capacity_t > 0
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
 

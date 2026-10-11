@@ -20,7 +20,6 @@ from space_idle.content.base_game import (
     OXYGEN,
     REUSABLE_LAUNCH_VEHICLE,
     REUSABLE_ORBITAL_CARGO_TUG,
-    WATER,
 )
 from space_idle.execution_requirements import (
     ExecutionRequirementBundle,
@@ -35,7 +34,7 @@ from space_idle.supply import (
     SupplyRequirement, SupplyRoutingConstraintScope, external_supply_requirements,
     resolve_local_supply,
 )
-from space_idle.shared import DefinitionId, EntityId
+from space_idle.shared import EntityId
 
 
 def _requirement(
