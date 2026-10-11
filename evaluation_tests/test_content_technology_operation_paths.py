@@ -1301,3 +1301,54 @@ def test_representative_transfer_uses_orbital_physics_and_existing_movement_exec
     local = graph.characteristic_transport_separation(ids.MARS_ORBIT, same)
     assert local.scope == "local_orbit_transfer"
     assert local.delta_v_km_s == 0.0 and local.representative_transit_days == 0.0
+
+
+def test_catalog_surface_transfers_use_physical_vehicle_and_gateway_capabilities():
+    """Current Mars/Venus equipment comparison is optional Content evaluation."""
+    from space_idle.shared import CelestialBodyId, SpatialNodeId, SurfaceCellId
+    from space_idle.spatial import PhysicalSurface
+
+    app = build_game_application()
+    sim = app._simulation
+    graph = sim.graph
+    resolver = sim.transport.movement_resolver()
+    owner_ids = frozenset(graph.operational_node_ids())
+    mars = sim.transport.movement_plans_to_physical_target(ids.LEO, ids.MARS_CELL_EQUATORIAL_PLAIN)
+    assert len(mars) == 1
+    assert mars[0].destination.physical_target_cell_id == ids.MARS_CELL_EQUATORIAL_PLAIN
+    assert mars[0].relation.movement_context == "interplanetary_transfer_surface_access"
+    assert {op.operation_type for op in mars[0].operations} == {"spaceflight", "landing"}
+    assert not sim.transport.vehicle_movement_physical_failures(
+        mars[0].id, ids.INTERPLANETARY_LANDER, sim.day,
+    )
+    assert sim.transport.vehicle_movement_physical_failures(
+        mars[0].id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
+    )
+    assert sim.transport.vehicle_movement_physical_failures(
+        mars[0].id, ids.DEEP_SPACE_FREIGHTER, sim.day,
+    )  # Freight has no Landing capability.
+
+    venus = sim.transport.movement_plans_to_physical_target(
+        ids.LEO, SurfaceCellId("base.cell.venus.highland"),
+    )
+    assert len(venus) == 1
+    assert venus[0].operations[-1].operation_type == "atmospheric_entry"
+    assert any("pressure" in reason for reason in sim.transport.vehicle_movement_physical_failures(
+        venus[0].id, ids.INTERPLANETARY_LANDER, sim.day,
+    ))
+    # An established atmospheric location must own an actual launch gateway;
+    # installing a surface-distribution hub alone cannot provide a launch pad.
+    assert frozenset(graph.operational_node_ids()) == owner_ids
+    venus_cell = SurfaceCellId("base.cell.venus.highland")
+    venus_node = SpatialNodeId("test.venus.surface_base")
+    graph.found_location(venus_node, "Venus base", graph.surface_cells[venus_cell].body_id, venus_cell)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, venus_node, site_cell_id=venus_cell)
+    assert not sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
+    sim.facilities.install(ids.SURFACE_LAUNCH_SUPPORT, venus_node, site_cell_id=venus_cell)
+    assert sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
+    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
+                if rule.body_id == CelestialBodyId("base.body.venus")) == "launch_operations"
+    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
+                if rule.body_id == CelestialBodyId("base.body.mars")) == "surface_distribution"
+    assert all(plan.origin_id in graph.operational_node_ids() and plan.destination_id in graph.operational_node_ids()
+               for plan in resolver.all_direct_plans())

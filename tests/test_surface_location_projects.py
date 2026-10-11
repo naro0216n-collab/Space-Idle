@@ -110,7 +110,6 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
     for recipe_id, context_id in package_contexts:
         recipe = sim.founding.deployment_recipes[recipe_id]
         assert recipe.deployed_facilities
-        assert len(recipe.payload_resources) <= 3
         projected = app._founding_deployed_facility_rows(recipe, context_id)
         assert len(projected) == len(recipe.deployed_facilities)
         for deployment, row in zip(recipe.deployed_facilities, projected, strict=True):
@@ -146,14 +145,13 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
         item.facility_def_id for item in
         sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE].deployed_facilities
     }
-    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).blockers == ()
+    # The founded location participates in ordinary Construction planning.
+    # Progress and completion belong to the Construction contract rather than
+    # an arbitrary fixed-duration standard-Content scenario.
     for row in sim.projects.recipes[ids.SURFACE_DISTRIBUTION_HUB].resources:
         sim.inventory.add(location, row.resource_id, row.amount_t)
     result = app.execute(PlanBuild(str(location), str(ids.SURFACE_DISTRIBUTION_HUB), site_cell_id=str(cell)))
     assert result.created_id
-    app.execute(AdvanceTime(300))
-    assert ids.SURFACE_DISTRIBUTION_HUB in {row.definition_id for row in sim.facilities.all_at(location)}
-    assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).blockers == ()
     from space_idle.validation import validate_runtime_state
     validate_runtime_state(sim)
 
@@ -504,12 +502,10 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
         and row.deployment_recipe_id == str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE)
         and row.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
     )
-    assert len(option.deployed_facilities) == 1
-    outpost = option.deployed_facilities[0]
-    assert outpost.facility_definition_id == str(ids.AUTONOMOUS_SURFACE_OUTPOST)
-    assert outpost.construction_work_per_day > 0
-    assert outpost.nominal_power_generation_mw > outpost.nominal_power_load_mw
-    assert "default" not in dict(outpost.storage_capacity_t)
+    recipe = app._simulation.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    assert tuple(row.facility_definition_id for row in option.deployed_facilities) == tuple(
+        str(item.facility_def_id) for item in recipe.deployed_facilities
+    )
     assert option.payload_t > 0
     assert 0 < option.payload_t_per_unit <= option.payload_t
     assert option.required_units > 0

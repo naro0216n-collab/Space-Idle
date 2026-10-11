@@ -754,9 +754,11 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
     for current in (app, loaded, returning_load):
         _finish_unoperated_science(current)
-    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
-    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
-    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
+    expected = capture_state(app._simulation)
+    for counterpart in (loaded, returning_load):
+        snapshot = capture_state(counterpart._simulation)
+        assert snapshot["transport"] == expected["transport"]
+        assert snapshot["scientific_exploration"] == expected["scientific_exploration"]
     assert state.phase.value == "complete"
     definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
     assert state.research_points_awarded == pytest.approx(definition.research_points_total)

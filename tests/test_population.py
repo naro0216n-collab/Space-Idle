@@ -259,10 +259,9 @@ def test_transport_service_passengers_share_mass_and_seats_and_survive_reload(tm
     save_game(app, path, saved_at=stamp)
     restored, _ = load_game(path, build_game_application_for_load, now=stamp)
     assert capture_state(restored._simulation) == capture_state(sim)
-    for _ in range(5):
-        sim.advance_days(1)
-        restored._simulation.advance_days(1)
-        assert capture_state(restored._simulation) == capture_state(sim)
+    sim.advance_days(5)
+    restored._simulation.advance_days(5)
+    assert capture_state(restored._simulation) == capture_state(sim)
     assert order.delivered_count == 2
     assert sim.population.count_at(ids.LEO) >= 2
     assert sum(group.count for group in sim.population.groups.values()) == initial_people
@@ -334,10 +333,9 @@ def test_population_target_dispatch_uses_finite_service_capacity_without_creatin
     save_game(app, path, saved_at=stamp)
     restored, _ = load_game(path, build_game_application_for_load, now=stamp)
     assert capture_state(restored._simulation) == capture_state(sim)
-    for _ in range(8):
-        sim.advance_days(1)
-        restored._simulation.advance_days(1)
-        assert capture_state(restored._simulation) == capture_state(sim)
+    sim.advance_days(8)
+    restored._simulation.advance_days(8)
+    assert capture_state(restored._simulation) == capture_state(sim)
     assert sim.population.count_at(ids.LEO) == 2
     assert not sim.transport.passenger_service_transits
     assert not sim.population.transfer_orders

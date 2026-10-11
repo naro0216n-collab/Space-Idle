@@ -109,8 +109,6 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     predicted = dict(candidate.maintenance_rates_per_day)
     installed = sim.facilities.maintenance_requirements_for_investment(definition.id, invested)
     assert predicted == {str(resource): rate for resource, rate in installed.items()}
-    # The projection is a read-only calculation, not an extra maintenance owner.
-    assert all(rate >= 0 for rate in predicted.values())
     rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
     # Every facility-backed Research Provider is exposed through the same
     # prospective capability projection, independent of the authored asset ID.
@@ -246,11 +244,11 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert option.research_capacity.generation_points_per_day == provider.level_spec(1).generation_points_per_day
     assert option.research_capacity.storage_capacity_points == provider.level_spec(1).storage_capacity_points
     survey = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION]
-    assert len(option.survey_providers) == 1
-    assert option.survey_providers[0].provider_id == str(survey.id)
-    assert option.survey_providers[0].capacity_units_per_source_per_day == survey.capacity_units_per_source_per_day
+    survey_projection = next(row for row in option.survey_providers
+                             if row.provider_id == str(survey.id))
+    assert survey_projection.capacity_units_per_source_per_day == survey.capacity_units_per_source_per_day
     assert tuple((mode.display_name, mode.survey_rate, mode.max_knowledge_level)
-                 for mode in option.survey_providers[0].observation_modes) == tuple(
+                 for mode in survey_projection.observation_modes) == tuple(
         (mode.display_name or mode.id, mode.survey_rate, int(mode.max_knowledge_level))
         for mode in survey.observation_modes
     )

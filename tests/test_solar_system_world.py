@@ -135,12 +135,11 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         )
 
 
-def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
+def test_surface_access_rules_follow_body_identity_and_physical_surface():
     """World Content can add landings without creating an OD table or player nodes."""
     app = build_game_application()
     sim = app._simulation
     graph = sim.graph
-    owner_ids = frozenset(graph.operational_node_ids())
     resolver = sim.transport.movement_resolver()
     eligible = {rule.body_id for rule in resolver.surface_access_rules}
     solid = {body.id for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID}
@@ -149,65 +148,30 @@ def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
     assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
                if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
 
-    mars = sim.transport.movement_plans_to_physical_target(ids.LEO, ids.MARS_CELL_EQUATORIAL_PLAIN)
-    assert len(mars) == 1
-    assert mars[0].destination.physical_target_cell_id == ids.MARS_CELL_EQUATORIAL_PLAIN
-    assert mars[0].relation.movement_context == "interplanetary_transfer_surface_access"
-    assert {op.operation_type for op in mars[0].operations} == {"spaceflight", "landing"}
-    assert not sim.transport.vehicle_movement_physical_failures(
-        mars[0].id, ids.INTERPLANETARY_LANDER, sim.day,
-    )
-    assert sim.transport.vehicle_movement_physical_failures(
-        mars[0].id, ids.REUSABLE_ORBITAL_CARGO_TUG, sim.day,
-    )
-    assert sim.transport.vehicle_movement_physical_failures(
-        mars[0].id, ids.DEEP_SPACE_FREIGHTER, sim.day,
-    )  # Freight has no Landing capability.
-
-    venus = sim.transport.movement_plans_to_physical_target(
-        ids.LEO, SurfaceCellId("base.cell.venus.highland"),
-    )
-    assert len(venus) == 1
-    assert venus[0].operations[-1].operation_type == "atmospheric_entry"
-    assert any("pressure" in reason for reason in sim.transport.vehicle_movement_physical_failures(
-        venus[0].id, ids.INTERPLANETARY_LANDER, sim.day,
-    ))
-    # An established atmospheric location must own an actual launch gateway;
-    # installing a surface-distribution hub alone cannot provide a launch pad.
-    assert frozenset(graph.operational_node_ids()) == owner_ids
-    venus_cell = SurfaceCellId("base.cell.venus.highland")
-    venus_node = SpatialNodeId("test.venus.surface_base")
-    graph.found_location(venus_node, "Venus base", graph.surface_cells[venus_cell].body_id, venus_cell)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, venus_node, site_cell_id=venus_cell)
-    assert not sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
-    sim.facilities.install(ids.SURFACE_LAUNCH_SUPPORT, venus_node, site_cell_id=venus_cell)
-    assert sim.transport.movement_resolver().direct_plans(venus_node, ids.LEO)
-    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
-                if rule.body_id == CelestialBodyId("base.body.venus")) == "launch_operations"
-    assert next(rule.gateway_capability_id for rule in resolver.surface_access_rules
-                if rule.body_id == CelestialBodyId("base.body.mars")) == "surface_distribution"
-    assert all(plan.origin_id in graph.operational_node_ids() and plan.destination_id in graph.operational_node_ids()
-               for plan in resolver.all_direct_plans())
-
     # Body IDs with equal terminal names remain separate physical contexts.
     # A Content extension does not require an authored case or a new evaluator.
     from space_idle.content.base_transport import build_surface_access_movement_rules
     from space_idle.spatial import AtmosphereField
-    venus_body = graph.bodies[CelestialBodyId("base.body.venus")]
+    reference = next(
+        rule for rule in resolver.surface_access_rules
+        if rule.descent_operations and rule.descent_operations[0].operation_type == "atmospheric_entry"
+    )
+    source_body = graph.bodies[reference.body_id]
     environment = sim.facilities.environment
+    suffix = str(source_body.id).split(".")[-1]
     for namespace in ("test.outer", "test.inner"):
-        new_body_id = CelestialBodyId(f"{namespace}.venus")
-        graph.add_body(replace(venus_body, id=new_body_id))
+        new_body_id = CelestialBodyId(f"{namespace}.{suffix}")
+        graph.add_body(replace(source_body, id=new_body_id))
         environment.static.body_facets[(new_body_id, AtmosphereField)] = (
-            environment.static.body_facets[(venus_body.id, AtmosphereField)]
+            environment.static.body_facets[(source_body.id, AtmosphereField)]
         )
     all_profiles = build_surface_access_movement_rules(graph, environment)
     assert len({profile.id for profile in all_profiles}) == len(all_profiles)
     for namespace in ("test.outer", "test.inner"):
-        new_body_id = CelestialBodyId(f"{namespace}.venus")
+        new_body_id = CelestialBodyId(f"{namespace}.{suffix}")
         generated = next(profile for profile in all_profiles if profile.body_id == new_body_id)
-        assert generated.gateway_capability_id == "launch_operations"
-        assert generated.descent_operations[0].operation_type == "atmospheric_entry"
+        assert generated.gateway_capability_id == reference.gateway_capability_id
+        assert generated.descent_operations == reference.descent_operations
 
 
 def test_founding_projections_are_scoped_to_explicit_targets_without_losing_other_cell_geography(monkeypatch):
