@@ -4,6 +4,7 @@ from ..research import (
     ResearchDefinition,
     ResearchTheoryStageSpec,
     ResearchPrototypeStageSpec,
+    ResearchDemonstrationStageSpec,
     ResearchOperationalExperienceStageSpec,
     ResearchProviderLevelSpec,
     ResearchProviderSourceKind,
@@ -37,6 +38,49 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
     # All other DAG entries remain Theory-only; display stages/series never
     # imply an automatic Research Stage kind.
     additional_stages = {
+        # Restart-capable propulsion is not established solely by a design
+        # calculation: a genuine propulsion test stand, propellant and finite
+        # trial time are needed before production of restart-capable vehicles.
+        ids.research_id("CH-COMBUSTION-06"): (
+            ResearchPrototypeStageSpec(
+                "restart-propellant-test",
+                {ids.MACHINERY: 0.3, ids.PROPELLANT: 0.5},
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "propulsion_test_equipment", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=4.0,
+            ),
+        ),
+        # High-precision planetary navigation requires observations against a
+        # tracking system, not an implicit upgrade of existing spacecraft.
+        ids.research_id("GN-NAVIGATION-06"): (
+            ResearchDemonstrationStageSpec(
+                "deep-space-tracking-demonstration", 4.0,
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "deep_space_tracking_equipment", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
+        # Load-following control needs an existing power unit to demonstrate
+        # the control loop. The later high-output unit is not required to
+        # research the method that unlocks that unit.
+        ids.research_id("FP-REACTOR-POWER-04"): (
+            ResearchDemonstrationStageSpec(
+                "reactor-load-following-demonstration", 3.0,
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "industrial_power", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
         ids.RP_RESOURCE_CHAIN_13: (
             ResearchPrototypeStageSpec(
                 "oxide-reduction-prototype",

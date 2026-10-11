@@ -615,3 +615,131 @@ def test_research_execution_context_projects_strategic_comparison_axes_from_appl
             for item in earth.resources] == [(2.0, 0.0, 2.0, 0.0)]
     assert [(item.required_t, item.reserved_t, item.available_t, item.shortfall_t)
             for item in leo.resources] == [(2.0, 0.0, 0.0, 2.0)]
+
+
+def test_authored_hardware_research_stages_require_real_site_resources_and_survive_load(tmp_path):
+    """Independent physical research tasks cannot be completed by RP alone.
+
+    Propulsion tests consume a physical prototype input; tracking and power
+    demonstrations require an operating source that already exists before their
+    unlocked Vehicle or Facility is acquired. The same Application boundary
+    owns preview, stage-site decision, progress and Save/Load.
+    """
+    from datetime import datetime, timezone
+
+    from space_idle.bootstrap import build_game_application_for_load, build_game_application_for_scenario
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.persistence import save_game, load_game, capture_state
+    from space_idle.scenario import ScenarioFacility
+    from space_idle.research import ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec
+    from space_idle.shared import DefinitionId
+
+    base = build_standard_scenario_definition()
+    originals = build_game_application()._simulation.research.definitions
+    cases = (
+        (DefinitionId("CH-COMBUSTION-06"), ids.PROPULSION_TEST_FACILITY,
+         "restart-propellant-test", ResearchPrototypeStageSpec),
+        (DefinitionId("GN-NAVIGATION-06"), ids.DEEP_SPACE_TRACKING_ARRAY,
+         "deep-space-tracking-demonstration", ResearchDemonstrationStageSpec),
+        (DefinitionId("FP-REACTOR-POWER-04"), ids.INDUSTRIAL_POWER_BLOCK,
+         "reactor-load-following-demonstration", ResearchDemonstrationStageSpec),
+    )
+
+    for target, required_facility, stage_id, stage_class in cases:
+        definition = originals[target]
+        assert len(definition.stage_specs) == 2
+        assert isinstance(definition.stage_specs[1], stage_class)
+        assert definition.stage_specs[1].stage_id == stage_id
+        prerequisites = set()
+        pending = list(definition.prerequisites)
+        while pending:
+            technology = pending.pop()
+            if technology in prerequisites:
+                continue
+            prerequisites.add(technology)
+            pending.extend(originals[technology].prerequisites)
+
+        # Keep the physical second stage unmodified; only shorten the Theory
+        # test input to reach the investment decision without balance coupling.
+        def short_theory(sim, _catalog):
+            item = sim.research.definitions[target]
+            sim.research.definitions[target] = replace(
+                item, stage_specs=(ResearchTheoryStageSpec("theory", 0.5),) + item.stage_specs[1:],
+            )
+
+        without = replace(base, completed_technologies=tuple(sorted(prerequisites)))
+        missing = build_game_application_for_scenario(without, definition_transform=short_theory)
+        missing._simulation.research.stored_points = 5.0
+        missing.execute(StartResearch(str(target)))
+        missing.execute(AdvanceTime(1))
+        blocked = _research_row(missing, target)
+        assert blocked.current_stage_id == stage_id
+        unavailable_site = next(option for option in blocked.execution_context_options
+                                if option.operational_node_id == str(ids.EARTH))
+        assert any("capability" in blocker.code for blocker in unavailable_site.blockers)
+
+        equipped = replace(without, facilities=without.facilities + (
+            ScenarioFacility(required_facility, ids.EARTH),
+        ))
+        app = build_game_application_for_scenario(equipped, definition_transform=short_theory)
+        from space_idle.analysis_graph import DependencyNode
+        from space_idle.analysis_coverage import inspect_definition_coverage
+        from space_idle.composition.analysis_graph import build_definition_dependency_graph
+        dependency_graph = build_definition_dependency_graph(app._simulation, app._catalog)
+        assert not dependency_graph.diagnostics
+        stage_node = DependencyNode("research_stage", f"{target}/{stage_id}")
+        assert any(edge.kind == "requires_site_capability" and edge.target == stage_node
+                   and edge.condition == "required_state:ACTIVE"
+                   for edge in dependency_graph.relations)
+        assert any(edge.kind == "research_stage" and edge.source == stage_node
+                   and edge.target.id == str(target) for edge in dependency_graph.relations)
+        assert not any(row.code == "potential_research_supply_acquisition_cycle"
+                       and row.subject.id == str(target)
+                       for row in inspect_definition_coverage(dependency_graph))
+        app._simulation.research.stored_points = 5.0
+        app.execute(StartResearch(str(target)))
+        app.execute(AdvanceTime(1))
+        row = _research_row(app, target)
+        site = next(option for option in row.execution_context_options
+                    if option.operational_node_id == str(ids.EARTH))
+        assert site.can_select
+        if isinstance(definition.stage_specs[1], ResearchPrototypeStageSpec):
+            app.execute(SetResearchPrototypeSite(str(target), stage_id, str(ids.EARTH)))
+        else:
+            app.execute(SetResearchDemonstrationSite(str(target), stage_id, str(ids.EARTH)))
+        app.execute(AdvanceTime(1))
+        assert _research_row(app, target).execution_context is not None
+        if isinstance(definition.stage_specs[1], ResearchPrototypeStageSpec):
+            stage = definition.stage_specs[1]
+            for resource_id, amount in stage.resources.items():
+                assert app._simulation.research.prototype_reserved_t(
+                    target, stage_id, ids.EARTH, resource_id,
+                ) == pytest.approx(amount)
+
+        # Operating capability is a live site requirement, not a one-time
+        # selection gate. Pausing the actual installed Facility must block
+        # further Stage work without clearing the player's selected site.
+        equipment = next(row for row in app._simulation.facilities.all_at(ids.EARTH)
+                         if row.definition_id == required_facility)
+        app.execute(PauseFacility(str(equipment.id)))
+        paused_progress = app._simulation.research.active[target].stage_progress
+        app.execute(AdvanceTime(1))
+        assert app._simulation.research.active[target].stage_progress == paused_progress
+        assert any("capability:active" in item.code
+                   for item in _research_row(app, target).current_blockers)
+        app.execute(ResumeFacility(str(equipment.id)))
+
+        path = tmp_path / f"{target}.json"
+        now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+        save_game(app, path, saved_at=now)
+        loaded, offline = load_game(path, lambda: build_game_application_for_load(
+            scenario=equipped, definition_transform=short_theory,
+        ), now=now)
+        assert offline is None
+        assert capture_state(loaded._simulation) == capture_state(app._simulation)
+        assert target not in loaded._simulation.technology.completed
+        for _ in range(8):
+            app.execute(AdvanceTime(1))
+            loaded.execute(AdvanceTime(1))
+        assert capture_state(loaded._simulation) == capture_state(app._simulation)
+        assert target in app._simulation.technology.completed
