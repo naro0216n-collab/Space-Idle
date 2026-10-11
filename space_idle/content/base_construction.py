@@ -239,6 +239,22 @@ def build_construction_recipes() -> dict:
         ids.METAL_ORE_MINE: req._surface_recipe(
             ids.METAL_ORE_MINE, 6, 8, 0, 38,
         ),
+        ids.AUTONOMOUS_ORE_MINE: req._surface_recipe(
+            ids.AUTONOMOUS_ORE_MINE, 22, 26, 6, 150,
+            technologies=frozenset({ids.research_id("RP-RESOURCE-CHAIN-09")}),
+        ),
+        ids.CONTINUOUS_ORE_CONCENTRATOR: req._surface_recipe(
+            ids.CONTINUOUS_ORE_CONCENTRATOR, 26, 24, 9, 170,
+            technologies=frozenset({ids.research_id("RP-RESOURCE-CHAIN-10")}),
+        ),
+        ids.CONTINUOUS_REDUCTION_FURNACE: req._surface_recipe(
+            ids.CONTINUOUS_REDUCTION_FURNACE, 34, 30, 11, 220,
+            technologies=frozenset({ids.research_id("RP-RESOURCE-CHAIN-15")}),
+        ),
+        ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE: req._surface_recipe(
+            ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE, 30, 22, 12, 180,
+            technologies=frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09")}),
+        ),
         ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
             ids.INDUSTRIAL_WATER_INTAKE, 5, 5, 0, 30,
         ),

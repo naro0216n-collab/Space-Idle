@@ -110,7 +110,7 @@ Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lande
 
 外部組織、Contract、Event等はContent / Application側の拡張として追加できるが、FundsをResource売買以外の報酬・一般支払手段として変更しない。Research Point中心の成長ループや通常SimulationのGeneric Core必須Domainにも含めない。
 
-Content固有名は説明に使ってよいが、Generic Core内の分岐条件にはしない。
+Content固有名は説明に使ってよいが、Generic Core内の分岐条件にはしない。高能力のFacility世代は必要な物理Capabilityを共有しながらInstalled Capacity、Power、維持・建設投資などで規模差を表現できる。既存Processの再利用を世代別IDの複製で代替しない。Technologyとの接続・整理はContentの工学的発展体系と量的成長を検討したうえで確定し、静的な未接続件数をCoreの成立判定へ持ち込まない。
 
 ### 3.3 Application Layer
 

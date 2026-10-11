@@ -300,3 +300,113 @@ def test_energy_generation_and_wet_beneficiation_keep_physical_choices_after_unl
     reloaded.execute(AdvanceTime(3))
     app.execute(AdvanceTime(3))
     assert capture_state(reloaded._simulation) == capture_state(sim)
+
+
+def test_industrial_scale_up_reuses_methods_and_changes_actual_mass_flow(tmp_path):
+    """Mining -> concentration -> reduction grows by installed mass flow, not a new Core rule.
+
+    The same Process/Extraction Definitions remain selectable on both generations.
+    The investment requires Technology and physically larger construction, power,
+    maintenance and finite inputs; later operation and Save/Load use normal APIs.
+    """
+    from space_idle import GetBuildOptions
+    from space_idle.content.base_research import build_research_definitions
+
+    new_assets = (
+        (ids.METAL_ORE_MINE, ids.AUTONOMOUS_ORE_MINE),
+        (ids.ORE_PROCESSING, ids.CONTINUOUS_ORE_CONCENTRATOR),
+        (ids.METALLURGY, ids.CONTINUOUS_REDUCTION_FURNACE),
+        (ids.FABRICATION_WORKSHOP, ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE),
+    )
+    base = build_standard_scenario_definition()
+    locked = build_game_application_for_scenario(base)
+    candidates = {row.facility_definition_id: row
+                  for row in locked.query(GetBuildOptions(str(ids.EARTH))).items}
+    research_unlocks = {row.id: {(unlock.kind, unlock.id) for unlock in row.unlocks}
+                        for row in locked.query(GetResearch()).items}
+    for original, newer in new_assets:
+        assert any(blocker.kind == "technology" for blocker in candidates[str(newer)].blockers)
+        assert candidates[str(newer)].construction_required > candidates[str(original)].construction_required
+        assert candidates[str(newer)].power_nominal_load_mw > candidates[str(original)].power_nominal_load_mw
+        assert any(("facility", str(newer)) in exits for exits in research_unlocks.values())
+        assert locked._simulation.projects.recipes[newer].resources != locked._simulation.projects.recipes[original].resources
+    assert (locked._simulation.extraction.compatible_methods(ids.METAL_ORE_MINE)
+            == locked._simulation.extraction.compatible_methods(ids.AUTONOMOUS_ORE_MINE))
+    for original, newer in new_assets[1:]:
+        assert (locked._simulation.industry.compatible_processes(original)
+                == locked._simulation.industry.compatible_processes(newer))
+
+    research = build_research_definitions()
+    required = {ids.research_id("RP-RESOURCE-CHAIN-09"),
+                ids.research_id("RP-RESOURCE-CHAIN-10"),
+                ids.research_id("RP-RESOURCE-CHAIN-15"),
+                ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09")}
+    completed = set(required)
+    frontier = list(required)
+    while frontier:
+        added = set(research[frontier.pop()].prerequisites) - completed
+        completed.update(added)
+        frontier.extend(added)
+
+    def make_scenario(use_new):
+        assignments = dict(new_assets) if use_new else {}
+        facilities = tuple(
+            replace(row, definition_id=assignments.get(row.definition_id, row.definition_id))
+            for row in base.facilities
+        ) + (
+            ScenarioFacility(assignments.get(ids.ORE_PROCESSING, ids.ORE_PROCESSING), ids.EARTH,
+                             selected_process_id=ids.PROCESS_ORE_PROCESS),
+            ScenarioFacility(assignments.get(ids.METALLURGY, ids.METALLURGY), ids.EARTH,
+                             selected_process_id=ids.PROCESS_METALLURGY),
+            ScenarioFacility(assignments.get(ids.FABRICATION_WORKSHOP, ids.FABRICATION_WORKSHOP), ids.EARTH,
+                             selected_process_id=ids.PROCESS_STRUCTURAL_FABRICATION),
+        )
+        return replace(
+            base, facilities=facilities,
+            completed_technologies=tuple(sorted(completed)),
+            inventory_stock=base.inventory_stock + (
+                ScenarioInventoryStock(ids.EARTH, ids.METAL_ORE, 250.0),
+                ScenarioInventoryStock(ids.EARTH, ids.METAL_FEEDSTOCK, 250.0),
+                ScenarioInventoryStock(ids.EARTH, ids.BULK_STRUCTURE, 100.0),
+            ),
+        )
+
+    old = build_game_application_for_scenario(make_scenario(False))
+    new = build_game_application_for_scenario(make_scenario(True))
+    old_ore = next(row for row in old.query(GetOperationalNode(str(ids.EARTH))).extraction_resources
+                   if row.resource_id == str(ids.METAL_ORE))
+    new_ore = next(row for row in new.query(GetOperationalNode(str(ids.EARTH))).extraction_resources
+                   if row.resource_id == str(ids.METAL_ORE))
+    assert new_ore.installed_nominal_capacity_t_per_day > old_ore.installed_nominal_capacity_t_per_day
+    assert new_ore.output_t_per_day > old_ore.output_t_per_day
+    # Increased ore preparation consumes more of the raw material; Stock is
+    # production MINUS consumption, not a proxy for mining output.
+    for app, names in ((old, tuple(old_id for old_id, _ in new_assets)),
+                       (new, tuple(new_id for _, new_id in new_assets))):
+        rows = app.query(GetOperationalNode(str(ids.EARTH))).industry
+        for definition_id in names[1:]:
+            row = next(row for row in rows if row.facility_definition_id == str(definition_id))
+            assert row.process_options
+            assert row.process_id in (str(ids.PROCESS_ORE_PROCESS), str(ids.PROCESS_METALLURGY),
+                                      str(ids.PROCESS_STRUCTURAL_FABRICATION))
+        before = app._simulation.inventory.amount(ids.EARTH, ids.FABRICATED_STRUCTURE)
+        app.execute(AdvanceTime(1))
+        assert app._simulation.inventory.amount(ids.EARTH, ids.FABRICATED_STRUCTURE) > before
+
+    old_sim = old._simulation
+    new_sim = new._simulation
+    assert (new_sim.inventory.amount(ids.EARTH, ids.FABRICATED_STRUCTURE)
+            > old_sim.inventory.amount(ids.EARTH, ids.FABRICATED_STRUCTURE))
+    assert (new_sim.inventory.amount(ids.EARTH, ids.METAL_ORE)
+            < old_sim.inventory.amount(ids.EARTH, ids.METAL_ORE))
+    assert new_sim.industry.processes[ids.PROCESS_METALLURGY] is not None
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    path = tmp_path / "industrial-scale.json"
+    save_game(new, path, saved_at=now)
+    restored, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(restored._simulation) == capture_state(new_sim)
+    restored.execute(AdvanceTime(3))
+    new.execute(AdvanceTime(3))
+    assert capture_state(restored._simulation) == capture_state(new_sim)

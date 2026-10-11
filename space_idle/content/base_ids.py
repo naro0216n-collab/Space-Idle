@@ -103,6 +103,11 @@ METAL_ORE_MINE = DefinitionId("base.facility.metal_ore_mine")
 INDUSTRIAL_WATER_INTAKE = DefinitionId("base.facility.industrial_water_intake")
 BASIC_STRUCTURAL_MATERIAL_PLANT = DefinitionId("base.facility.basic_structural_material_plant")
 BASIC_MACHINERY_WORKS = DefinitionId("base.facility.basic_machinery_works")
+# Integrated scale-up of mining, concentration and metal reduction.
+AUTONOMOUS_ORE_MINE = DefinitionId("base.facility.autonomous_ore_mine")
+CONTINUOUS_ORE_CONCENTRATOR = DefinitionId("base.facility.continuous_ore_concentrator")
+CONTINUOUS_REDUCTION_FURNACE = DefinitionId("base.facility.continuous_reduction_furnace")
+AUTOMATED_STRUCTURAL_FABRICATION_LINE = DefinitionId("base.facility.automated_structural_fabrication_line")
 
 # Physically motivated space-support assets; their rules are ordinary definitions.
 ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
