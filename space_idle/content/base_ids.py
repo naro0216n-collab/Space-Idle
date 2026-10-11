@@ -109,6 +109,7 @@ CONTINUOUS_ORE_CONCENTRATOR = DefinitionId("base.facility.continuous_ore_concent
 CONTINUOUS_REDUCTION_FURNACE = DefinitionId("base.facility.continuous_reduction_furnace")
 AUTOMATED_STRUCTURAL_FABRICATION_LINE = DefinitionId("base.facility.automated_structural_fabrication_line")
 INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.facility.industrial_machinery_assembly")
+MICROELECTRONICS_FAB = DefinitionId("base.facility.microelectronics_fab")
 
 # Physically motivated space-support assets; their rules are ordinary definitions.
 ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
@@ -140,6 +141,7 @@ PROCESS_BASIC_STRUCTURAL_MATERIAL = DefinitionId("base.process.basic_structural_
 PROCESS_BASIC_MACHINERY = DefinitionId("base.process.basic_machinery")
 PROCESS_STANDARD_STRUCTURAL_COMPONENTS = DefinitionId("base.process.standard_structural_components")
 PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.process.industrial_machinery_assembly")
+PROCESS_MICROELECTRONICS_FABRICATION = DefinitionId("base.process.microelectronics_fabrication")
 
 # Research DAG IDs are Content Definition IDs. Progression stage/category/series
 # are metadata on ResearchDefinition, not implicit gates.

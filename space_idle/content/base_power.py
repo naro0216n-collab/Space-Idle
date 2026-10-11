@@ -60,6 +60,7 @@ def build_power_specs() -> dict:
         ids.CONTINUOUS_REDUCTION_FURNACE: PowerSpec(None, 2.10),
         ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE: PowerSpec(None, 1.45),
         ids.INDUSTRIAL_MACHINERY_ASSEMBLY: PowerSpec(None, 0.80),
+        ids.MICROELECTRONICS_FAB: PowerSpec(None, 1.70),
         ids.INDUSTRIAL_WATER_INTAKE: PowerSpec(None, 0.18),
         ids.BASIC_STRUCTURAL_MATERIAL_PLANT: PowerSpec(None, 0.40),
         ids.BASIC_MACHINERY_WORKS: PowerSpec(None, 0.48),

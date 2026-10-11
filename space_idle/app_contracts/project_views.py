@@ -34,6 +34,7 @@ class BuildProcessOptionRow:
     # Actual execution remains bounded by allocation, upkeep and storage.
     input_rates_per_day: tuple[tuple[str, float], ...]
     output_rates_per_day: tuple[tuple[str, float], ...]
+    missing_technology_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

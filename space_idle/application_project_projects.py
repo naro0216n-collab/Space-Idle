@@ -633,6 +633,9 @@ class ProjectProjectorMixin:
                         (str(resource), rate * definition.process_throughput_per_day)
                         for resource, rate in sorted(process.outputs_per_day.items(), key=lambda pair: str(pair[0]))
                     ),
+                    missing_technology_ids=tuple(
+                        str(technology) for technology in sim.industry.missing_process_technologies(process)
+                    ),
                 )
                 for process in compatible
             )

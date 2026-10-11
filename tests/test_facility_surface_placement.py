@@ -112,6 +112,9 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
             str(resource_id): rate * definition.process_throughput_per_day
             for resource_id, rate in process.outputs_per_day.items()
         }
+        assert option.missing_technology_ids == tuple(
+            str(technology) for technology in sim.industry.missing_process_technologies(process)
+        )
     assert build_options.comparison_axes
     assert any(axis.differs for axis in build_options.comparison_axes)
     assert {axis.key for axis in build_options.comparison_axes} == {
@@ -159,6 +162,10 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert dict(advanced_flows.output_rates_per_day)[resource] > dict(base_flows.output_rates_per_day)[resource]
     assert (rows_by_id[ids.AUTONOMOUS_ORE_MINE].extraction_nominal_capacity_t_per_day
             > rows_by_id[ids.METAL_ORE_MINE].extraction_nominal_capacity_t_per_day)
+    ore = rows_by_id[ids.ORE_PROCESSING]
+    wet = next(option for option in ore.process_options
+               if option.process_id == str(ids.PROCESS_WET_ORE_BENEFICIATION))
+    assert str(ids.research_id("RP-RESOURCE-CHAIN-10")) in wet.missing_technology_ids
     assert candidate.projected_material_readiness_day == sim.day
     for resource in candidate.resources:
         assert resource.available_t == pytest.approx(

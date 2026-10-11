@@ -952,7 +952,8 @@
     const processCards=(o.process_options||[]).map((option)=>{
       const inputs=(option.input_rates_per_day||[]).map(([resource,rate])=>`${resourceName(resource)} ${fmt(rate,3)} t/日`).join(' / ')||'投入なし';
       const outputs=(option.output_rates_per_day||[]).map(([resource,rate])=>`${resourceName(resource)} ${fmt(rate,3)} t/日`).join(' / ')||'産出なし';
-      return `<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(option.display_name)}</strong></div><div class="cell-sub">公称投入: ${esc(inputs)}</div><div class="cell-sub">公称産出: ${esc(outputs)}</div></div>`;
+      const missing=option.missing_technology_ids||[];
+      return `<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(option.display_name)}</strong>${missing.length?'<span class="badge warn">研究条件不足</span>':''}</div><div class="cell-sub">公称投入: ${esc(inputs)}</div><div class="cell-sub">公称産出: ${esc(outputs)}</div>${missing.length?`<div class="cell-sub">工程の解禁研究: ${esc(missing.map(definitionName).join(' / '))}</div>`:''}</div>`;
     }).join('');
     const enables=capabilityCards+serviceCards+processCards||'<div class="empty-state">追加される能力情報なし</div>';
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';

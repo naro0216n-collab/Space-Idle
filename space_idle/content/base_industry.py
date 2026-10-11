@@ -62,6 +62,15 @@ def build_process_specs() -> dict:
             {ids.BASIC_MACHINE_PARTS: 0.32, ids.PRECISION_ELECTRONICS: 0.06},
             {ids.MACHINERY: 0.27},
         ),
+        # A locally operated microelectronics production chain is an alternative
+        # to finite imported electronics, consuming upstream bulk products and
+        # process water rather than minting Construction/Vehicle supplies.
+        ids.PROCESS_MICROELECTRONICS_FABRICATION: ProcessSpec(
+            ids.PROCESS_MICROELECTRONICS_FABRICATION, "薄膜回路形成・電子モジュール実装",
+            frozenset({"microelectronics_fabrication"}),
+            {ids.CERAMICS_GLASS: 0.60, ids.METAL_FEEDSTOCK: 0.25, ids.WATER: 0.15},
+            {ids.PRECISION_ELECTRONICS: 0.20},
+        ),
         ids.PROCESS_HEAVY_EQUIPMENT: ProcessSpec(ids.PROCESS_HEAVY_EQUIPMENT, "建設機械組立", frozenset({"heavy_equipment_assembly"}), {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.CONSTRUCTION_EQUIPMENT: 0.25}),
         # Deliberately low-throughput opening industry. These are ordinary
         # ProcessSpecs and can operate at any site where their facility and

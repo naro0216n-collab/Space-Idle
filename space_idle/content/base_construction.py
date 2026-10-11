@@ -259,6 +259,14 @@ def build_construction_recipes() -> dict:
             ids.INDUSTRIAL_MACHINERY_ASSEMBLY, 17, 16, 5, 105,
             technologies=frozenset({ids.research_id("AR-AUTONOMY-ROBOTICS-07")}),
         ),
+        ids.MICROELECTRONICS_FAB: ConstructionRecipe(
+            ids.MICROELECTRONICS_FAB,
+            (req._structure_resource(12), req._machinery_resource(15),
+             req._electronics_resource(7),
+             BuildResourceRequirement(ids.CERAMICS_GLASS, 4)),
+            125.0, req.SURFACE_SITE,
+            frozenset({ids.research_id("EM-ELECTRONICS-MANUFACTURING-01")}),
+        ),
         ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
             ids.INDUSTRIAL_WATER_INTAKE, 5, 5, 0, 30,
         ),

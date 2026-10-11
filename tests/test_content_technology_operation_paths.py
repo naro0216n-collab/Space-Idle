@@ -422,12 +422,14 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
     """
     from space_idle import (
         GetBuildOptions, GetFlowReport, PlanBuild, ProduceVehicle, PauseFacility,
+        CreateTransportAllocation, SetTargetStock,
     )
     from space_idle.content.base_research import build_research_definitions
 
     base = build_standard_scenario_definition()
     required = {
         ids.research_id("AR-AUTONOMY-ROBOTICS-07"),
+        ids.research_id("EM-ELECTRONICS-MANUFACTURING-01"),
         ids.research_id("CH-COMBUSTION-01"),
         ids.research_id("GN-NAVIGATION-01"),
     }
@@ -452,6 +454,9 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
           for _ in range(3)),
         ScenarioFacility(ids.INDUSTRIAL_MACHINERY_ASSEMBLY, ids.EARTH,
                          selected_process_id=ids.PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY),
+        ScenarioFacility(ids.MICROELECTRONICS_FAB, ids.EARTH,
+                         selected_process_id=ids.PROCESS_MICROELECTRONICS_FABRICATION),
+        ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
     )
     # Scarce construction commodities coexist with opening Industry and
     # Population/Maintenance demand. Other intermediate stocks are independent
@@ -469,6 +474,7 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         ScenarioInventoryStock(ids.EARTH, ids.METAL_FEEDSTOCK, 250.0),
         ScenarioInventoryStock(ids.EARTH, ids.BULK_STRUCTURE, 250.0),
         ScenarioInventoryStock(ids.EARTH, ids.BASIC_MACHINE_PARTS, 150.0),
+        ScenarioInventoryStock(ids.EARTH, ids.CERAMICS_GLASS, 90.0),
     )
     scenario = replace(base, facilities=facilities, inventory_stock=stock,
                        completed_technologies=tuple(sorted(completed)))
@@ -481,6 +487,17 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
                for row in assembly_option.blockers)
     assert any(
         unlock.kind == "facility" and unlock.id == str(ids.INDUSTRIAL_MACHINERY_ASSEMBLY)
+        for research_item in locked.query(GetResearch()).items
+        for unlock in research_item.unlocks
+    )
+    electronics_option = next(
+        row for row in locked.query(GetBuildOptions(str(ids.EARTH))).items
+        if row.facility_definition_id == str(ids.MICROELECTRONICS_FAB)
+    )
+    assert any(row.subject_id == str(ids.research_id("EM-ELECTRONICS-MANUFACTURING-01"))
+               for row in electronics_option.blockers)
+    assert any(
+        unlock.kind == "facility" and unlock.id == str(ids.MICROELECTRONICS_FAB)
         for research_item in locked.query(GetResearch()).items
         for unlock in research_item.unlocks
     )
@@ -503,6 +520,11 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         if row.facility_definition_id == str(ids.INDUSTRIAL_MACHINERY_ASSEMBLY)
     )
     baseline.execute(PauseFacility(assembly.facility_id))
+    microelectronics = next(
+        row for row in baseline_rows
+        if row.facility_definition_id == str(ids.MICROELECTRONICS_FAB)
+    )
+    baseline.execute(PauseFacility(microelectronics.facility_id))
 
     for _ in range(22):
         baseline.execute(AdvanceTime(1))
@@ -512,7 +534,7 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
             row for row in app.query(GetFlowReport(str(ids.EARTH))).resources
             if row.resource_id == str(resource_id)
         )
-    for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY):
+    for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS):
         ordinary_flow = end_product_flow(baseline, product)
         extended_flow = end_product_flow(extended, product)
         assert extended_flow.local_production_per_day > ordinary_flow.local_production_per_day
@@ -528,7 +550,7 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         app.execute(ProduceVehicle(str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH)))
     before = {
         product: extended._simulation.inventory.amount(ids.EARTH, product)
-        for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY)
+        for product in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS)
     }
     for _ in range(4):
         baseline.execute(AdvanceTime(1))
@@ -548,4 +570,21 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
     assert capture_state(loaded._simulation) == capture_state(extended._simulation)
     loaded.execute(AdvanceTime(1))
     extended.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(extended._simulation)
+
+    # Physical stock produced for common terrestrial Construction and Vehicle
+    # demand can also supply an orbital node through a real finite Fleet and
+    # cargo-handling chain. It must not appear at LEO without shipment.
+    leo_before = loaded._simulation.inventory.amount(ids.LEO, ids.PRECISION_ELECTRONICS)
+    for app in (loaded, extended):
+        assert app.execute(CreateTransportAllocation(
+            str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+            target_forward_t_per_day=1.0, target_reverse_t_per_day=0.0,
+        )).created_id
+        assert app.execute(SetTargetStock(
+            str(ids.LEO), str(ids.PRECISION_ELECTRONICS), leo_before + 3.0,
+            priority=4,
+        )).created_id
+        app.execute(AdvanceTime(8))
+    assert loaded._simulation.inventory.amount(ids.LEO, ids.PRECISION_ELECTRONICS) > leo_before
     assert capture_state(loaded._simulation) == capture_state(extended._simulation)
