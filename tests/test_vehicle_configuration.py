@@ -168,14 +168,10 @@ def test_surface_movement_requires_known_physical_fields_without_reclassifying_v
     assert "operation:landing:gravity_unknown" in failures
     assert "operation:landing:pressure_unknown" in failures
 
-    # The same operation registry evaluates real surface pressure, temperature
-    # and entry energy. Missing thermal data remains unknown, not a 0 K proxy.
-    from space_idle.spatial import ThermalField
-    from space_idle.shared import CelestialBodyId, SurfaceCellId
-    venus_cell = SurfaceCellId("base.cell.venus.highland")
-    venus_surface = sim.transport._surface_environment(venus_cell, sim.day)
-    assert venus_surface.maximum_temperature_k > 700
-    hot_context = OperationEvaluationContext(1, None, venus_surface)
+    # Evaluate physical limits against an independent synthetic environment;
+    # registered planet temperatures and pressures are Content, not Core thresholds.
+    surface = SurfaceOperationEnvironment(9.0, 800_000.0, 750.0, 30.0)
+    hot_context = OperationEvaluationContext(1, None, surface)
     hot_enough = AtmosphericEntryCapability(10_000_000, 800, 50)
     assert not registry.evaluate(entry, hot_enough, hot_context)
     assert any("temperature:" in failure for failure in registry.evaluate(
@@ -190,11 +186,8 @@ def test_surface_movement_requires_known_physical_fields_without_reclassifying_v
     assert any("temperature:" in failure for failure in registry.evaluate(
         landing, LandingCapability(5, 20, 10_000_000, 500), hot_context,
     ))
-    sim.facilities.environment.static.body_facets.pop(
-        (CelestialBodyId("base.body.venus"), ThermalField)
-    )
     assert "operation:atmospheric_entry:temperature_unknown" in registry.evaluate(
-        entry, hot_enough, OperationEvaluationContext(
-            1, None, sim.transport._surface_environment(venus_cell, sim.day),
-        ),
+        entry, hot_enough, replace(hot_context, destination_surface=replace(
+            surface, maximum_temperature_k=None,
+        )),
     )

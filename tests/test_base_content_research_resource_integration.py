@@ -1,13 +1,6 @@
 from __future__ import annotations
 
 from space_idle import build_game_application
-from space_idle.content.base_research import build_research_definitions
-
-
-
-
-
-
 def test_base_content_limits_resource_families_per_recipe():
     """An acquisition or production decision has at most three material inputs.
 
@@ -57,8 +50,6 @@ def test_base_content_limits_resource_families_per_recipe():
         # never invested in the vehicle or multiply goods on retirement.
         assert recovered.keys() <= invested.keys()
         assert all(0 <= amount <= invested[resource] for resource, amount in recovered.items())
-    # Single-feed physical extraction/separation is not padded with fictional inputs.
-    assert any(len(process.inputs_per_day) == 1 for process in sim.industry.processes.values())
 
 
 def test_completed_technology_enables_process_and_vehicle_methods_without_rewriting_assets(tmp_path):

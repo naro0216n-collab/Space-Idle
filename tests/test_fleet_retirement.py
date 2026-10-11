@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from math import ceil
 
 import pytest
 
@@ -80,7 +81,8 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     retirement = next(row for row in fleet.retirements if row.id == retirement_id)
     assert retirement.phase == "committed"
     assert not retirement.irreversible_started
-    assert retirement.required_work == pytest.approx(5.0)
+    retirement_spec = sim.transport.vehicle_defs[ids.REUSABLE_LAUNCH_VEHICLE].retirement
+    assert retirement.required_work == pytest.approx(retirement_spec.work_days_per_unit)
     assert retirement.expected_salvage
     assert next(
         row for row in fleet.pools
@@ -108,17 +110,19 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     with pytest.raises(ApplicationError, match="cannot be cancelled"):
         app.execute(CancelFleetRetirement(retirement_id))
 
-    app.execute(AdvanceTime(5))
+    finish_days = ceil(retirement_spec.work_days_per_unit) + 1
+    app.execute(AdvanceTime(finish_days))
     state = sim.transport.fleet_retirements[EntityId(retirement_id)]
     assert state.phase is FleetRetirementPhase.COMPLETE
     assert state.salvage_recovered_fraction == pytest.approx(1.0)
     snapshot = sim.transport.fleet_pool_snapshot(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     assert snapshot.total_units == 0
     assert snapshot.retirement_units == 0
-    control.execute(AdvanceTime(6))
-    assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
-        control._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) + 10.0
-    )
+    control.execute(AdvanceTime(1 + finish_days))
+    for resource_id, quantity in retirement_spec.recovery_resources_per_unit:
+        assert sim.inventory.amount(ids.EARTH, resource_id) == pytest.approx(
+            control._simulation.inventory.amount(ids.EARTH, resource_id) + quantity
+        )
 
     completed_stock = {
         resource_id: sim.inventory.amount(ids.EARTH, resource_id)

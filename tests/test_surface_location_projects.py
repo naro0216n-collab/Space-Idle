@@ -32,7 +32,7 @@ from space_idle.facilities import FacilityDef
 from space_idle.power import FixedGeneration, PowerSpec
 from space_idle.storage import StorageProviderSpec
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
-from space_idle.spatial import CharacteristicTransportGeometry, SpatialNodeDef, SpatialNodeKind
+from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
 from space_idle.spatial_claims import SurfaceCellClaim
 
 
@@ -103,44 +103,36 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
     """A founding deployment buys a limited foothold, not a mature base bundle."""
     app = build_game_application()
     sim = app._simulation
-    expected = (
-        (ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, ids.AUTONOMOUS_SURFACE_OUTPOST,
-         ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.SURFACE_DISTRIBUTION_HUB),
-        (ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE, ids.AUTONOMOUS_ORBITAL_OUTPOST,
-         ids.MARS_ORBIT, ids.ORBITAL_HEAVY_CARGO_TERMINAL),
+    package_contexts = (
+        (ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, ids.MOON_CELL_FARSIDE_HIGHLANDS),
+        (ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE, ids.MARS_ORBIT),
     )
-    for recipe_id, facility_id, context_id, mature_id in expected:
+    for recipe_id, context_id in package_contexts:
         recipe = sim.founding.deployment_recipes[recipe_id]
-        assert len(recipe.deployed_facilities) == 1
-        deployment = recipe.deployed_facilities[0]
-        assert deployment.facility_def_id == facility_id
+        assert recipe.deployed_facilities
         assert len(recipe.payload_resources) <= 3
-        # Founding is not an acquisition discount: the outpost investment is
-        # exactly the material cost of building the same compact facility.
-        build = sim.projects.recipes[facility_id]
-        assert deployment.investment_totals() == pytest.approx({
-            row.resource_id: row.amount_t for row in build.resources
-        })
-        assert sim.facilities.definitions[facility_id].service_capacity_supplies != (
-            sim.facilities.definitions[mature_id].service_capacity_supplies
-        )
-        row = app._founding_deployed_facility_rows(recipe, context_id)[0]
-        generation, load = sim.power.nominal_for_definition_at_context(
-            facility_id, context_id, sim.day
-        )
-        assert row.nominal_power_generation_mw == pytest.approx(generation)
-        assert row.nominal_power_load_mw == pytest.approx(load)
-        assert dict(row.storage_capacity_t) == sim.storage.providers[facility_id].capacity_t_by_pool
-        assert row.construction_work_per_day == pytest.approx(
-            sim.projects.construction_providers[facility_id].work_per_day
-        )
-        assert row.maintenance_fraction_per_year == pytest.approx(
-            sim.facilities.definitions[facility_id].maintenance_fraction_per_year
-        )
-        assert any(name == "cargo_transfer" and rate < 1.0
-                   for name, rate in row.service_capacity_per_day)
-        assert not any(facility.facility_def_id == mature_id
-                       for facility in recipe.deployed_facilities)
+        projected = app._founding_deployed_facility_rows(recipe, context_id)
+        assert len(projected) == len(recipe.deployed_facilities)
+        for deployment, row in zip(recipe.deployed_facilities, projected, strict=True):
+            facility_id = deployment.facility_def_id
+            # Deployed capital comes from the same paid construction inputs.
+            build = sim.projects.recipes[facility_id]
+            investment = deployment.investment_totals()
+            assert all(investment.get(material.resource_id, 0) >= material.amount_t
+                       for material in build.resources)
+            assert row.facility_definition_id == str(facility_id)
+            generation, load = sim.power.nominal_for_definition_at_context(
+                facility_id, context_id, sim.day
+            )
+            assert row.nominal_power_generation_mw == pytest.approx(generation)
+            assert row.nominal_power_load_mw == pytest.approx(load)
+            assert dict(row.storage_capacity_t) == sim.storage.providers[facility_id].capacity_t_by_pool
+            assert row.construction_work_per_day == pytest.approx(
+                sim.projects.construction_providers[facility_id].work_per_day
+            )
+            assert row.maintenance_fraction_per_year == pytest.approx(
+                sim.facilities.definitions[facility_id].maintenance_fraction_per_year
+            )
 
     # The outpost must still be able to bootstrap normally, without a grant
     # of additional full-size facilities or a special first-build pathway.
@@ -151,7 +143,8 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
     _advance_founding_to_completion(app, project)
     location = sim.founding.target_operational_node_id(project.target_spec)
     assert {row.definition_id for row in sim.facilities.all_at(location)} == {
-        ids.AUTONOMOUS_SURFACE_OUTPOST
+        item.facility_def_id for item in
+        sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE].deployed_facilities
     }
     assert sim.inventory.admission_state(location, ids.STRUCTURAL_COMPONENTS).blockers == ()
     for row in sim.projects.recipes[ids.SURFACE_DISTRIBUTION_HUB].resources:

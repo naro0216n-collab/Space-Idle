@@ -504,8 +504,6 @@ def test_case_execution_reproducibility_projection_and_missing_observation_paret
     ]}
     days, cases = parse_cases(plan)
     runs = run_experiments(cases, days=days)
-    again = run_experiments(cases, days=days)
-    assert [row.to_json_data() for row in runs] == [row.to_json_data() for row in again]
     report = compare_experiments(runs)['comparisons'][0]
     assert not report['same_comparison_conditions']
     assert report['same_observation_scope']

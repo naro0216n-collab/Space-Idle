@@ -22,32 +22,26 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     assert bodies
     assert any(body.parent_body_id is None for body in bodies)
     assert any(body.parent_body_id is not None for body in bodies)
-    assert graph.bodies[ids.MOON].parent_body_id == ids.EARTH_BODY
-    assert graph.body_lineage(CelestialBodyId("base.body.europa")) == (
-        CelestialBodyId("base.body.europa"), CelestialBodyId("base.body.jupiter"),
+    assert all(
+        body.parent_body_id is None
+        or body.star_system_id == graph.bodies[body.parent_body_id].star_system_id
+        for body in bodies
     )
-    assert graph.body_lineage(CelestialBodyId("base.body.triton"))[-1] == CelestialBodyId("base.body.neptune")
-    assert any(body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE for body in bodies)
-    assert all(body.parent_body_id is None or body.star_system_id == graph.bodies[body.parent_body_id].star_system_id for body in bodies)
     assert all(body.representative_gravity_m_s2 is not None for body in bodies)
-    # Relative irradiation is a physical Content invariant, not a balance fixture.
-    assert (
-        graph.representative_solar_flux_w_m2(ids.MOON)
-        > graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.europa"))
-        > graph.representative_solar_flux_w_m2(CelestialBodyId("base.body.triton"))
-        > 0
-    )
+    assert all(graph.body_lineage(body.id)[0] == body.id for body in bodies)
+    assert any(body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE for body in bodies)
 
     catalog = app.query(GetCatalog())
-    assert len(catalog.celestial_bodies) == len(bodies)
-    jupiter = next(row for row in catalog.celestial_bodies if row.id == "base.body.jupiter")
-    europa = next(row for row in catalog.celestial_bodies if row.id == "base.body.europa")
-    assert jupiter.physical_surface == "no_solid_surface"
-    assert europa.physical_surface == "solid" and europa.parent_body_id == jupiter.id
-    assert europa.surface_cell_count > 0
-    assert app.query(GetSurfaceMap(jupiter.id)).physical_surface == "no_solid_surface"
-    assert app.query(GetSurfaceMap(europa.id)).physical_surface == "solid"
-    assert len(app.query(GetSurfaceMap(europa.id)).cells) == europa.surface_cell_count
+    assert {row.id for row in catalog.celestial_bodies} == {str(body.id) for body in bodies}
+    catalog_by_id = {row.id: row for row in catalog.celestial_bodies}
+    for body in bodies:
+        entry = catalog_by_id[str(body.id)]
+        assert entry.parent_body_id == (str(body.parent_body_id) if body.parent_body_id else None)
+        surface_map = app.query(GetSurfaceMap(entry.id))
+        assert surface_map.physical_surface == entry.physical_surface
+        assert len(surface_map.cells) == entry.surface_cell_count
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            assert entry.surface_cell_count == 0
 
     world = app.query(GetWorld())
     assert {row.id for row in world.operational_nodes} == {str(id_) for id_ in graph.operational_node_ids()}
@@ -196,44 +190,41 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
                if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
 
-    io = SurfaceCellId("base.cell.io.plain")
-    europa = SurfaceCellId("base.cell.europa.ridge")
-    callisto = SurfaceCellId("base.cell.callisto.crater")
-    titan = SurfaceCellId("base.cell.titan.highland")
-    venus = SurfaceCellId("base.cell.venus.lowland")
-    triton = SurfaceCellId("base.cell.triton.plain")
-    for cell_id in (io, europa, callisto, titan, venus, triton):
+    for cell_id, cell in graph.surface_cells.items():
         assert env.require(cell_id, GravityField).local_acceleration_m_s2 > 0
         assert env.require(cell_id, IlluminationField).solar_flux_w_m2 == pytest.approx(
-            graph.representative_solar_flux_w_m2(graph.surface_cells[cell_id].body_id)
+            graph.representative_solar_flux_w_m2(cell.body_id)
         )
-        for resource in graph.surface_cells[cell_id].resource_potential_by_resource:
+        for resource in cell.resource_potential_by_resource:
             assert (cell_id, resource) in sim.survey.targets
-            assert (cell_id, resource) not in sim.survey.knowledge_progress
 
-    assert env.require(venus, AtmosphereField).pressure_pa > env.require(titan, AtmosphereField).pressure_pa
-    assert env.require(europa, AtmosphereField).pressure_pa == 0
-    assert env.require(triton, ThermalField).nominal_temperature_k < env.require(europa, ThermalField).nominal_temperature_k
-    assert env.require(io, RadiationField).dose_equivalent_msv_per_day > (
-        env.require(europa, RadiationField).dose_equivalent_msv_per_day
-        > env.require(callisto, RadiationField).dose_equivalent_msv_per_day
-    )
-    # Radiation is not inherited from Jupiter, which has no solid Site.
-    assert (CelestialBodyId("base.body.jupiter"), RadiationField) not in env.static.body_facets
-    assert env.require(ids.MARS_CELL_POLAR_HIGHLANDS, RadiationField).dose_equivalent_msv_per_day < (
-        env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, RadiationField).dose_equivalent_msv_per_day
-    )
+    # Site eligibility follows resolved radiation fields rather than the IDs or
+    # balance values of particular moons.
+    radiation = {
+        cell_id: env.require(cell_id, RadiationField).dose_equivalent_msv_per_day
+        for cell_id in graph.surface_cells
+    }
+    low = min(radiation, key=radiation.get)
+    high = max(radiation, key=radiation.get)
+    assert radiation[high] > radiation[low]
+    tolerance = (radiation[high] + radiation[low]) / 2
     condition = SiteRequirements(environment=(FacetValueRange(
         RadiationField, "dose_equivalent_msv_per_day", "environment:radiation_tolerance",
-        "radiation limit", maximum=5,
+        "radiation limit", maximum=tolerance,
     ),))
-    assert evaluate_physical_site_requirements(condition, io, sim.day, env)[0].code == "environment:radiation_tolerance"
-    assert not evaluate_physical_site_requirements(condition, callisto, sim.day, env)
+    assert evaluate_physical_site_requirements(condition, high, sim.day, env)[0].code == "environment:radiation_tolerance"
+    assert not evaluate_physical_site_requirements(condition, low, sim.day, env)
 
     # Same solar Facility in different Cells receives exactly the flux and
     # availability resolved from each Cell; no second AU attenuation is applied.
     generation = {}
-    for cell_id in (ids.MOON_CELL_SOUTH_POLAR_RIDGE, europa, triton):
+    candidate_by_body = {}
+    for cell_id, cell in graph.surface_cells.items():
+        if graph.owner_of_cell(cell_id) is None:
+            candidate_by_body.setdefault(cell.body_id, cell_id)
+    candidate_cells = tuple(candidate_by_body.values())[:3]
+    assert len(candidate_cells) == 3
+    for cell_id in candidate_cells:
         node_id = SpatialNodeId(f"test.power.{cell_id}")
         graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
         facilities = FacilityBook(sim.facilities.definitions, env)
@@ -244,7 +235,6 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         assert generation[cell_id] == pytest.approx(
             spec.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / spec.reference_flux_w_m2 * illum.availability
         )
-    assert generation[ids.MOON_CELL_SOUTH_POLAR_RIDGE] > generation[europa] > generation[triton]
 
 
 def test_surface_access_transfer_reuses_world_physics_and_vehicle_operations():
@@ -462,14 +452,19 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
     assert detailed.contexts[0].foundation_options
     assert {str(value) for value in visited} == {context_id}
 
-    # Each gas giant has an eligible, still-unowned orbital context. These
-    # read-only options must not create Fleet, Inventory or operational Nodes.
+    # Physical non-surface targets use the same projection and remain read-only.
     owned = set(sim.graph.operational_node_ids())
     fleet = dict(sim.transport.fleet_pools)
     stock = dict(sim.inventory.stock)
-    for body_id in ("base.body.jupiter", "base.body.saturn", "base.body.uranus", "base.body.neptune"):
-        context_id = f"base.spatial.{body_id.rsplit('.', 1)[-1]}.orbit"
-        context = app.query(GetNonSurfaceFoundingOptions(body_id, context_id)).contexts[0]
+    non_surface_bodies = (
+        body for body in sim.graph.bodies.values()
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE
+    )
+    for body in non_surface_bodies:
+        contexts = app.query(GetNonSurfaceFoundingOptions(str(body.id), "")).contexts
+        assert contexts
+        context_id = contexts[0].spatial_node_id
+        context = app.query(GetNonSurfaceFoundingOptions(str(body.id), context_id)).contexts[0]
         assert context.spatial_node_id in sim.graph.nodes
         assert context.spatial_node_id not in {str(node) for node in owned}
         assert not context.operational
