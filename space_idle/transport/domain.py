@@ -984,7 +984,7 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 f"vehicle production references unknown service type: {vehicle_id}/{vehicle.production.service_type}",
             )
             _require(vehicle.production.days > 0, f"vehicle production duration must be positive: {vehicle_id}")
-            _require(2 <= len(vehicle.production.resources) <= 3, f"vehicle production should use 2-3 physical resources: {vehicle_id}")
+            _require(bool(vehicle.production.resources), f"vehicle production requires physical resources: {vehicle_id}")
             _require(all(amount > 0 for _resource, amount in vehicle.production.resources), f"vehicle production has non-positive resource input: {vehicle_id}")
             _validate_site_requirements(vehicle.production.site_requirements, known_capabilities, f"vehicle_production:{vehicle_id}")
 def validate_transport_runtime(sim: Any) -> None:

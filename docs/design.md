@@ -210,6 +210,8 @@ Market取引は通常のCargo、Transport、Cargo Handling、Inventory Admission
 
 FacilityそのものとProcessを分離する。一つのFacility Definitionが複数の互換Processを持てる場合、同一Facility instanceで通常同時に実行するProcessは一つとし、プレイヤーが選択する。互換Processが一つだけならそのProcessを自明な選択として扱え、冗長なinstance stateを必須にしない。複数候補がある場合はFacility Stateが現在選択中のProcessをauthoritativeに所有し、登録順やID順で暗黙選択しない。
 
+生産Processの1レシピが要求する投入Resource種類数は最大3種類とし、単一原料からの分離・加工など物理的に1種類で成立する工程へ不要な投入を強制しない。工程を複雑にする必要がある場合は、実際に独立した加工段階と中間材へ分け、架空の材料や設備別の同型レシピを増やさない。
+
 ProcessはFacility名・IDではなく必要な加工Interface/Capabilityと製法の入出力比率によって互換性を判定する。同じ工程は実行可能な別世代・規模のFacilityが共有できる。設備が持つinstalled throughputは工程定義の投入・産出比率と別に定め、選択した工程をその設備能力と当日の有限Resource / Service / Storage admissionに従って実行する。工程のためだけに同一レシピをFacilityごとに複製しない。
 
 Process変更はPlayer Commandとしてcanonical boundaryから反映し、既に確定したexecutionを遡及変更しない。現在ProcessのRequirementが満たせない場合も別Processへ自動切替せず、その選択を保持したままblocker / limiting factorを示す。
@@ -220,9 +222,9 @@ Process変更はPlayer Commandとしてcanonical boundaryから反映し、既�
 
 ### 6.2 建造投入物
 
-建築物は明示的な実ResourceとConstruction workを消費して建造する。一般Contentでは、物流判断とUI可読性を保つため、簡易設備は2種類、高度設備は3種類程度の主要Resourceへまとめることを基準とする。ただしこれはContent設計上の目安であり、Generic CoreがResource種類数を固定上限として検証しない。
+建築物は明示的な実ResourceとConstruction workを消費して建造する。Contentの各Construction Recipeは投入Resourceを最大3種類とし、簡易設備では必要に応じて1〜2種類とする。高度設備に複数の専門部品が必要な場合は、その部品の製造Processに上流投入を集約する。Generic Core側にはResource種類数の固定上限を設けず、このContent設計契約をCore Validationへ混入させない。
 
-構造・機械・電子等の抽象Componentへ複数の代替材を暗黙にぶら下げず、Construction Recipeが実際に消費するResourceと量を直接定義する。追加Resourceが独立した供給・立地・技術判断を生む場合は、有限個の明示RequirementとしてContentへ定義できる。
+構造・機械・電子等の抽象Componentへ複数の代替材を暗黙にぶら下げず、Construction Recipeが実際に消費するResourceと量を直接定義する。追加Resourceが独立した供給・立地・技術判断を生む場合も、1レシピの投入上限3種類の中で必要な部品の選定と中間工程の構成を決める。
 
 建設資材の産地はRecipeの条件にしない。要求Resourceが建設地点Inventoryへ存在すれば、地球産・月産・他拠点産を区別せず利用できる。
 
@@ -254,7 +256,7 @@ Content側は設備ごと、または設備群ごとに維持率を持つ。具�
 
 ### 6.4 Upgrade
 
-Levelアップは同一世代設備への増設・拡張・改良として扱う。Upgradeも明示ResourceとConstruction workを投入し、その投入分を以後の累積投入Resourceと維持需要へ反映する。Resource種類数はFacility建設と同じくContent設計上は可読な範囲へ保つが、Generic Coreの固定上限にはしない。
+Levelアップは同一世代設備への増設・拡張・改良として扱う。Upgradeも明示ResourceとConstruction workを投入し、その投入分を以後の累積投入Resourceと維持需要へ反映する。Upgrade Recipeの投入Resourceも最大3種類とし、Generic Coreの固定上限にはしない。
 
 ### 6.5 Decommission
 
@@ -353,6 +355,8 @@ Founding targetは少なくとも地表Locationとnon-surface Operational Node�
 未開発の天体や軌道もWorld上の物理対象として選択でき、出発拠点を所有するFleet・Resourceから科学探査または設立候補を評価する。軌道上の拠点設立は既存の物理Contextを対象に共通Foundingを用い、設立以前のFleetPool・Inventoryは存在しない。表示する候補はTarget種別・staging拠点・Deployment Recipe・Vehicle性能から導かれ、必要条件やblockerはApplicationから受け取る。
 
 Location設立前のSurface CellはInventoryや通常物流のNodeではない。Surface FoundingではContentが必要Resource、展開Facility / Fleet、輸送・着陸能力、準備作業、所要時間、物理Site条件をDeployment Recipeとして定義する。Resource Survey Knowledgeを成立条件にする場合は「Survey済み」というbooleanではなく、対象Cell / Resource等とminimum Knowledge Levelを明示するKnowledge Requirementを定義する。
+
+Deployment Recipeも、展開Facilityへの投資分と持込初期在庫を合わせて、staging側から要求するResource種類数を最大3種類とする。複数Facilityを含むPackageであっても投入種類数を際限なく増やさず、事前組立や専門Componentの工程を用いて準備する。
 
 Deployment開始時にprepared Resource / Fleetをsource側の物理Stateからone-shot Movement payload / commitmentへ移し、成功時だけRecipeに従って初期Storage、Facility、Inventory、必要なFleet等へ変換する。Definitionだけを根拠にtarget側へResource、Fleet、Facilityを無償生成しない。失敗・取消可能境界・帰還dispositionもMovement / commitment契約で明示する。
 
@@ -572,6 +576,8 @@ CampaignをPauseした場合は新たな科学executionを進めないが、開�
 Research Point源は、地上研究設備、人工衛星、有人実験、軌道研究設備、Scientific Exploration、地表研究所、実証設備等である。研究源ごとに「この研究にしか使えないRP」という適用範囲は原則設けず、生成したResearch Pointは組織全体の共有Knowledge Poolへ蓄積する。
 
 研究資産の世代差はTierで表現し、Tierが上がるとResearch Point生成効率と貯蔵能力を明確に向上させる。技術的に高度な研究は必要Research Pointも大きく増えるため、初期研究源だけで後期研究を進めることは理論上可能でも極めて遅くなる。
+
+Vehicle製造も1レシピにつき投入Resourceを最大3種類とする。機体の専門的な装備・構成部品はそれぞれ実物Resourceの製造工程に集約し、製造、整備、退役、回収の会計を同じ部品構成と整合させる。
 
 TechnologyはResearch完了により利用可能となる実行手段を変える。Scientific Explorationの新規Campaignにも明示Technology要件を設けられるが、開始済みの航行・Fleet Commitment・回収義務へ解禁条件を遡及適用しない。Processの使用方法やVehicle製造は、設備Capability・立地・有限Resource/Serviceとは別に明示Technology条件を持てる。研究完了は既設設備の自動改造や既開始の製造計画の取消を生まず、現在実行できない工程はPlayerの選択を保持したまま稼働を停止する。研究の解禁先は研究系列や表示段階から暗黙に推定せず、個々の手段Definitionから複数の研究へ接続する。
 
@@ -844,7 +850,7 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 - Scientific ExplorationがRP Pool容量不足時に有限RPを消失させず、science progress / RP settlementを整合させる。
 - Research Projectのtyped ordered Stageとcurrent stageが一致し、最終Stage完了時だけTechnology Stateを更新する。
 - Facility Processが複数候補時にPlayer選択を要求し、登録順で暗黙決定しない。
-- Facility Build / Upgrade Recipeが有限個の明示Resourceを消費し、Resource種類数をGeneric Core固定上限にしない。
+- Facility Build / Upgrade Recipeの投入はContentで最大3種類とし、Generic Coreは種類数を固定上限として検証しない。
 - 維持需要が累積投入Resourceとmaintenance fractionから決定論的に導出される。
 - Extraction responseがCapacityに対して単調非減少・限界収益逓減で、Content固有任意関数へ分岐しない。
 - Surface LocationのEnvironment / Movement / Surface Infrastructureをcore cellへ暗黙縮退させない。

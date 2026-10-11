@@ -151,6 +151,36 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
         # Higher-order science consumes finite experimental materials and
         # demands actual powered instrumentation. Its Research output comes
         # from installed assets; completing these stages is no global buff.
+        ids.research_id("TH-THERMAL-TRANSPORT-06"): (
+            ResearchPrototypeStageSpec(
+                "deployable-radiator-flow-loop-trial",
+                {ids.THERMAL_CONTROL_ASSEMBLIES: 0.6, ids.PRECISION_COMPONENTS: 0.15},
+                req.with_capabilities(req.ORBIT_SITE, "microgravity_experiment_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
+            ),
+        ),
+        ids.research_id("HB-HABITATION-PROTECTION-06"): (
+            ResearchPrototypeStageSpec(
+                "localized-radiation-attenuation-trial",
+                {ids.RADIATION_SHIELDING_PANELS: 0.9, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SiteRequirements(), "research_lab"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
+            ),
+        ),
+        ids.research_id("CO-OPTICAL-COMMUNICATIONS-02"): (
+            ResearchPrototypeStageSpec(
+                "optical-link-modulation-hardware-trial",
+                {ids.OPTICAL_INSTRUMENT_PACKAGES: 0.5, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SURFACE_SITE, "deep_space_tracking_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
+            ),
+        ),
         ids.research_id("MS-MATERIALS-10"): (
             ResearchPrototypeStageSpec(
                 "irradiated-material-fatigue-trial",

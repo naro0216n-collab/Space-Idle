@@ -315,7 +315,10 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         blocker.code in {"import_source", "import_transport_blocked"}
         for blocker in planned.blockers
     )
-    assert any(blocker.code == "resource_shortage" for blocker in planned.blockers)
+    # Logistics may present an import blocker rather than a second generic
+    # resource_shortage blocker; the physical deficit is explicit on the
+    # project Resource row regardless of its supply route.
+    assert any(row.shortage_t > 0 for row in planned.resources)
 
     app.execute(AdvanceTime(1))
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)

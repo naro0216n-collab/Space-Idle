@@ -20,6 +20,9 @@ WATER = DefinitionId("base.resource.water")
 OXYGEN = DefinitionId("base.resource.oxygen")
 HYDROGEN = DefinitionId("base.resource.hydrogen")
 PROPELLANT = DefinitionId("base.resource.chemical_propellant")
+THERMAL_CONTROL_ASSEMBLIES = DefinitionId("base.resource.thermal_control_assemblies")
+RADIATION_SHIELDING_PANELS = DefinitionId("base.resource.radiation_shielding_panels")
+OPTICAL_INSTRUMENT_PACKAGES = DefinitionId("base.resource.optical_instrument_packages")
 
 # ---------------------------------------------------------------------------
 # Spatial content. Surface geography is separate from player-operated
@@ -119,6 +122,9 @@ AUTOMATED_STRUCTURAL_FABRICATION_LINE = DefinitionId("base.facility.automated_st
 INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.facility.industrial_machinery_assembly")
 MICROELECTRONICS_FAB = DefinitionId("base.facility.microelectronics_fab")
 MOLTEN_OXIDE_ELECTROLYZER = DefinitionId("base.facility.molten_oxide_electrolyzer")
+THERMAL_HARDWARE_ASSEMBLY = DefinitionId("base.facility.thermal_hardware_assembly")
+SHIELDING_PANEL_FABRICATION = DefinitionId("base.facility.shielding_panel_fabrication")
+OPTICAL_INSTRUMENT_INTEGRATION = DefinitionId("base.facility.optical_instrument_integration")
 
 # Physically motivated space-support assets; their rules are ordinary definitions.
 ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
@@ -162,6 +168,9 @@ PROCESS_STANDARD_STRUCTURAL_COMPONENTS = DefinitionId("base.process.standard_str
 PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.process.industrial_machinery_assembly")
 PROCESS_MICROELECTRONICS_FABRICATION = DefinitionId("base.process.microelectronics_fabrication")
 PROCESS_MOLTEN_OXIDE_ELECTROLYSIS = DefinitionId("base.process.molten_oxide_electrolysis")
+PROCESS_THERMAL_HARDWARE_ASSEMBLY = DefinitionId("base.process.heat_pipe_radiator_assembly")
+PROCESS_SHIELDING_PANEL_FABRICATION = DefinitionId("base.process.graded_shielding_laminate")
+PROCESS_OPTICAL_INSTRUMENT_INTEGRATION = DefinitionId("base.process.optical_sensor_alignment")
 
 # Research DAG IDs are Content Definition IDs. Progression stage/category/series
 # are metadata on ResearchDefinition, not implicit gates.

@@ -6,6 +6,9 @@ from . import base_ids as ids
 
 def build_power_specs() -> dict:
     return {
+        ids.THERMAL_HARDWARE_ASSEMBLY: PowerSpec(None, 1.35, standby_load_mw=0.09),
+        ids.SHIELDING_PANEL_FABRICATION: PowerSpec(None, 0.85, standby_load_mw=0.07),
+        ids.OPTICAL_INSTRUMENT_INTEGRATION: PowerSpec(None, 1.75, standby_load_mw=0.18),
         ids.ORBITAL_CONSTRUCTION_PLATFORM: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.15),
         ids.ORBITAL_SOLAR_ARRAY: PowerSpec(SolarGeneration(4.0 / 0.62, 1361.0), 0.04),
         # The tracking array trades more electronics, machinery and orbital

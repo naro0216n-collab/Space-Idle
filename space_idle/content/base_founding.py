@@ -16,19 +16,19 @@ def build_deployment_recipes() -> dict:
         deployed_facilities=(
             FoundingFacilityDeployment(
                 ids.ROBOTIC_SURVEY_PACKAGE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5), _r(ids.PRECISION_ELECTRONICS, 0.3), _r(ids.CONSTRUCTION_EQUIPMENT, 0.2)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5), _r(ids.CONSTRUCTION_EQUIPMENT, 0.2)),
             ),
             FoundingFacilityDeployment(
                 ids.CARGO_WAREHOUSE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.2), _r(ids.PRECISION_ELECTRONICS, 0.1), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
             ),
             FoundingFacilityDeployment(
                 ids.SURFACE_DISTRIBUTION_HUB,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.9), _r(ids.MACHINERY, 0.4), _r(ids.PRECISION_ELECTRONICS, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 0.9), _r(ids.MACHINERY, 0.4), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
             ),
             FoundingFacilityDeployment(
                 ids.CRYOGENIC_STORAGE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.3), _r(ids.MACHINERY, 0.2), _r(ids.PRECISION_ELECTRONICS, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 0.3), _r(ids.MACHINERY, 0.2), _r(ids.CONSTRUCTION_EQUIPMENT, 0.1)),
             ),
         ),
         preparation_work=3.0,
@@ -44,13 +44,11 @@ def build_deployment_recipes() -> dict:
         deployed_facilities=(
             FoundingFacilityDeployment(
                 ids.ORBITAL_LOGISTICS_NODE,
-                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5),
-                 _r(ids.PRECISION_ELECTRONICS, 0.4)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 1.4), _r(ids.MACHINERY, 0.5)),
             ),
             FoundingFacilityDeployment(
                 ids.ORBITAL_FISSION_POWER,
-                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.6),
-                 _r(ids.PRECISION_ELECTRONICS, 0.2)),
+                (_r(ids.STRUCTURAL_COMPONENTS, 0.8), _r(ids.MACHINERY, 0.6)),
             ),
         ),
         preparation_work=3.0,
@@ -61,7 +59,6 @@ def build_deployment_recipes() -> dict:
             _r(ids.PROPELLANT, 3.0),
             _r(ids.STRUCTURAL_COMPONENTS, 1.0),
             _r(ids.MACHINERY, 0.8),
-            _r(ids.PRECISION_ELECTRONICS, 0.5),
         ),
         required_units=1,
     )

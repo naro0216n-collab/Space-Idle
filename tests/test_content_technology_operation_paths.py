@@ -201,7 +201,9 @@ def test_energy_generation_and_wet_beneficiation_keep_physical_choices_after_unl
         inventory_stock=base.inventory_stock + tuple(
             ScenarioInventoryStock(ids.LEO, resource_id, 100.0)
             for resource_id in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY,
-                                ids.PRECISION_ELECTRONICS)
+                                ids.PRECISION_ELECTRONICS,
+                                ids.THERMAL_CONTROL_ASSEMBLIES, ids.RADIATION_SHIELDING_PANELS,
+                                ids.OPTICAL_INSTRUMENT_PACKAGES)
         ) + (
             ScenarioInventoryStock(ids.EARTH, ids.METAL_ORE, 120.0),
             ScenarioInventoryStock(ids.EARTH, ids.METAL_FEEDSTOCK, 0.0),
@@ -1311,6 +1313,8 @@ def test_electric_propulsion_research_to_cross_node_resource_transport(tmp_path)
             ScenarioInventoryStock(ids.LEO, ids.MACHINERY, 100.0),
             ScenarioInventoryStock(ids.LEO, ids.PRECISION_ELECTRONICS, 100.0),
             ScenarioInventoryStock(ids.LEO, ids.CONSTRUCTION_EQUIPMENT, 80.0),
+            ScenarioInventoryStock(ids.LEO, ids.THERMAL_CONTROL_ASSEMBLIES, 12.0),
+            ScenarioInventoryStock(ids.LEO, ids.OPTICAL_INSTRUMENT_PACKAGES, 8.0),
             # A returning spacecraft must refuel physically at the far end;
             # the receiving depot is not an inexhaustible fuel source.
             ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.HYDROGEN, 8.0),
@@ -1493,6 +1497,9 @@ def test_interplanetary_supply_and_science_use_one_physical_portfolio(tmp_path):
                 (ids.MACHINERY, 200.0),
                 (ids.PRECISION_ELECTRONICS, 150.0),
                 (ids.CONSTRUCTION_EQUIPMENT, 25.0),
+                (ids.THERMAL_CONTROL_ASSEMBLIES, 25.0),
+                (ids.RADIATION_SHIELDING_PANELS, 25.0),
+                (ids.OPTICAL_INSTRUMENT_PACKAGES, 12.0),
                 (ids.WATER, 140.0), (ids.FOOD, 60.0),
                 (ids.OXYGEN, 70.0), (ids.HYDROGEN, 60.0),
             )
@@ -1795,7 +1802,8 @@ def test_reclaimed_water_food_habitation_links_processes_population_construction
         inventory_stock=common.inventory_stock + tuple(
             ScenarioInventoryStock(ids.LEO, resource, 80.0)
             for resource in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY,
-                             ids.PRECISION_ELECTRONICS)
+                             ids.PRECISION_ELECTRONICS, ids.RADIATION_SHIELDING_PANELS,
+                             ids.THERMAL_CONTROL_ASSEMBLIES)
         ),
     ))
     before = construction.query(GetOperationalNode(str(ids.LEO))).population.housing_physical
@@ -1854,3 +1862,105 @@ def test_reclaimed_water_food_habitation_links_processes_population_construction
     assert passengers.delivered_count == 2
     assert modern._simulation.population.count_at(ids.LEO) == before_population + 2
     assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0
+
+
+def test_functional_materials_from_industrial_process_to_advanced_assets_and_fleet(tmp_path):
+    """Functional hardware is built, transported, and consumed as actual stock.
+
+    Heat rejection, radiation attenuation and optical alignment each need a
+    different physical production line. Their products compete with vehicle
+    manufacture, reactors, medical facilities and research trials rather than
+    appearing when a Technology is completed.
+    """
+    from space_idle import GetBuildOptions, GetFleet, GetFlowReport, PlanBuild, ProduceVehicle
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.scenario import ScenarioFacility, ScenarioInventoryStock
+
+    base = build_standard_scenario_definition()
+    required = {
+        ids.research_id(code) for code in (
+            "TH-THERMAL-TRANSPORT-03", "HB-HABITATION-PROTECTION-04",
+            "CO-OPTICAL-COMMUNICATIONS-01", "LS-ATMOSPHERE-WATER-WASTE-13",
+            "HB-HABITATION-PROTECTION-06", "NT-NUCLEAR-THERMAL-07",
+            "LS-ATMOSPHERE-WATER-WASTE-05", "FP-REACTOR-POWER-04",
+        )
+    }
+    research = build_research_definitions()
+    frontier = list(required)
+    while frontier:
+        unseen = research[frontier.pop()].prerequisites - required
+        required.update(unseen)
+        frontier.extend(unseen)
+
+    lines = (
+        (ids.THERMAL_HARDWARE_ASSEMBLY, ids.THERMAL_CONTROL_ASSEMBLIES,
+         ids.PROCESS_THERMAL_HARDWARE_ASSEMBLY),
+        (ids.SHIELDING_PANEL_FABRICATION, ids.RADIATION_SHIELDING_PANELS,
+         ids.PROCESS_SHIELDING_PANEL_FABRICATION),
+        (ids.OPTICAL_INSTRUMENT_INTEGRATION, ids.OPTICAL_INSTRUMENT_PACKAGES,
+         ids.PROCESS_OPTICAL_INSTRUMENT_INTEGRATION),
+    )
+    locked = build_game_application_for_scenario(base)
+    options = {row.facility_definition_id: row for row in
+               locked.query(GetBuildOptions(str(ids.EARTH))).items}
+    for facility_id, _, _ in lines:
+        assert any(blocker.kind == 'technology' for blocker in options[str(facility_id)].blockers)
+
+    scenario = replace(
+        base,
+        completed_technologies=tuple(sorted(required)),
+        inventory_stock=base.inventory_stock + (
+            ScenarioInventoryStock(ids.EARTH, ids.METAL_FEEDSTOCK, 180.0),
+            ScenarioInventoryStock(ids.EARTH, ids.MINERAL_FEEDSTOCK, 250.0),
+            ScenarioInventoryStock(ids.EARTH, ids.CERAMICS_GLASS, 160.0),
+            ScenarioInventoryStock(ids.EARTH, ids.BULK_STRUCTURE, 120.0),
+            ScenarioInventoryStock(ids.EARTH, ids.PRECISION_COMPONENTS, 160.0),
+        ),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    for facility_id, _, _ in lines:
+        assert app.execute(PlanBuild(str(ids.EARTH), str(facility_id),
+                                     procurement_policy='immediate')).created_id
+    assert not any(f.definition_id in {item[0] for item in lines}
+                   for f in sim.facilities.all_at(ids.EARTH))
+    app.execute(AdvanceTime(110))
+    surface = app.query(GetOperationalNode(str(ids.EARTH)))
+    for facility_id, resource_id, process_id in lines:
+        assert any(row.facility_definition_id == str(facility_id)
+                   for row in surface.industry)
+        industry = next(row for row in surface.industry
+                        if row.facility_definition_id == str(facility_id))
+        assert any(option.process_id == str(process_id) for option in industry.process_options)
+        assert sim.inventory.amount(ids.EARTH, resource_id) > 0.0
+
+    # Actual resource consumption for a habitat and a reactor instrument, not
+    # just extra labels or an unlock in the static dependency graph.
+    before = {material: sim.inventory.amount(ids.EARTH, material)
+              for _, material, _ in lines}
+    project = app.execute(PlanBuild(str(ids.EARTH), str(ids.CLOSED_CYCLE_HABITAT),
+                                    procurement_policy='immediate'))
+    assert project.created_id
+    production = app.execute(ProduceVehicle(str(ids.NUCLEAR_THERMAL_CREW_SHIP),
+                                            str(ids.EARTH)))
+    assert production.created_id
+    app.execute(AdvanceTime(110))
+    assert any(f.definition_id == ids.CLOSED_CYCLE_HABITAT
+               for f in sim.facilities.all_at(ids.EARTH))
+    assert next(row for row in app.query(GetFleet(str(ids.EARTH))).pools
+                if row.vehicle_definition_id == str(ids.NUCLEAR_THERMAL_CREW_SHIP)).total_units >= 1
+    # Later raw-material exhaustion may stop some lines: never assert that
+    # finite feedstock gives perpetual output. Real construction and finished
+    # fleet prove that the produced hardware was consumed by both domains.
+    assert all(sim.inventory.amount(ids.EARTH, resource) >= 0.0
+               for resource in before)
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    path = tmp_path / 'functional-manufactured-hardware.json'
+    save_game(app, path, saved_at=now)
+    loaded, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    app.execute(AdvanceTime(3))
+    loaded.execute(AdvanceTime(3))
+    assert capture_state(loaded._simulation) == capture_state(sim)

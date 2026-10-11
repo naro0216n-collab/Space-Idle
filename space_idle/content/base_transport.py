@@ -473,8 +473,9 @@ def build_vehicle_definitions() -> dict:
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=16.0,
-                resources=((ids.STRUCTURAL_COMPONENTS, 13.0),
-                           (ids.MACHINERY, 5.5), (ids.PRECISION_ELECTRONICS, 8.0)),
+                resources=((ids.STRUCTURAL_COMPONENTS, 13),
+                           (ids.PRECISION_ELECTRONICS, 8),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 1.6)),
                 prerequisite_technologies=frozenset({
                     ids.research_id("EP-PLASMA-THRUSTERS-06"),
                     ids.research_id("GN-NAVIGATION-06"),
@@ -483,7 +484,8 @@ def build_vehicle_definitions() -> dict:
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=8.0,
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 6.5),
-                                             (ids.MACHINERY, 2.75), (ids.PRECISION_ELECTRONICS, 4.0)),
+                           (ids.PRECISION_ELECTRONICS, 4),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 0.8)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=6.0),
         ),
@@ -503,8 +505,9 @@ def build_vehicle_definitions() -> dict:
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=12.0,
-                resources=((ids.STRUCTURAL_COMPONENTS, 6.0),
-                           (ids.MACHINERY, 3.0), (ids.PRECISION_ELECTRONICS, 6.0)),
+                resources=((ids.STRUCTURAL_COMPONENTS, 6),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 0.6),
+                           (ids.OPTICAL_INSTRUMENT_PACKAGES, 0.75)),
                 prerequisite_technologies=frozenset({
                     ids.research_id("EP-PLASMA-THRUSTERS-04"),
                     ids.research_id("EP-PLASMA-THRUSTERS-07"),
@@ -513,8 +516,9 @@ def build_vehicle_definitions() -> dict:
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=5.0,
-                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0),
-                                             (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 3.0)),
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 0.3),
+                           (ids.OPTICAL_INSTRUMENT_PACKAGES, 0.375)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=4.0),
         ),
@@ -538,8 +542,9 @@ def build_vehicle_definitions() -> dict:
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=26.0,
-                resources=((ids.STRUCTURAL_COMPONENTS, 23.0),
-                           (ids.MACHINERY, 13.0), (ids.PRECISION_ELECTRONICS, 8.0)),
+                resources=((ids.STRUCTURAL_COMPONENTS, 23),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 3),
+                           (ids.RADIATION_SHIELDING_PANELS, 2)),
                 prerequisite_technologies=frozenset({
                     ids.research_id("NT-NUCLEAR-THERMAL-04"),
                     ids.research_id("FP-REACTOR-POWER-03"),
@@ -549,7 +554,8 @@ def build_vehicle_definitions() -> dict:
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=11.0,
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 11.5),
-                                             (ids.MACHINERY, 6.5), (ids.PRECISION_ELECTRONICS, 4.0)),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 1.5),
+                           (ids.RADIATION_SHIELDING_PANELS, 1)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=9.0),
         ),
@@ -569,8 +575,9 @@ def build_vehicle_definitions() -> dict:
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=38.0,
-                resources=((ids.STRUCTURAL_COMPONENTS, 31.0),
-                           (ids.MACHINERY, 17.0), (ids.PRECISION_ELECTRONICS, 13.0)),
+                resources=((ids.STRUCTURAL_COMPONENTS, 31),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 4),
+                           (ids.RADIATION_SHIELDING_PANELS, 6)),
                 prerequisite_technologies=frozenset({
                     ids.research_id("NT-NUCLEAR-THERMAL-07"),
                     ids.research_id("LS-ATMOSPHERE-WATER-WASTE-05"),
@@ -580,7 +587,8 @@ def build_vehicle_definitions() -> dict:
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=16.0,
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 15.5),
-                                             (ids.MACHINERY, 8.5), (ids.PRECISION_ELECTRONICS, 6.5)),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 2),
+                           (ids.RADIATION_SHIELDING_PANELS, 3)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=12.0),
             passengers=PassengerAccommodation(
@@ -606,14 +614,16 @@ def build_vehicle_definitions() -> dict:
             ),
             production=VehicleProductionSpec(
                 service_type="vehicle_assembly", days=14.0,
-                resources=((ids.STRUCTURAL_COMPONENTS, 7.0), (ids.MACHINERY, 3.0),
-                           (ids.PRECISION_ELECTRONICS, 5.0)),
+                resources=((ids.STRUCTURAL_COMPONENTS, 7),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 0.4),
+                           (ids.OPTICAL_INSTRUMENT_PACKAGES, 1)),
                 prerequisite_technologies=frozenset({ids.research_id("GN-NAVIGATION-06"), ids.research_id("SS-SENSING-01"), ids.research_id("CO-RF-COMMUNICATIONS-04")}),
             ),
             retirement=VehicleRetirementSpec(
                 service_type="vehicle_assembly", work_days_per_unit=5.0,
-                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0),
-                                             (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 2.5)),
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.5),
+                           (ids.THERMAL_CONTROL_ASSEMBLIES, 0.2),
+                           (ids.OPTICAL_INSTRUMENT_PACKAGES, 0.5)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=5.0),
         ),

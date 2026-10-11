@@ -612,7 +612,7 @@ ConstructionRecipe
   prerequisite_technologies
 ```
 
-一般ContentではUI可読性と物流判断を保つため2〜3種類程度の主要Resourceを基準とするが、Generic CoreはResource種類数を固定上限としてValidationしない。追加Resourceが独立した判断を生む場合は明示Requirementとして定義する。
+標準ContentのConstruction / Upgrade / Decommission / Spatial Development各Recipeは、投入Resourceを最大3種類とする。専門装備の構成材は独立Processを通じて製造した中間Resourceに集約する。Generic CoreはResource種類数を固定上限としてValidationせず、Contentの投入種類数はContent契約で検証する。
 
 Construction workはFacility建設・UpgradeだけでなくFacility Decommissionにも共通Service Capacity / Project schedulingを利用できる。ただしFacility lifecycle transition自体はFacility Domainが所有する。Decommission recipeは必要work、補助Resource、salvage definitionをContentとして定義できる。抽象ComponentへLocalSubstitutionTierをぶら下げる方式は採用しない。
 
@@ -662,7 +662,7 @@ NonSurfaceOperationalNodeTargetSpec
   spatial_context_id
 ```
 
-Founding前のtargetはphysical Movement endpointにはなれてもInventory / Logistics Nodeではない。Deployment Recipeはstaging側で実際に準備するResource、Fleet、workと、到着後に生成するOperational Node、Facility、Inventory等の対応を明示する。dispatch時にsource側Stateからone-shot Movement payload / commitmentへ移し、成功時だけtarget Stateへ一度settleする。Definitionだけを理由にResource、Fleet、Facilityを追加生成しない。dispatch前の取消は取得済みReservation / Fleet Commitmentを通常のrelease契約で解放する。dispatch後はpayloadやFleetを消去せず、Movement Executionが定義するreturn / recovery / failure dispositionを完了させてsettleする。
+Founding前のtargetはphysical Movement endpointにはなれてもInventory / Logistics Nodeではない。標準ContentのDeployment Recipeは、Facility投資と初期配置Inventoryを合わせたstaging側の要求Resource種類数を最大3種類とする。Deployment Recipeはstaging側で実際に準備するResource、Fleet、workと、到着後に生成するOperational Node、Facility、Inventory等の対応を明示する。dispatch時にsource側Stateからone-shot Movement payload / commitmentへ移し、成功時だけtarget Stateへ一度settleする。Definitionだけを理由にResource、Fleet、Facilityを追加生成しない。dispatch前の取消は取得済みReservation / Fleet Commitmentを通常のrelease契約で解放する。dispatch後はpayloadやFleetを消去せず、Movement Executionが定義するreturn / recovery / failure dispositionを完了させてsettleする。
 
 Surface Location Foundingは追加でKnowledge Eligibility、target Surface CellのPhysical Environment、Landing / access等を要求できる。Knowledge Requirementはtarget / knowledge subject / minimum levelを明示し、単一の「survey済み」flagや任意Resourceの最大Knowledge値へ縮退させない。
 
@@ -737,7 +737,7 @@ Vehicleは任意Operational NodeでProduction requirementsを満たせば建造�
 
 ### 10.3 Vehicle Production / Retirement / one-shot Movement Execution
 
-Vehicle ProductionはOperational Nodeを実行地点として持ち、必要Resource、Production Capability / Service Capacity、SiteRequirements、時間を満たして進行する。完成時にそのNodeのFleetPoolへunitを追加する。
+Vehicle ProductionはOperational Nodeを実行地点として持ち、必要Resource、Production Capability / Service Capacity、SiteRequirements、時間を満たして進行する。標準Contentの製造Recipeは投入Resourceを最大3種類とし、部品の複雑性は上流の加工Processに集約する。このContent上限をTransport Generic CoreのValidationへ埋め込まない。完成時にそのNodeのFleetPoolへunitを追加する。
 
 Fleet RetirementはTransport / Fleet Domainが所有する永続Intentとする。retirement対象unitは所在Operational Nodeのfree Fleetから排他的にcommitし、所在Nodeで通常のService Capacity / Resource Requirementとして表現されるworkを経て完了時にFleet総数を減らす。不可逆な解体開始前は取消可能、開始後は対象unitを他用途へ解放しない。
 
@@ -1131,7 +1131,7 @@ Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存
 - snapshot後の生成・到着・Commandが同tick過去phaseへ遡及しない。
 - 通常進行 / 高速進行 / Offlineで同じgame timeの結果が一致する。
 - Facility Processは複数候補時にPlayer選択を要求し、登録順で暗黙決定しない。
-- Facility Build / Upgrade Recipeが有限個の明示Resourceを消費し、Resource種類数をGeneric Coreの固定上限にしない。
+- Facility Build / Upgrade Recipeの投入ResourceはContentで最大3種類とし、Generic Coreの固定上限にしない。
 - 維持需要が累積投入Resourceとmaintenance fractionから決定論的に導出される。
 - Extraction responseがCapacityに対して単調非減少・限界収益逓減で、Content固有任意関数へ分岐しない。
 - Surface Infrastructure負荷をOpportunity等へ二重適用せず、core cellへ暗黙fallbackしない。

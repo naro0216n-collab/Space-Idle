@@ -11,6 +11,26 @@ def build_facility_definitions() -> dict:
     surface = req.SURFACE_SITE
     orbit = req.ORBIT_SITE
     definitions = {
+        # Sealed manufacturing interfaces can be installed on any operating
+        # surface or orbital node with real power, stock and maintenance.
+        ids.THERMAL_HARDWARE_ASSEMBLY: FacilityDef(
+            ids.THERMAL_HARDWARE_ASSEMBLY, "ヒートパイプ封止・放熱器組立工場",
+            req._capabilities("heat_pipe_radiator_assembly"),
+            req.SiteRequirements(), req.SiteRequirements(),
+            process_throughput_per_day=1.8,
+        ),
+        ids.SHIELDING_PANEL_FABRICATION: FacilityDef(
+            ids.SHIELDING_PANEL_FABRICATION, "積層鉱物放射線遮蔽パネル工場",
+            req._capabilities("graded_radiation_shielding"),
+            req.SiteRequirements(), req.SiteRequirements(),
+            process_throughput_per_day=2.5,
+        ),
+        ids.OPTICAL_INSTRUMENT_INTEGRATION: FacilityDef(
+            ids.OPTICAL_INSTRUMENT_INTEGRATION, "光学計測器芯出し・組立工場",
+            req._capabilities("precision_optical_alignment"),
+            req.SiteRequirements(), req.SiteRequirements(),
+            process_throughput_per_day=1.3,
+        ),
         ids.ORBITAL_CONSTRUCTION_PLATFORM: FacilityDef(
             ids.ORBITAL_CONSTRUCTION_PLATFORM, "軌道上ロボット施工プラットフォーム",
             req._capabilities("robotic_orbital_construction"), orbit, orbit,

@@ -30,6 +30,34 @@ def build_process_specs() -> dict:
             {ids.VOLATILE_BEARING_MATERIAL: 1.0}, {ids.WATER: 0.58},
             frozenset({ids.research_id("RP-RESOURCE-CHAIN-11")}),
         ),
+        # Equipment assemblies are actual manufactured stocks needed by
+        # downstream research, habitat, power and spacecraft acquisition.
+        # Each line is a separate installed technical capability; research does
+        # not alter existing machinery or silently grant products.
+        ids.PROCESS_THERMAL_HARDWARE_ASSEMBLY: ProcessSpec(
+            ids.PROCESS_THERMAL_HARDWARE_ASSEMBLY, "ヒートパイプ封止・放熱器組立",
+            frozenset({"heat_pipe_radiator_assembly"}),
+            {ids.METAL_FEEDSTOCK: 0.42, ids.PRECISION_COMPONENTS: 0.24,
+             ids.CERAMICS_GLASS: 0.18},
+            {ids.THERMAL_CONTROL_ASSEMBLIES: 0.65},
+            frozenset({ids.research_id("TH-THERMAL-TRANSPORT-03")}),
+        ),
+        ids.PROCESS_SHIELDING_PANEL_FABRICATION: ProcessSpec(
+            ids.PROCESS_SHIELDING_PANEL_FABRICATION, "鉱物積層・二次粒子遮蔽パネル成形",
+            frozenset({"graded_radiation_shielding"}),
+            {ids.MINERAL_FEEDSTOCK: 1.0, ids.CERAMICS_GLASS: 0.35,
+             ids.BULK_STRUCTURE: 0.28},
+            {ids.RADIATION_SHIELDING_PANELS: 1.3},
+            frozenset({ids.research_id("HB-HABITATION-PROTECTION-04")}),
+        ),
+        ids.PROCESS_OPTICAL_INSTRUMENT_INTEGRATION: ProcessSpec(
+            ids.PROCESS_OPTICAL_INSTRUMENT_INTEGRATION, "光学素子精密芯出し・撮像端末実装",
+            frozenset({"precision_optical_alignment"}),
+            {ids.CERAMICS_GLASS: 0.30, ids.PRECISION_COMPONENTS: 0.20,
+             ids.PRECISION_ELECTRONICS: 0.18},
+            {ids.OPTICAL_INSTRUMENT_PACKAGES: 0.50},
+            frozenset({ids.research_id("CO-OPTICAL-COMMUNICATIONS-01")}),
+        ),
         ids.PROCESS_ELECTROLYSIS: ProcessSpec(ids.PROCESS_ELECTROLYSIS, "水電解", frozenset({"industrial_electrolysis"}), {ids.WATER: 0.50}, {ids.OXYGEN: 0.44, ids.HYDROGEN: 0.055}),
         ids.PROCESS_PROPELLANT_BLEND: ProcessSpec(ids.PROCESS_PROPELLANT_BLEND, "化学推進剤調製", frozenset({"propellant_production"}), {ids.OXYGEN: 0.40, ids.HYDROGEN: 0.05}, {ids.PROPELLANT: 0.45}),
         ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", frozenset({"mineral_sintering"}), {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}, frozenset({DefinitionId("MC-MANUFACTURING-CONSTRUCTION-10")})),

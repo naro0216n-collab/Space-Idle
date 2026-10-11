@@ -40,6 +40,60 @@ def test_base_technology_content_preserves_dag_and_stage_independence():
 
 
 
+
+def test_base_content_limits_resource_families_per_recipe():
+    """An acquisition or production decision has at most three material inputs.
+
+    Specialized assemblies carry their own upstream commodity demand rather
+    than causing every late-game asset to need five unrelated cargo families.
+    The limit belongs to authored Content, not to Generic Core's ability to
+    represent arbitrary physical resource requirements.
+    """
+    from space_idle.content.base_construction import (
+        build_facility_decommission_recipes,
+        build_facility_upgrade_recipes,
+        build_spatial_development_recipes,
+    )
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.research_models import ResearchPrototypeStageSpec
+
+    sim = build_game_application()._simulation
+    recipe_inputs = {
+        **{f"process:{key}": set(process.inputs_per_day)
+           for key, process in sim.industry.processes.items()},
+        **{f"construction:{key}": {row.resource_id for row in recipe.resources}
+           for key, recipe in sim.projects.recipes.items()},
+        **{f"upgrade:{key}": {row.resource_id for row in recipe.resources}
+           for key, recipe in build_facility_upgrade_recipes().items()},
+        **{f"decommission:{key}": {row.resource_id for row in recipe.resources}
+           for key, recipe in build_facility_decommission_recipes(sim.facilities.definitions).items()},
+        **{f"development:{key}": {row.resource_id for row in recipe.resources}
+           for key, recipe in build_spatial_development_recipes().items()},
+        **{f"vehicle:{key}": {resource for resource, _ in vehicle.production.resources}
+           for key, vehicle in sim.transport.vehicle_defs.items() if vehicle.production},
+        **{f"founding:{key}": set(recipe.investment_totals()) | set(recipe.initial_inventory_totals())
+           for key, recipe in sim.founding.deployment_recipes.items()},
+        **{f"research:{key}:{stage.stage_id}": set(stage.resources)
+           for key, research in build_research_definitions().items()
+           for stage in research.stage_specs if isinstance(stage, ResearchPrototypeStageSpec)},
+    }
+    assert recipe_inputs
+    assert all(len(resources) <= 3 for resources in recipe_inputs.values()), {
+        name: len(resources) for name, resources in recipe_inputs.items() if len(resources) > 3
+    }
+    for vehicle in sim.transport.vehicle_defs.values():
+        if vehicle.production is None or vehicle.retirement is None:
+            continue
+        invested = dict(vehicle.production.resources)
+        recovered = dict(vehicle.retirement.recovery_resources_per_unit)
+        # Reduced-input manufacturing must not recover equipment that was
+        # never invested in the vehicle or multiply goods on retirement.
+        assert recovered.keys() <= invested.keys()
+        assert all(0 <= amount <= invested[resource] for resource, amount in recovered.items())
+    # Single-feed physical extraction/separation is not padded with fictional inputs.
+    assert any(len(process.inputs_per_day) == 1 for process in sim.industry.processes.values())
+
+
 def test_base_resource_methods_connect_surveyed_geology_to_processing_and_construction():
     """Check playable content connectivity without preserving old IDs or balance values."""
     app = build_game_application()
@@ -309,8 +363,14 @@ def test_surface_mobility_assets_have_real_service_and_exclusive_survey_fleet():
     from space_idle.content.base_scenario import build_standard_scenario_definition
 
     scenario = build_standard_scenario_definition()
+    # These test sites stand in for a supplied industrial base; the integrated
+    # manufacturing path for this input is tested with actual operating mills.
+    from space_idle.scenario import ScenarioInventoryStock
     app = build_game_application_for_scenario(replace(
         scenario, completed_technologies=tuple(build_research_definitions()),
+        inventory_stock=scenario.inventory_stock + (
+            ScenarioInventoryStock(ids.EARTH, ids.OPTICAL_INSTRUMENT_PACKAGES, 4.0),
+        ),
     ))
     sim = app._simulation
     assert app.execute(PlanBuild(str(ids.EARTH), str(ids.SURFACE_ROVER_SERVICE_DEPOT))).created_id
@@ -489,14 +549,16 @@ def test_materials_thermal_and_biomedical_science_capital_creates_distinct_physi
         ScenarioFacility(ids.MACHINE_SHOP, ids.EARTH,
                          invested_resources=((ids.STRUCTURAL_COMPONENTS, 9.0), (ids.MACHINERY, 9.0))),
         ScenarioFacility(ids.CLOSED_CYCLE_HABITAT, ids.EARTH,
-                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 17.0), (ids.MACHINERY, 12.0),
-                                             (ids.PRECISION_ELECTRONICS, 8.0))),
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 17.0),
+                                             (ids.RADIATION_SHIELDING_PANELS, 4.0),
+                                             (ids.THERMAL_CONTROL_ASSEMBLIES, 1.0))),
         ScenarioFacility(ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.LEO,
                          invested_resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 3.0),
                                              (ids.PRECISION_ELECTRONICS, 1.5))),
         ScenarioFacility(ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER, ids.LEO,
-                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 12.0), (ids.MACHINERY, 12.0),
-                                             (ids.PRECISION_ELECTRONICS, 4.0))),
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 9.0),
+                                             (ids.THERMAL_CONTROL_ASSEMBLIES, 2.0),
+                                             (ids.RADIATION_SHIELDING_PANELS, 3.0))),
     )
     stocks = tuple(
         ScenarioInventoryStock(node_id, resource_id, 250.0)
@@ -510,6 +572,10 @@ def test_materials_thermal_and_biomedical_science_capital_creates_distinct_physi
         inventory_stock=setup.inventory_stock + stocks + (
             ScenarioInventoryStock(ids.EARTH, ids.CERAMICS_GLASS, 10.0),
             ScenarioInventoryStock(ids.EARTH, ids.PRECISION_COMPONENTS, 10.0),
+            ScenarioInventoryStock(ids.EARTH, ids.RADIATION_SHIELDING_PANELS, 15.0),
+            ScenarioInventoryStock(ids.EARTH, ids.OPTICAL_INSTRUMENT_PACKAGES, 6.0),
+            ScenarioInventoryStock(ids.LEO, ids.THERMAL_CONTROL_ASSEMBLIES, 9.0),
+            ScenarioInventoryStock(ids.LEO, ids.OPTICAL_INSTRUMENT_PACKAGES, 3.0),
         ),
     )
     app = build_game_application_for_scenario(scenario)
