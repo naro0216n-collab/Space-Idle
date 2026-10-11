@@ -1621,3 +1621,236 @@ def test_interplanetary_supply_and_science_use_one_physical_portfolio(tmp_path):
     assert completed.crew_in_transit == 0
     assert restored._simulation.transport.fleet_free_units(
         ids.NUCLEAR_THERMAL_CREW_SHIP, ids.LEO) == 1
+
+
+def test_reclaimed_water_food_habitation_links_processes_population_construction_research_and_transport(tmp_path):
+    """One resource loop is owned by Industry, Inventory, Population and Projects.
+
+    A lower-net-water habitat and a recirculating farm are paid-for installed
+    alternatives, not effects unlocked globally by Technology. On-site recovery
+    competes for actual volatile feed, Power, construction material and storage.
+    """
+    from space_idle import (
+        GetBuildOptions, GetResearch, PlanBuild, SetTargetStock,
+        CreateTransportAllocation, GetTransportAllocationOptions, GetProjects,
+        GetPassengerTransferPreview, RequestPassengerTransfer, GetPassengerTransfers,
+        PauseFacility, StartResearch, SetResearchPrototypeSite,
+    )
+    from space_idle.analysis_execution import observe_canonical_day
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.research import ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec, ResearchTheoryStageSpec
+    from space_idle.scenario import ScenarioPopulation
+
+    research = build_research_definitions()
+    target_research = {
+        ids.research_id(code) for code in (
+            "RP-RESOURCE-CHAIN-11", "TH-THERMAL-TRANSPORT-08",
+            "PL-PLANT-FOOD-07", "LS-ATMOSPHERE-WATER-WASTE-14",
+            "LS-ATMOSPHERE-WATER-WASTE-13", "HB-HABITATION-PROTECTION-06",
+        )
+    }
+    technologies = set(target_research)
+    pending = list(target_research)
+    while pending:
+        for predecessor in research[pending.pop()].prerequisites - technologies:
+            technologies.add(predecessor)
+            pending.append(predecessor)
+    for technology, stage_kind in (
+        ("RP-RESOURCE-CHAIN-11", ResearchPrototypeStageSpec),
+        ("PL-PLANT-FOOD-07", ResearchPrototypeStageSpec),
+        ("LS-ATMOSPHERE-WATER-WASTE-13", ResearchDemonstrationStageSpec),
+    ):
+        assert any(isinstance(stage, stage_kind)
+                   for stage in research[ids.research_id(technology)].stage_specs)
+
+    locked = build_game_application_for_scenario(build_standard_scenario_definition())
+    options = {row.facility_definition_id: row
+               for row in locked.query(GetBuildOptions(str(ids.LEO))).items}
+    for facility_id in (ids.CLOSED_CYCLE_HABITAT, ids.BIOREGENERATIVE_GROWTH_MODULE,
+                        ids.VOLATILE_FRACTIONATION_PLANT):
+        option = options[str(facility_id)]
+        assert option.resources and option.construction_required > 0
+        assert option.power_nominal_load_mw > 0
+        assert any(b.kind == "technology" for b in option.blockers)
+        assert option.maintenance_rates_per_day
+    habitat = options[str(ids.CLOSED_CYCLE_HABITAT)]
+    assert habitat.housing_capacity > 0
+    assert habitat.life_support_person_days_per_day >= habitat.housing_capacity
+    assert dict(habitat.life_support_net_resources_per_person_day)[str(ids.WATER)] < dict(
+        locked._simulation.facilities.definitions[ids.HABITAT].life_support.net_resources
+    )[ids.WATER]
+    unlocked_methods = {(method.kind, method.id)
+                        for row in locked.query(GetResearch()).items for method in row.unlocks}
+    assert ("process", str(ids.PROCESS_WATER_EFFICIENT_CULTIVATION)) in unlocked_methods
+    assert ("process", str(ids.PROCESS_VOLATILE_FRACTIONATION)) in unlocked_methods
+
+    # Before the new method can be selected, the research Stage must consume
+    # resources and require a genuinely installed cultivation capability.
+    target_id = ids.research_id("PL-PLANT-FOOD-07")
+    def small_theory(sim, _catalog):
+        technology = sim.research.definitions[target_id]
+        sim.research.definitions[target_id] = replace(
+            technology,
+            stage_specs=(ResearchTheoryStageSpec("theory", 0.5),) + technology.stage_specs[1:],
+        )
+    trial = build_game_application_for_scenario(
+        replace(build_standard_scenario_definition(),
+                completed_technologies=tuple(sorted(technologies - target_research))),
+        definition_transform=small_theory,
+    )
+    trial._simulation.research.stored_points = 2
+    trial.execute(StartResearch(str(target_id)))
+    trial.execute(AdvanceTime(1))
+    stage = next(row for row in trial.query(GetResearch()).items if row.id == str(target_id))
+    assert stage.current_stage_id == "recirculating-nutrient-loop-trial"
+    trial.execute(SetResearchPrototypeSite(
+        str(target_id), "recirculating-nutrient-loop-trial", str(ids.EARTH),
+    ))
+    trial.execute(AdvanceTime(1))
+    assert trial._simulation.research.prototype_reserved_t(
+        target_id, "recirculating-nutrient-loop-trial", ids.EARTH, ids.WATER,
+    ) > 0
+
+    base = build_standard_scenario_definition()
+    common = replace(
+        base,
+        completed_technologies=tuple(sorted(technologies)),
+        initial_population=base.initial_population + (ScenarioPopulation(ids.LEO, 12),),
+        facilities=base.facilities + (
+            ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
+        ),
+        inventory_stock=base.inventory_stock + (
+            ScenarioInventoryStock(ids.LEO, ids.WATER, 40.0),
+            ScenarioInventoryStock(ids.LEO, ids.FOOD, 15.0),
+            ScenarioInventoryStock(ids.LEO, ids.OXYGEN, 30.0),
+            ScenarioInventoryStock(ids.EARTH, ids.VOLATILE_BEARING_MATERIAL, 45.0),
+        ),
+    )
+    old = build_game_application_for_scenario(replace(common,
+        facilities=common.facilities + (
+            ScenarioFacility(ids.ORBITAL_HABITAT, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_HYDROPONICS, ids.LEO),
+            ScenarioFacility(ids.VOLATILE_PROCESSING, ids.EARTH),
+        ),
+    ))
+    modern = build_game_application_for_scenario(replace(common,
+        facilities=common.facilities + (
+            ScenarioFacility(ids.CLOSED_CYCLE_HABITAT, ids.LEO),
+            ScenarioFacility(ids.BIOREGENERATIVE_GROWTH_MODULE, ids.LEO),
+            ScenarioFacility(ids.VOLATILE_FRACTIONATION_PLANT, ids.EARTH),
+        ),
+    ))
+    new_farm = next(row for row in modern.query(GetOperationalNode(str(ids.LEO))).industry
+                    if row.facility_definition_id == str(ids.BIOREGENERATIVE_GROWTH_MODULE))
+    assert {row.process_id for row in new_farm.process_options} == {
+        str(ids.PROCESS_FOOD_PRODUCTION), str(ids.PROCESS_WATER_EFFICIENT_CULTIVATION),
+    }
+    assert new_farm.selection_required
+    modern.execute(SetFacilityProcess(
+        new_farm.facility_id, str(ids.PROCESS_WATER_EFFICIENT_CULTIVATION),
+    ))
+    new_separation = next(row for row in modern.query(GetOperationalNode(str(ids.EARTH))).industry
+                          if row.facility_definition_id == str(ids.VOLATILE_FRACTIONATION_PLANT))
+    modern.execute(SetFacilityProcess(
+        new_separation.facility_id, str(ids.PROCESS_VOLATILE_FRACTIONATION),
+    ))
+    assert not any(
+        row.facility_definition_id == str(ids.BIOREGENERATIVE_GROWTH_MODULE)
+        for row in old.query(GetOperationalNode(str(ids.LEO))).industry
+    )
+
+    # Same time and starting inventory, with different *installed* equipment.
+    # Trace causal gross Flow instead of reading net stock delta as consumption.
+    with observe_canonical_day(old._simulation) as prior:
+        old.execute(AdvanceTime(1))
+    with observe_canonical_day(modern._simulation) as improved:
+        modern.execute(AdvanceTime(1))
+
+    def flows(trace, resource, fragment, node):
+        return sum(row.quantity_t for row in trace.activity_flows()
+                   if row.resource_id == str(resource)
+                   and fragment in row.activity_id
+                   and node in (row.source_owner + row.destination_owner))
+
+    prior_life = flows(prior, ids.WATER, 'population_life_support', str(ids.LEO))
+    improved_life = flows(improved, ids.WATER, 'population_life_support', str(ids.LEO))
+    assert 0 < improved_life < prior_life
+    assert modern.query(GetOperationalNode(str(ids.LEO))).population.current_count == 12
+    assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0
+    assert modern._simulation.inventory.amount(ids.EARTH, ids.WATER) > old._simulation.inventory.amount(ids.EARTH, ids.WATER)
+    assert modern._simulation.inventory.amount(ids.EARTH, ids.VOLATILE_BEARING_MATERIAL) < old._simulation.inventory.amount(ids.EARTH, ids.VOLATILE_BEARING_MATERIAL)
+    improved_food = flows(improved, ids.FOOD, 'industry_process', str(ids.LEO))
+    prior_food = flows(prior, ids.FOOD, 'industry_process', str(ids.LEO))
+    assert improved_food > prior_food > 0
+
+    # A true build changes ownership and the life-support supply only upon
+    # completion, with ordinary resource/Power/Construction competition.
+    construction = build_game_application_for_scenario(replace(common,
+        facilities=common.facilities + (
+            ScenarioFacility(ids.ORBITAL_HABITAT, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.LEO),
+        ),
+        inventory_stock=common.inventory_stock + tuple(
+            ScenarioInventoryStock(ids.LEO, resource, 80.0)
+            for resource in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY,
+                             ids.PRECISION_ELECTRONICS)
+        ),
+    ))
+    before = construction.query(GetOperationalNode(str(ids.LEO))).population.housing_physical
+    project_id = construction.execute(PlanBuild(
+        str(ids.LEO), str(ids.CLOSED_CYCLE_HABITAT), procurement_policy="immediate",
+    )).created_id
+    assert project_id
+    assert construction.query(GetOperationalNode(str(ids.LEO))).population.housing_physical == before
+    construction.execute(AdvanceTime(120))
+    assert construction.query(GetOperationalNode(str(ids.LEO))).population.housing_physical > before
+    assert any(row.id == project_id and row.completed_facility_id is not None
+               for row in construction.query(GetProjects()).items)
+
+    # Actual Earth-to-LEO replenishment for the new inhabited industry, using
+    # the existing ascent Fleet and recipient cargo-handling capacity. Process
+    # output is real Inventory at the source, never an automatic shared pool.
+    vehicle = next(row for row in modern.query(GetTransportAllocationOptions(
+        str(ids.EARTH), str(ids.LEO))).options
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE))
+    allocation_id = modern.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        target_forward_t_per_day=vehicle.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    )).created_id
+    assert allocation_id
+    before_leo_water = modern._simulation.inventory.amount(ids.LEO, ids.WATER)
+    before_earth_fuel = modern._simulation.inventory.amount(ids.EARTH, ids.PROPELLANT)
+    assert modern.execute(SetTargetStock(str(ids.LEO), str(ids.WATER), 70.0)).created_id
+    modern.execute(AdvanceTime(35))
+    assert modern._simulation.inventory.amount(ids.LEO, ids.WATER) > before_leo_water
+    assert modern._simulation.inventory.amount(ids.EARTH, ids.PROPELLANT) < before_earth_fuel
+    assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0
+
+    # Housing expansion is an actual destination for people, not just a
+    # catalogue number. The same physical Earth–LEO fleet service moves
+    # passengers, while Food/Water/Oxygen settlement remains at the LEO owner.
+    preview = modern.query(GetPassengerTransferPreview(str(ids.EARTH), str(ids.LEO), 2))
+    assert any(option.dispatchable_people >= 2 for option in preview.options)
+    before_population = modern._simulation.population.count_at(ids.LEO)
+    order_id = modern.execute(RequestPassengerTransfer(
+        str(ids.EARTH), str(ids.LEO), 2,
+    )).created_id
+    assert order_id
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save = tmp_path / "water-recovery-settlement.json"
+    save_game(modern, save, saved_at=now)
+    restored, offline = load_game(save, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(restored._simulation) == capture_state(modern._simulation)
+    modern.execute(AdvanceTime(8))
+    restored.execute(AdvanceTime(8))
+    assert capture_state(restored._simulation) == capture_state(modern._simulation)
+    passengers = next(row for row in modern.query(GetPassengerTransfers()).items
+                      if row.id == order_id)
+    assert passengers.delivered_count == 2
+    assert modern._simulation.population.count_at(ids.LEO) == before_population + 2
+    assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0

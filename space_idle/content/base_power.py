@@ -33,6 +33,11 @@ def build_power_specs() -> dict:
         ids.SURFACE_ROVER_SERVICE_DEPOT: PowerSpec(None, 0.15),
         ids.GENERAL_RESEARCH_LAB: PowerSpec(None, 0.10),
         ids.BREATHABLE_SURFACE_LIFE_SUPPORT: PowerSpec(None, 0.04),
+        # Improved water and oxygen autonomy is purchased with continuous
+        # pumps, environmental control and higher installation investment.
+        ids.BIOREGENERATIVE_GROWTH_MODULE: PowerSpec(None, 1.05, standby_load_mw=0.20),
+        ids.VOLATILE_FRACTIONATION_PLANT: PowerSpec(None, 1.40, standby_load_mw=0.18),
+        ids.CLOSED_CYCLE_HABITAT: PowerSpec(None, 1.15, standby_load_mw=0.42),
         ids.FOOD_FARM: PowerSpec(None, 0.14),
         ids.HABITAT: PowerSpec(None, 0.08),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: PowerSpec(SolarGeneration(0.24 / 0.62, 1361.0), 0.10),

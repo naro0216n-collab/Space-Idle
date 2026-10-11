@@ -134,6 +134,32 @@ def build_construction_recipes() -> dict:
         ids.VEHICLE_ASSEMBLY_FACILITY: req._surface_recipe(
             ids.VEHICLE_ASSEMBLY_FACILITY, 10, 10, 3, 60,
         ),
+        # All three assets share normal Construction and local resource demand.
+        # Expensive thermal/fluid controls compete with transport and Research
+        # hardware for structural, machine and electronics production.
+        ids.VOLATILE_FRACTIONATION_PLANT: ConstructionRecipe(
+            ids.VOLATILE_FRACTIONATION_PLANT,
+            (req._structure_resource(12.0), req._machinery_resource(13.0),
+             req._electronics_resource(4.0)),
+            68.0, req.SiteRequirements(),
+            frozenset({ids.research_id("RP-RESOURCE-CHAIN-11")}),
+        ),
+        ids.BIOREGENERATIVE_GROWTH_MODULE: ConstructionRecipe(
+            ids.BIOREGENERATIVE_GROWTH_MODULE,
+            (req._structure_resource(10.0), req._machinery_resource(9.0),
+             req._electronics_resource(7.0)),
+            56.0, req.SiteRequirements(),
+            frozenset({ids.research_id("PL-PLANT-FOOD-07"),
+                       ids.research_id("LS-ATMOSPHERE-WATER-WASTE-14")}),
+        ),
+        ids.CLOSED_CYCLE_HABITAT: ConstructionRecipe(
+            ids.CLOSED_CYCLE_HABITAT,
+            (req._structure_resource(17.0), req._machinery_resource(12.0),
+             req._electronics_resource(8.0)),
+            82.0, req.SiteRequirements(),
+            frozenset({ids.research_id("LS-ATMOSPHERE-WATER-WASTE-13"),
+                       ids.research_id("HB-HABITATION-PROTECTION-06")}),
+        ),
         ids.FOOD_FARM: req._surface_recipe(ids.FOOD_FARM, 6, 4, 2, 28),
         ids.HABITAT: ConstructionRecipe(
             ids.HABITAT,

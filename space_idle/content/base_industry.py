@@ -11,6 +11,25 @@ def build_process_specs() -> dict:
             ids.PROCESS_FOOD_PRODUCTION, '食料水耕生産', frozenset({"food_hydroponics"}),
             {ids.WATER: 0.18}, {ids.FOOD: 0.36},
         ),
+        # Physically closed irrigation and nutrient recapture require a newly
+        # installed recirculation interface. Existing farms do not gain better
+        # yields when Technology is completed.
+        ids.PROCESS_WATER_EFFICIENT_CULTIVATION: ProcessSpec(
+            ids.PROCESS_WATER_EFFICIENT_CULTIVATION, "循環養液制御による閉鎖栽培",
+            frozenset({"recirculating_hydroponics"}),
+            {ids.WATER: 0.12}, {ids.FOOD: 0.36},
+            frozenset({ids.research_id("PL-PLANT-FOOD-07"),
+                       ids.research_id("LS-ATMOSPHERE-WATER-WASTE-14")}),
+        ),
+        # Liquid water is physically separated from the collected volatile
+        # feed. This is a different installed column/condensation interface,
+        # not an arbitrary Technology buff of an existing still.
+        ids.PROCESS_VOLATILE_FRACTIONATION: ProcessSpec(
+            ids.PROCESS_VOLATILE_FRACTIONATION, "揮発性原料の多段分留・凝縮",
+            frozenset({"multistage_volatile_fractionation"}),
+            {ids.VOLATILE_BEARING_MATERIAL: 1.0}, {ids.WATER: 0.58},
+            frozenset({ids.research_id("RP-RESOURCE-CHAIN-11")}),
+        ),
         ids.PROCESS_ELECTROLYSIS: ProcessSpec(ids.PROCESS_ELECTROLYSIS, "水電解", frozenset({"industrial_electrolysis"}), {ids.WATER: 0.50}, {ids.OXYGEN: 0.44, ids.HYDROGEN: 0.055}),
         ids.PROCESS_PROPELLANT_BLEND: ProcessSpec(ids.PROCESS_PROPELLANT_BLEND, "化学推進剤調製", frozenset({"propellant_production"}), {ids.OXYGEN: 0.40, ids.HYDROGEN: 0.05}, {ids.PROPELLANT: 0.45}),
         ids.PROCESS_MINERAL_SINTER: ProcessSpec(ids.PROCESS_MINERAL_SINTER, "鉱物原料焼結", frozenset({"mineral_sintering"}), {ids.MINERAL_FEEDSTOCK: 1.0}, {ids.CERAMICS_GLASS: 0.8}, frozenset({DefinitionId("MC-MANUFACTURING-CONSTRUCTION-10")})),

@@ -40,6 +40,9 @@ class SurfaceFacilityPlacementOption:
     process_nominal_throughput_per_day: float | None = None
     extraction_nominal_capacity_t_per_day: float | None = None
     maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
+    housing_capacity: int = 0
+    life_support_person_days_per_day: float = 0.0
+    life_support_net_resources_per_person_day: tuple[tuple[str, float], ...] = ()
     research_capacity: BuildResearchCapacityRow | None = None
     survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
 

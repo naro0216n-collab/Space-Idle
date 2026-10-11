@@ -148,6 +148,49 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
                 required_work=6.0,
             ),
         ),
+        # Experimental recovery of volatile fractions uses an actual heated
+        # processor and finite process water/parts before a multistage separator
+        # can be acquired; it is not a free yield change to existing equipment.
+        ids.research_id("RP-RESOURCE-CHAIN-11"): (
+            ResearchPrototypeStageSpec(
+                "volatile-condensation-process-trial",
+                {ids.VOLATILE_BEARING_MATERIAL: 0.65,
+                 ids.MACHINERY: 0.14},
+                req.with_capabilities(req.SiteRequirements(), "volatile_processing"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=5.0,
+            ),
+        ),
+        # Plant water recapture needs an operating cultivation module and a
+        # finite feed-water/measurement trial. Post-research physical modules
+        # must still be constructed: an old farm gains no new process interface.
+        ids.research_id("PL-PLANT-FOOD-07"): (
+            ResearchPrototypeStageSpec(
+                "recirculating-nutrient-loop-trial",
+                {ids.WATER: 0.70, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SiteRequirements(), "food_hydroponics"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
+            ),
+        ),
+        # Occupied pressure compartments and real life-support systems are
+        # needed to validate long-duration low-net-water habitation.
+        ids.research_id("LS-ATMOSPHERE-WATER-WASTE-13"): (
+            ResearchDemonstrationStageSpec(
+                "pressurized-life-support-recovery-trial", 8.0,
+                req.with_capabilities(req.SiteRequirements(), "pressurized_habitation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
         ids.RP_RESOURCE_CHAIN_13: (
             ResearchPrototypeStageSpec(
                 "oxide-reduction-prototype",

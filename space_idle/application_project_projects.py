@@ -688,6 +688,16 @@ class ProjectProjectorMixin:
                 (str(resource_id), rate)
                 for resource_id, rate in sorted(upkeep.items(), key=lambda item: str(item[0]))
             ),
+            housing_capacity=definition.housing_capacity,
+            life_support_person_days_per_day=(
+                definition.life_support.person_days_per_day
+                if definition.life_support is not None else 0.0
+            ),
+            life_support_net_resources_per_person_day=(
+                tuple((str(resource), rate)
+                      for resource, rate in definition.life_support.net_resources)
+                if definition.life_support is not None else ()
+            ),
             research_capacity=research_capacity,
             survey_providers=survey_providers,
         )

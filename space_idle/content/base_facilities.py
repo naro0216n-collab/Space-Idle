@@ -217,6 +217,31 @@ def build_facility_definitions() -> dict:
         ids.BASIC_STRUCTURAL_MATERIAL_PLANT: FacilityDef(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, "基礎構造材工場", req._capabilities("basic_structural_material"), surface, surface, 0.09),
         ids.BASIC_MACHINERY_WORKS: FacilityDef(ids.BASIC_MACHINERY_WORKS, "基礎機械製作所", req._capabilities("basic_machinery_production"), surface, surface, 0.09),
     }
+    # The physical recirculation hardware is installed after its Research and
+    # construction investment. These modules can be transported as real cargo
+    # to any operational site with enough Power and maintenance, rather than
+    # being licensed by a planet name or a scenario-only subsidy.
+    definitions[ids.BIOREGENERATIVE_GROWTH_MODULE] = FacilityDef(
+        ids.BIOREGENERATIVE_GROWTH_MODULE, "再生養液・閉鎖環境栽培モジュール",
+        req._capabilities("food_hydroponics", "recirculating_hydroponics"),
+        process_throughput_per_day=1.8, maintenance_fraction_per_year=0.075,
+    )
+    definitions[ids.VOLATILE_FRACTIONATION_PLANT] = FacilityDef(
+        ids.VOLATILE_FRACTIONATION_PLANT, "多段揮発成分分留・凝縮装置",
+        req._capabilities("volatile_processing", "multistage_volatile_fractionation"),
+        process_throughput_per_day=2.2, maintenance_fraction_per_year=0.075,
+    )
+    # Distinct installed pressure/atmosphere and water-reclamation hardware.
+    # Lower *net* demand reflects internal closed-cycle recovery, not a new
+    # Resource source or a free technological change to existing habitats.
+    definitions[ids.CLOSED_CYCLE_HABITAT] = FacilityDef(
+        ids.CLOSED_CYCLE_HABITAT, "閉鎖水循環・大気再生居住区",
+        req._capabilities("pressurized_habitation", "closed_cycle_life_support"),
+        housing_capacity=48, maintenance_fraction_per_year=0.085,
+        life_support=LifeSupportSpec(48, ((ids.FOOD, 0.001),
+                                        (ids.WATER, 0.00040),
+                                        (ids.OXYGEN, 0.0014))),
+    )
     definitions[ids.FOOD_FARM] = FacilityDef(
         ids.FOOD_FARM, '閉鎖式食料栽培設備', req._capabilities('food_hydroponics'), installation_requirements=surface, operating_requirements=surface,
     )

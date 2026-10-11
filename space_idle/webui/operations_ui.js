@@ -919,13 +919,15 @@
       const missing=option.missing_technology_ids||[];
       return `<div class="detail-card"><div class="mode-title"><span>生産工程</span><strong>${esc(option.display_name)}</strong>${missing.length?'<span class="badge warn">研究条件不足</span>':''}</div><div class="cell-sub">公称投入: ${esc(inputs)}</div><div class="cell-sub">公称産出: ${esc(outputs)}</div>${missing.length?`<div class="cell-sub">工程の解禁研究: ${esc(missing.map(definitionName).join(' / '))}</div>`:''}</div>`;
     }).join('');
+    const habitation=(Number(o.housing_capacity)>0||Number(o.life_support_person_days_per_day)>0)?
+      `<div class="detail-card"><div class="mode-title"><span>居住・生命維持</span><strong>${fmt(o.housing_capacity||0,0)}人用Housing</strong></div><div class="cell-sub">生命維持公称能力 ${fmt(o.life_support_person_days_per_day||0,1)} 人日/日</div>${(o.life_support_net_resources_per_person_day||[]).map(([resource,rate])=>`<div class="cell-sub">正味生活消費: ${esc(resourceName(resource))} ${fmt(rate,5)} t/人日</div>`).join('')}<div class="cell-sub">実際の受入可能人数・Resource消費は所在拠点の居住者数、Power、Maintenance、他活動との配分で決まります。</div></div>`:'';
     const research=o.research_capacity;
     const researchCapacity=research?`<div class="detail-card"><div class="mode-title"><span>研究能力</span><strong>Tier ${fmt(research.provider_tier,0)}</strong></div><div class="cell-sub">公称RP生成 ${fmt(research.generation_points_per_day,2)} RP/日 · 貯蔵 ${fmt(research.storage_capacity_points,1)} RP</div><div class="cell-sub">研究実行 ${fmt(research.execution_work_per_day,2)} work/日${research.crew_person_days_per_research_point>0?` · Crew ${fmt(research.crew_person_days_per_research_point,3)} 人日/RP`:''}</div></div>`:'';
     const surveyCards=(o.survey_providers||[]).map((provider)=>{
       const modes=(provider.observation_modes||[]).map((mode)=>`<div class="cell-sub">${esc(mode.display_name)} · 観測進捗 ${fmt(mode.survey_rate,2)}/能力単位 · 到達Knowledge Lv ${fmt(mode.max_knowledge_level,0)}</div>`).join('');
       return `<div class="detail-card"><div class="mode-title"><span>資源調査・観測能力</span><strong>${fmt(provider.capacity_units_per_source_per_day,2)} 能力単位/日</strong></div>${modes}</div>`;
     }).join('');
-    const enables=capabilityCards+serviceCards+processCards+researchCapacity+surveyCards||'<div class="empty-state">追加される能力情報なし</div>';
+    const enables=capabilityCards+serviceCards+processCards+researchCapacity+surveyCards+habitation||'<div class="empty-state">追加される能力情報なし</div>';
     return section('設備の機能・工程候補',enables+
       (o.process_options?.length?'<div class="cell-sub">工程値は公称量です。実際の投入・産出はResource、Power、保守、Storage等の充足に依存します。</div>':'')+
       (o.extraction_nominal_capacity_t_per_day!=null?'<div class="cell-sub">採掘設備能力は上限です。実採掘量は資源ポテンシャル・機会と運用配分に依存します。</div>':'')+

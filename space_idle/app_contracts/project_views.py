@@ -81,6 +81,9 @@ class BuildOptionRow:
     # Recurring material demand at Level 1 from this construction investment;
     # actual allocation remains subject to competing activities.
     maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
+    housing_capacity: int = 0
+    life_support_person_days_per_day: float = 0.0
+    life_support_net_resources_per_person_day: tuple[tuple[str, float], ...] = ()
     research_capacity: BuildResearchCapacityRow | None = None
     survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
 
