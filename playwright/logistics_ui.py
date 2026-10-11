@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetFleet, GetLogistics, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -307,17 +307,31 @@ def run(browser) -> None:
                 timeout=10000,
             )
 
-            # Cargo is not admitted Inventory; inspect the physical leg and final
-            # destination separately when this state contains an in-flight parcel.
+            # Make the previously configured player-owned Transport Allocation
+            # execute one canonical day through the public Application Command.
+            # A conditional cargo assertion was vacuous here: the clock is paused
+            # and no cargo exists until a day actually advances.
+            runtime.execute(AdvanceTime(1))
+            cargo = runtime.query(GetCargoFlows()).data.items
+            assert any(flow.owner_id == project_id and flow.status == 'in_transit' for flow in cargo), (
+                'the real project and UI-created Transport Allocation must dispatch cargo'
+            )
+            with page.expect_response(
+                lambda response: response.request.method == 'GET'
+                and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as cargo_refresh:
+                page.locator('#refreshButton').click()
+            assert cargo_refresh.value.ok
             cargo_card = page.locator('#cargoTable .cargo-flow-card').first
-            if cargo_card.count():
-                assert '最終目的地' in cargo_card.inner_text()
-                assert '次のhandoff' in cargo_card.inner_text()
-                cargo_card.locator('[data-cargo-inspect]').click()
-                cargo_inspector = page.locator('#movementPlanInspectorContent').inner_text()
-                assert all(label in cargo_inspector for label in (
-                    '輸送中のResource', '最終目的地', '次の引継先', '輸送量',
-                ))
+            cargo_card.wait_for(state='visible', timeout=10000)
+            assert '最終目的地' in cargo_card.inner_text()
+            assert '次のhandoff' in cargo_card.inner_text()
+            cargo_card.locator('[data-cargo-inspect]').click()
+            cargo_inspector = page.locator('#movementPlanInspectorContent').inner_text()
+            assert all(label in cargo_inspector for label in (
+                '輸送中のResource', '最終目的地', '次の引継先', '輸送量',
+            ))
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
             page.get_by_role("button", name="追加備蓄を設定").click()
@@ -442,10 +456,10 @@ def run(browser) -> None:
             remote_resource = page.evaluate(
                 '() => window.SpaceIdleApp.state.inspectedNode.inventory?.[0]?.resource_id || null'
             )
-            if remote_resource:
-                page.locator('#systemMapResourceFilter').select_option(remote_resource)
-                assert '現在在庫' in page.locator('#movementPlanInspectorContent').inner_text()
-                assert '現地生産' in page.locator('#movementPlanInspectorContent').inner_text()
+            assert remote_resource, 'inspected remote node must expose a selectable Resource'
+            page.locator('#systemMapResourceFilter').select_option(remote_resource)
+            assert '現在在庫' in page.locator('#movementPlanInspectorContent').inner_text()
+            assert '現地生産' in page.locator('#movementPlanInspectorContent').inner_text()
 
     finally:
         server.shutdown()
