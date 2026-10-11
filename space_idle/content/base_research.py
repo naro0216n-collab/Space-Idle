@@ -67,14 +67,14 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
                 ),),
             ),
         ),
-        # Load-following control needs an existing power unit to demonstrate
-        # the control loop. The later high-output unit is not required to
-        # research the method that unlocks that unit.
+        # Load-following control needs an existing instrumented reactor, not
+        # merely any solar / grid power source. Both surface and orbital
+        # reactors may provide the physical test interface, independent of ID.
         ids.research_id("FP-REACTOR-POWER-04"): (
             ResearchDemonstrationStageSpec(
                 "reactor-load-following-demonstration", 3.0,
                 SiteRequirements(capability_requirements=(CapabilityRequirement(
-                    "industrial_power", CapabilityRequirementState.ACTIVE,
+                    "fission_reactor_control_instrumentation", CapabilityRequirementState.ACTIVE,
                 ),)),
                 (ServiceCapacityRequirement(
                     "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,

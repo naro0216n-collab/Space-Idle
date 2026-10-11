@@ -638,14 +638,16 @@ def test_authored_hardware_research_stages_require_real_site_resources_and_survi
     originals = build_game_application()._simulation.research.definitions
     cases = (
         (DefinitionId("CH-COMBUSTION-06"), ids.PROPULSION_TEST_FACILITY,
-         "restart-propellant-test", ResearchPrototypeStageSpec),
+         "restart-propellant-test", ResearchPrototypeStageSpec, ids.EARTH),
         (DefinitionId("GN-NAVIGATION-06"), ids.DEEP_SPACE_TRACKING_ARRAY,
-         "deep-space-tracking-demonstration", ResearchDemonstrationStageSpec),
+         "deep-space-tracking-demonstration", ResearchDemonstrationStageSpec, ids.EARTH),
         (DefinitionId("FP-REACTOR-POWER-04"), ids.INDUSTRIAL_POWER_BLOCK,
-         "reactor-load-following-demonstration", ResearchDemonstrationStageSpec),
+         "reactor-load-following-demonstration", ResearchDemonstrationStageSpec, ids.EARTH),
+        (DefinitionId("FP-REACTOR-POWER-04"), ids.ORBITAL_FISSION_POWER,
+         "reactor-load-following-demonstration", ResearchDemonstrationStageSpec, ids.LEO),
     )
 
-    for target, required_facility, stage_id, stage_class in cases:
+    for target, required_facility, stage_id, stage_class, site_node in cases:
         definition = originals[target]
         assert len(definition.stage_specs) == 2
         assert isinstance(definition.stage_specs[1], stage_class)
@@ -675,11 +677,34 @@ def test_authored_hardware_research_stages_require_real_site_resources_and_survi
         blocked = _research_row(missing, target)
         assert blocked.current_stage_id == stage_id
         unavailable_site = next(option for option in blocked.execution_context_options
-                                if option.operational_node_id == str(ids.EARTH))
+                                if option.operational_node_id == str(site_node))
         assert any("capability" in blocker.code for blocker in unavailable_site.blockers)
 
+        if required_facility == ids.ORBITAL_FISSION_POWER:
+            # Comparable orbit and positive generation do not establish a
+            # reactor-specific experiment: only the real reactor instrument can.
+            solar_scenario = replace(without, facilities=without.facilities + (
+                ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
+            ))
+            solar = build_game_application_for_scenario(solar_scenario, definition_transform=short_theory)
+            solar._simulation.research.stored_points = 5.0
+            solar.execute(StartResearch(str(target)))
+            solar.execute(AdvanceTime(1))
+            solar_site = next(option for option in _research_row(solar, target).execution_context_options
+                              if option.operational_node_id == str(ids.LEO))
+            # A destination may be selected before the required equipment is
+            # installed; current execution remains blocked, not silently run.
+            assert solar_site.can_select
+            assert any("capability" in blocker.code for blocker in solar_site.blockers)
+            solar.execute(SetResearchDemonstrationSite(str(target), stage_id, str(ids.LEO)))
+            blocked_progress = solar._simulation.research.active[target].stage_progress
+            solar.execute(AdvanceTime(1))
+            assert solar._simulation.research.active[target].stage_progress == blocked_progress
+            assert any("capability" in constraint.code for constraint in
+                       _research_row(solar, target).current_blockers)
+
         equipped = replace(without, facilities=without.facilities + (
-            ScenarioFacility(required_facility, ids.EARTH),
+            ScenarioFacility(required_facility, site_node),
         ))
         app = build_game_application_for_scenario(equipped, definition_transform=short_theory)
         from space_idle.analysis_graph import DependencyNode
@@ -701,25 +726,25 @@ def test_authored_hardware_research_stages_require_real_site_resources_and_survi
         app.execute(AdvanceTime(1))
         row = _research_row(app, target)
         site = next(option for option in row.execution_context_options
-                    if option.operational_node_id == str(ids.EARTH))
+                    if option.operational_node_id == str(site_node))
         assert site.can_select
         if isinstance(definition.stage_specs[1], ResearchPrototypeStageSpec):
-            app.execute(SetResearchPrototypeSite(str(target), stage_id, str(ids.EARTH)))
+            app.execute(SetResearchPrototypeSite(str(target), stage_id, str(site_node)))
         else:
-            app.execute(SetResearchDemonstrationSite(str(target), stage_id, str(ids.EARTH)))
+            app.execute(SetResearchDemonstrationSite(str(target), stage_id, str(site_node)))
         app.execute(AdvanceTime(1))
         assert _research_row(app, target).execution_context is not None
         if isinstance(definition.stage_specs[1], ResearchPrototypeStageSpec):
             stage = definition.stage_specs[1]
             for resource_id, amount in stage.resources.items():
                 assert app._simulation.research.prototype_reserved_t(
-                    target, stage_id, ids.EARTH, resource_id,
+                    target, stage_id, site_node, resource_id,
                 ) == pytest.approx(amount)
 
         # Operating capability is a live site requirement, not a one-time
         # selection gate. Pausing the actual installed Facility must block
         # further Stage work without clearing the player's selected site.
-        equipment = next(row for row in app._simulation.facilities.all_at(ids.EARTH)
+        equipment = next(row for row in app._simulation.facilities.all_at(site_node)
                          if row.definition_id == required_facility)
         app.execute(PauseFacility(str(equipment.id)))
         paused_progress = app._simulation.research.active[target].stage_progress
