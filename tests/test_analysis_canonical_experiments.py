@@ -1020,10 +1020,9 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     assert all(abs(row['unattributed_delta_t']) < 1e-7
                for run in extraction_runs for row in run.flow_reconciliation)
 
-    # An extraction method with no installed-compatible hardware is not an
-    # invalid Content reference. It is an explicit authoring-coverage gap until
-    # appropriate hardware appears; no imaginary provider is added to the game.
-    from space_idle.analysis_coverage import inspect_definition_coverage
+    # An extraction method with no compatible hardware is valid future Content.
+    # Its actual availability belongs to the installed-capacity and Application
+    # contracts; analysis must not invent a provider to fill the gap.
     orphan_id = 'experiment.extraction.future_instrument'
     orphan_edits = changes + (
         {'operation': 'add', 'kind': 'extraction', 'id': orphan_id,
@@ -1034,9 +1033,9 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     orphan_app = factory(scenario, orphan_edits)
     orphan_graph = build_definition_dependency_graph(orphan_app._simulation, orphan_app._catalog)
     assert not orphan_graph.diagnostics
-    assert any(row.code == 'extraction_method_without_registered_compatible_facility'
-               and row.subject.id == orphan_id
-               for row in inspect_definition_coverage(orphan_graph))
+    assert all(DefinitionId(orphan_id) not in {method.id for method in
+               orphan_app._simulation.extraction.compatible_methods(facility_id)}
+               for facility_id in orphan_app._simulation.facilities.definitions)
 
     # Removing a method changes the actual candidates/Definition Graph; nothing
     # rewrites the Scenario or dependent Technology requirements to conceal it.
@@ -1240,14 +1239,10 @@ def test_independent_survey_definition_requires_a_real_compatible_vehicle(tmp_pa
     assert capture_state(loaded._simulation) == capture_state(variant._simulation)
     assert candidate(loaded).committed_units == 1
     # A future provider may be authored before its physical Vehicle exists.
-    # It is diagnosable incomplete Content, not an invalid reference or a free
-    # ghost Fleet. The same Definition becomes usable when its Vehicle is added.
+    # No ghost Fleet is created; adding real hardware supplies the capability.
     unconnected = factory(edits[2:])
-    from space_idle.analysis_coverage import inspect_definition_coverage
     graph = build_definition_dependency_graph(unconnected._simulation, unconnected._catalog)
     assert not graph.diagnostics
-    assert any(row.code == 'provider_without_registered_compatible_asset'
-               and row.subject.id == added_provider for row in inspect_definition_coverage(graph))
     assert unconnected._simulation.survey.compatible_source_definition_ids(
         unconnected._simulation.survey.providers[DefinitionId(added_provider)]) == ()
     assert not any(row.provider_definition_id == added_provider

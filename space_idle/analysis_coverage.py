@@ -177,8 +177,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
             "nominal_resource_construction_supply", "nominal_survey_service_supply",
             "nominal_life_support_supply",
         ),
-        "facility": ("constructs_facility", "deploys_facility"),
-        "vehicle": ("produces_vehicle",),
     }
     requirement_relations = {
         "capability": ("requires_capability", "requires_site_capability"),
@@ -195,7 +193,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     }
     supplied: set[DependencyNode] = set()
     demands: dict[DependencyNode, set[str]] = defaultdict(set)
-    retirement: set[DependencyNode] = set()
     for relation in graph.relations:
         for kind, relation_kinds in supplier_relations.items():
             if relation.kind in relation_kinds and relation.target.kind == kind:
@@ -205,10 +202,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                 evidence = (relation.provenance if kind == "capability"
                             else f"{relation.kind}:{relation.provenance}")
                 demands[relation.source].add(evidence)
-        if relation.kind == "decommissions_facility" and relation.source.kind == "facility":
-            retirement.add(relation.source)
-        if relation.kind == "retires_vehicle" and relation.source.kind == "vehicle":
-            retirement.add(relation.source)
     # Definition acquisition and Research Stage prerequisites are analyzed
     # together below, without a separate capability-only Research solver.
     downstream_technologies: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
@@ -270,35 +263,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
                      f"redundant_ancestor:technology:{ancestor.id}",
                      f"required_descendant:technology:{descendant.id}"),
                 ))
-    # A registered extraction method can be awaiting future hardware. This is
-    # authoring coverage, not an invalid reference or a claim that the Scenario
-    # cannot operate. Physical compatibility comes from the same Graph edges
-    # emitted for normal installed extraction capacity.
-    extractable = {
-        relation.target for relation in graph.relations
-        if relation.kind == "nominal_extraction_capacity"
-        and relation.source.kind == "facility"
-        and relation.target.kind == "extraction_method"
-    }
-    for method in sorted(node for node in graph.nodes if node.kind == "extraction_method"):
-        if method not in extractable:
-            findings.append(DefinitionCoverageFinding(
-                "extraction_method_without_registered_compatible_facility", method,
-                ("scope:registered_physical_interface_only;future_facilities_unknown",),
-            ))
-    for node in sorted(graph.nodes):
-        if node.kind not in ("facility", "vehicle"):
-            continue
-        if node not in supplied:
-            findings.append(DefinitionCoverageFinding(
-                f"{node.kind}_without_registered_acquisition_method", node,
-                (f"{node.kind}:{node.id}:no_registered_production_or_deployment",),
-            ))
-        if node not in retirement:
-            findings.append(DefinitionCoverageFinding(
-                f"{node.kind}_without_registered_retirement_method", node,
-                (f"{node.kind}:{node.id}:no_registered_retirement_or_decommission",),
-            ))
     # An installed asset cannot provide the only service needed to construct
     # its *first* instance through every registered acquisition route.  This
     # check deliberately preserves method OR and requirement AND: one viable
@@ -318,14 +282,6 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
         if (relation.kind == "uses_asset_definition"
                 and relation.source in owned_assets):
             service_asset_sources[relation.target].add(relation.source)
-    for provider in sorted(node for node in graph.nodes
-                           if node.kind in ("research_provider", "survey_provider")):
-        if provider not in service_asset_sources:
-            findings.append(DefinitionCoverageFinding(
-                "provider_without_registered_compatible_asset", provider,
-                ("scope:registered_definition_source_compatibility_only;"
-                 "initial_assets_and_site_conditions_unknown",),
-            ))
     supply_kinds = {
         "supplies_capability", "nominal_service_supply", "nominal_power_supply",
         "nominal_research_execution", "nominal_construction_service_supply",
@@ -347,7 +303,7 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
     for asset in sorted(owned_assets):
         methods = acquisitions.get(asset, set())
         if not methods:
-            continue  # Missing acquisitions are already a separate finding.
+            continue  # Absence alone is an authored catalogue fact, not an acquisition cycle.
         bottlenecks = {}
         for method in methods:
             # Resource-only or self-deploying pathways remain independent of
@@ -435,62 +391,8 @@ def inspect_definition_coverage(graph: DependencyDefinitionGraph) -> tuple[Defin
         graph, owned_assets, acquisitions, physical_suppliers, method_inputs,
         method_techs, downstream_technologies, research_stages,
     ))
-    findings.extend(_inspect_incomplete_method_sources(graph))
     findings.extend(inspect_definition_alternatives(graph))
     return tuple(sorted(findings, key=lambda row: (row.code, row.subject, row.evidence)))
-
-
-def _inspect_incomplete_method_sources(
-    graph: DependencyDefinitionGraph,
-) -> tuple[DefinitionCoverageFinding, ...]:
-    """Check *joint* physical source compatibility, not independent cap edges.
-
-    A definition may reference two individually supplied capabilities without
-    any one asset that provides both. That is a Content coverage gap, not a
-    dangling symbol or evidence that a future asset cannot exist. Extraction
-    method compatibility already has its own installed-capacity diagnostic;
-    do not emit a second finding for the same unavailable physical method.
-    Survey modes must use the sources of their own Provider.
-    """
-    supplies: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
-    required: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
-    sources: dict[DependencyNode, set[DependencyNode]] = defaultdict(set)
-    mode_provider: dict[DependencyNode, DependencyNode] = {}
-    for relation in graph.relations:
-        if (relation.kind == "supplies_capability" and
-                relation.source.kind in ("facility", "vehicle") and
-                relation.target.kind == "capability"):
-            supplies[relation.source].add(relation.target)
-        elif relation.kind == "requires_capability" and relation.source.kind == "capability":
-            required[relation.target].add(relation.source)
-        elif relation.kind == "uses_asset_definition" and relation.source.kind in ("facility", "vehicle"):
-            sources[relation.target].add(relation.source)
-        elif relation.kind == "provides_mode":
-            mode_provider[relation.target] = relation.source
-
-    findings: list[DefinitionCoverageFinding] = []
-    for method in sorted(required):
-        capabilities = required[method]
-        if not capabilities:
-            continue
-        if method.kind == "process":
-            candidates = (asset for asset in supplies if asset.kind == "facility")
-            has_source = any(capabilities <= supplies[asset] for asset in candidates)
-        elif method in mode_provider:
-            candidates = sources.get(mode_provider[method], set())
-            has_source = any(capabilities <= supplies[asset] for asset in candidates)
-        else:
-            continue
-        if has_source:
-            continue
-        findings.append(DefinitionCoverageFinding(
-            "method_without_registered_compatible_asset", method,
-            (
-                "scope:registered_capability_combinations_only;future_asset_and_site_conditions_unknown",
-                *(f"required_capability:{cap.id}" for cap in sorted(capabilities)),
-            ),
-        ))
-    return tuple(findings)
 
 
 def _resource_acquisition_cycles(

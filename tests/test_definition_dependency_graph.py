@@ -189,10 +189,6 @@ def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_
     assert {f.code for f in findings} == {
         "resource_demand_without_registered_replenishment",
         "service_demand_without_registered_capacity_supplier",
-        "facility_without_registered_acquisition_method",
-        "facility_without_registered_retirement_method",
-        "vehicle_without_registered_acquisition_method",
-        "vehicle_without_registered_retirement_method",
     }
     assert all(f.significance == "informational" and f.evidence for f in findings)
     # Any registered supplier is an alternative, not an AND requirement; it
@@ -394,7 +390,6 @@ def test_provider_supplied_services_trace_to_real_assets_in_acquisition_diagnost
     findings = coverage(relations, (facility, provider, execution, method))
     assert any(row.code == "potential_asset_self_bootstrap_dependency"
                and row.subject == facility for row in findings)
-    assert not any(row.code == "provider_without_registered_compatible_asset" for row in findings)
 
     # A different built asset can provide the same service, and the provider's
     # ID never appears in the physical asset ledger as an additional unit.
@@ -407,12 +402,10 @@ def test_provider_supplied_services_trace_to_real_assets_in_acquisition_diagnost
                        facility, alternate, provider, execution, method, alternate_method,
                    )))
 
-    # A typed Provider with no compatible source is a different Content gap;
-    # it does not make fictional capacity available in a Game instance.
+    # A typed Provider without a source cannot create a fictitious independent
+    # construction supply; its absence is an ordinary catalogue fact.
     orphan = coverage(tuple(row for row in relations if row.kind != "uses_asset_definition"),
                       (facility, provider, execution, method))
-    assert any(row.code == "provider_without_registered_compatible_asset"
-               and row.subject == provider for row in orphan)
     assert not any(row.code == "potential_asset_self_bootstrap_dependency" for row in orphan)
 
     life_support = DependencyNode("life_support_method", "test.lab.life_support")
@@ -761,15 +754,11 @@ def test_definition_coverage_distinguishes_missing_supply_from_terminal_technolo
     ), ())
     gaps = inspect_definition_coverage(missing)
     by_code = {row.code: row for row in gaps}
-    assert set(by_code) == {
-        "required_capability_without_definition_supplier",
-        "method_without_registered_compatible_asset",
-    }
+    assert set(by_code) == {"required_capability_without_definition_supplier"}
     assert by_code["required_capability_without_definition_supplier"].evidence == (
         "process:test.process:required_capabilities",
     )
     assert by_code["required_capability_without_definition_supplier"].to_json_data()["subject"]["id"] == "test.unavailable"
-    assert by_code["method_without_registered_compatible_asset"].subject == consumer
 
     connected = DependencyDefinitionGraph((capability, consumer, DependencyNode("facility", "supplier")), (
         *missing.relations,
@@ -1181,7 +1170,7 @@ def test_research_stage_supply_dependencies_preserve_alternative_sources_and_tec
     assert risks(tuple(row for row in base if row.kind != "produces_resource")) == []
 
 
-def test_unconnected_physical_methods_and_providers_are_diagnostic_not_ghost_supply(tmp_path):
+def test_unconnected_physical_methods_and_providers_never_supply_ghost_capacity(tmp_path):
     """Incomplete authored Content is distinct from a corrupt reference.
 
     A future physical asset may be introduced without its operating method;
@@ -1283,14 +1272,8 @@ def test_unconnected_physical_methods_and_providers_are_diagnostic_not_ghost_sup
 
     graph = build_definition_dependency_graph(sim, app._catalog)
     assert graph.diagnostics == ()
-    findings = inspect_definition_coverage(graph)
-    assert {(row.code, row.subject.id) for row in findings} >= {
-        ("provider_without_registered_compatible_asset", str(future_research)),
-        ("provider_without_registered_compatible_asset", str(future_survey)),
-        ("extraction_method_without_registered_compatible_facility", str(future_extraction_method)),
-        ("method_without_registered_compatible_asset", str(future_process)),
-        ("method_without_registered_compatible_asset", f"{future_survey_mode}/future_radar"),
-    }
+    # Physical availability is observable through the actual Application and
+    # Owner domains above; the analysis layer need not re-count missing asset IDs.
     original = capture_state(sim)
     app.execute(AdvanceTime(1))
     future_after = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).extraction

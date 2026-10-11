@@ -59,7 +59,7 @@ class ExtractionService:
             ), key=lambda method: str(method.id)))
             # A physically installed extraction interface may have no currently
             # registered method.  It supplies no extraction until Content adds a
-            # compatible method; this is a coverage gap, not an invalid asset.
+            # compatible method; registration alone creates no active capacity.
             methods[definition_id] = compatible
         self._methods_by_facility = methods
 
