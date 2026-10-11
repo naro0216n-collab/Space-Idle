@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, CreateTransportAllocation, GetFleet, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetFleet, GetLogistics, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -33,10 +33,20 @@ def run(browser) -> None:
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
     )
     runtime.set_time_control(paused=True)
+    # Start only a construction project the shipped new game can actually plan.
+    # Granting technology in private Simulation State used to make an otherwise
+    # blocked project look like a working logistics scenario.
+    candidate = next(
+        (row for row in runtime.query(GetBuildOptions(LEO)).data.items
+         if row.can_plan and not row.blockers
+         and any(resource.shortage_t > 0 for resource in row.resources)),
+        None,
+    )
+    assert candidate is not None, "new game must expose an actionable remote construction supply demand"
     project_id = runtime.execute(
         PlanBuild(
             LEO,
-            str(ids.ORBITAL_LOGISTICS_NODE),
+            candidate.facility_definition_id,
             priority=5,
             procurement_policy="immediate",
         )
@@ -45,6 +55,10 @@ def run(browser) -> None:
     # Establish a real project-owned Supply Requirement so browser controls can
     # exercise sparse routing intent against an Application-projected decision row.
     runtime.execute(AdvanceTime(1))
+    requirements = runtime.query(GetLogistics()).data.requirements
+    assert any(row.owner_id == project_id and row.remaining_t > 0 for row in requirements), (
+        "a real construction project must generate Supply Requirements before the browser checks routing"
+    )
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
     thread = Thread(target=server.serve_forever, daemon=True)
