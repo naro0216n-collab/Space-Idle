@@ -453,6 +453,71 @@ def build_vehicle_definitions() -> dict:
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
         ),
+        # Electric propulsion consumes locally manufactured liquid hydrogen,
+        # not a fictitious interchangeable Chemical Propellant stock. The
+        # additional onboard electrical plant trades dry mass and slower
+        # transit for considerably less reaction mass at high Delta-V.
+        ids.HALL_ELECTRIC_CARGO_TUG: VehicleDef(
+            id=ids.HALL_ELECTRIC_CARGO_TUG,
+            display_name="ホール電気推進軌道間貨物船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=13.0, payload_t=14.0, transit_time_multiplier=2.4,
+                propellant_resource_id=ids.HYDROGEN, propellant_capacity_t=3.2,
+                propellant_t_per_total_t_per_km_s=0.0025,
+                operation_capabilities=(SpaceflightCapability(30.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.HYDROGEN, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=4000.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=16.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 13.0),
+                           (ids.MACHINERY, 5.5), (ids.PRECISION_ELECTRONICS, 8.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("EP-PLASMA-THRUSTERS-06"),
+                    ids.research_id("GN-NAVIGATION-06"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=8.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 6.5),
+                                             (ids.MACHINERY, 2.75), (ids.PRECISION_ELECTRONICS, 4.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=6.0),
+        ),
+        ids.ION_PROPULSION_SCIENCE_PROBE: VehicleDef(
+            id=ids.ION_PROPULSION_SCIENCE_PROBE,
+            display_name="グリッド式イオン推進深宇宙探査機",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=4.5, payload_t=1.1, transit_time_multiplier=2.0,
+                propellant_resource_id=ids.HYDROGEN, propellant_capacity_t=1.2,
+                propellant_t_per_total_t_per_km_s=0.0017,
+                operation_capabilities=(SpaceflightCapability(45.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.HYDROGEN, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=30000.0,
+                generic_capabilities=("survey_sensor", "docking_interface", "refueling_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=12.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 6.0),
+                           (ids.MACHINERY, 3.0), (ids.PRECISION_ELECTRONICS, 6.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("EP-PLASMA-THRUSTERS-04"),
+                    ids.research_id("EP-PLASMA-THRUSTERS-07"),
+                    ids.research_id("SS-SENSING-01"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=5.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0),
+                                             (ids.MACHINERY, 1.5), (ids.PRECISION_ELECTRONICS, 3.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=4.0),
+        ),
         ids.DEEP_SPACE_PROBE: VehicleDef(
             id=ids.DEEP_SPACE_PROBE,
             display_name="長距離無人探査機",

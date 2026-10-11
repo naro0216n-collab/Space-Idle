@@ -14,6 +14,9 @@ def build_power_specs() -> dict:
         ids.TRACKING_ORBITAL_SOLAR_ARRAY: PowerSpec(SolarGeneration(10.0 / 0.62, 1361.0), 0.09),
         ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER: PowerSpec(FixedGeneration(7.0), 0.20),
         ids.ORBITAL_PROPELLANT_DEPOT: PowerSpec(None, 0.20, standby_load_mw=0.20),
+        # Active plasma discharge and beam calibration require a continuous high
+        # voltage load; an unpowered test bench cannot qualify an experiment.
+        ids.PLASMA_PROPULSION_TEST_MODULE: PowerSpec(None, 1.65, standby_load_mw=0.08),
         ids.ORBITAL_MATERIALS_WORKSHOP: PowerSpec(None, 1.25, standby_load_mw=0.08),
         ids.ORBITAL_HEAVY_CARGO_TERMINAL: PowerSpec(None, 0.65, standby_load_mw=0.20),
         ids.ORBITAL_ASSEMBLY_YARD: PowerSpec(None, 0.95),

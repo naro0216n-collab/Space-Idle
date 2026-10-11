@@ -43,6 +43,14 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(7.0), req._machinery_resource(5.0), req._electronics_resource(2.0)),
             26.0, req.ORBIT_SITE, frozenset({ids.research_id("CR-CRYOGENIC-STORAGE-TRANSFER-08")}),
         ),
+        ids.PLASMA_PROPULSION_TEST_MODULE: ConstructionRecipe(
+            ids.PLASMA_PROPULSION_TEST_MODULE,
+            (req._structure_resource(9.0), req._machinery_resource(7.0),
+             req._electronics_resource(6.0)),
+            37.0, req.with_capabilities(req.ORBIT_SITE, "robotic_orbital_construction"),
+            frozenset({ids.research_id("EP-PLASMA-THRUSTERS-01"),
+                       ids.research_id("PD-STORAGE-DISTRIBUTION-04")}),
+        ),
         ids.ORBITAL_MATERIALS_WORKSHOP: ConstructionRecipe(
             ids.ORBITAL_MATERIALS_WORKSHOP,
             (req._structure_resource(14.0), req._machinery_resource(12.0), req._electronics_resource(5.0)),

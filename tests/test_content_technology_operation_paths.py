@@ -1187,3 +1187,229 @@ def test_orbital_materials_and_bulk_freight_form_a_single_owned_supply_chain(tmp
     starved = next(row for row in restored.query(GetOperationalNode(str(ids.LEO))).industry
                    if row.facility_definition_id == str(ids.ORBITAL_MATERIALS_WORKSHOP))
     assert starved.scale < active.scale
+
+
+def test_electric_propulsion_research_to_cross_node_resource_transport(tmp_path):
+    """One real power/research/industry/Fleet chain, with chemical alternatives retained.
+
+    Test the physical ownership and execution contract rather than the number
+    of content outlets: research never creates hardware or fuel, production
+    uses local stock, and cargo arrives only through the normal movement flow.
+    """
+    from space_idle import (
+        CreateTransportAllocation, GetBuildOptions, GetFleet, GetResearch,
+        GetTransportAllocationOptions, GetFlowReport, PauseFacility, PlanBuild, ProduceVehicle,
+        SetTargetStock, StartResearch, SetResearchPrototypeSite,
+    )
+    from space_idle.scenario import ScenarioFacility
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.research import ResearchTheoryStageSpec, ResearchPrototypeStageSpec
+
+    base = build_standard_scenario_definition()
+    incomplete = build_game_application_for_scenario(base)
+    with pytest.raises(ApplicationError, match="technology"):
+        incomplete.execute(ProduceVehicle(str(ids.HALL_ELECTRIC_CARGO_TUG), str(ids.EARTH)))
+    with pytest.raises(ApplicationError, match="technology"):
+        incomplete.execute(ProduceVehicle(str(ids.ION_PROPULSION_SCIENCE_PROBE), str(ids.EARTH)))
+    bench = next(option for option in incomplete.query(GetBuildOptions(str(ids.LEO))).items
+                 if option.facility_definition_id == str(ids.PLASMA_PROPULSION_TEST_MODULE))
+    assert any(blocker.kind == "technology" for blocker in bench.blockers)
+
+    research = build_research_definitions()
+    prototype = research[ids.research_id("EP-PLASMA-THRUSTERS-02")]
+    assert isinstance(prototype.stage_specs[1], ResearchPrototypeStageSpec)
+    assert prototype.stage_specs[1].resources[ids.HYDROGEN] > 0
+    # Reach the hardware research stage through the real Research command.
+    predecessors = set()
+    frontier = list(prototype.prerequisites)
+    while frontier:
+        for technology_id in (frontier.pop(),):
+            if technology_id not in predecessors:
+                predecessors.add(technology_id)
+                frontier.extend(research[technology_id].prerequisites)
+
+    def short_theory(sim, _catalog):
+        definition = sim.research.definitions[prototype.id]
+        sim.research.definitions[prototype.id] = replace(
+            definition,
+            stage_specs=(ResearchTheoryStageSpec("theory", 0.5),) + definition.stage_specs[1:],
+        )
+
+    unpowered = build_game_application_for_scenario(
+        replace(base, completed_technologies=tuple(sorted(predecessors)),
+                facilities=base.facilities +
+                (ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),)),
+        definition_transform=short_theory,
+    )
+    unpowered._simulation.research.stored_points = 10.0
+    unpowered.execute(StartResearch(str(prototype.id)))
+    unpowered.execute(AdvanceTime(1))
+    research_view = next(row for row in unpowered.query(GetResearch()).items if row.id == str(prototype.id))
+    assert research_view.current_stage_id == "hall-discharge-test"
+    choice = next(row for row in research_view.execution_context_options
+                  if row.operational_node_id == str(ids.LEO))
+    assert any("capability" in blocker.code for blocker in choice.blockers)
+
+    trial = build_game_application_for_scenario(
+        replace(base, completed_technologies=tuple(sorted(predecessors)),
+                facilities=base.facilities + (
+                    ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
+                    ScenarioFacility(ids.PLASMA_PROPULSION_TEST_MODULE, ids.LEO),
+                    ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
+                ), inventory_stock=base.inventory_stock + (
+                    ScenarioInventoryStock(ids.LEO, ids.HYDROGEN, 4.0),
+                    ScenarioInventoryStock(ids.LEO, ids.PRECISION_ELECTRONICS, 8.0),
+                )), definition_transform=short_theory,
+    )
+    trial._simulation.research.stored_points = 10.0
+    trial.execute(StartResearch(str(prototype.id)))
+    trial.execute(AdvanceTime(1))
+    trial.execute(SetResearchPrototypeSite(
+        str(prototype.id), "hall-discharge-test", str(ids.LEO),
+    ))
+    trial.execute(AdvanceTime(1))
+    reserved = trial._simulation.research.prototype_reserved_t(
+        prototype.id, "hall-discharge-test", ids.LEO, ids.HYDROGEN,
+    )
+    assert reserved == pytest.approx(0.35)
+    rig = next(row for row in trial._simulation.facilities.all_at(ids.LEO)
+               if row.definition_id == ids.PLASMA_PROPULSION_TEST_MODULE)
+    trial.execute(PauseFacility(str(rig.id)))
+    before = trial._simulation.research.active[prototype.id].stage_progress
+    trial.execute(AdvanceTime(1))
+    assert trial._simulation.research.active[prototype.id].stage_progress == before
+    assert any("capability:active" in blocker.code for blocker in
+               next(row for row in trial.query(GetResearch()).items if row.id == str(prototype.id)).current_blockers)
+
+    # Complete the full authored precursor DAG for the separate industrial
+    # scenario. These are Scenario initial conditions, not synthetic unlocks.
+    all_tech = set()
+    frontier = [ids.research_id(code) for code in (
+        "EP-PLASMA-THRUSTERS-06", "EP-PLASMA-THRUSTERS-07",
+        "EP-PLASMA-THRUSTERS-04", "GN-NAVIGATION-06", "SS-SENSING-01",
+    )]
+    while frontier:
+        tech_id = frontier.pop()
+        if tech_id in all_tech:
+            continue
+        all_tech.add(tech_id)
+        frontier.extend(research[tech_id].prerequisites)
+
+    scenario = replace(
+        base,
+        completed_technologies=tuple(sorted(all_tech)),
+        facilities=base.facilities + (
+            ScenarioFacility(ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.LEO),
+            ScenarioFacility(ids.TRACKING_ORBITAL_SOLAR_ARRAY, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_ASSEMBLY_YARD, ids.LEO),
+            ScenarioFacility(ids.ELECTROLYSIS_PLANT, ids.EARTH),
+        ),
+        inventory_stock=base.inventory_stock + (
+            ScenarioInventoryStock(ids.LEO, ids.STRUCTURAL_COMPONENTS, 150.0),
+            ScenarioInventoryStock(ids.LEO, ids.MACHINERY, 100.0),
+            ScenarioInventoryStock(ids.LEO, ids.PRECISION_ELECTRONICS, 100.0),
+            ScenarioInventoryStock(ids.LEO, ids.CONSTRUCTION_EQUIPMENT, 80.0),
+            # A returning spacecraft must refuel physically at the far end;
+            # the receiving depot is not an inexhaustible fuel source.
+            ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.HYDROGEN, 8.0),
+        ),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    # The test rig is another regular orbital construction project; the
+    # research unlock did not silently install it.
+    rig_plan = app.execute(PlanBuild(
+        str(ids.LEO), str(ids.PLASMA_PROPULSION_TEST_MODULE), procurement_policy="immediate",
+    ))
+    assert rig_plan.created_id
+    app.execute(AdvanceTime(110))
+    assert any(inst.definition_id == ids.PLASMA_PROPULSION_TEST_MODULE
+               for inst in sim.facilities.all_at(ids.LEO))
+
+    # Electrolysis and imported hydrogen physically precede electric operation.
+    # At the same time the baseline chemical tug remains free to consume the
+    # independently stored chemical propellant, without being upgraded.
+    hydrogen_before = sim.inventory.amount(ids.EARTH, ids.HYDROGEN)
+    app.execute(AdvanceTime(4))
+    assert next(row.local_consumption_per_day for row in
+                app.query(GetFlowReport(str(ids.EARTH))).resources
+                if row.resource_id == str(ids.WATER)) > 0
+    assert sim.inventory.amount(ids.EARTH, ids.HYDROGEN) > hydrogen_before
+    launch = next(option for option in app.query(GetTransportAllocationOptions(
+        str(ids.EARTH), str(ids.LEO))).options
+        if option.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE))
+    assert app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        target_forward_t_per_day=launch.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    )).created_id
+    assert app.execute(SetTargetStock(str(ids.LEO), str(ids.HYDROGEN), 20.0)).created_id
+    app.execute(AdvanceTime(45))
+    assert sim.inventory.amount(ids.LEO, ids.HYDROGEN) > 0
+
+    for vehicle_id in (ids.HALL_ELECTRIC_CARGO_TUG, ids.ION_PROPULSION_SCIENCE_PROBE):
+        assert app.execute(ProduceVehicle(str(vehicle_id), str(ids.LEO))).created_id
+    app.execute(AdvanceTime(40))
+    fleet = {row.vehicle_definition_id: row for row in app.query(GetFleet(str(ids.LEO))).pools}
+    assert fleet[str(ids.HALL_ELECTRIC_CARGO_TUG)].total_units == 1
+    assert fleet[str(ids.ION_PROPULSION_SCIENCE_PROBE)].total_units == 1
+    candidates = {row.vehicle_definition_id: row for row in app.query(
+        GetTransportAllocationOptions(str(ids.LEO), str(ids.LUNAR_ORBIT))).options}
+    electric = candidates[str(ids.HALL_ELECTRIC_CARGO_TUG)]
+    chemical = candidates[str(ids.REUSABLE_ORBITAL_CARGO_TUG)]
+    assert electric.nominal_capacity.forward_t_per_day < chemical.nominal_capacity.forward_t_per_day
+    assert (sim.transport.vehicle_defs[ids.HALL_ELECTRIC_CARGO_TUG].performance.propellant_resource_id
+            == ids.HYDROGEN)
+    assert (sim.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].performance.propellant_resource_id
+            == ids.PROPELLANT)
+    assert (sim.transport.vehicle_defs[ids.HALL_ELECTRIC_CARGO_TUG].performance.propellant_t_per_total_t_per_km_s
+            < sim.transport.vehicle_defs[ids.REUSABLE_ORBITAL_CARGO_TUG].performance.propellant_t_per_total_t_per_km_s)
+    assert app.execute(CreateTransportAllocation(
+        str(ids.HALL_ELECTRIC_CARGO_TUG), str(ids.LEO), str(ids.LUNAR_ORBIT),
+        target_forward_t_per_day=electric.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    )).created_id
+    arrival_before = sim.inventory.amount(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS)
+    fuel_before = sim.inventory.amount(ids.LEO, ids.HYDROGEN)
+    app.execute(SetTargetStock(str(ids.LUNAR_ORBIT), str(ids.STRUCTURAL_COMPONENTS), arrival_before + 8.0))
+    app.execute(AdvanceTime(110))
+    assert sim.inventory.amount(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS) > arrival_before
+    # The far-end hydrogen is consumed by real return transits; both nodes
+    # therefore require fuel provision rather than only an origin stock.
+    assert sim.inventory.amount(ids.LUNAR_ORBIT, ids.HYDROGEN) < 8.0
+    assert sim.inventory.amount(ids.LEO, ids.HYDROGEN) >= 0
+    assert fuel_before > 0
+    from space_idle import GetTransportAllocations, SetSurveyProviderFleetQuantity
+    active = next(row for row in app.query(GetTransportAllocations()).items
+                  if row.vehicle_definition_id == str(ids.HALL_ELECTRIC_CARGO_TUG))
+    assert active.used.forward_t_per_day >= 0
+    assert any(resource_id == str(ids.HYDROGEN) and quantity > 0
+               for _node_id, resource_id, quantity in active.operational_supply)
+    assert not any(resource_id == str(ids.PROPELLANT)
+                   for _node_id, resource_id, _quantity in active.operational_supply)
+    # A remote-sensing compatible ion probe remains a single physical Fleet
+    # unit even when dedicated to a Survey provider instead of transport.
+    assert sim.survey.source_is_compatible(
+        sim.survey.provider(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER),
+        ids.ION_PROPULSION_SCIENCE_PROBE,
+    )
+    assert app.execute(SetSurveyProviderFleetQuantity(
+        str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LEO),
+        str(ids.ION_PROPULSION_SCIENCE_PROBE), 1,
+    )).created_id
+    dedicated = next(row for row in app.query(GetFleet(str(ids.LEO))).pools
+                     if row.vehicle_definition_id == str(ids.ION_PROPULSION_SCIENCE_PROBE))
+    assert dedicated.total_units == dedicated.survey_units == 1
+    assert dedicated.free_units == dedicated.transport_units == 0
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    path = tmp_path / "electric-industrial-logistics.json"
+    save_game(app, path, saved_at=now)
+    loaded, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    app.execute(AdvanceTime(2))
+    loaded.execute(AdvanceTime(2))
+    assert capture_state(loaded._simulation) == capture_state(sim)

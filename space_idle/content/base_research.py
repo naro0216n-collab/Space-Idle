@@ -81,6 +81,31 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
                 ),),
             ),
         ),
+        # The plasma discharge and ion-optics designs must be validated on a
+        # powered vacuum bench. A Theory-only research completion cannot
+        # furnish a spacecraft with an untested high-voltage thruster.
+        ids.research_id("EP-PLASMA-THRUSTERS-02"): (
+            ResearchPrototypeStageSpec(
+                "hall-discharge-test",
+                {ids.PRECISION_ELECTRONICS: 0.18, ids.HYDROGEN: 0.35},
+                req.with_capabilities(req.ORBIT_SITE, "plasma_propulsion_test_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=5.0,
+            ),
+        ),
+        ids.research_id("EP-PLASMA-THRUSTERS-03"): (
+            ResearchPrototypeStageSpec(
+                "ion-optics-beam-test",
+                {ids.PRECISION_ELECTRONICS: 0.25, ids.HYDROGEN: 0.25},
+                req.with_capabilities(req.ORBIT_SITE, "plasma_propulsion_test_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
+            ),
+        ),
         ids.RP_RESOURCE_CHAIN_13: (
             ResearchPrototypeStageSpec(
                 "oxide-reduction-prototype",

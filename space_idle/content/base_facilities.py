@@ -37,6 +37,11 @@ def build_facility_definitions() -> dict:
             req._capabilities("structural_fabrication", "basic_machine_shop", "precision_machining"),
             orbit, orbit, process_throughput_per_day=2.5,
         ),
+        ids.PLASMA_PROPULSION_TEST_MODULE: FacilityDef(
+            ids.PLASMA_PROPULSION_TEST_MODULE, "高電圧プラズマ推進器・真空試験モジュール",
+            req._capabilities("plasma_propulsion_test_instrumentation", "research_lab"),
+            orbit, orbit,
+        ),
         ids.ORBITAL_HEAVY_CARGO_TERMINAL: FacilityDef(
             ids.ORBITAL_HEAVY_CARGO_TERMINAL, "大型貨物係留・移載ターミナル",
             req._capabilities("cargo_transfer", "spacecraft_servicing", "vehicle_refueling", "orbital_fuel_transfer"),
