@@ -616,3 +616,192 @@ def test_industrial_material_chain_supplies_common_construction_and_vehicle_inpu
         app.execute(AdvanceTime(8))
     assert loaded._simulation.inventory.amount(ids.LEO, ids.PRECISION_ELECTRONICS) > leo_before
     assert capture_state(loaded._simulation) == capture_state(extended._simulation)
+
+
+def test_vacuum_mineral_oxygen_chain_and_lander_share_real_resource_and_acquisition_contracts(tmp_path):
+    """Industrial expansion must change regional oxygen and transport inputs,
+    not synthesize fuel or Fleet through a new Core operation or Research buff.
+    """
+    from space_idle import GetBuildOptions, GetFlowReport, GetLogistics, ProduceVehicle, PlanBuild
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.scenario import ScenarioSurfaceLocation, ScenarioStorageInfrastructure
+    from space_idle.shared import SpatialNodeId
+
+    moon_node = SpatialNodeId("test.location.industrial_supply")
+    mars_node = SpatialNodeId("test.location.mars_surface_supply")
+    base = build_standard_scenario_definition()
+    # Two independently installed power generators can support the high heat
+    # load. This Moon Scenario is constructed with the ordinary public Scenario
+    # schema, not a special planetary production or Inventory rule.
+    scenario = replace(
+        base,
+        operational_node_ids=base.operational_node_ids + (ids.MARS_ORBIT,),
+        surface_locations=base.surface_locations + (
+            ScenarioSurfaceLocation(moon_node, "真空産業拠点", ids.MOON,
+                                    ids.MOON_CELL_SOUTH_POLAR_RIDGE),
+            ScenarioSurfaceLocation(mars_node, "火星地表貨物受入拠点", ids.MARS_BODY,
+                                    ids.MARS_CELL_EQUATORIAL_PLAIN),
+        ),
+        facilities=base.facilities + (
+            ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, moon_node),
+            ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, moon_node),
+            ScenarioFacility(ids.MOLTEN_OXIDE_ELECTROLYZER, moon_node),
+            ScenarioFacility(ids.VOLATILE_PROCESSING, moon_node),
+            ScenarioFacility(ids.ELECTROLYSIS_PLANT, moon_node),
+            ScenarioFacility(ids.PROPELLANT_PLANT, moon_node),
+            ScenarioFacility(ids.SURFACE_DISTRIBUTION_HUB, mars_node,
+                             ids.MARS_CELL_EQUATORIAL_PLAIN),
+            ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.MARS_ORBIT),
+        ),
+        storage_infrastructure=base.storage_infrastructure + (
+            ScenarioStorageInfrastructure(moon_node, "default", 3000.0),
+            ScenarioStorageInfrastructure(moon_node, "cryogenic", 1000.0),
+        ),
+        inventory_stock=base.inventory_stock + (
+            ScenarioInventoryStock(moon_node, ids.MINERAL_FEEDSTOCK, 100.0),
+            ScenarioInventoryStock(moon_node, ids.VOLATILE_BEARING_MATERIAL, 100.0),
+        ),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    process = sim.industry.processes[ids.PROCESS_MOLTEN_OXIDE_ELECTROLYSIS]
+    research = build_research_definitions()[ids.RP_RESOURCE_CHAIN_16]
+    assert len(research.stage_specs) > 1  # vacuum prototype actually consumes material and work
+    assert process.prerequisite_technologies == {ids.RP_RESOURCE_CHAIN_16}
+
+    # The same Definition is a physical option across all surface sites, but
+    # a breathable Earth surface is not suitable for vacuum molten processing.
+    def build_option(node):
+        return next(row for row in app.query(GetBuildOptions(str(node))).items
+                    if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER))
+
+    assert {b.kind for b in build_option(ids.EARTH).blockers} >= {"environment", "technology"}
+    assert {b.kind for b in build_option(moon_node).blockers} >= {"technology"}
+    facility = next(row for row in app.query(GetOperationalNode(str(moon_node))).industry
+                    if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER))
+    method = next(row for row in facility.process_options if row.process_id == str(process.id))
+    assert not method.can_select
+    assert any(b.subject_id == str(ids.RP_RESOURCE_CHAIN_16) for b in method.blockers)
+    with pytest.raises(ApplicationError, match="technology"):
+        app.execute(SetFacilityProcess(facility.facility_id, str(process.id)))
+
+    unlocks = {
+        (unlock.kind, unlock.id)
+        for row in app.query(GetResearch()).items for unlock in row.unlocks
+        if row.id == str(ids.RP_RESOURCE_CHAIN_16)
+    }
+    assert {("process", str(process.id)),
+            ("facility", str(ids.MOLTEN_OXIDE_ELECTROLYZER))} <= unlocks
+    # The new cargo craft competes with established designs using real
+    # thrust/entry limits, carrying mass, propellant, manufacture and upkeep.
+    craft = sim.transport.vehicle_defs[ids.THROTTLEABLE_CARGO_LANDER]
+    older = sim.transport.vehicle_defs[ids.REUSABLE_SURFACE_CARGO_LANDER]
+    assert craft.performance.payload_t > older.performance.payload_t
+    assert craft.performance.propellant_capacity_t > older.performance.propellant_capacity_t
+    assert craft.maintenance.turnaround_days > older.maintenance.turnaround_days
+    # A real new Body/Location goes through the canonical Movement resolver:
+    # the first lander cannot meet the Mars gravity-derived surface delta-v,
+    # while the throttleable lander can. Neither is keyed to a Body name.
+    assert not sim.transport.transport_service_plan_for(
+        older.id, ids.MARS_ORBIT, mars_node,
+    ).feasible
+    assert sim.transport.transport_service_plan_for(
+        craft.id, ids.MARS_ORBIT, mars_node,
+    ).feasible
+    production = next(row for row in app.query(GetLogistics()).vehicle_production_options
+                      if row.vehicle_definition_id == str(craft.id)
+                      and row.operational_node_id == str(ids.EARTH))
+    assert {b.subject_id for b in production.blockers if b.kind == "technology"} == {
+        str(t) for t in craft.production.prerequisite_technologies
+    }
+    with pytest.raises(ApplicationError, match="technology"):
+        app.execute(ProduceVehicle(str(craft.id), str(ids.EARTH)))
+
+    before = {resource: sim.inventory.amount(moon_node, resource)
+              for resource in (ids.MINERAL_FEEDSTOCK, ids.OXYGEN, ids.METAL_FEEDSTOCK,
+                               ids.WATER, ids.HYDROGEN, ids.PROPELLANT)}
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(moon_node, ids.OXYGEN) == before[ids.OXYGEN]
+    # Research authorizes a method and Vehicle manufacture; it does not
+    # retroactively alter physical stocks, generator supply or installed assets.
+    sim.technology.completed.update({ids.RP_RESOURCE_CHAIN_16}
+                                    | craft.production.prerequisite_technologies)
+    assert not any(b.kind == "technology" for b in build_option(moon_node).blockers)
+    assert any(b.kind == "environment" for b in build_option(ids.EARTH).blockers)
+    app.execute(SetFacilityProcess(facility.facility_id, str(process.id)))
+    assert sim.inventory.amount(moon_node, ids.OXYGEN) == before[ids.OXYGEN]
+    assert app.execute(ProduceVehicle(str(craft.id), str(ids.EARTH))).created_id
+    app.execute(AdvanceTime(12))
+    after = {resource: sim.inventory.amount(moon_node, resource)
+             for resource in before}
+    assert after[ids.MINERAL_FEEDSTOCK] < before[ids.MINERAL_FEEDSTOCK]
+    assert after[ids.OXYGEN] > before[ids.OXYGEN]
+    assert after[ids.METAL_FEEDSTOCK] > before[ids.METAL_FEEDSTOCK]
+    # The same finite inventory is consumed by the existing electrolysis and
+    # propellant lines. Oxygen alone cannot mint propellant: Hydrogen must
+    # really be recovered from the separate volatile/water chain.
+    assert after[ids.PROPELLANT] > before[ids.PROPELLANT]
+    assert sim.inventory.amount(moon_node, ids.VOLATILE_BEARING_MATERIAL) < 100.0
+    assert sim.inventory.amount(ids.EARTH, ids.OXYGEN) != after[ids.OXYGEN]
+    assert sim.transport.fleet_pool(craft.id, ids.EARTH).total_units == 1
+    assert sim.transport.fleet_pool(craft.id, moon_node).total_units == 0
+    flow = app.query(GetFlowReport(str(moon_node)))
+    assert next(row.local_production_per_day for row in flow.resources
+                if row.resource_id == str(ids.OXYGEN)) > 0
+    assert next(row.local_production_per_day for row in flow.resources
+                if row.resource_id == str(ids.METAL_FEEDSTOCK)) > 0
+
+    # Finite power is charged to the same canonical production allocation as
+    # every other process. Removing one actual generator cuts installed output;
+    # the new research neither creates a free power source nor bypasses others.
+    low_power_scenario = replace(
+        scenario,
+        facilities=tuple(row for index, row in enumerate(scenario.facilities)
+                         if index != len(base.facilities)),
+        completed_technologies=tuple(sorted({ids.RP_RESOURCE_CHAIN_16})),
+    )
+    limited = build_game_application_for_scenario(low_power_scenario)
+    limited.execute(AdvanceTime(3))
+    limited_electrolyzer = next(
+        row for row in limited.query(GetOperationalNode(str(moon_node))).industry
+        if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER)
+    )
+    assert limited_electrolyzer.scale < next(
+        row for row in app.query(GetOperationalNode(str(moon_node))).industry
+        if row.facility_definition_id == str(ids.MOLTEN_OXIDE_ELECTROLYZER)
+    ).scale
+
+    # A newly ordered second furnace uses normal locally owned build inputs,
+    # a construction yard and finite work; merely unlocking the technology
+    # has not supplied another industrial installation for free.
+    construction_case = replace(
+        scenario,
+        facilities=scenario.facilities + (ScenarioFacility(ids.CONSTRUCTION_YARD, moon_node),),
+        inventory_stock=scenario.inventory_stock + (
+            ScenarioInventoryStock(moon_node, ids.FABRICATED_STRUCTURE, 15.0),
+            ScenarioInventoryStock(moon_node, ids.MACHINERY, 15.0),
+            ScenarioInventoryStock(moon_node, ids.PRECISION_ELECTRONICS, 10.0),
+            ScenarioInventoryStock(moon_node, ids.CONSTRUCTION_EQUIPMENT, 60.0),
+        ),
+        completed_technologies=(ids.RP_RESOURCE_CHAIN_16,),
+    )
+    builder = build_game_application_for_scenario(construction_case)
+    before_furnaces = sum(row.definition_id == ids.MOLTEN_OXIDE_ELECTROLYZER
+                          for row in builder._simulation.facilities.all_at(moon_node))
+    assert builder.execute(PlanBuild(str(moon_node), str(ids.MOLTEN_OXIDE_ELECTROLYZER),
+                                     procurement_policy="immediate")).created_id
+    assert sum(row.definition_id == ids.MOLTEN_OXIDE_ELECTROLYZER
+               for row in builder._simulation.facilities.all_at(moon_node)) == before_furnaces
+    builder.execute(AdvanceTime(160))
+    assert sum(row.definition_id == ids.MOLTEN_OXIDE_ELECTROLYZER
+               for row in builder._simulation.facilities.all_at(moon_node)) > before_furnaces
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save_path = tmp_path / "vacuum-industrial-chain.json"
+    save_game(app, save_path, saved_at=now)
+    loaded, offline = load_game(save_path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(loaded._simulation) == capture_state(sim)
+    loaded.execute(AdvanceTime(1))
+    app.execute(AdvanceTime(1))
+    assert capture_state(loaded._simulation) == capture_state(sim)

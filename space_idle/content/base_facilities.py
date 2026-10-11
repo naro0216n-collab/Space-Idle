@@ -133,6 +133,12 @@ def build_facility_definitions() -> dict:
             req._capabilities("microelectronics_fabrication"), surface, surface,
             process_throughput_per_day=1.6,
         ),
+        ids.MOLTEN_OXIDE_ELECTROLYZER: FacilityDef(
+            ids.MOLTEN_OXIDE_ELECTROLYZER, "溶融酸化物電解製錬設備",
+            req._capabilities("molten_oxide_electrolysis"),
+            req.VACUUM_SURFACE_SITE, req.VACUUM_SURFACE_SITE,
+            process_throughput_per_day=2.0,
+        ),
         ids.INDUSTRIAL_WATER_INTAKE: FacilityDef(ids.INDUSTRIAL_WATER_INTAKE, "工業用水取水・処理設備", req._capabilities("industrial_water_supply"), surface, surface, 0.08, extraction_capacity_t_per_day=1.0),
         ids.BASIC_STRUCTURAL_MATERIAL_PLANT: FacilityDef(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, "基礎構造材工場", req._capabilities("basic_structural_material"), surface, surface, 0.09),
         ids.BASIC_MACHINERY_WORKS: FacilityDef(ids.BASIC_MACHINERY_WORKS, "基礎機械製作所", req._capabilities("basic_machinery_production"), surface, surface, 0.09),

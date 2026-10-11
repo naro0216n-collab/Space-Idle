@@ -99,6 +99,17 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
                 "manufacturing-experience", {ids.EXPERIENCE_MANUFACTURING_OPERATIONS: 4.0},
             ),
         ),
+        ids.RP_RESOURCE_CHAIN_16: (
+            ResearchPrototypeStageSpec(
+                "molten-oxide-electrode-trial",
+                {ids.CERAMICS_GLASS: 0.45, ids.METAL_FEEDSTOCK: 0.25},
+                req.with_capabilities(req.VACUUM_SURFACE_SITE, "vacuum_regolith_research_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=8.0,
+            ),
+        ),
     }
     definitions: dict[DefinitionId, ResearchDefinition] = {}
     for code, progression_stage, category, series, display_name, prerequisites, theory_cost in RESEARCH_DAG_ROWS:

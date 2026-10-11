@@ -468,7 +468,7 @@ def build_vehicle_definitions() -> dict:
         ),
         ids.REUSABLE_SURFACE_CARGO_LANDER: VehicleDef(
             id=ids.REUSABLE_SURFACE_CARGO_LANDER,
-            display_name="再使用型地表貨物宇宙船",
+            display_name="小型再使用着陸貨物艇",
             performance=TransportPerformanceProfile(
                 dry_mass_t=5.0, payload_t=6.0,
                 propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=3.0,
@@ -488,5 +488,40 @@ def build_vehicle_definitions() -> dict:
                 recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 1.25), (ids.MACHINERY, 0.75), (ids.PRECISION_ELECTRONICS, 0.4)),
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
+        ),
+        ids.THROTTLEABLE_CARGO_LANDER: VehicleDef(
+            id=ids.THROTTLEABLE_CARGO_LANDER,
+            display_name="推力可変式地表アクセス貨物艇",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=9.0, payload_t=10.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=11.0,
+                propellant_t_per_total_t_per_km_s=0.021,
+                operation_capabilities=(
+                    SpaceflightCapability(9.0),
+                    PoweredAscentCapability(4.5, 5.0, 1500.0, 440.0),
+                    LandingCapability(4.5, 5.0, 1500.0, 440.0),
+                ),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=75.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=8.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 6.0),
+                           (ids.MACHINERY, 4.0), (ids.PRECISION_ELECTRONICS, 2.2)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("CH-COMBUSTION-08"),
+                    ids.research_id("EDL-EDL-08"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=3.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 3.0),
+                                             (ids.MACHINERY, 2.0),
+                                             (ids.PRECISION_ELECTRONICS, 1.1)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=3.5),
         ),
     }

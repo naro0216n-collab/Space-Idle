@@ -267,6 +267,13 @@ def build_construction_recipes() -> dict:
             125.0, req.SURFACE_SITE,
             frozenset({ids.research_id("EM-ELECTRONICS-MANUFACTURING-01")}),
         ),
+        ids.MOLTEN_OXIDE_ELECTROLYZER: ConstructionRecipe(
+            ids.MOLTEN_OXIDE_ELECTROLYZER,
+            (BuildResourceRequirement(ids.FABRICATED_STRUCTURE, 8.0),
+             req._machinery_resource(7.0), req._electronics_resource(2.5)),
+            95.0, req.VACUUM_SURFACE_SITE,
+            frozenset({ids.RP_RESOURCE_CHAIN_16}),
+        ),
         ids.INDUSTRIAL_WATER_INTAKE: req._surface_recipe(
             ids.INDUSTRIAL_WATER_INTAKE, 5, 5, 0, 30,
         ),

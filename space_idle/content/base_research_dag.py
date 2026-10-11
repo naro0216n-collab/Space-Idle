@@ -195,6 +195,7 @@ RESEARCH_DAG_ROWS = (
     ('RP-RESOURCE-CHAIN-13', 4, 'resource_processing', 'resource_chain', '酸化物還元反応温度・酸素分圧制御', ('RP-RESOURCE-CHAIN-10', 'TH-THERMAL-TRANSPORT-08'), 3000.0),
     ('RP-RESOURCE-CHAIN-14', 4, 'resource_processing', 'resource_chain', '副生成物流分離・再投入条件管理', ('RP-RESOURCE-CHAIN-13', 'LM-LOGISTICS-MAINTENANCE-07'), 3000.0),
     ('RP-RESOURCE-CHAIN-15', 4, 'resource_processing', 'resource_chain', '原料組成変動に対する反応条件補償', ('RP-RESOURCE-CHAIN-13', 'SS-SENSING-10'), 3000.0),
+    ('RP-RESOURCE-CHAIN-16', 5, 'resource_processing', 'resource_chain', '溶融酸化物電解の電極耐食・酸素分離制御', ('RP-RESOURCE-CHAIN-13', 'MC-MANUFACTURING-CONSTRUCTION-10'), 6800.0),
     ('LM-LOGISTICS-MAINTENANCE-01', 1, 'logistics_maintenance', 'logistics_maintenance', '機械式ドッキング接触荷重・捕捉制御', ('GN-NAVIGATION-04',), 180.0),
     ('LM-LOGISTICS-MAINTENANCE-02', 1, 'logistics_maintenance', 'logistics_maintenance', '貨物固定・加速度荷重管理', ('MS-MATERIALS-03',), 180.0),
     ('LM-LOGISTICS-MAINTENANCE-03', 2, 'logistics_maintenance', 'logistics_maintenance', '相対状態推定連動接近・結合シーケンス制御', ('LM-LOGISTICS-MAINTENANCE-01', 'AR-AUTONOMY-ROBOTICS-04'), 480.0),

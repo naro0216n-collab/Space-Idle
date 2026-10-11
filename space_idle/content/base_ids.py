@@ -110,6 +110,7 @@ CONTINUOUS_REDUCTION_FURNACE = DefinitionId("base.facility.continuous_reduction_
 AUTOMATED_STRUCTURAL_FABRICATION_LINE = DefinitionId("base.facility.automated_structural_fabrication_line")
 INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.facility.industrial_machinery_assembly")
 MICROELECTRONICS_FAB = DefinitionId("base.facility.microelectronics_fab")
+MOLTEN_OXIDE_ELECTROLYZER = DefinitionId("base.facility.molten_oxide_electrolyzer")
 
 # Physically motivated space-support assets; their rules are ordinary definitions.
 ORBITAL_CONSTRUCTION_PLATFORM = DefinitionId("base.facility.orbital_construction_platform")
@@ -142,6 +143,7 @@ PROCESS_BASIC_MACHINERY = DefinitionId("base.process.basic_machinery")
 PROCESS_STANDARD_STRUCTURAL_COMPONENTS = DefinitionId("base.process.standard_structural_components")
 PROCESS_INDUSTRIAL_MACHINERY_ASSEMBLY = DefinitionId("base.process.industrial_machinery_assembly")
 PROCESS_MICROELECTRONICS_FABRICATION = DefinitionId("base.process.microelectronics_fabrication")
+PROCESS_MOLTEN_OXIDE_ELECTROLYSIS = DefinitionId("base.process.molten_oxide_electrolysis")
 
 # Research DAG IDs are Content Definition IDs. Progression stage/category/series
 # are metadata on ResearchDefinition, not implicit gates.
@@ -158,6 +160,7 @@ RP_RESOURCE_CHAIN_12 = research_id("RP-RESOURCE-CHAIN-12")
 RP_RESOURCE_CHAIN_13 = research_id("RP-RESOURCE-CHAIN-13")
 RP_RESOURCE_CHAIN_14 = research_id("RP-RESOURCE-CHAIN-14")
 RP_RESOURCE_CHAIN_15 = research_id("RP-RESOURCE-CHAIN-15")
+RP_RESOURCE_CHAIN_16 = research_id("RP-RESOURCE-CHAIN-16")
 MC_MANUFACTURING_CONSTRUCTION_01 = research_id("MC-MANUFACTURING-CONSTRUCTION-01")
 MC_MANUFACTURING_CONSTRUCTION_05 = research_id("MC-MANUFACTURING-CONSTRUCTION-05")
 MC_MANUFACTURING_CONSTRUCTION_09 = research_id("MC-MANUFACTURING-CONSTRUCTION-09")
@@ -192,6 +195,7 @@ DEEP_SPACE_FREIGHTER = DefinitionId("base.vehicle.deep_space_freighter")
 INTERPLANETARY_LANDER = DefinitionId("base.vehicle.interplanetary_lander")
 LUNAR_FLEET_SURVEY_PROVIDER = DefinitionId("base.survey_provider.lunar_orbital_spacecraft")
 REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_cargo_lander")
+THROTTLEABLE_CARGO_LANDER = DefinitionId("base.vehicle.throttleable_cargo_lander")
 SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
 
 

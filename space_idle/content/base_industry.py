@@ -71,6 +71,16 @@ def build_process_specs() -> dict:
             {ids.CERAMICS_GLASS: 0.60, ids.METAL_FEEDSTOCK: 0.25, ids.WATER: 0.15},
             {ids.PRECISION_ELECTRONICS: 0.20},
         ),
+        # Molten-oxide electrolysis is a distinct vacuum/high-power route to
+        # oxygen and metallurgical feedstock from common mineral feedstock.
+        # Neither Water nor a planet-specific Resource identity is invented.
+        ids.PROCESS_MOLTEN_OXIDE_ELECTROLYSIS: ProcessSpec(
+            ids.PROCESS_MOLTEN_OXIDE_ELECTROLYSIS, "溶融酸化物電解・酸素金属分離",
+            frozenset({"molten_oxide_electrolysis"}),
+            {ids.MINERAL_FEEDSTOCK: 2.0},
+            {ids.OXYGEN: 0.55, ids.METAL_FEEDSTOCK: 0.80},
+            frozenset({ids.RP_RESOURCE_CHAIN_16}),
+        ),
         ids.PROCESS_HEAVY_EQUIPMENT: ProcessSpec(ids.PROCESS_HEAVY_EQUIPMENT, "建設機械組立", frozenset({"heavy_equipment_assembly"}), {ids.BASIC_MACHINE_PARTS: 0.30, ids.PRECISION_ELECTRONICS: 0.05}, {ids.CONSTRUCTION_EQUIPMENT: 0.25}),
         # Deliberately low-throughput opening industry. These are ordinary
         # ProcessSpecs and can operate at any site where their facility and
