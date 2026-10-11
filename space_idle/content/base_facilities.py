@@ -81,6 +81,29 @@ def build_facility_definitions() -> dict:
             req._capabilities("research_data_retention"),
             req.SiteRequirements(), req.SiteRequirements(),
         ),
+        # Material testing needs a physical beamline and calibrated strain
+        # instruments rather than a generic research throughput multiplier.
+        ids.MATERIALS_FATIGUE_BEAMLINE: FacilityDef(
+            ids.MATERIALS_FATIGUE_BEAMLINE, "複合熱・放射線材料疲労試験施設",
+            req._capabilities("research_lab", "material_fatigue_beamline"),
+            surface, surface, maintenance_fraction_per_year=0.085,
+        ),
+        # An unmanned orbital thermal/vacuum laboratory provides experiments
+        # inaccessible to the surface beamline, with power and cooling demand.
+        ids.ORBITAL_THERMAL_VACUUM_LAB: FacilityDef(
+            ids.ORBITAL_THERMAL_VACUUM_LAB, "軌道熱真空・二相流実験モジュール",
+            req._capabilities("research_lab", "orbital_thermal_vacuum_calorimetry"),
+            orbit, orbit, maintenance_fraction_per_year=0.09,
+        ),
+        # Life-science research requires an inhabited, operating closed-loop
+        # habitat. Research RP consumes real local crew capacity, not a free
+        # laboratory-wide research buff or a separate Crew owner.
+        ids.BIOREGENERATIVE_BIOMEDICAL_LAB: FacilityDef(
+            ids.BIOREGENERATIVE_BIOMEDICAL_LAB, "閉鎖生態・宇宙生体曝露解析施設",
+            req._capabilities("research_lab", "bioregenerative_biomedical_research"),
+            req.SiteRequirements(), req.SiteRequirements(),
+            maintenance_fraction_per_year=0.09,
+        ),
         ids.ORBITAL_HABITAT: FacilityDef(
             ids.ORBITAL_HABITAT, "軌道居住・生命維持モジュール",
             req._capabilities("pressurized_habitation"), orbit, orbit, housing_capacity=18,

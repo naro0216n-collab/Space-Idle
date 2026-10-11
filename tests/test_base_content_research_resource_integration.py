@@ -440,3 +440,161 @@ def test_physical_content_can_be_reused_across_bodies_without_name_based_excepti
         production = next(row for row in case.query(GetOperationalNode(str(location))).extraction
                           if row.resource_id == str(ids.VOLATILE_BEARING_MATERIAL))
         assert production.output_t_per_day > 0
+
+
+def test_materials_thermal_and_biomedical_science_capital_creates_distinct_physical_research_capacity(tmp_path):
+    """Three expensive research routes consume real construction, power and crew.
+
+    Research output and admission are physical facility effects; no completed
+    Technology silently improves the original laboratories. Both Earth-based
+    and orbital infrastructure run through the same Application/Owner State.
+    """
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from space_idle import (AdvanceTime, GetBuildOptions, GetResearch, PlanBuild,
+                            PauseFacility, StartResearch, SetResearchPrototypeSite)
+    from space_idle.bootstrap import build_game_application_for_load, build_game_application_for_scenario
+    from space_idle.content import base_ids as ids
+    from space_idle.content.base_ids import research_id
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.persistence import capture_state, load_game, save_game
+    from space_idle.scenario import ScenarioFacility, ScenarioInventoryStock
+
+    equipment = (
+        (ids.MATERIALS_FATIGUE_BEAMLINE, ids.EARTH),
+        (ids.ORBITAL_THERMAL_VACUUM_LAB, ids.LEO),
+        (ids.BIOREGENERATIVE_BIOMEDICAL_LAB, ids.EARTH),
+    )
+    research = build_research_definitions()
+    needed = {
+        research_id(code) for code in (
+            "MS-MATERIALS-07", "TH-THERMAL-TRANSPORT-05",
+            "TH-THERMAL-TRANSPORT-06", "MC-MANUFACTURING-CONSTRUCTION-05",
+            "BIO-HUMAN-BIOLOGY-MEDICINE-09", "LS-ATMOSPHERE-WATER-WASTE-09",
+        )
+    }
+    # The experimental work must be researchable only after its real prereqs;
+    # constructing the equipment is not a shortcut to completed Technology.
+    material_research = research_id("MS-MATERIALS-10")
+    needed.update(research[material_research].prerequisites)
+    frontier = list(needed)
+    while frontier:
+        extra = research[frontier.pop()].prerequisites - needed
+        needed.update(extra)
+        frontier.extend(extra)
+    setup = build_standard_scenario_definition()
+    facilities = (
+        ScenarioFacility(ids.MACHINE_SHOP, ids.EARTH,
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 9.0), (ids.MACHINERY, 9.0))),
+        ScenarioFacility(ids.CLOSED_CYCLE_HABITAT, ids.EARTH,
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 17.0), (ids.MACHINERY, 12.0),
+                                             (ids.PRECISION_ELECTRONICS, 8.0))),
+        ScenarioFacility(ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.LEO,
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 3.0),
+                                             (ids.PRECISION_ELECTRONICS, 1.5))),
+        ScenarioFacility(ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER, ids.LEO,
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 12.0), (ids.MACHINERY, 12.0),
+                                             (ids.PRECISION_ELECTRONICS, 4.0))),
+    )
+    stocks = tuple(
+        ScenarioInventoryStock(node_id, resource_id, 250.0)
+        for node_id in (ids.EARTH, ids.LEO)
+        for resource_id in (ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS)
+    )
+    scenario = replace(
+        setup,
+        facilities=setup.facilities + facilities,
+        completed_technologies=tuple(sorted(needed)),
+        inventory_stock=setup.inventory_stock + stocks + (
+            ScenarioInventoryStock(ids.EARTH, ids.CERAMICS_GLASS, 10.0),
+            ScenarioInventoryStock(ids.EARTH, ids.PRECISION_COMPONENTS, 10.0),
+        ),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    for facility_id, node_id in equipment:
+        build = next(row for row in app.query(GetBuildOptions(str(node_id))).items
+                     if row.facility_definition_id == str(facility_id))
+        assert build.resources and build.construction_required > 0
+        assert build.power_nominal_load_mw > 2.0
+        assert not any(blocker.kind == "technology" for blocker in build.blockers)
+        assert not any(row.provider_definition_id == str(facility_id)
+                       for row in app.query(GetResearch()).providers)
+        assert app.execute(PlanBuild(str(node_id), str(facility_id),
+                                     procurement_policy="extended_wait")).created_id
+
+    for _ in range(800):
+        app.execute(AdvanceTime(1))
+        providers = {row.provider_definition_id: row for row in app.query(GetResearch()).providers}
+        if all(str(facility_id) in providers for facility_id, _node_id in equipment):
+            break
+    else:
+        raise AssertionError('physical science infrastructure did not complete')
+    assert providers[str(ids.MATERIALS_FATIGUE_BEAMLINE)].generation_points_per_day > 0
+    assert providers[str(ids.ORBITAL_THERMAL_VACUUM_LAB)].generation_points_per_day > 0
+    # Local population caps biomedical RP; facility's 250 RP/day nominal rate
+    # must not create fictitious crew or bypass life support allocation.
+    medical = providers[str(ids.BIOREGENERATIVE_BIOMEDICAL_LAB)]
+    assert medical.generation_points_per_day > 0
+    assert medical.admitted_generation_points_per_day <= medical.generation_points_per_day + 1e-8
+    assert app.query(GetResearch()).storage_capacity_points > 18000
+
+    for research_id_str, expected_cap in (
+        ('MS-MATERIALS-10', 'material_fatigue_beamline'),
+        ('TH-THERMAL-TRANSPORT-07', 'orbital_thermal_vacuum_calorimetry'),
+        ('BIO-HUMAN-BIOLOGY-MEDICINE-12', 'bioregenerative_biomedical_research'),
+    ):
+        stage = research[research_id(research_id_str)].stage_specs[1]
+        assert any(requirement.capability_id == expected_cap
+                   for requirement in stage.site_requirements.capability_requirements)
+
+    # Use the real RP gained from physical providers for a late-stage materials
+    # project, then execute its resource-consuming Prototype on installed
+    # hardware. This is not just a static Definition-to-Technology edge.
+    app.execute(StartResearch(str(material_research)))
+    for _ in range(150):
+        app.execute(AdvanceTime(1))
+        item = next(row for row in app.query(GetResearch()).items
+                    if row.id == str(material_research))
+        if item.current_stage_id == "irradiated-material-fatigue-trial":
+            break
+    else:
+        raise AssertionError(f'material research did not reach experiment: {item.status}, '
+                             f'{item.current_stage_id}, stored RP={sim.research.stored_points}, '
+                             f'execution={app.query(GetResearch()).research_execution_per_day}')
+    app.execute(SetResearchPrototypeSite(str(material_research),
+                                         "irradiated-material-fatigue-trial", str(ids.EARTH)))
+    app.execute(AdvanceTime(1))
+    assert sim.research.prototype_reserved_t(
+        material_research, "irradiated-material-fatigue-trial", ids.EARTH,
+        ids.CERAMICS_GLASS,
+    ) > 0
+    saved_at = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    save_path = tmp_path / 'science-capital.json'
+    save_game(app, save_path, saved_at=saved_at)
+    restored, offline = load_game(save_path, build_game_application_for_load, now=saved_at)
+    assert offline is None
+    assert capture_state(restored._simulation) == capture_state(sim)
+    app.execute(AdvanceTime(2))
+    restored.execute(AdvanceTime(2))
+    assert capture_state(restored._simulation) == capture_state(sim)
+
+    orbital = next(f for f in sim.facilities.facilities.values()
+                   if f.definition_id == ids.ORBITAL_THERMAL_VACUUM_LAB)
+    app.execute(PauseFacility(str(orbital.id)))
+    paused = next(row for row in app.query(GetResearch()).providers
+                  if row.provider_definition_id == str(ids.ORBITAL_THERMAL_VACUUM_LAB))
+    assert paused.generation_points_per_day == 0
+    assert paused.storage_capacity_points == 0
+
+    # Medical research also depends on a *currently operating* closed habitat.
+    # Existing biomedical instruments remain owned, but cannot claim free
+    # inhabited laboratory operations after life support is switched off.
+    habitat = next(f for f in sim.facilities.facilities.values()
+                   if f.definition_id == ids.CLOSED_CYCLE_HABITAT)
+    app.execute(PauseFacility(str(habitat.id)))
+    medical_paused = next(row for row in app.query(GetResearch()).providers
+                          if row.provider_definition_id == str(ids.BIOREGENERATIVE_BIOMEDICAL_LAB))
+    assert medical_paused.generation_points_per_day == 0

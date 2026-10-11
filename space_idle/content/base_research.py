@@ -148,6 +148,43 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
                 required_work=6.0,
             ),
         ),
+        # Higher-order science consumes finite experimental materials and
+        # demands actual powered instrumentation. Its Research output comes
+        # from installed assets; completing these stages is no global buff.
+        ids.research_id("MS-MATERIALS-10"): (
+            ResearchPrototypeStageSpec(
+                "irradiated-material-fatigue-trial",
+                {ids.CERAMICS_GLASS: 1.25, ids.PRECISION_COMPONENTS: 0.32},
+                req.with_capabilities(req.SURFACE_SITE, "material_fatigue_beamline"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=10.0,
+            ),
+        ),
+        ids.research_id("TH-THERMAL-TRANSPORT-07"): (
+            ResearchDemonstrationStageSpec(
+                "orbital-multiloop-thermal-isolation-test", 12.0,
+                req.with_capabilities(req.ORBIT_SITE,
+                                      "orbital_thermal_vacuum_calorimetry"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
+        ids.research_id("BIO-HUMAN-BIOLOGY-MEDICINE-12"): (
+            ResearchPrototypeStageSpec(
+                "controlled-closed-habitat-microbiome-trial",
+                {ids.FOOD: 0.35, ids.WATER: 0.65,
+                 ids.PRECISION_COMPONENTS: 0.22},
+                req.with_capabilities(req.SiteRequirements(),
+                                      "bioregenerative_biomedical_research"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=12.0,
+            ),
+        ),
         # Experimental recovery of volatile fractions uses an actual heated
         # processor and finite process water/parts before a multistage separator
         # can be acquired; it is not a free yield change to existing equipment.
@@ -248,6 +285,28 @@ def build_research_providers() -> dict:
             ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
             frozenset({"deep_space_tracking_equipment"}), tier=2,
             levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 0.8),),
+        ),
+        ids.MATERIALS_FATIGUE_BEAMLINE: ResearchProviderSpec(
+            ids.MATERIALS_FATIGUE_BEAMLINE,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"material_fatigue_beamline"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 125.0, 12500.0, 24.0),),
+        ),
+        ids.ORBITAL_THERMAL_VACUUM_LAB: ResearchProviderSpec(
+            ids.ORBITAL_THERMAL_VACUUM_LAB,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"orbital_thermal_vacuum_calorimetry"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 185.0, 18000.0, 32.0),),
+        ),
+        ids.BIOREGENERATIVE_BIOMEDICAL_LAB: ResearchProviderSpec(
+            ids.BIOREGENERATIVE_BIOMEDICAL_LAB,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"bioregenerative_biomedical_research"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 250.0, 22000.0, 40.0),),
+            crew_person_days_per_research_point=0.18,
+            site_requirements=req.SiteRequirements(capability_requirements=(CapabilityRequirement(
+                "closed_cycle_life_support", CapabilityRequirementState.ACTIVE,
+            ),)),
         ),
         ids.RESEARCH_DATA_ARCHIVE: ResearchProviderSpec(
             ids.RESEARCH_DATA_ARCHIVE,
