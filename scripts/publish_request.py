@@ -22,7 +22,6 @@ MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
 CONNECTOR_SUMMARY_NAME = "summary.json"
-CONNECTOR_EXECUTION_INDEX_NAME = "execution-index.json"
 TRANSACTION_DIR_NAME = "space-idle-publish-transaction"
 WORKFLOW_TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"
 MANIFEST_NAME = "manifest.json"
@@ -962,7 +961,7 @@ def _write_execution_index(repo: Path, state: dict[str, object]) -> str:
         "publish_base_tree": state["publish_base_tree"],
         "packets": entries,
     }
-    path = directory / CONNECTOR_EXECUTION_INDEX_NAME
+    path = directory / f"execution-index-{state['request_id']}.json"
     encoded = json.dumps(index, indent=2, sort_keys=True) + "\n"
     if path.exists() and path.read_text(encoding="ascii") != encoded:
         raise PublishStateError("active Connector execution index differs from verified plan")

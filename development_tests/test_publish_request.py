@@ -362,9 +362,15 @@ const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 const source = fs.readFileSync(0, 'utf8');
 const indexPath = process.argv[1], mode = process.argv[2], approvedExecutor = process.argv[3];
 const index = JSON.parse(fs.readFileSync(indexPath,'utf8'));
-const packets = index.packets.map(e => JSON.parse(fs.readFileSync(indexPath.replace(/execution-index\.json$/,e.name),'utf8')));
+const packets = index.packets.map(e => JSON.parse(fs.readFileSync(require('node:path').join(require('node:path').dirname(indexPath),e.name),'utf8')));
 const events = [], registered=new Map(), reads=new Map();
-let treeIndex=0, tempExists=false;
+let treeIndex=0, tempExists=false, nextId=0;
+const prefix='/temp/space-idle-publish-' + index.request_id + '-';
+if(mode==='stale') {
+  registered.set('stale', {path:null,name:prefix+'99.json'});
+  registered.set('other', {path:null,name:'/temp/unrelated.json'});
+  registered.set('other-transaction', {path:null,name:'/temp/space-idle-publish-'+'f'.repeat(32)+'-0.json'});
+}
 const tools = {
  mcp__GitHub__fetch_file: async ({repository_full_name,path,ref}) => {
    events.push({type:'fetch-source'});
@@ -373,6 +379,12 @@ const tools = {
      throw Error('invalid published executor lookup');
    if(mode==='source-unavailable') return {result:{content:null}};
    return {result:{content:fs.readFileSync(approvedExecutor,'utf8')}};
+ },
+ files__list: async ({surface,library_path,limit,cursor}) => {
+   events.push({type:'list'});
+   if(surface!=='library'||library_path!=='/temp'||limit!==250||cursor) throw Error('invalid Library listing');
+   if(mode==='list-fails') throw Error('Library list unavailable');
+   return {items:[...registered].map(([id,entry])=>({kind:'file',name:entry.name.split('/').at(-1),library_file_id:id})),next_cursor:null};
  },
  files__manage_library: async ({operations}) => {
    events.push({type:operations[0].operation,count:operations.length});
@@ -384,14 +396,22 @@ const tools = {
        return {status:'succeeded',path:'/temp'};
      }
      if(op.operation==='upload') {
-       if(!tempExists || !op.destination_path.startsWith('/temp/space-idle-publish-'))
-         throw Error('upload outside temporary folder');
+       if(!tempExists || !op.destination_path.startsWith(prefix))
+         throw Error('upload outside current transaction');
+       const id='file-'+(nextId++);
+       registered.set(id,{path:op.container_path,name:op.destination_path});
+       if(mode==='upload-throws-partial') throw Error('Upload timed out after registration');
        if(mode==='upload-fails' && i===operations.length-1) return {status:'failed'};
-       const id='file-'+registered.size;
-       registered.set(id,op.container_path);
+       if(mode==='upload-without-id') return {status:'succeeded'};
        return {status:'succeeded',file_id:id,library_file_id:id};
      }
-     if(op.operation==='delete') return {status:mode==='delete-fails'?'failed':'succeeded'};
+     if(op.operation==='delete') {
+       const id=op.target?.library_file_id;
+       if(!registered.has(id)) throw Error('delete unknown file');
+       if(mode==='delete-fails') return {status:'failed'};
+       registered.delete(id);
+       return {status:'succeeded'};
+     }
      throw Error('unexpected operation');
    })};
  },
@@ -401,10 +421,12 @@ const tools = {
      const attempt=(reads.get(ref_id)||0)+1;
      reads.set(ref_id,attempt);
      if(mode==='unreadable'||attempt===1) return {warnings:['not yet visible'],content:['not visible'],has_more:false};
-     let value=fs.readFileSync(registered.get(ref_id),'utf8');
+     const entry=registered.get(ref_id);
+     if(!entry) throw Error('read deleted file');
+     let value=fs.readFileSync(entry.path,'utf8');
      if(mode==='trim-newline') value=value.replace(/\n$/, '');
-     if(mode==='tampered' && registered.get(ref_id).endsWith('tree-batch-000.json')) {
-       const suffix=value.slice(-50), pos=value.indexOf('content');
+     if(mode==='tampered' && entry.path.endsWith('tree-batch-000.json')) {
+       const pos=value.indexOf('content');
        value=value.slice(0,pos+12) + 'x' + value.slice(pos+13);
      }
      return {content:[value],has_more:false,warnings:[]};
@@ -414,6 +436,8 @@ const tools = {
    events.push({type:'tree'});
    const expected=packets[treeIndex++];
    if (JSON.stringify(expected.action_args)!==JSON.stringify(args)) throw Error('modified tree args');
+   if(mode==='stale' && (!registered.has('other') || !registered.has('other-transaction') || registered.has('stale')))
+     throw Error('stale recovery touched an unrelated file');
    return {result:{sha:mode==='tree-mismatch'?'0'.repeat(40):expected.expected_tree}};
  },
  mcp__GitHub__create_commit: async args => {
@@ -429,7 +453,7 @@ const tools = {
 };
 new AsyncFunction('tools','text','INDEX_PATH',source)(tools,()=>{},indexPath)
  .then(()=>process.stdout.write(JSON.stringify(events)))
- .catch(e=>{process.stdout.write(JSON.stringify(events));console.error(e.message);process.exitCode=1});
+ .catch(e=>{events.push({type:'residual',paths:[...registered.values()].map(x=>x.name)});process.stdout.write(JSON.stringify(events));console.error(e.message);process.exitCode=1});
 """
     return subprocess.run(
         ["node", "-e", js, str(index_path), mode, str(ROOT / "scripts" / "publish_connector_executor.js")],
@@ -452,7 +476,12 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
         assert PUBLISH_REQUEST._tool_call_fingerprint(original.decode("ascii")) == entry["fnv32"]
     ok = _execute_original_packets(index_path)
     assert ok.returncode == 0, ok.stderr
+    assert index_path.name == f"execution-index-{index['request_id']}.json"
     trimmed = _execute_original_packets(index_path, "trim-newline")
+    stale = _execute_original_packets(index_path, "stale")
+    assert stale.returncode == 0, stale.stderr
+    stale_actions = [event["type"] for event in json.loads(stale.stdout)]
+    assert stale_actions.index("delete") < stale_actions.index("upload")
     assert trimmed.returncode == 0, trimmed.stderr
     actions = [a["type"] for a in json.loads(ok.stdout)]
     assert actions[0] == "fetch-source"
@@ -462,13 +491,17 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     assert actions.count("tree") == summary["tree_call_count"]
     assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
 
-    for mode in ("source-unavailable", "folder-fails", "upload-fails", "delete-fails", "unreadable", "tampered"):
+    for mode in ("source-unavailable", "folder-fails", "upload-fails", "upload-without-id", "upload-throws-partial", "delete-fails", "list-fails", "unreadable", "tampered"):
         rejected = _execute_original_packets(index_path, mode)
         assert rejected.returncode != 0, (mode, rejected.stderr)
-        assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
+        rejected_events = json.loads(rejected.stdout)
+        assert "tree" not in [a["type"] for a in rejected_events]
+        if mode != "delete-fails":
+            current_prefix = "/temp/space-idle-publish-" + index["request_id"] + "-"
+            assert not any(path.startswith(current_prefix) for path in rejected_events[-1]["paths"]), mode
     mismatch = _execute_original_packets(index_path, "tree-mismatch")
     assert mismatch.returncode != 0
-    assert [a["type"] for a in json.loads(mismatch.stdout)][-1] == "tree"
+    assert [a["type"] for a in json.loads(mismatch.stdout)][-2:] == ["tree", "residual"]
 
     packet_file = Path(summary["tree_packets"][0])
     packet = json.loads(packet_file.read_text(encoding="utf-8"))

@@ -1,6 +1,10 @@
 // Fixed functions.exec body. Define INDEX_PATH with the local connector-plan execution_index.
 // All original packet files are checked and temporary Library registrations trashed before GitHub writes.
-const root = INDEX_PATH.slice(0, INDEX_PATH.lastIndexOf('/') + 1);
+const root = INDEX_PATH.slice(0, Math.max(INDEX_PATH.lastIndexOf('/'), INDEX_PATH.lastIndexOf('\\')) + 1);
+const requestId = /(?:^|[\\/])execution-index-([a-f0-9]{32})\.json$/.exec(INDEX_PATH)?.[1];
+if (!requestId) throw Error('Invalid transaction index path; no GitHub write');
+const tempPrefix = 'space-idle-publish-' + requestId + '-';
+const tempPattern = new RegExp('^' + tempPrefix + '(?:index|[0-9]+)\\.json$');
 const fingerprint = value => {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) {
@@ -12,30 +16,69 @@ const fingerprint = value => {
 };
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
-async function loadAndTrash(files, requestId, ensureTempFolder = false) {
+async function ownedFiles() {
+  const items = [];
+  let cursor;
+  for (let page = 0; page < 100; page++) {
+    const args = {surface:'library',library_path:'/temp',limit:250};
+    if (cursor) args.cursor = cursor;
+    const response = await tools.files__list(args);
+    if (!Array.isArray(response.items)) throw Error('Cannot enumerate temporary Library files');
+    for (const item of response.items) {
+      if (item.kind === 'file' && typeof item.name === 'string' &&
+          tempPattern.test(item.name)) {
+        if (!item.library_file_id) throw Error('Temporary file has no Library ID');
+        items.push(item.library_file_id);
+      }
+    }
+    if (!response.next_cursor) return [...new Set(items)];
+    cursor = response.next_cursor;
+  }
+  throw Error('Temporary Library listing exceeded page limit');
+}
+
+async function deleteIds(ids) {
+  for (let first = 0; first < ids.length; first += 20) {
+    const group = ids.slice(first, first + 20);
+    try {
+      await tools.files__manage_library({operations:group.map(id => ({
+        operation:'delete',target:{kind:'file',library_file_id:id},
+      }))});
+    } catch (_) { /* The scoped inventory pass handles missing acknowledgements. */ }
+  }
+}
+
+async function cleanupOwnedFiles() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ids = await ownedFiles();
+    if (!ids.length) return;
+    await deleteIds(ids);
+  }
+  if ((await ownedFiles()).length) throw Error('Temporary file cleanup failed; no GitHub write');
+}
+
+async function loadAndTrash(files, offset) {
   const contents = Array(files.length);
   for (let start = 0; start < files.length; start += 20) {
     const group = files.slice(start, start + 20);
     const registered = [];
-    let cleanupFailure = false;
     try {
-      const createFolder = ensureTempFolder && start === 0;
       const operations = group.map((file, index) => ({
-        operation: 'upload', container_path: file.path,
-        destination_path: '/temp/space-idle-publish-' + requestId + '-' + (start + index) + '.json',
-        overwrite: false,
+        operation:'upload',container_path:file.path,
+        destination_path:'/temp/' + tempPrefix + (offset < 0 ? 'index' : offset + start + index) + '.json',
+        overwrite:false,
       }));
-      if (createFolder) operations.unshift({operation:'create_folder',path:'/temp',parents:true});
-      const result = await tools.files__manage_library({operations});
-      if (result.results?.length !== operations.length ||
-          (createFolder && result.results[0]?.status !== 'succeeded'))
-        throw Error('Temporary folder or registration failed');
-      const rows = createFolder ? result.results.slice(1) : result.results;
-      for (let i = 0; i < group.length; i++) {
-        const row = rows[i];
-        if (row?.library_file_id) registered.push({fileId:row.file_id, libraryId:row.library_file_id, index:start+i});
+      const response = await tools.files__manage_library({operations});
+      const rows = response.results;
+      if (Array.isArray(rows)) {
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i]?.library_file_id) registered.push({
+            fileId:rows[i].file_id, libraryId:rows[i].library_file_id, index:start+i,
+          });
+        }
       }
-      if (registered.length !== group.length || rows.some(r => r.status !== 'succeeded' || !r.file_id))
+      if (rows?.length !== group.length || registered.length !== group.length ||
+          rows.some(row => row.status !== 'succeeded' || !row.file_id))
         throw Error('Temporary registration failed');
       for (let first = 0; first < registered.length; first += 5) {
         let pending = registered.slice(first, first + 5);
@@ -50,7 +93,6 @@ async function loadAndTrash(files, requestId, ensureTempFolder = false) {
             }
             let raw = response.content.join('');
             // Files.read can omit the original trailing newline in a text file.
-            // Restore it only when the exact original size and fingerprint prove it.
             if (file.size != null && raw.length === file.size - 1 &&
                 file.fnv32 != null && fingerprint(raw + '\n') === file.fnv32)
               raw += '\n';
@@ -65,17 +107,8 @@ async function loadAndTrash(files, requestId, ensureTempFolder = false) {
         if (pending.length) throw Error('Temporary file unreadable or truncated');
       }
     } finally {
-      for (let first = 0; first < registered.length; first += 20) {
-        const subset = registered.slice(first, first + 20);
-        try {
-          const result = await tools.files__manage_library({operations:subset.map(r => ({
-            operation: 'delete', target:{kind:'file',library_file_id:r.libraryId},
-          }))});
-          if (result.results?.length !== subset.length || result.results.some(r => r.status !== 'succeeded'))
-            cleanupFailure = true;
-        } catch (_) {cleanupFailure = true;}
-      }
-      if (cleanupFailure) throw Error('Temporary file cleanup failed; no GitHub write');
+      await deleteIds(registered.map(r => r.libraryId));
+      await cleanupOwnedFiles();
     }
   }
   if (contents.some(x => typeof x !== 'string') || contents.length !== files.length)
@@ -83,10 +116,17 @@ async function loadAndTrash(files, requestId, ensureTempFolder = false) {
   return contents;
 }
 
+const folder = await tools.files__manage_library({operations:[
+  {operation:'create_folder',path:'/temp',parents:true},
+]});
+if (folder.results?.length !== 1 || folder.results[0]?.status !== 'succeeded')
+  throw Error('Temporary folder unavailable; no GitHub write');
+await cleanupOwnedFiles();
+
 // One small index locates exact original packets; it does not contain copies of their contents.
-const indexText = (await loadAndTrash([{path:INDEX_PATH}], 'index', true))[0];
+const indexText = (await loadAndTrash([{path:INDEX_PATH}], -1))[0];
 const index = JSON.parse(indexText);
-if (index.version !== 1 || !/^[a-f0-9]{32}$/.test(index.request_id) ||
+if (index.version !== 1 || index.request_id !== requestId ||
     index.repository !== 'naro0216n-collab/Space-Idle' ||
     !sha(index.develop_head) || !sha(index.publish_base_head) || !sha(index.publish_base_tree) ||
     !Array.isArray(index.packets) || index.packets.length < 2 || index.packets.length > 300)
@@ -101,7 +141,7 @@ for (let i = 0; i < index.packets.length; i++) {
 }
 const payloads = await loadAndTrash(index.packets.map(row => ({
   path:root + row.name, size:row.size, fnv32:row.fnv32,
-})), index.request_id);
+})), 0);
 const packets = payloads.map(raw => JSON.parse(raw));
 let prior = index.publish_base_tree;
 for (let i = 0; i < packets.length - 1; i++) {

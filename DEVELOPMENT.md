@@ -82,7 +82,7 @@ Publish Gateway workflowを変更する際は、Publish control maintenanceに�
 
 ### Connectorの一時ファイル管理
 
-通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。Executorは、ChatGPT Libraryの`/temp/`を用意し、indexと原本packetを一時登録・読取して、登録したファイルをGitHub書込前に削除する。Library上の削除はゴミ箱への移動である。
+通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。Executorは、ChatGPT Libraryの`/temp/`を用意し、transaction IDに対応する残存ファイルを回収してから、indexと原本packetを一時登録・読取する。各入力の使用後に登録ファイルを削除し、当該transactionの一時ファイルが空であることを確認してからGitHub書込へ進む。Library上の削除はゴミ箱への移動である。
 
 Executorの登録・読取・削除が完了した後、同じ実行の中でGitHub transportのtree生成、commit作成、`publish` ref更新を行う。中断または一時ファイル操作の失敗時は、保存済みtransactionを使用して「中断・失敗時の再開」から続ける。通常publishの実行者が扱う入力は`execution_index`と固定Launcherのsourceであり、packet数やpayload規模にかかわらず同じ手順を使う。
 
