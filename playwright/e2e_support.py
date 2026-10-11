@@ -97,6 +97,7 @@ def monitored_page(context: Any) -> Iterator[Any]:
     console_errors: list[str] = []
     page_errors: list[str] = []
     request_failures: list[str] = []
+    http_failures: list[str] = []
     page = context.new_page()
     page.on("console", lambda msg: console_errors.append(msg.text) if msg.type == "error" else None)
     page.on("pageerror", lambda exc: page_errors.append(str(exc)))
@@ -104,9 +105,14 @@ def monitored_page(context: Any) -> Iterator[Any]:
         "requestfailed",
         lambda req: request_failures.append(f"{req.method} {req.url}: {req.failure}"),
     )
+    page.on(
+        "response",
+        lambda resp: http_failures.append(f"{resp.status} {resp.request.method} {resp.url}")
+        if resp.status >= 400 and "/api/v1/" in resp.url else None,
+    )
     yield page
-    if console_errors or page_errors or request_failures:
+    if console_errors or page_errors or request_failures or http_failures:
         raise AssertionError(
             "browser runtime errors: "
-            f"console={console_errors}, page={page_errors}, requests={request_failures}"
+            f"console={console_errors}, page={page_errors}, requests={request_failures}, http={http_failures}"
         )

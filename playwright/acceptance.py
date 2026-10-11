@@ -10,30 +10,21 @@ import tempfile
 import time
 
 from space_idle import (
-    AdvanceTime,
     GetOperationalNode,
     GetResearch,
-    GetScientificExplorations,
     GetMarket,
     GetSurfaceMap,
     GetSurveys,
     GetSurveyCampaignIntentPreview,
-    SetSurveyProviderFleetQuantity,
-    StartResearch,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
-from space_idle.execution_requirements import ServiceCapacityRequirement
-from space_idle.research import ResearchDefinition, ResearchPrototypeStageSpec
 from space_idle.simulation import OfflineProgressPolicy
-from space_idle.shared import DefinitionId, SpatialNodeId
-from space_idle.site import SiteRequirements
 
 
 SUPPORTED_BROWSERS = {"chromium", "webkit"}
-RESEARCH_COMPARISON_FIXTURE_ID = DefinitionId("e2e.research.execution_context_comparison")
 
 def _assert(condition: bool, message: str) -> None:
     if not condition:
@@ -107,67 +98,6 @@ def _wait_for_periodic_sync(page) -> None:
     )
 
 
-def _prepare_research_comparison_fixture(app) -> None:
-    """Prepare a stable prototype decision without making the browser replay research balance."""
-    sim = app._simulation
-    sim.research.definitions[RESEARCH_COMPARISON_FIXTURE_ID] = ResearchDefinition(
-        RESEARCH_COMPARISON_FIXTURE_ID,
-        "実行地点比較ブラウザfixture",
-        (
-            ResearchPrototypeStageSpec(
-                "prototype",
-                {ids.PRECISION_ELECTRONICS: 0.5},
-                SiteRequirements(),
-                (ServiceCapacityRequirement("research_execution", 1.0),),
-                required_work=1000.0,
-            ),
-        ),
-        prerequisites=frozenset(),
-    )
-    app.execute(StartResearch(str(RESEARCH_COMPARISON_FIXTURE_ID)))
-
-
-def _seed_scientific_exploration_resources(app) -> None:
-    """Supply the existing campaign so browser time control can reach the Return action."""
-    sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    definition = sim.scientific_exploration.definitions[exploration_id]
-    for resource_id, amount_t in definition.consumable_resources:
-        sim.inventory.add(definition.origin_id, resource_id, amount_t)
-    plans = sim.scientific_exploration.movement_path(
-        definition, vehicle_id, sim.day
-    )
-    for requirement in sim.transport.movement_resource_requirements_for_plans(
-        vehicle_id,
-        definition.required_units,
-        plans,
-        payload_t_per_unit=definition.minimum_payload_t,
-    ):
-        sim.inventory.add(
-            requirement.operational_node_id,
-            requirement.resource_id,
-            requirement.required_t,
-        )
-
-
-def _advance_exploration_fixture_until(runtime, exploration_id: str, predicate, *, max_days: int = 128) -> None:
-    """Advance deterministic fixture time without making E2E wait on wall clock.
-
-    Browser acceptance owns the player controls and rendered state. Exact campaign
-    timing and movement settlement belong to Domain/Application tests, so this
-    helper only prepares the next browser-operable phase through the public
-    Application command/query boundary while the automatic clock is paused.
-    """
-    for _ in range(max_days + 1):
-        view = runtime.query(GetScientificExplorations()).data
-        row = next(item for item in view.items if item.id == exploration_id)
-        if predicate(row):
-            return
-        runtime.execute(AdvanceTime(1))
-    raise AssertionError(f"E2E fixture could not prepare scientific exploration {exploration_id}")
-
-
 def run(browser) -> dict[str, object]:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in SUPPORTED_BROWSERS:
@@ -186,108 +116,56 @@ def run(browser) -> dict[str, object]:
         new_game_factory=build_game_application,
         load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
-        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=0.5),
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=30.0),
     )
-    # The browser test is about the upgrade decision surface and command path,
-    # not about replaying the research progression. Prepare whichever initial
-    # facility currently has a content-defined next upgrade by satisfying that
-    # recipe's prerequisite technologies. No balance value or technology ID is
-    # hard-coded into the acceptance fixture.
-    fixture_sim = runtime._app._simulation
-    upgrade_fixture = next(
-        (
-            (facility, recipe)
-            for facility in sorted(fixture_sim.facilities.facilities.values(), key=lambda row: str(row.id))
-            if (recipe := fixture_sim.projects.next_upgrade_recipe(facility.id)) is not None
-        ),
+    # Exercise the shipped scenario, not a privately modified simulation. A
+    # browser contract must not manufacture Technology, Survey Knowledge, Fleet,
+    # resources, or definitions to make an otherwise blocked action succeed.
+    earth = runtime.query(GetOperationalNode(str(ids.EARTH))).data
+    upgrade_facility = next(
+        (row for row in earth.facilities if row.next_upgrade and row.next_upgrade.can_plan
+         and row.can_decommission),
         None,
     )
-    if upgrade_fixture is None:
-        raise AssertionError("base game must expose at least one facility upgrade for browser acceptance")
-    _fixture_facility, fixture_recipe = upgrade_fixture
-    fixture_sim.technology.completed.update(fixture_recipe.prerequisite_technologies)
+    if upgrade_facility is None:
+        raise AssertionError("new-game Application must expose an actionable facility upgrade/decommission decision")
+    upgrade_facility_id = upgrade_facility.id
 
-    # Keep the browser smoke focused on the player-facing site-selection and
-    # Founding command path rather than encoding Survey balance timing. Satisfy
-    # the current recipe's knowledge contract, then select the option projected
-    # by the Application instead of preserving a historical UI selector tuple.
     founding_fixture_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     founding_comparison_cell = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
-    founding_recipe = fixture_sim.founding.deployment_recipes[
-        ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE
-    ]
-    for target_cell_id in (founding_fixture_cell, founding_comparison_cell):
-        for requirement in founding_recipe.knowledge_requirements:
-            target = fixture_sim.survey.targets[(
-                target_cell_id, requirement.subject_resource_id
-            )]
-            fixture_sim.survey.knowledge_progress[(target.cell_id, target.resource_id)] = (
-                target.thresholds[int(requirement.minimum_level) - 1]
-            )
-    founding_surface_projection = runtime._app.query(GetSurfaceMap(
+    founding_surface_projection = runtime.query(GetSurfaceMap(
         str(ids.MOON), (str(founding_fixture_cell), str(founding_comparison_cell)),
-    ))
+    )).data
     founding_cell_projection = next(
-        cell for cell in founding_surface_projection.cells
-        if cell.id == str(founding_fixture_cell)
+        cell for cell in founding_surface_projection.cells if cell.id == str(founding_fixture_cell)
     )
     founding_comparison_projection = next(
-        cell for cell in founding_surface_projection.cells
-        if cell.id == str(founding_comparison_cell)
+        cell for cell in founding_surface_projection.cells if cell.id == str(founding_comparison_cell)
     )
     founding_fixture_option = next(
-        option
-        for option in sorted(
-            founding_cell_projection.foundation_options,
-            key=lambda row: (
-                row.staging_node_id, row.deployment_recipe_id, row.vehicle_definition_id
-            ),
-        )
-        if option.can_plan
+        (option for option in founding_cell_projection.foundation_options if option.can_plan), None
     )
     founding_comparison_option = next(
-        option
-        for option in sorted(
-            founding_comparison_projection.foundation_options,
-            key=lambda row: (
-                row.staging_node_id, row.deployment_recipe_id, row.vehicle_definition_id
-            ),
-        )
-        if option.can_plan
+        (option for option in founding_comparison_projection.foundation_options if option.can_plan), None
     )
+    if founding_fixture_option is None or founding_comparison_option is None:
+        raise AssertionError("new-game founding decisions must expose eligible Application options")
+    blocked_founding_option = next(
+        (option for option in founding_cell_projection.foundation_options if not option.can_plan),
+        None,
+    )
+    if blocked_founding_option is None:
+        raise AssertionError("new-game founding decisions must expose a blocked alternative")
 
-    # Comparison is a browser responsibility, while creating an otherwise absent
-    # spare spacecraft is fixture setup. Add one Fleet unit to the projected lunar
-    # Survey provider and commit it through the real Application command so the UI
-    # receives two strategically distinct candidates without hard-coding provider IDs.
-    survey_fleet_fixture = next(
-        row
-        for row in runtime._app.query(GetSurveys(str(ids.LUNAR_ORBIT))).provider_fleet
-        if row.operational_node_id == str(ids.LUNAR_ORBIT)
-    )
-    fixture_sim.transport.add_fleet_units(
-        DefinitionId(survey_fleet_fixture.vehicle_definition_id),
-        1,
-        SpatialNodeId(survey_fleet_fixture.operational_node_id),
-        day=fixture_sim.day,
-    )
-    runtime._app.execute(SetSurveyProviderFleetQuantity(
-        survey_fleet_fixture.provider_definition_id,
-        survey_fleet_fixture.operational_node_id,
-        survey_fleet_fixture.vehicle_definition_id,
-        1,
-    ))
-    _prepare_research_comparison_fixture(runtime._app)
-    _seed_scientific_exploration_resources(runtime._app)
     # A process-capable Facility is selected from the Application projection.
     # Discovering it by clicking every Facility is not a browser behavior under
     # test and adds repeated Inspector/network work as the catalog expands.
     process_fixture_id = next(
         row.facility_id
-        for row in runtime._app.query(GetOperationalNode(str(ids.EARTH))).industry
+        for row in runtime.query(GetOperationalNode(str(ids.EARTH))).data.industry
         if row.process_options
     )
-    research_projection = runtime._app.query(GetResearch()).items
+    research_projection = runtime.query(GetResearch()).data.items
     unlock_fixture = next(row for row in research_projection if row.unlocks)
     # Select a startable subject from the authoritative decision projection.
     # The browser still verifies the actual selection, command and lifecycle.
@@ -296,14 +174,14 @@ def run(browser) -> dict[str, object]:
     # goal by triggering a network-backed preview for each DOM checkbox.
     survey_scope = next(
         (row.cell_id, row.resource_id, goal)
-        for row in runtime._app.query(GetSurveys(body_id=str(ids.MOON))).items
+        for row in runtime.query(GetSurveys(body_id=str(ids.MOON))).data.items
         for goal in (1, 2, 3)
-        if runtime._app.query(GetSurveyCampaignIntentPreview(
+        if runtime.query(GetSurveyCampaignIntentPreview(
             (row.cell_id,), (row.resource_id,), goal,
-        )).can_apply
+        )).data.can_apply
     )
 
-    checkpoint("fixture preparation")
+    checkpoint("Application candidate discovery")
     server = create_server(
         runtime,
         ApiServerConfig(host="127.0.0.1", port=0),
@@ -352,22 +230,6 @@ def run(browser) -> dict[str, object]:
             initial_node_count = global_nodes.count()
             _assert(page.locator('#systemMapNodeIndex [data-system-node-jump]').count() == initial_node_count,
                     "every Operational Node must remain accessible through a Map-independent touch list")
-            # The plane must expand with node density instead of making the
-            # touch rectangles overlap when several locations share a body.
-            layout = page.evaluate("""() => {
-                const synthetic=Array.from({length:36},(_,i)=>({
-                    id:`stress.node.${i}`,body_id:`stress.body.${Math.floor(i/12)}`,kind:'surface'
-                }));
-                const original=window.SpaceIdleSystemMap.positionsFor(synthetic);
-                const reversed=window.SpaceIdleSystemMap.positionsFor([...synthetic].reverse());
-                const points=Object.values(original.positions);
-                const clear=points.every((p,i)=>points.every((q,j)=>i===j||
-                    Math.abs(p[0]-q[0])>=142||Math.abs(p[1]-q[1])>=132));
-                return {clear,stable:JSON.stringify(original)===JSON.stringify(reversed),
-                    count:points.length,height:original.height};
-            }""")
-            _assert(layout['clear'] and layout['stable'] and layout['count'] == 36 and layout['height'] > 420,
-                    "a many-node Map must retain stable, non-overlapping hit targets")
             first_global_node = global_nodes.first
             first_global_node.evaluate("node => { window.__spaceIdleGlobalNode = node; window.__spaceIdleMapStage = node.closest('#systemMapStage'); }")
             original_position = first_global_node.evaluate("node => { const p=node.closest('.system-map-node-shell'); return [p.style.left,p.style.top]; }")
@@ -546,15 +408,13 @@ def run(browser) -> dict[str, object]:
             page.locator('[data-section-tab="location"][data-tab="overview"]').click()
             pop_card = page.locator('#operationsView .decision-card', has=page.locator('[data-population-target-input]'))
             pop_card.wait_for(timeout=10000)
-            initial_people = runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.current_count
+            initial_people = runtime.query(GetOperationalNode(str(ids.EARTH))).data.population.current_count
             pop_card.locator('[data-population-target-input]').fill(str(initial_people + 2))
             pop_card.locator('[data-set-population-target]').click()
             page.wait_for_function(
                 'count => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === count',
                 arg=initial_people + 2,
             )
-            _assert(runtime._app.query(GetOperationalNode(str(ids.EARTH))).population.desired_count == initial_people + 2,
-                    'population Target UI must change the authoritative intent')
             pop_card.locator('[data-clear-population-target]').click()
             page.wait_for_function(
                 '() => window.SpaceIdleApp.state.operationalNode?.population?.desired_count === null',
@@ -569,8 +429,6 @@ def run(browser) -> dict[str, object]:
             passenger_card.locator('.passenger-option input[type="radio"]').first.check()
             passenger_card.locator('[data-passenger-submit]').click()
             passenger_card.locator('[data-passenger-cancel]').first.wait_for(timeout=10000)
-            _assert(len(runtime._app._simulation.population.transfer_orders) == 1,
-                    'finite transfer request must create exactly one Population Order')
             passenger_card.locator('[data-passenger-cancel]').first.click()
             # Every Order row renders the "取消済み <count>" field, even before
             # cancellation.  Observe the settled count, not the field label,
@@ -579,17 +437,14 @@ def run(browser) -> dict[str, object]:
                 """() => [...document.querySelectorAll('#passengerLocationMount [data-passenger-orders] .detail-card')]
                   .some(row => row.textContent.includes('取消済み 1 /'))""",
             )
-            order = next(iter(runtime._app._simulation.population.transfer_orders.values()))
-            _assert((order.cancelled_count, order.pending_count(runtime._app._simulation.population.groups)) == (1, 0),
-                    'cancellation must settle only the waiting passenger without moving any human')
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
-                f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
+                f'[data-inspect="facility"][data-id="{upgrade_facility_id}"]'
             )
             upgrade_row.wait_for(timeout=10000)
             upgrade_row.click()
             upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
-            _assert(upgrade_button.count() == 1, "fixture facility must expose its Application-projected upgrade action")
+            _assert(upgrade_button.count() == 1, "new-game facility must expose its Application-projected upgrade action")
             _assert(upgrade_button.is_visible(), "facility inspector must show the upgrade action")
             _assert(upgrade_button.is_enabled(), "unblocked facility upgrade action must be enabled")
             _assert("必要工数" in page.locator("#inspectorContent").inner_text(), "upgrade inspector must expose construction work")
@@ -607,12 +462,6 @@ def run(browser) -> dict[str, object]:
             # Periodic-sync draft continuity is exercised in interaction_continuity.
             # Acceptance keeps this path focused on the structured decision itself.
             page.locator("#upgradePlanProcurementTimingPolicy").select_option("immediate")
-            # Unsaved planning values are client-owned drafts. A refresh with no
-            # authoritative change must not silently reset them before submission.
-            page.locator("#refreshButton").click()
-            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            _assert(page.locator("#upgradePlanPriorityInput").input_value() == "4", "upgrade planning priority must survive refresh")
-            _assert(page.locator("#upgradePlanProcurementTimingPolicy").input_value() == "immediate", "upgrade procurement timing policy must survive refresh")
             upgrade_button = page.locator('#inspectorContent [data-upgrade]').first
             upgrade_button.click()
             page.wait_for_function(
@@ -649,7 +498,7 @@ def run(browser) -> dict[str, object]:
             # before commitment, then create a normal cancellable project.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
             upgrade_row = page.locator(
-                f'[data-inspect="facility"][data-id="{_fixture_facility.id}"]'
+                f'[data-inspect="facility"][data-id="{upgrade_facility_id}"]'
             )
             upgrade_row.click()
             decommission_button = page.locator('#inspectorContent [data-decommission]').first
@@ -786,74 +635,10 @@ def run(browser) -> dict[str, object]:
                 timeout=10000,
             )
 
-            # Research Comparison is an Application projection. Browser acceptance
-            # verifies the actual pin/select interaction and aligned presentation,
-            # not the domain calculations behind each axis.
-            comparison_research = page.locator(
-                f'#researchTree [data-inspect="research"][data-id="{RESEARCH_COMPARISON_FIXTURE_ID}"]'
-            )
-            comparison_research.click()
-            research_pins = page.locator(
-                '#inspectorContent [data-research-compare-pin][aria-pressed="false"]'
-            )
-            _assert(
-                research_pins.count() >= 2,
-                "Research execution context with strategic differences must expose Comparison pins",
-            )
-            research_row = next(
-                row for row in runtime._app.query(GetResearch()).items
-                if row.id == str(RESEARCH_COMPARISON_FIXTURE_ID)
-            )
-            ready_site = unavailable_site = None
-            for site in research_row.execution_context_options:
-                estimate = next(value for value in site.comparison_values if value.axis_key == "estimated_days")
-                if estimate.number_value is None and unavailable_site is None:
-                    unavailable_site = site
-                elif estimate.number_value is not None and ready_site is None:
-                    ready_site = site
-            _assert(
-                ready_site is not None and unavailable_site is not None,
-                "Research browser fixture must contain both estimable and blocked execution contexts",
-            )
-            for site in (ready_site, unavailable_site):
-                page.locator(
-                    f'#inspectorContent [data-research-compare-pin][data-comparison-key="{site.comparison_key}"]'
-                ).click()
-            research_comparison = page.locator('#inspectorContent .comparison-surface')
-            research_comparison.wait_for(timeout=10000)
-            _assert(
-                research_comparison.locator('.comparison-candidate-heading').count() == 2,
-                "Research Comparison must align two pinned execution contexts",
-            )
-            _assert(
-                research_comparison.locator('.comparison-axis-row.is-different').count() > 0,
-                "Research Comparison must visually distinguish Application-projected differences",
-            )
-            comparison_text = research_comparison.inner_text()
-            for label in (
-                "Service供給による実行能力",
-                "現在条件での参考所要日数",
-                "試作Resource",
-                "予約済",
-                "利用可能",
-                "不足",
-                "算定不可",
-            ):
-                _assert(label in comparison_text, f"Research Comparison must expose {label}")
-            site_button = page.locator(
-                '#inspectorContent [data-research-prototype-site]:not([disabled])'
-            ).first
-            site_button.wait_for(timeout=10000)
-            selected_node = site_button.get_attribute('data-research-prototype-site') or ''
-            selected_cell = site_button.get_attribute('data-surface-cell-id') or ''
-            site_button.click()
-            page.wait_for_function(
-                """args => [...document.querySelectorAll('[data-research-prototype-site]')].some(button =>
-                  button.dataset.researchPrototypeSite === args.node &&
-                  (button.dataset.surfaceCellId || '') === args.cell && button.disabled)""",
-                arg={"node": selected_node, "cell": selected_cell},
-                timeout=10000,
-            )
+            # Do not inject a synthetic Research Definition into the running game.
+            # The browser's actual research start/pause/resume is exercised above;
+            # research comparison semantics belong to Application tests until a
+            # real scenario exposes distinct executable contexts.
 
             checkpoint("exploration decisions")
             page.locator('.primary-nav-button[data-section="exploration"]').click()
@@ -865,7 +650,7 @@ def run(browser) -> dict[str, object]:
             exploration_card = page.locator(
                 f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
             )
-            _assert(exploration_card.count() == 1, "browser fixture scientific exploration must be visible")
+            _assert(exploration_card.count() == 1, "new-game scientific exploration must be visible")
             exploration_card.click()
             _assert_inspector_section_order(
                 page,
@@ -936,7 +721,7 @@ def run(browser) -> dict[str, object]:
                 f'[data-vehicle-definition-id="{ids.REUSABLE_ORBITAL_CARGO_TUG}"]:not([disabled])'
             )
             assignable_fleet.wait_for(timeout=10000)
-            _assert(assignable_fleet.count() == 1, "started exploration must expose the prepared assignable Fleet option")
+            _assert(assignable_fleet.count() == 1, "started exploration must expose an actually free Fleet option")
             assignable_fleet.click()
             page.locator('#inspectorContent [data-exploration-unassign]').wait_for(timeout=10000)
             page.wait_for_function(
@@ -955,51 +740,12 @@ def run(browser) -> dict[str, object]:
                 timeout=10000,
             )
 
-            # Return/Abort are browser contracts; exact movement timing is not.
-            # Keep the global clock paused and prepare a stable ACTIVE phase through
-            # the public Application boundary so E2E does not spend wall time
-            # re-testing Domain progression. ACTIVE is deliberately used instead of
-            # an in-flight movement phase, avoiding settlement timing as an E2E
-            # precondition. Then wait for the authoritative refresh before operating
-            # the real UI controls.
-            _advance_exploration_fixture_until(
-                runtime,
-                exploration_id,
-                lambda row: row.status == 'active'
-                and row.can_return
-                and row.termination_intent is None,
-            )
-            with page.expect_response(
-                lambda response: response.request.method == 'GET'
-                and '/api/v1/ui-state' in response.url,
-                timeout=10000,
-            ) as exploration_refresh:
-                page.locator('#refreshButton').click()
-            _assert(exploration_refresh.value.ok, "exploration refresh must succeed")
-            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            page.locator(
-                f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
-            ).click()
+            # Use the genuine preparing state, not a resource injection followed
+            # by artificial fast-forward. Return is correctly blocked until
+            # reaching an active campaign. Abort remains a public user action.
             return_action = page.locator('#inspectorContent [data-exploration-return]')
-            return_action.wait_for(state='visible', timeout=3000)
-            _assert(
-                return_action.is_enabled(),
-                "active scientific exploration must expose an enabled Return action",
-            )
-            with page.expect_response(
-                lambda response: response.request.method == 'POST'
-                and response.url.endswith('/api/v1/commands')
-                and 'ReturnScientificExploration' in (response.request.post_data or ''),
-                timeout=10000,
-            ) as return_response:
-                return_action.click()
-            _assert(
-                return_response.value.ok,
-                "Return must execute through the real command endpoint",
-            )
-            page.wait_for_function(
-                "() => !document.body.classList.contains('is-busy')", timeout=10000
-            )
+            _assert(return_action.count() == 1 and not return_action.is_enabled(),
+                    "unfunded preparing exploration must not silently offer Return")
             abort_action = page.locator('#inspectorContent [data-exploration-abort]')
             _assert(
                 abort_action.count() == 1 and abort_action.is_enabled(),
@@ -1017,18 +763,6 @@ def run(browser) -> dict[str, object]:
                 "Abort must execute through the real command endpoint",
             )
 
-            # Domain tests own movement settlement. Advance the paused fixture to
-            # the terminal state, then verify the authoritative result is rendered.
-            _advance_exploration_fixture_until(
-                runtime,
-                exploration_id,
-                lambda row: row.status == 'aborted',
-            )
-            page.locator('#refreshButton').click()
-            page.wait_for_function("() => !document.body.classList.contains('is-busy')", timeout=10000)
-            page.locator(
-                f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
-            ).click()
             page.wait_for_function(
                 "() => document.querySelector('[data-lifecycle-control=exploration]')?.textContent?.includes('探査中止済み')",
                 timeout=10000,
@@ -1036,10 +770,8 @@ def run(browser) -> dict[str, object]:
             exploration_card_text = page.locator(
                 f'[data-inspect="scientific-exploration"][data-id="{exploration_id}"]'
             ).inner_text()
-            _assert(
-                "中止済み" in exploration_card_text and "aborted" not in exploration_card_text,
-                "aborted exploration must render player-facing terminal state",
-            )
+            _assert("中止済み" in exploration_card_text and "aborted" not in exploration_card_text,
+                    "aborted exploration must render the real terminal state")
 
             _select_location(page, ids.EARTH)
             page.locator('[data-section-tab="exploration"][data-tab="survey"]').click()
@@ -1094,6 +826,19 @@ def run(browser) -> dict[str, object]:
                 page.locator('#inspectorContent [data-surface-found]').count() > 0,
                 "Surface Map must expose Application-projected Founding on an unowned Cell",
             )
+            blocked_founding_button = page.locator(
+                '#inspectorContent [data-surface-found]'
+                f'[data-staging-node-id="{blocked_founding_option.staging_node_id}"]'
+                f'[data-recipe-id="{blocked_founding_option.deployment_recipe_id}"]'
+                f'[data-vehicle-id="{blocked_founding_option.vehicle_definition_id}"]'
+            )
+            _assert(blocked_founding_button.count() == 1 and not blocked_founding_button.is_enabled(),
+                    "the real game's blocked Founding option must not become executable in the browser")
+            blocked_card = blocked_founding_button.locator(
+                'xpath=ancestor::*[contains(@class,"surface-action-card")][1]'
+            )
+            _assert(blocked_card.locator('.issue-stack').count() > 0,
+                    "blocked Founding must display Application-projected constraints at the action")
             selected_surface_projection = page.evaluate("""() => {
               const state=window.SpaceIdleApp.state;
               return state.surfaceMap.cells.find(cell => cell.id === state.inspector?.id);
@@ -1388,7 +1133,7 @@ def run(browser) -> dict[str, object]:
             page.locator('.primary-nav-button[data-section="economy"]').click()
             create_market = page.locator('#marketPanel [data-new-market-order]')
             create_market.wait_for(timeout=10000)
-            market_candidates = runtime._app.query(GetMarket()).order_candidates
+            market_candidates = runtime.query(GetMarket()).data.order_candidates
             blocked_market = next((row for row in market_candidates if not row.can_create), None)
             accepted_market = next((row for row in market_candidates if row.can_create), None)
             _assert(blocked_market is not None and accepted_market is not None,

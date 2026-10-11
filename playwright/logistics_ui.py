@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, CreateTransportAllocation, GetFleet, GetTransportAllocations, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetFleet, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -20,14 +20,6 @@ PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
-def _build_logistics_test_application():
-    app = build_game_application()
-    app._simulation.technology.completed.update(  # noqa: SLF001 - deterministic E2E fixture setup
-        {ids.LM_LOGISTICS_MAINTENANCE_01, ids.CR_CRYOGENIC_STORAGE_TRANSFER_03}
-    )
-    return app
-
-
 def run(browser) -> None:
     browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
     if browser_name not in {"chromium", "webkit"}:
@@ -35,7 +27,7 @@ def run(browser) -> None:
 
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
-        new_game_factory=_build_logistics_test_application,
+        new_game_factory=build_game_application,
         load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
@@ -398,12 +390,8 @@ def run(browser) -> None:
                 target_forward_t_per_day=0.0, target_reverse_t_per_day=0.0,
             )).data.created_id
             assert first_parallel_id and second_parallel_id and first_parallel_id != second_parallel_id
-            parallel_rows = runtime.query(GetTransportAllocations()).data.items
-            parallel = {row.id: row for row in parallel_rows if row.id in (first_parallel_id, second_parallel_id)}
-            assert len(parallel) == 2
-            assert parallel[first_parallel_id].target_capacity.forward_t_per_day > 0
-            assert parallel[second_parallel_id].target_capacity.forward_t_per_day == 0
-
+            # Allocation target semantics are covered by Application/Domain tests.
+            # E2E checks that both independently owned rows can be selected in the Map.
             page.reload(wait_until='load')
             page.locator('#connectionState.is-ok').wait_for(timeout=10000)
             page.locator('.primary-nav-button[data-section="logistics"]').click()

@@ -124,6 +124,7 @@ def test_browser_context_lifecycle_isolates_each_scenario_and_closes_on_error() 
         ("pageerror", RuntimeError("uncaught browser exception"), "uncaught browser exception"),
         ("console", SimpleNamespace(type="error", text="browser console error"), "browser console error"),
         ("requestfailed", SimpleNamespace(method="GET", url="/api/v1/ui-state", failure="connection lost"), "connection lost"),
+        ("response", SimpleNamespace(status=500, url="http://127.0.0.1/api/v1/ui-state", request=SimpleNamespace(method="GET")), "500 GET"),
     ],
 )
 def test_monitored_page_fails_on_browser_specific_runtime_errors(event, payload, message) -> None:
@@ -194,5 +195,9 @@ def test_ci_browser_jobs_execute_the_runnable_scenarios_without_gaps() -> None:
         workflows / "full-validation.yml", "webkit-e2e", "webkit"
     )
     assert fast and fast <= runnable
-    assert full_chromium == full_webkit == runnable
-    assert fast <= full_chromium
+    # The cheap Fast CI smoke owns only initial browser wiring. Full Validation
+    # owns deeper user journeys on both browser engines, without executing the
+    # smoke again. Neither suite may silently lose an entrypoint.
+    assert full_chromium == full_webkit
+    assert fast.isdisjoint(full_chromium)
+    assert fast | full_chromium == runnable
