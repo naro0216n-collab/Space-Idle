@@ -32,10 +32,20 @@ def build_facility_definitions() -> dict:
             req._capabilities("vehicle_refueling", "cryogenic_storage", "orbital_fuel_transfer"),
             orbit, orbit, service_capacity_supplies=req._services(spacecraft_servicing=0.3),
         ),
+        ids.ORBITAL_MATERIALS_WORKSHOP: FacilityDef(
+            ids.ORBITAL_MATERIALS_WORKSHOP, "軌道トラス加工・精密工作モジュール",
+            req._capabilities("structural_fabrication", "basic_machine_shop", "precision_machining"),
+            orbit, orbit, process_throughput_per_day=2.5,
+        ),
+        ids.ORBITAL_HEAVY_CARGO_TERMINAL: FacilityDef(
+            ids.ORBITAL_HEAVY_CARGO_TERMINAL, "大型貨物係留・移載ターミナル",
+            req._capabilities("cargo_transfer", "spacecraft_servicing", "vehicle_refueling", "orbital_fuel_transfer"),
+            orbit, orbit, service_capacity_supplies=req._services(cargo_transfer=4.0, spacecraft_servicing=2.0),
+        ),
         ids.ORBITAL_ASSEMBLY_YARD: FacilityDef(
             ids.ORBITAL_ASSEMBLY_YARD, "軌道上宇宙機組立ヤード",
             req._capabilities("vehicle_assembly", "robotic_orbital_assembly"), orbit, orbit,
-            service_capacity_supplies=req._services(vehicle_assembly=0.85),
+            service_capacity_supplies=req._services(vehicle_assembly=1.4),
         ),
         ids.ORBITAL_HABITAT: FacilityDef(
             ids.ORBITAL_HABITAT, "軌道居住・生命維持モジュール",

@@ -43,10 +43,22 @@ def build_construction_recipes() -> dict:
             (req._structure_resource(7.0), req._machinery_resource(5.0), req._electronics_resource(2.0)),
             26.0, req.ORBIT_SITE, frozenset({ids.research_id("CR-CRYOGENIC-STORAGE-TRANSFER-08")}),
         ),
+        ids.ORBITAL_MATERIALS_WORKSHOP: ConstructionRecipe(
+            ids.ORBITAL_MATERIALS_WORKSHOP,
+            (req._structure_resource(14.0), req._machinery_resource(12.0), req._electronics_resource(5.0)),
+            54.0, req.with_capabilities(req.ORBIT_SITE, "robotic_orbital_construction"),
+            frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_14}),
+        ),
+        ids.ORBITAL_HEAVY_CARGO_TERMINAL: ConstructionRecipe(
+            ids.ORBITAL_HEAVY_CARGO_TERMINAL,
+            (req._structure_resource(22.0), req._machinery_resource(15.0), req._electronics_resource(6.0)),
+            72.0, req.with_capabilities(req.ORBIT_SITE, "robotic_orbital_construction"),
+            frozenset({ids.LM_LOGISTICS_MAINTENANCE_13}),
+        ),
         ids.ORBITAL_ASSEMBLY_YARD: ConstructionRecipe(
             ids.ORBITAL_ASSEMBLY_YARD,
-            (req._structure_resource(10.0), req._machinery_resource(9.0), req._electronics_resource(3.0)),
-            38.0, req.ORBIT_SITE, frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_05}),
+            (req._structure_resource(14.0), req._machinery_resource(12.0), req._electronics_resource(3.5)),
+            50.0, req.ORBIT_SITE, frozenset({ids.MC_MANUFACTURING_CONSTRUCTION_05}),
         ),
         ids.ORBITAL_HABITAT: ConstructionRecipe(
             ids.ORBITAL_HABITAT,

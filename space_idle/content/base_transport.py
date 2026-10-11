@@ -341,6 +341,36 @@ def build_vehicle_definitions() -> dict:
                 net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003), (ids.OXYGEN, 0.001)),
             ),
         ),
+        ids.HEAVY_ORBITAL_FREIGHTER: VehicleDef(
+            id=ids.HEAVY_ORBITAL_FREIGHTER,
+            display_name="大型軌道間モジュール貨物船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=22.0, payload_t=44.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=28.0,
+                propellant_t_per_total_t_per_km_s=0.011,
+                operation_capabilities=(SpaceflightCapability(14.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=520.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=20.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 26.0),
+                           (ids.MACHINERY, 11.0), (ids.PRECISION_ELECTRONICS, 5.0)),
+                prerequisite_technologies=frozenset({
+                    ids.LM_LOGISTICS_MAINTENANCE_13,
+                    ids.MC_MANUFACTURING_CONSTRUCTION_05,
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=9.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 13.0),
+                                             (ids.MACHINERY, 5.5), (ids.PRECISION_ELECTRONICS, 2.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=7.0),
+        ),
         ids.DEEP_SPACE_FREIGHTER: VehicleDef(
             id=ids.DEEP_SPACE_FREIGHTER,
             display_name="長距離軌道間貨物船",

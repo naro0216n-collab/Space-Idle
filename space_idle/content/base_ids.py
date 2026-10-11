@@ -120,6 +120,8 @@ ORBITAL_SOLAR_ARRAY = DefinitionId("base.facility.orbital_solar_array")
 TRACKING_ORBITAL_SOLAR_ARRAY = DefinitionId("base.facility.tracking_orbital_solar_array")
 HIGH_OUTPUT_ORBITAL_FISSION_POWER = DefinitionId("base.facility.high_output_orbital_fission_power")
 ORBITAL_PROPELLANT_DEPOT = DefinitionId("base.facility.orbital_propellant_depot")
+ORBITAL_MATERIALS_WORKSHOP = DefinitionId("base.facility.orbital_materials_workshop")
+ORBITAL_HEAVY_CARGO_TERMINAL = DefinitionId("base.facility.orbital_heavy_cargo_terminal")
 ORBITAL_ASSEMBLY_YARD = DefinitionId("base.facility.orbital_assembly_yard")
 ORBITAL_HABITAT = DefinitionId("base.facility.orbital_habitat")
 PROPULSION_TEST_FACILITY = DefinitionId("base.facility.propulsion_test_facility")
@@ -180,6 +182,9 @@ CR_CRYOGENIC_STORAGE_TRANSFER_04 = research_id("CR-CRYOGENIC-STORAGE-TRANSFER-04
 BIO_HUMAN_BIOLOGY_MEDICINE_03 = research_id("BIO-HUMAN-BIOLOGY-MEDICINE-03")
 LS_ATMOSPHERE_WATER_WASTE_01 = research_id("LS-ATMOSPHERE-WATER-WASTE-01")
 
+MC_MANUFACTURING_CONSTRUCTION_14 = research_id("MC-MANUFACTURING-CONSTRUCTION-14")
+LM_LOGISTICS_MAINTENANCE_13 = research_id("LM-LOGISTICS-MAINTENANCE-13")
+
 # Operational Experience categories are Content-defined Knowledge dimensions.
 EXPERIENCE_TRANSPORT_OPERATIONS = "base.experience.transport_operations"
 EXPERIENCE_EXTRACTION_OPERATIONS = "base.experience.extraction_operations"
@@ -194,6 +199,7 @@ ORBITAL_OBSERVATION_SPACECRAFT = DefinitionId("base.vehicle.orbital_observation_
 ORBITAL_OBSERVATION_RESEARCH_PROVIDER = DefinitionId("base.research_provider.orbital_observation")
 LUNAR_ORBITAL_SURVEY_SPACECRAFT = DefinitionId("base.vehicle.lunar_orbital_survey_spacecraft")
 DEEP_SPACE_PROBE = DefinitionId("base.vehicle.deep_space_probe")
+HEAVY_ORBITAL_FREIGHTER = DefinitionId("base.vehicle.heavy_orbital_freighter")
 DEEP_SPACE_FREIGHTER = DefinitionId("base.vehicle.deep_space_freighter")
 INTERPLANETARY_LANDER = DefinitionId("base.vehicle.interplanetary_lander")
 LUNAR_FLEET_SURVEY_PROVIDER = DefinitionId("base.survey_provider.lunar_orbital_spacecraft")
