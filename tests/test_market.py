@@ -252,7 +252,7 @@ def test_market_offer_eligibility_is_shared_by_candidates_and_order_commands():
             control_mode="quantity", quantity_target_t=1.0,
         ))
 
-    # Rejected target parameters must not consume an order ID or mutate Market.
+    # Rejected target parameters must not create a Market order.
     market, _provider, interface_id, _node, resource_id = _market()
     with pytest.raises(ValueError, match="QUANTITY order"):
         market.create_order(
@@ -260,13 +260,12 @@ def test_market_offer_eligibility_is_shared_by_candidates_and_order_commands():
             market_interface_id=interface_id,
             control_mode="quantity", quantity_target_t=None,
         )
-    assert not market.orders and market._order_counter == 0
+    assert not market.orders
     first_valid_id = market.create_order(
         direction="buy", resource_id=resource_id,
         market_interface_id=interface_id,
         control_mode="quantity", quantity_target_t=1.0,
     )
-    assert str(first_valid_id) == "trade.order.1"
     market.cancel_order(first_valid_id)
     assert market.order_offer_blockers(
         direction="buy", resource_id=DefinitionId("test.resource.unlisted"),

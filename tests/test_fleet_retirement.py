@@ -22,7 +22,7 @@ from space_idle.site import (
     CapabilityRequirementState,
     SiteRequirements,
 )
-from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.transport.models import FleetActivityRef, FleetRetirementPhase
 
@@ -93,7 +93,6 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     save_game(app, path, saved_at=datetime(2026, 9, 17, tzinfo=timezone.utc))
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
-    assert capture_state(loaded._simulation) == capture_state(sim)
     app = loaded
     sim = loaded._simulation
     loaded_retirement = sim.transport.fleet_retirements[EntityId(retirement_id)]

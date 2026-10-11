@@ -22,7 +22,7 @@ pytest suite collects `tests/` only; evaluation scenarios run explicitly via
 
 | Owning contract | Test modules / acceptance entrypoint | Boundary verified |
 | --- | --- | --- |
-| State boundaries, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Static import direction and selected Transport/Logistics ownership checks; allocation and extension contracts. Not exhaustive enforcement of every Domain's state ownership |
+| State boundaries, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Static import direction, Transport/Logistics state ownership checks, allocation and extension contracts. Not exhaustive enforcement of every Domain's state ownership |
 | Time and normal/offline Simulation | `tests/test_time_progression.py` | Clock control, invalid elapsed time, canonical day transitions |
 | Authoritative state and derived-state restoration | `tests/test_persistence.py` | Whole-snapshot roundtrip, Offline equivalence, validation/atomic save, cache rederivation |
 | Resource accounting and market | `tests/test_inventory_admission.py`, `tests/test_market.py`, `tests/test_maintenance.py` | Pool admission, funds and stock conservation, ongoing operating allocation |
@@ -33,7 +33,7 @@ pytest suite collects `tests/` only; evaluation scenarios run explicitly via
 | Movement, vehicles and Fleet | `tests/test_movement_planning.py`, `tests/test_vehicle_configuration.py`, `tests/test_vehicle_production.py`, `tests/test_fleet_allocations.py`, `tests/test_fleet_retirement.py` | Physical operation requirements, Fleet ownership/commitment, production/retirement |
 | Research and scientific operations | `tests/test_research_phase_model.py`, `tests/test_research_execution.py`, `tests/test_scientific_exploration.py`, `tests/test_survey_progression.py` | Research DAG and stage execution, experiment, survey, provider commitments |
 | Base Content contract | `tests/test_base_content_research_resource_integration.py`, `tests/test_solar_system_world.py` | Resource input limits, generic Research/asset eligibility and registered World geometry |
-| Evaluation and diagnostic scenarios (explicit run) | `evaluation_tests/test_content_technology_operation_paths.py`, `evaluation_tests/test_definition_dependency_graph.py`, `evaluation_tests/test_analysis_canonical_experiments.py` | Quantitative equipment/flow comparisons, optional dependency diagnostics and alternative Content experiments; independent of default contract suite and Fast CI |
+| Evaluation and diagnostic scenarios (explicit run) | `evaluation_tests/test_content_technology_operation_paths.py`, `evaluation_tests/test_definition_dependency_graph.py`, `evaluation_tests/test_analysis_canonical_experiments.py` | Quantitative equipment/flow comparisons, world-specific site and extraction comparisons, optional dependency diagnostics and alternative Content experiments; independent of default contract suite and Fast CI |
 | Application decision state | `tests/test_application_decision_projection.py` | Player-facing blockers, options, projections, scope and read-only behavior |
 | HTTP and packaged WebUI boundary | `tests/test_api_server.py` | Command/revision/query routing, persistence endpoints, resource serving |
 | Publish Gateway transport | `development_tests/test_publish_request.py` | Snapshot restore, fixed-slot packets, transaction safety and gateway contract |

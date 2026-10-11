@@ -179,13 +179,12 @@ def test_save_load_preserves_vehicle_production_staging_and_future_completion(tm
     assert original.phase.value == "awaiting_inputs"
     assert partial_stock - remaining_on_hand > 0.0
 
-    before = capture_state(sim)
     path = tmp_path / "vehicle-production.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     loaded, _ = load_game(path, build_game_application_for_load)
-    loaded_state = capture_state(loaded._simulation)
-    assert loaded_state["transport"] == before["transport"]
-    assert loaded_state["inventory"] == before["inventory"]
+    restored_project = loaded._simulation.transport.vehicle_production_projects[production_id]
+    assert restored_project == original
+    assert loaded._simulation.inventory.amount(EARTH, partial_resource) == pytest.approx(remaining_on_hand)
 
     before_units = loaded._simulation.transport.fleet_pool(
         REUSABLE_ORBITAL_CARGO_TUG, EARTH

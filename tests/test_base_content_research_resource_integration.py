@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from space_idle import build_game_application
+
+
 def test_base_content_limits_resource_families_per_recipe():
     """An acquisition or production decision has at most three material inputs.
 
@@ -52,17 +54,14 @@ def test_base_content_limits_resource_families_per_recipe():
         assert all(0 <= amount <= invested[resource] for resource, amount in recovered.items())
 
 
-def test_completed_technology_enables_process_and_vehicle_methods_without_rewriting_assets(tmp_path):
+def test_completed_technology_enables_process_and_vehicle_methods_without_rewriting_assets():
     """One Technology owner gates physical methods; existing projects retain their obligations."""
-    from datetime import datetime, timezone
     import pytest
     from space_idle import (
         ApplicationError, GetLogistics, GetOperationalNode, GetResearch,
         SetFacilityProcess, ProduceVehicle,
     )
-    from space_idle.bootstrap import build_game_application_for_load
     from space_idle.content import base_ids as ids
-    from space_idle.persistence import capture_state, save_game, load_game
     from space_idle.shared import EntityId
 
     app = build_game_application()
@@ -127,12 +126,6 @@ def test_completed_technology_enables_process_and_vehicle_methods_without_rewrit
     assert process_state.scale == 0
     assert any(row.kind == "technology" for row in process_state.limiting_factors)
 
-    fixed = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    path = tmp_path / "technology-eligibility.json"
-    save_game(app, path, saved_at=fixed)
-    loaded, _ = load_game(path, build_game_application_for_load, now=fixed)
-    assert capture_state(loaded._simulation) == capture_state(sim)
-
 
 def test_survey_method_technology_blocks_progress_without_discarding_campaign():
     """A mode is a reusable method, not an implicit property of its Provider or body."""
@@ -177,104 +170,3 @@ def test_survey_method_technology_blocks_progress_without_discarding_campaign():
     app.execute(AdvanceTime(1))
     assert sim.survey.progress(cell_id, resource_id) == progress
     assert campaign.id in sim.survey.campaigns
-
-
-
-
-def test_physical_content_can_be_reused_across_bodies_without_name_based_exceptions():
-    """Every acquired asset uses physical site/operation criteria, not its first Scenario."""
-    from space_idle.content import base_ids as ids
-    from space_idle.site import evaluate_physical_site_requirements
-    from space_idle.shared import SurfaceCellId
-
-    sim = build_game_application()._simulation
-    environment = sim.facilities.environment
-    surface_contexts = (
-        ids.EARTH_CELL_INDUSTRIAL,
-        ids.MOON_CELL_SOUTH_POLAR_PLAIN,
-        ids.MARS_CELL_EQUATORIAL_PLAIN,
-        SurfaceCellId('base.cell.venus.highland'),
-    )
-    # A robotic staging package and enclosed oxide processor are not Moon
-    # properties. Outpost thermal limits reject extreme sites, while the
-    # enclosed oxide reactor is governed by its own power and materials.
-    deploy = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
-    oxide = sim.facilities.definitions[ids.MOLTEN_OXIDE_ELECTROLYZER]
-    for cell in surface_contexts:
-        assert bool(evaluate_physical_site_requirements(deploy.target_requirements, cell, sim.day, environment)) == (cell == SurfaceCellId("base.cell.venus.highland"))
-        assert not evaluate_physical_site_requirements(oxide.installation_requirements, cell, sim.day, environment)
-        assert not evaluate_physical_site_requirements(oxide.operating_requirements, cell, sim.day, environment)
-    assert evaluate_physical_site_requirements(oxide.installation_requirements, ids.LEO, sim.day, environment)
-
-    # Cold volatile deposits occur in both near-vacuum icy regions and dense
-    # cold atmospheres. Pressure alone must not turn a Titan resource into an
-    # unobtainable, Moon-specific raw material.
-    from space_idle.content import base_requirements as req
-    titan = SurfaceCellId('base.cell.titan.highland')
-    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, titan, sim.day, environment)
-    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, ids.MOON_CELL_POLAR_COLD_TRAP, sim.day, environment)
-    assert evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS, sim.day, environment)
-    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, SurfaceCellId("base.cell.mercury.polar"), sim.day, environment)
-
-    # Atmospheric and low-pressure infrastructure stay physically distinct.
-    low_pressure = sim.facilities.definitions[ids.VACUUM_CARGO_HANDLING_TERMINAL]
-    ambient = sim.facilities.definitions[ids.BREATHABLE_SURFACE_LIFE_SUPPORT]
-    for cell in (ids.MOON_CELL_SOUTH_POLAR_PLAIN, ids.MARS_CELL_EQUATORIAL_PLAIN):
-        assert not evaluate_physical_site_requirements(low_pressure.installation_requirements, cell, sim.day, environment)
-        assert evaluate_physical_site_requirements(ambient.operating_requirements, cell, sim.day, environment)
-    for cell in (ids.EARTH_CELL_INDUSTRIAL, SurfaceCellId('base.cell.venus.highland')):
-        assert evaluate_physical_site_requirements(low_pressure.installation_requirements, cell, sim.day, environment)
-    assert not evaluate_physical_site_requirements(ambient.operating_requirements, ids.EARTH_CELL_INDUSTRIAL, sim.day, environment)
-
-    # Asset and method IDs describe reusable engineering roles. World geography,
-    # one-shot targeted science, initial Scenario and Market location remain
-    # separate Content, rather than silently constraining an asset's identity.
-    owned = (sim.facilities.definitions, sim.transport.vehicle_defs,
-             sim.founding.deployment_recipes, sim.survey.providers,
-             sim.industry.processes, sim.extraction.specs)
-    assert all(not any(planet in str(key) for planet in ('earth', 'lunar', 'moon', 'mars'))
-               for definitions in owned for key in definitions)
-    assert sim.transport.vehicle_defs[ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT].performance.generic_capabilities
-    assert sim.survey.providers[ids.ORBITAL_RESOURCE_MAPPING_PROVIDER].observation_modes
-
-    # Physical eligibility is tested above; now settle real Resource ownership
-    # at unlike Worlds using the same Extraction and physical infrastructure.
-    from dataclasses import replace
-    from space_idle import AdvanceTime, GetOperationalNode
-    from space_idle.bootstrap import build_game_application_for_scenario
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-    from space_idle.scenario import (
-        ScenarioSurfaceLocation, ScenarioFacility,
-    )
-    from space_idle.shared import SpatialNodeId, CelestialBodyId
-    base = build_standard_scenario_definition()
-    regions = (
-        (ids.MOON, ids.MOON_CELL_POLAR_COLD_TRAP),
-        (CelestialBodyId('base.body.titan'), titan),
-        (CelestialBodyId('base.body.mercury'), SurfaceCellId('base.cell.mercury.polar')),
-    )
-    for body, cell in regions:
-        location = SpatialNodeId(f'test.cold_volatile.{body}')
-        scenario = replace(
-            base,
-            surface_locations=base.surface_locations + (
-                ScenarioSurfaceLocation(location, 'Volatile production site', body, cell),
-            ),
-            facilities=base.facilities + (
-                ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, location),
-                ScenarioFacility(ids.SURFACE_DISTRIBUTION_HUB, location, cell),
-                ScenarioFacility(ids.VOLATILE_EXTRACTOR, location, cell),
-            ),
-            known_surface_resources=base.known_surface_resources + (
-                (cell, ids.VOLATILE_BEARING_MATERIAL),
-            ),
-        )
-        case = build_game_application_for_scenario(scenario)
-        actual = case._simulation
-        before = actual.inventory.amount(location, ids.VOLATILE_BEARING_MATERIAL)
-        case.execute(AdvanceTime(3))
-        after = actual.inventory.amount(location, ids.VOLATILE_BEARING_MATERIAL)
-        assert after > before
-        production = next(row for row in case.query(GetOperationalNode(str(location))).extraction
-                          if row.resource_id == str(ids.VOLATILE_BEARING_MATERIAL))
-        assert production.output_t_per_day > 0

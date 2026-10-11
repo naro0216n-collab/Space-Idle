@@ -7,6 +7,7 @@ import pytest
 
 from space_idle import (
     AdvanceTime, ApplicationError, GetOperationalNode, GetResearch, SetFacilityProcess,
+    build_game_application,
 )
 from space_idle.bootstrap import (
     build_game_application_for_load, build_game_application_for_scenario,
@@ -1132,3 +1133,90 @@ def test_reclaimed_water_food_habitation_links_processes_population_construction
     assert passengers.delivered_count == 2
     assert modern._simulation.population.count_at(ids.LEO) == before_population + 2
     assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0
+
+
+def test_content_site_and_extraction_choices_across_worlds():
+    """Compare authored site eligibility and actual extraction across unlike worlds."""
+    from space_idle.content import base_ids as ids
+    from space_idle.site import evaluate_physical_site_requirements
+    from space_idle.shared import SurfaceCellId
+
+    sim = build_game_application()._simulation
+    environment = sim.facilities.environment
+    surface_contexts = (
+        ids.EARTH_CELL_INDUSTRIAL,
+        ids.MOON_CELL_SOUTH_POLAR_PLAIN,
+        ids.MARS_CELL_EQUATORIAL_PLAIN,
+        SurfaceCellId('base.cell.venus.highland'),
+    )
+    # A robotic staging package and enclosed oxide processor are not Moon
+    # properties. Outpost thermal limits reject extreme sites, while the
+    # enclosed oxide reactor is governed by its own power and materials.
+    deploy = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    oxide = sim.facilities.definitions[ids.MOLTEN_OXIDE_ELECTROLYZER]
+    for cell in surface_contexts:
+        assert bool(evaluate_physical_site_requirements(deploy.target_requirements, cell, sim.day, environment)) == (cell == SurfaceCellId("base.cell.venus.highland"))
+        assert not evaluate_physical_site_requirements(oxide.installation_requirements, cell, sim.day, environment)
+        assert not evaluate_physical_site_requirements(oxide.operating_requirements, cell, sim.day, environment)
+    assert evaluate_physical_site_requirements(oxide.installation_requirements, ids.LEO, sim.day, environment)
+
+    # Cold volatile deposits occur in both near-vacuum icy regions and dense
+    # cold atmospheres. Pressure alone must not turn a Titan resource into an
+    # unobtainable, Moon-specific raw material.
+    from space_idle.content import base_requirements as req
+    titan = SurfaceCellId('base.cell.titan.highland')
+    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, titan, sim.day, environment)
+    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, ids.MOON_CELL_POLAR_COLD_TRAP, sim.day, environment)
+    assert evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, ids.MOON_CELL_EQUATORIAL_HIGHLANDS, sim.day, environment)
+    assert not evaluate_physical_site_requirements(req.COLD_VOLATILE_SURFACE_SITE, SurfaceCellId("base.cell.mercury.polar"), sim.day, environment)
+
+    # Atmospheric and low-pressure infrastructure stay physically distinct.
+    low_pressure = sim.facilities.definitions[ids.VACUUM_CARGO_HANDLING_TERMINAL]
+    ambient = sim.facilities.definitions[ids.BREATHABLE_SURFACE_LIFE_SUPPORT]
+    for cell in (ids.MOON_CELL_SOUTH_POLAR_PLAIN, ids.MARS_CELL_EQUATORIAL_PLAIN):
+        assert not evaluate_physical_site_requirements(low_pressure.installation_requirements, cell, sim.day, environment)
+        assert evaluate_physical_site_requirements(ambient.operating_requirements, cell, sim.day, environment)
+    for cell in (ids.EARTH_CELL_INDUSTRIAL, SurfaceCellId('base.cell.venus.highland')):
+        assert evaluate_physical_site_requirements(low_pressure.installation_requirements, cell, sim.day, environment)
+    assert not evaluate_physical_site_requirements(ambient.operating_requirements, ids.EARTH_CELL_INDUSTRIAL, sim.day, environment)
+
+    # Evaluate actual Resource ownership and extraction in distinct physical contexts
+    from dataclasses import replace
+    from space_idle import AdvanceTime, GetOperationalNode
+    from space_idle.bootstrap import build_game_application_for_scenario
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.scenario import (
+        ScenarioSurfaceLocation, ScenarioFacility,
+    )
+    from space_idle.shared import SpatialNodeId, CelestialBodyId
+    base = build_standard_scenario_definition()
+    regions = (
+        (ids.MOON, ids.MOON_CELL_POLAR_COLD_TRAP),
+        (CelestialBodyId('base.body.titan'), titan),
+        (CelestialBodyId('base.body.mercury'), SurfaceCellId('base.cell.mercury.polar')),
+    )
+    for body, cell in regions:
+        location = SpatialNodeId(f'test.cold_volatile.{body}')
+        scenario = replace(
+            base,
+            surface_locations=base.surface_locations + (
+                ScenarioSurfaceLocation(location, 'Volatile production site', body, cell),
+            ),
+            facilities=base.facilities + (
+                ScenarioFacility(ids.INDUSTRIAL_POWER_BLOCK, location),
+                ScenarioFacility(ids.SURFACE_DISTRIBUTION_HUB, location, cell),
+                ScenarioFacility(ids.VOLATILE_EXTRACTOR, location, cell),
+            ),
+            known_surface_resources=base.known_surface_resources + (
+                (cell, ids.VOLATILE_BEARING_MATERIAL),
+            ),
+        )
+        case = build_game_application_for_scenario(scenario)
+        actual = case._simulation
+        before = actual.inventory.amount(location, ids.VOLATILE_BEARING_MATERIAL)
+        case.execute(AdvanceTime(3))
+        after = actual.inventory.amount(location, ids.VOLATILE_BEARING_MATERIAL)
+        assert after > before
+        production = next(row for row in case.query(GetOperationalNode(str(location))).extraction
+                          if row.resource_id == str(ids.VOLATILE_BEARING_MATERIAL))
+        assert production.output_t_per_day > 0

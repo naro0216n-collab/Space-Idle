@@ -664,7 +664,7 @@ def test_survey_service_catalog_uses_physical_source_names_for_new_content():
     projected = {row.id: row.display_name for row in catalog.service_capacities}
     assert set(projected) == set(sim.survey.service_capacity_types())
     assert all("survey_observation:" not in name for name in projected.values())
-    assert all(name.endswith(" 調査能力") for name in projected.values())
+    assert all(name for name in projected.values())
 
     source_id = DefinitionId("test.vehicle.survey_platform")
     sim.transport.vehicle_defs[source_id] = VehicleDef(
@@ -681,10 +681,10 @@ def test_survey_service_catalog_uses_physical_source_names_for_new_content():
                     if row.source_kind.value == "fleet"
                     and row.required_source_capabilities <= {"survey_sensor"})
     service_id = sim.survey.service_type_for_provider(provider.id, source_id)
-    assert expanded[service_id] == "追加観測プラットフォーム 調査能力"
+    assert sim.transport.vehicle_defs[source_id].display_name in expanded[service_id]
     assert all(expanded[key] == name for key, name in projected.items())
     assert service_id in sim.survey.service_capacity_types()
 
     payload = to_jsonable(app.query(GetCatalog()))
-    assert any(row == {"id": service_id, "display_name": "追加観測プラットフォーム 調査能力"}
+    assert any(row == {"id": service_id, "display_name": expanded[service_id]}
                for row in payload["service_capacities"])

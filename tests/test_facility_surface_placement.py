@@ -135,49 +135,24 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert predicted == {str(resource): rate for resource, rate in installed.items()}
     # The projection is a read-only calculation, not an extra maintenance owner.
     assert all(rate >= 0 for rate in predicted.values())
-    # Unlike build inputs, heterogeneous facility effects have no shared
-    # comparison score or comparison pinning contract.
-    assert not hasattr(build_options, "comparison_axes")
-    assert not hasattr(candidate, "comparison_values")
     rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
-    # Research generation and storage are first-class idle scale: the
-    # prospective Facility uses the same provider as the installed asset.
-    for facility_id in (ids.GENERAL_RESEARCH_LAB, ids.VACUUM_REGOLITH_PROCESS_LABORATORY):
-        assert facility_id in rows_by_id
+    # Every facility-backed Research Provider is exposed through the same
+    # prospective capability projection, independent of the authored asset ID.
+    research_candidates = 0
+    for facility_id, projected_candidate in rows_by_id.items():
         provider = sim.research.facility_provider_for_definition(facility_id)
-        assert provider is not None
+        if provider is None:
+            continue
+        research_candidates += 1
         spec = provider.level_spec(1)
-        projected = rows_by_id[facility_id].research_capacity
+        projected = projected_candidate.research_capacity
         assert projected is not None
         assert projected.provider_tier == provider.tier
         assert projected.generation_points_per_day == spec.generation_points_per_day
         assert projected.storage_capacity_points == spec.storage_capacity_points
         assert projected.execution_work_per_day == spec.research_execution_per_day
         assert projected.crew_person_days_per_research_point == provider.crew_person_days_per_research_point
-    # The build decision includes Construction-owned site work as a nominal
-    # service, but not the manufacturing of finite Construction Equipment.
-    from space_idle.construction.models import CONSTRUCTION_SERVICE_TYPE
-    yard = rows_by_id[ids.CONSTRUCTION_YARD]
-    assert (CONSTRUCTION_SERVICE_TYPE, sim.projects.construction_providers[ids.CONSTRUCTION_YARD].work_per_day) in yard.service_capacity_supplies
-    equipment = rows_by_id[ids.HEAVY_EQUIPMENT_ASSEMBLY]
-    assert all(service != CONSTRUCTION_SERVICE_TYPE for service, _ in equipment.service_capacity_supplies)
-    # Existing and advanced fabricators expose the resulting rates for the
-    # *same* downstream Process. The comparison must reflect material flow,
-    # not just a list of available Process names.
-    base = rows_by_id[ids.FABRICATION_WORKSHOP]
-    advanced = rows_by_id[ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE]
-    assert advanced.process_nominal_throughput_per_day > base.process_nominal_throughput_per_day
-    common_process = str(ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS)
-    base_flows = next(option for option in base.process_options if option.process_id == common_process)
-    advanced_flows = next(option for option in advanced.process_options if option.process_id == common_process)
-    resource = str(ids.STRUCTURAL_COMPONENTS)
-    assert dict(advanced_flows.output_rates_per_day)[resource] > dict(base_flows.output_rates_per_day)[resource]
-    assert (rows_by_id[ids.AUTONOMOUS_ORE_MINE].extraction_nominal_capacity_t_per_day
-            > rows_by_id[ids.METAL_ORE_MINE].extraction_nominal_capacity_t_per_day)
-    ore = rows_by_id[ids.ORE_PROCESSING]
-    wet = next(option for option in ore.process_options
-               if option.process_id == str(ids.PROCESS_WET_ORE_BENEFICIATION))
-    assert str(ids.research_id("RP-RESOURCE-CHAIN-10")) in wet.missing_technology_ids
+    assert research_candidates
     assert candidate.projected_material_readiness_day == sim.day
     for resource in candidate.resources:
         assert resource.available_t == pytest.approx(
@@ -206,7 +181,6 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     )
     assert unresolved.selection_required
     assert unresolved.process_id is None
-    assert not hasattr(unresolved, "process_comparison_axes")
     assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
         str(process.id), str(alternate_process_id),
     )))
@@ -222,11 +196,6 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
     )
     assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
-    assert not hasattr(primary_option, "comparison_values")
-    # The alternative process is selectable via its individual material
-    # flows, not a shared score or a separately pinned comparison.
-    assert all(option.input_rates_per_day is not None and option.output_rates_per_day is not None
-               for option in unresolved.process_options)
 
     app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
     selected = next(

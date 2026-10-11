@@ -31,7 +31,8 @@ def _module_import_targets(path: Path) -> set[str]:
     return targets
 
 
-def test_domain_authoritative_state_is_not_read_directly_across_domain_boundaries():
+def test_transport_and_logistics_state_ownership_boundaries():
+    """Transport and Logistics state ownership at their shared boundary."""
     from space_idle.logistics import LogisticsService
     from space_idle.transport.service import TransportService
 
