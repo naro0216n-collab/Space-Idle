@@ -37,6 +37,11 @@ def build_facility_definitions() -> dict:
             req._capabilities("structural_fabrication", "basic_machine_shop", "precision_machining"),
             orbit, orbit, process_throughput_per_day=2.5,
         ),
+        ids.NUCLEAR_THERMAL_TEST_STAND: FacilityDef(
+            ids.NUCLEAR_THERMAL_TEST_STAND, "核熱推進模擬炉心・水素流動試験設備",
+            req._capabilities("nuclear_thermal_flow_test_equipment", "research_lab"),
+            req.SiteRequirements(), req.SiteRequirements(),
+        ),
         ids.PLASMA_PROPULSION_TEST_MODULE: FacilityDef(
             ids.PLASMA_PROPULSION_TEST_MODULE, "高電圧プラズマ推進器・真空試験モジュール",
             req._capabilities("plasma_propulsion_test_instrumentation", "research_lab"),
@@ -51,6 +56,30 @@ def build_facility_definitions() -> dict:
             ids.ORBITAL_ASSEMBLY_YARD, "軌道上宇宙機組立ヤード",
             req._capabilities("vehicle_assembly", "robotic_orbital_assembly"), orbit, orbit,
             service_capacity_supplies=req._services(vehicle_assembly=1.4),
+        ),
+        # Reuse the exact production Process used at surface greenhouses. The
+        # orbital installation needs pressurized rooting equipment and active
+        # environmental control; it does not create a second Food economy.
+        ids.ORBITAL_HYDROPONICS: FacilityDef(
+            ids.ORBITAL_HYDROPONICS, "軌道閉鎖環境水耕栽培ユニット",
+            req._capabilities("food_hydroponics"), orbit, orbit,
+            process_throughput_per_day=1.6,
+        ),
+        # A separate gas-generation skid allows the same water electrolysis
+        # Process to feed crew Oxygen and hydrogen-propellant operations in
+        # orbit. Its Power/maintenance and inventory are not implicit buffs.
+        ids.ORBITAL_WATER_ELECTROLYSIS: FacilityDef(
+            ids.ORBITAL_WATER_ELECTROLYSIS, "軌道水電解・ガス分離モジュール",
+            req._capabilities("industrial_electrolysis"), orbit, orbit,
+            process_throughput_per_day=2.1,
+        ),
+        # Physically powered data/knowledge retention capacity, rather than a
+        # second lab that also generates RP. A distant science campaign needs
+        # Research admission headroom but does not automatically create it.
+        ids.RESEARCH_DATA_ARCHIVE: FacilityDef(
+            ids.RESEARCH_DATA_ARCHIVE, "宇宙探査研究データ保存・受入アーカイブ",
+            req._capabilities("research_data_retention"),
+            req.SiteRequirements(), req.SiteRequirements(),
         ),
         ids.ORBITAL_HABITAT: FacilityDef(
             ids.ORBITAL_HABITAT, "軌道居住・生命維持モジュール",

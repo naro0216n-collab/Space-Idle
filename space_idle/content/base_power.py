@@ -16,11 +16,18 @@ def build_power_specs() -> dict:
         ids.ORBITAL_PROPELLANT_DEPOT: PowerSpec(None, 0.20, standby_load_mw=0.20),
         # Active plasma discharge and beam calibration require a continuous high
         # voltage load; an unpowered test bench cannot qualify an experiment.
+        # Control electronics and cryogenic circulation remain finite load;
+        # an active reactor instrumentation source is separately required by
+        # the technical Research stage, rather than implied by this building.
+        ids.NUCLEAR_THERMAL_TEST_STAND: PowerSpec(None, 1.50, standby_load_mw=0.12),
         ids.PLASMA_PROPULSION_TEST_MODULE: PowerSpec(None, 1.65, standby_load_mw=0.08),
         ids.ORBITAL_MATERIALS_WORKSHOP: PowerSpec(None, 1.25, standby_load_mw=0.08),
         ids.ORBITAL_HEAVY_CARGO_TERMINAL: PowerSpec(None, 0.65, standby_load_mw=0.20),
         ids.ORBITAL_ASSEMBLY_YARD: PowerSpec(None, 0.95),
         ids.ORBITAL_HABITAT: PowerSpec(None, 0.55),
+        ids.ORBITAL_HYDROPONICS: PowerSpec(None, 1.05, standby_load_mw=0.12),
+        ids.ORBITAL_WATER_ELECTROLYSIS: PowerSpec(None, 1.65, standby_load_mw=0.10),
+        ids.RESEARCH_DATA_ARCHIVE: PowerSpec(None, 0.60, standby_load_mw=0.38),
         ids.PROPULSION_TEST_FACILITY: PowerSpec(None, 0.45),
         ids.DEEP_SPACE_TRACKING_ARRAY: PowerSpec(None, 0.38),
         ids.SURFACE_ROVER_SERVICE_DEPOT: PowerSpec(None, 0.15),

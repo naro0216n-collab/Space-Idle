@@ -84,6 +84,48 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
         # The plasma discharge and ion-optics designs must be validated on a
         # powered vacuum bench. A Theory-only research completion cannot
         # furnish a spacecraft with an untested high-voltage thruster.
+        # The hydrogen-cooled reactor propulsion line has a distinct thermal
+        # flow test and nozzle/heat-exchanger integration demonstration. Both
+        # need real reactor instrumentation; Research cannot supply a free core.
+        # Low-gravity root-zone water transport is an actual plant-growth
+        # experiment on installed microgravity equipment, not an instant
+        # theoretical upgrade of terrestrial farming or new free food output.
+        ids.research_id("PL-PLANT-FOOD-04"): (
+            ResearchPrototypeStageSpec(
+                "microgravity-root-zone-growth-test",
+                {ids.WATER: 0.5, ids.PRECISION_ELECTRONICS: 0.08},
+                req.with_capabilities(req.ORBIT_SITE,
+                                      "microgravity_experiment_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
+            ),
+        ),
+        ids.research_id("NT-NUCLEAR-THERMAL-02"): (
+            ResearchPrototypeStageSpec(
+                "reactor-hydrogen-flow-test",
+                {ids.HYDROGEN: 0.8, ids.CERAMICS_GLASS: 0.35},
+                req.with_capabilities(req.SiteRequirements(),
+                                      "nuclear_thermal_flow_test_equipment",
+                                      "fission_reactor_control_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=7.0,
+            ),
+        ),
+        ids.research_id("NT-NUCLEAR-THERMAL-04"): (
+            ResearchDemonstrationStageSpec(
+                "nuclear-thermal-nozzle-integration", 7.0,
+                req.with_capabilities(req.SiteRequirements(),
+                                      "nuclear_thermal_flow_test_equipment",
+                                      "fission_reactor_control_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
         ids.research_id("EP-PLASMA-THRUSTERS-02"): (
             ResearchPrototypeStageSpec(
                 "hall-discharge-test",
@@ -163,6 +205,13 @@ def build_research_providers() -> dict:
             ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
             frozenset({"deep_space_tracking_equipment"}), tier=2,
             levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 0.8),),
+        ),
+        ids.RESEARCH_DATA_ARCHIVE: ResearchProviderSpec(
+            ids.RESEARCH_DATA_ARCHIVE,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"research_data_retention"}),
+            tier=3,
+            levels=(ResearchProviderLevelSpec(1, 0.0, 9000.0, 0.0),),
         ),
         ids.GENERAL_RESEARCH_LAB: ResearchProviderSpec(
             ids.GENERAL_RESEARCH_LAB,

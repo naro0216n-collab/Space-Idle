@@ -123,9 +123,13 @@ HIGH_OUTPUT_ORBITAL_FISSION_POWER = DefinitionId("base.facility.high_output_orbi
 ORBITAL_PROPELLANT_DEPOT = DefinitionId("base.facility.orbital_propellant_depot")
 ORBITAL_MATERIALS_WORKSHOP = DefinitionId("base.facility.orbital_materials_workshop")
 PLASMA_PROPULSION_TEST_MODULE = DefinitionId("base.facility.plasma_propulsion_test_module")
+NUCLEAR_THERMAL_TEST_STAND = DefinitionId("base.facility.nuclear_thermal_test_stand")
 ORBITAL_HEAVY_CARGO_TERMINAL = DefinitionId("base.facility.orbital_heavy_cargo_terminal")
 ORBITAL_ASSEMBLY_YARD = DefinitionId("base.facility.orbital_assembly_yard")
 ORBITAL_HABITAT = DefinitionId("base.facility.orbital_habitat")
+ORBITAL_HYDROPONICS = DefinitionId("base.facility.orbital_hydroponics")
+ORBITAL_WATER_ELECTROLYSIS = DefinitionId("base.facility.orbital_water_electrolysis")
+RESEARCH_DATA_ARCHIVE = DefinitionId("base.facility.research_data_archive")
 PROPULSION_TEST_FACILITY = DefinitionId("base.facility.propulsion_test_facility")
 DEEP_SPACE_TRACKING_ARRAY = DefinitionId("base.facility.deep_space_tracking_array")
 SURFACE_ROVER_SERVICE_DEPOT = DefinitionId("base.facility.surface_rover_service_depot")
@@ -203,6 +207,8 @@ ORBITAL_RESOURCE_MAPPING_SPACECRAFT = DefinitionId("base.vehicle.orbital_resourc
 DEEP_SPACE_PROBE = DefinitionId("base.vehicle.deep_space_probe")
 HALL_ELECTRIC_CARGO_TUG = DefinitionId("base.vehicle.hall_electric_cargo_tug")
 ION_PROPULSION_SCIENCE_PROBE = DefinitionId("base.vehicle.ion_propulsion_science_probe")
+NUCLEAR_THERMAL_CARGO_SHIP = DefinitionId("base.vehicle.nuclear_thermal_cargo_ship")
+NUCLEAR_THERMAL_CREW_SHIP = DefinitionId("base.vehicle.nuclear_thermal_crew_ship")
 HEAVY_ORBITAL_FREIGHTER = DefinitionId("base.vehicle.heavy_orbital_freighter")
 DEEP_SPACE_FREIGHTER = DefinitionId("base.vehicle.deep_space_freighter")
 INTERPLANETARY_LANDER = DefinitionId("base.vehicle.interplanetary_lander")
@@ -225,6 +231,7 @@ DEEP_SPACE_TRACKING_RESEARCH_PROVIDER = DefinitionId("base.research_provider.dee
 # Scientific Exploration campaigns are finite science activities, separate from resource survey.
 CISLUNAR_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.cislunar_environment_observation")
 MARS_ORBIT_SCIENCE_EXPLORATION = DefinitionId("base.scientific_exploration.mars_orbit_observation")
+MARS_ORBIT_CREW_EXPEDITION = DefinitionId("base.scientific_exploration.crewed_mars_orbit_expedition")
 CREWED_CISLUNAR_EXPEDITION = DefinitionId("base.scientific_exploration.crewed_cislunar_expedition")
 
 # Extraction methods are distinct from the facilities which can perform them.

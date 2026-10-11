@@ -35,6 +35,28 @@ def build_scientific_exploration_definitions() -> dict:
             required_crew=2,
             return_to_origin=True,
         ),
+        # Crewed planetary-orbit science uses the same one-shot Movement and
+        # Crew settlement as every other expedition. The new hull's long-range
+        # thermal propulsion is a Content alternative, not a mission ID rule.
+        ids.MARS_ORBIT_CREW_EXPEDITION: ScientificExplorationDefinition(
+            id=ids.MARS_ORBIT_CREW_EXPEDITION,
+            display_name="火星周回有人地質・放射線観測遠征",
+            origin_id=ids.LEO,
+            destination=MovementEndpoint(physical_target_node_id=ids.MARS_ORBIT),
+            duration_days=22.0,
+            research_points_total=320.0,
+            prerequisite_technologies=frozenset({
+                ids.research_id("HB-HABITATION-PROTECTION-06"),
+                ids.research_id("CO-RF-COMMUNICATIONS-07"),
+                ids.research_id("LS-ATMOSPHERE-WATER-WASTE-05"),
+            }),
+            consumable_resources=((ids.FOOD, 0.35), (ids.WATER, 0.35),
+                                  (ids.PRECISION_ELECTRONICS, 0.5)),
+            origin_requirements=req.ORBIT_SITE,
+            destination_requirements=req.ORBIT_SITE,
+            required_crew=4,
+            return_to_origin=True,
+        ),
         ids.MARS_ORBIT_SCIENCE_EXPLORATION: ScientificExplorationDefinition(
             id=ids.MARS_ORBIT_SCIENCE_EXPLORATION,
             display_name="火星周回・環境観測遠征",

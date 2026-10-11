@@ -1413,3 +1413,190 @@ def test_electric_propulsion_research_to_cross_node_resource_transport(tmp_path)
     app.execute(AdvanceTime(2))
     loaded.execute(AdvanceTime(2))
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_interplanetary_supply_and_science_use_one_physical_portfolio(tmp_path):
+    """Orbital industry supports human/robotic campaigns and distinct propulsion.
+
+    Facility, Process, experimental Research, Vehicle production, Supply and
+    Science decisions all use normal Application/state transitions. The
+    scenario supplies a finite industrial investment, not an alternate solver.
+    """
+    from space_idle import (
+        GetBuildOptions, GetFleet, GetScientificExplorations, GetFlowReport,
+        GetTransportAllocationOptions, CreateTransportAllocation,
+        SetTargetStock, PlanBuild, ProduceVehicle, StartScientificExploration,
+        AssignExplorationFleet,
+    )
+    from space_idle.content.base_research import build_research_definitions
+    from space_idle.scenario import (
+        ScenarioFacility, ScenarioPopulation, ScenarioStorageInfrastructure,
+    )
+    from space_idle.research import ResearchPrototypeStageSpec
+
+    base = build_standard_scenario_definition()
+    research = build_research_definitions()
+    root_test = research[ids.research_id("NT-NUCLEAR-THERMAL-02")]
+    plant_test = research[ids.research_id("PL-PLANT-FOOD-04")]
+    assert any(isinstance(stage, ResearchPrototypeStageSpec)
+               and stage.resources[ids.HYDROGEN] > 0 for stage in root_test.stage_specs)
+    assert any(isinstance(stage, ResearchPrototypeStageSpec)
+               and stage.resources[ids.WATER] > 0 for stage in plant_test.stage_specs)
+
+    unresearched = build_game_application_for_scenario(base)
+    for facility_id in (ids.ORBITAL_HYDROPONICS, ids.ORBITAL_WATER_ELECTROLYSIS):
+        row = next(row for row in unresearched.query(GetBuildOptions(str(ids.LEO))).items
+                   if row.facility_definition_id == str(facility_id))
+        assert any(blocker.kind == "technology" for blocker in row.blockers)
+    for vehicle_id in (ids.NUCLEAR_THERMAL_CARGO_SHIP, ids.NUCLEAR_THERMAL_CREW_SHIP):
+        with pytest.raises(ApplicationError, match="technology"):
+            unresearched.execute(ProduceVehicle(str(vehicle_id), str(ids.EARTH)))
+
+    # Material and crew stocks are not shared across nodes. Normal Location
+    # stocks remain finite while investments and services compete in orbit.
+    scenario = replace(
+        base,
+        completed_technologies=tuple(research),
+        facilities=base.facilities + tuple(ScenarioFacility(fid, ids.LEO) for fid in (
+            ids.ORBITAL_CONSTRUCTION_PLATFORM, ids.HIGH_OUTPUT_ORBITAL_FISSION_POWER,
+            ids.ORBITAL_LOGISTICS_NODE, ids.ORBITAL_ASSEMBLY_YARD,
+            ids.ORBITAL_HABITAT, ids.ORBITAL_PROPELLANT_DEPOT,
+        )),
+        storage_infrastructure=base.storage_infrastructure + (
+            ScenarioStorageInfrastructure(ids.LEO, "default", 2400.0),
+            ScenarioStorageInfrastructure(ids.LEO, "cryogenic", 200.0),
+        ),
+        inventory_stock=base.inventory_stock + tuple(
+            ScenarioInventoryStock(ids.LEO, rid, qty) for rid, qty in (
+                (ids.STRUCTURAL_COMPONENTS, 240.0),
+                (ids.MACHINERY, 200.0),
+                (ids.PRECISION_ELECTRONICS, 150.0),
+                (ids.CONSTRUCTION_EQUIPMENT, 25.0),
+                (ids.WATER, 140.0), (ids.FOOD, 60.0),
+                (ids.OXYGEN, 70.0), (ids.HYDROGEN, 60.0),
+            )
+        ) + (ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.HYDROGEN, 12.0),),
+        initial_population=base.initial_population + (ScenarioPopulation(ids.LEO, 4),),
+    )
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    # Import the water that both orbital food/oxygen activities consume. A
+    # powered plant at its destination cannot silently draw Earth's stock.
+    launch = next(row for row in app.query(GetTransportAllocationOptions(
+        str(ids.EARTH), str(ids.LEO))).options
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE))
+    assert app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        target_forward_t_per_day=launch.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    )).created_id
+    assert app.execute(SetTargetStock(str(ids.LEO), str(ids.WATER), 220.0)).created_id
+    research_capacity_before = app.query(GetResearch()).storage_capacity_points
+    for facility_id in (
+        ids.ORBITAL_HYDROPONICS, ids.ORBITAL_WATER_ELECTROLYSIS,
+        ids.NUCLEAR_THERMAL_TEST_STAND, ids.RESEARCH_DATA_ARCHIVE,
+    ):
+        assert app.execute(PlanBuild(str(ids.LEO), str(facility_id),
+                                     procurement_policy="immediate")).created_id
+    app.execute(AdvanceTime(110))
+    for facility_id in (
+        ids.ORBITAL_HYDROPONICS, ids.ORBITAL_WATER_ELECTROLYSIS,
+        ids.NUCLEAR_THERMAL_TEST_STAND, ids.RESEARCH_DATA_ARCHIVE,
+    ):
+        assert any(inst.definition_id == facility_id for inst in sim.facilities.all_at(ids.LEO))
+    research_providers = app.query(GetResearch())
+    archive = next(row for row in research_providers.providers
+                   if row.provider_definition_id == str(ids.RESEARCH_DATA_ARCHIVE))
+    assert archive.generation_points_per_day == 0
+    assert archive.storage_capacity_points > 0
+    assert research_providers.storage_capacity_points > research_capacity_before + 1000
+
+    industry = app.query(GetOperationalNode(str(ids.LEO))).industry
+    for facility_id, process_id in (
+        (ids.ORBITAL_HYDROPONICS, ids.PROCESS_FOOD_PRODUCTION),
+        (ids.ORBITAL_WATER_ELECTROLYSIS, ids.PROCESS_ELECTROLYSIS),
+    ):
+        row = next(row for row in industry if row.facility_definition_id == str(facility_id))
+        assert any(opt.process_id == str(process_id) and opt.can_select for opt in row.process_options)
+        app.execute(SetFacilityProcess(row.facility_id, str(process_id)))
+    before = {rid: sim.inventory.amount(ids.LEO, rid) for rid in
+              (ids.FOOD, ids.OXYGEN, ids.HYDROGEN, ids.WATER)}
+    app.execute(AdvanceTime(2))
+    flow = {row.resource_id: row for row in app.query(GetFlowReport(str(ids.LEO))).resources}
+    for rid in (ids.FOOD, ids.OXYGEN, ids.HYDROGEN):
+        assert flow[str(rid)].local_production_per_day > 0
+        assert sim.inventory.amount(ids.LEO, rid) > before[rid]
+    assert sim.inventory.amount(ids.LEO, ids.WATER) < before[ids.WATER]
+
+    # This same orbital assembly location must build two competing designs;
+    # both are real Fleet units, not produced automatically by the Research.
+    for vehicle_id in (ids.NUCLEAR_THERMAL_CARGO_SHIP, ids.NUCLEAR_THERMAL_CREW_SHIP):
+        assert app.execute(ProduceVehicle(str(vehicle_id), str(ids.LEO))).created_id
+    app.execute(AdvanceTime(85))
+    fleet = {row.vehicle_definition_id: row for row in app.query(GetFleet(str(ids.LEO))).pools}
+    assert fleet[str(ids.NUCLEAR_THERMAL_CARGO_SHIP)].total_units == 1
+    assert fleet[str(ids.NUCLEAR_THERMAL_CREW_SHIP)].total_units == 1
+    assert (sim.transport.vehicle_defs[ids.NUCLEAR_THERMAL_CARGO_SHIP].performance.payload_t
+            > sim.transport.vehicle_defs[ids.NUCLEAR_THERMAL_CREW_SHIP].performance.payload_t)
+    assert (sim.transport.vehicle_defs[ids.NUCLEAR_THERMAL_CARGO_SHIP].performance.propellant_resource_id
+            == sim.transport.vehicle_defs[ids.NUCLEAR_THERMAL_CREW_SHIP].performance.propellant_resource_id
+            == ids.HYDROGEN)
+    assert (sim.transport.vehicle_defs[ids.DEEP_SPACE_FREIGHTER].performance.propellant_resource_id
+            == ids.PROPELLANT)
+
+    # An orbital cargo plan with a real receiving Node requires both endpoints
+    # to have refueling stock and available Fleet; a physical-target campaign
+    # instead commits Crew and life-support for the entire round trip.
+    options = {r.vehicle_definition_id: r for r in app.query(GetTransportAllocationOptions(
+        str(ids.LEO), str(ids.LUNAR_ORBIT))).options}
+    nuclear = options[str(ids.NUCLEAR_THERMAL_CARGO_SHIP)]
+    assert nuclear.nominal_capacity.forward_t_per_day > 0
+    assert app.execute(CreateTransportAllocation(
+        str(ids.NUCLEAR_THERMAL_CARGO_SHIP), str(ids.LEO), str(ids.LUNAR_ORBIT),
+        target_forward_t_per_day=nuclear.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    )).created_id
+    arrival_before = sim.inventory.amount(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS)
+    app.execute(SetTargetStock(str(ids.LUNAR_ORBIT), str(ids.STRUCTURAL_COMPONENTS),
+                               arrival_before + 5.0))
+
+    science = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(ids.MARS_ORBIT_CREW_EXPEDITION))
+    assert science.can_start
+    crew = next(row for row in science.fleet_options
+                if row.vehicle_definition_id == str(ids.NUCLEAR_THERMAL_CREW_SHIP))
+    assert crew.blockers == ()
+    assert crew.outbound_latency_days is not None and crew.return_latency_days is not None
+    app.execute(StartScientificExploration(str(ids.MARS_ORBIT_CREW_EXPEDITION)))
+    app.execute(AssignExplorationFleet(str(ids.MARS_ORBIT_CREW_EXPEDITION),
+                                      str(ids.NUCLEAR_THERMAL_CREW_SHIP)))
+    app.execute(AdvanceTime(6))
+    science = next(row for row in app.query(GetScientificExplorations()).items
+                   if row.id == str(ids.MARS_ORBIT_CREW_EXPEDITION))
+    assert science.committed_crew == 4 and science.crew_in_transit == 4
+    assert science.destination_kind == "non_surface_spatial_node"
+    assert ids.MARS_ORBIT not in sim.graph.locations
+    assert sim.transport.fleet_free_units(ids.NUCLEAR_THERMAL_CREW_SHIP, ids.LEO) == 0
+
+    # Snapshot/restore and the following day preserve material, Fleet, Crew,
+    # research and in-flight cargo on one authoritative physical timeline.
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    path = tmp_path / "interplanetary-supply.json"
+    save_game(app, path, saved_at=now)
+    restored, offline = load_game(path, build_game_application_for_load, now=now)
+    assert offline is None
+    assert capture_state(restored._simulation) == capture_state(sim)
+    app.execute(AdvanceTime(20))
+    restored.execute(AdvanceTime(20))
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert sim.inventory.amount(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS) > arrival_before
+    # Finish the interplanetary journey on the restored authoritative State:
+    # the campaign may not silently teleport its Crew or bypass RP admission.
+    restored.execute(AdvanceTime(630))
+    completed = next(row for row in restored.query(GetScientificExplorations()).items
+                     if row.id == str(ids.MARS_ORBIT_CREW_EXPEDITION))
+    assert completed.status == "complete"
+    assert completed.committed_crew == 0
+    assert completed.crew_in_transit == 0
+    assert restored._simulation.transport.fleet_free_units(
+        ids.NUCLEAR_THERMAL_CREW_SHIP, ids.LEO) == 1

@@ -1176,6 +1176,13 @@ class LogisticsFlowMixin:
             ):
                 segment.dispatch_end_day += 1
                 segment.amount_t += amount_t
+                # Almost-equal dispatch slices share one transport segment,
+                # but their real settled amounts must not be replaced by the
+                # original rate. Preserve the aggregate mass and represent its
+                # mean frozen rate across the merged dispatch interval.
+                segment.dispatch_rate_t_per_day = (
+                    segment.amount_t / segment.dispatch_days
+                )
                 return segment.id
 
         self._cargo_flow_counter += 1
@@ -1231,14 +1238,28 @@ class LogisticsFlowMixin:
             arrived_days = max(0, arrived_end - segment.dispatch_start_day)
             if arrived_days <= 0:
                 continue
-            arrived_amount = min(
-                segment.amount_t, segment.dispatch_rate_t_per_day * arrived_days
+            # The final slice owns *all* remaining physical cargo, including
+            # round-off left by repeated equal-rate dispatch coalescing. Using
+            # rate * days for the last slice can leave a positive amount with
+            # a zero-day interval, which breaks snapshots/Save and conceals a
+            # physical quantity from Inventory admission. Never round it away.
+            fully_arrived = arrived_end >= segment.dispatch_end_day
+            arrived_amount = (
+                segment.amount_t if fully_arrived
+                else min(segment.amount_t, segment.dispatch_rate_t_per_day * arrived_days)
             )
             self._append_arrival_waiting(segment, arrived_amount, day)
             segment.dispatch_start_day += arrived_days
             segment.amount_t = max(0.0, segment.amount_t - arrived_amount)
-            if segment.amount_t <= 1e-9:
+            if fully_arrived or segment.amount_t <= 0.0:
                 del self.cargo_flows[segment_id]
+            else:
+                # The outstanding aggregate is again normalized to its
+                # remaining interval. No loss or phantom Resource is introduced
+                # by accumulated rounding in long-running merged flows.
+                segment.dispatch_rate_t_per_day = (
+                    segment.amount_t / segment.dispatch_days
+                )
 
     @staticmethod
     def _handoff_request_id(owner_id: EntityId, kind: str) -> EntityId:

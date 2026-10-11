@@ -518,6 +518,78 @@ def build_vehicle_definitions() -> dict:
             ),
             maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=4.0),
         ),
+        # Hydrogen flows through an onboard reactor-heated nozzle. Its high
+        # thrust keeps travel time close to chemical propulsion, unlike the
+        # low-thrust electric tug, while the reactor/thermal hardware raises
+        # manufacturing material, maintenance and Research commitments.
+        ids.NUCLEAR_THERMAL_CARGO_SHIP: VehicleDef(
+            id=ids.NUCLEAR_THERMAL_CARGO_SHIP,
+            display_name="水素核熱推進・惑星間貨物輸送船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=28.0, payload_t=40.0, transit_time_multiplier=1.05,
+                propellant_resource_id=ids.HYDROGEN, propellant_capacity_t=22.0,
+                propellant_t_per_total_t_per_km_s=0.005,
+                operation_capabilities=(SpaceflightCapability(38.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.HYDROGEN, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=17000.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=26.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 23.0),
+                           (ids.MACHINERY, 13.0), (ids.PRECISION_ELECTRONICS, 8.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("NT-NUCLEAR-THERMAL-04"),
+                    ids.research_id("FP-REACTOR-POWER-03"),
+                    ids.research_id("MC-MANUFACTURING-CONSTRUCTION-05"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=11.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 11.5),
+                                             (ids.MACHINERY, 6.5), (ids.PRECISION_ELECTRONICS, 4.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=9.0),
+        ),
+        ids.NUCLEAR_THERMAL_CREW_SHIP: VehicleDef(
+            id=ids.NUCLEAR_THERMAL_CREW_SHIP,
+            display_name="核熱推進・有人深宇宙航行船",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=33.0, payload_t=25.0, transit_time_multiplier=1.12,
+                propellant_resource_id=ids.HYDROGEN, propellant_capacity_t=15.0,
+                propellant_t_per_total_t_per_km_s=0.0045,
+                operation_capabilities=(SpaceflightCapability(50.0),),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.HYDROGEN, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=12000.0,
+                generic_capabilities=("refueling_interface", "docking_interface"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=38.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 31.0),
+                           (ids.MACHINERY, 17.0), (ids.PRECISION_ELECTRONICS, 13.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("NT-NUCLEAR-THERMAL-07"),
+                    ids.research_id("LS-ATMOSPHERE-WATER-WASTE-05"),
+                    ids.research_id("HB-HABITATION-PROTECTION-04"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=16.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 15.5),
+                                             (ids.MACHINERY, 8.5), (ids.PRECISION_ELECTRONICS, 6.5)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=12.0),
+            passengers=PassengerAccommodation(
+                seats=10, life_support_person_days_per_day=10, onboard_power_mw=2.0,
+                power_mw_per_person=0.14,
+                net_resources_per_person_day=((ids.FOOD, 0.002),
+                                              (ids.WATER, 0.003), (ids.OXYGEN, 0.002)),
+            ),
+        ),
         ids.DEEP_SPACE_PROBE: VehicleDef(
             id=ids.DEEP_SPACE_PROBE,
             display_name="長距離無人探査機",
