@@ -1,0 +1,1086 @@
+{
+  "base_plan": {
+    "initial_facilities": [
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.mineral_quarry",
+        "units": 2,
+        "extraction": "base.extraction.crust_mineral"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.metal_ore_mine",
+        "units": 2,
+        "extraction": "base.extraction.crust_ore"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.industrial_water_intake",
+        "units": 1,
+        "extraction": "base.extraction.water_intake"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.ore_processing",
+        "units": 1,
+        "process": "base.process.ore_processing"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.metallurgy",
+        "units": 1,
+        "process": "base.process.metallurgy"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.fabrication_workshop",
+        "units": 2,
+        "process": "base.process.standard_structural_components"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.basic_machinery_works",
+        "units": 1,
+        "process": "base.process.basic_machinery"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.industrial_machinery_assembly",
+        "units": 1,
+        "process": "base.process.industrial_machinery_assembly"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.construction_yard",
+        "units": 2
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.fission_power_unit",
+        "units": 3
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.research_laboratory",
+        "units": 2
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.food_farm",
+        "units": 1,
+        "process": "base.process.food_production"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.vehicle_assembly",
+        "units": 1
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "facility": "base.facility.orbital_solar_array",
+        "units": 2
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "facility": "base.facility.orbital_construction_platform",
+        "units": 1
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "facility": "base.facility.orbital_logistics_node",
+        "units": 1
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.mineral_sintering",
+        "units": 1,
+        "process": "base.process.mineral_sintering"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.machine_shop",
+        "units": 2,
+        "process": "base.process.basic_machining"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.microelectronics_fab",
+        "units": 1,
+        "process": "base.process.microelectronics_fabrication"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.heavy_equipment_assembly",
+        "units": 1,
+        "process": "base.process.heavy_equipment_assembly"
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "facility": "base.facility.fabrication_workshop",
+        "units": 1,
+        "process": "base.process.structural_fabrication"
+      }
+    ],
+    "initial_fleet": [
+      {
+        "node": "base.location.earth_industrial",
+        "vehicle": "base.vehicle.reusable_launch_vehicle",
+        "units": 2
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "vehicle": "base.vehicle.reusable_surface_cargo_lander",
+        "units": 1
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "vehicle": "base.vehicle.orbital_resource_mapping_spacecraft",
+        "units": 1
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "vehicle": "base.vehicle.deep_space_probe",
+        "units": 1
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+        "units": 2
+      }
+    ],
+    "initial_stock": [
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.machinery",
+        "amount_t": 60
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.structural_components",
+        "amount_t": 70
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.precision_electronics",
+        "amount_t": 15
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.metal_ore",
+        "amount_t": 45
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.mineral_feedstock",
+        "amount_t": 60
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.water",
+        "amount_t": 40
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.construction_equipment",
+        "amount_t": 5
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.chemical_propellant",
+        "amount_t": 35
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.structural_components",
+        "amount_t": 10
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.machinery",
+        "amount_t": 12
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.precision_electronics",
+        "amount_t": 3
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.chemical_propellant",
+        "amount_t": 15
+      }
+    ],
+    "solar_sites": [
+      {
+        "node": "conditional.moon.south_pole",
+        "facility": "base.facility.surface_solar_power_grid",
+        "context": "base.cell.moon.polar_cold_trap"
+      }
+    ],
+    "solar_yield": {
+      "base.node.low_earth_orbit": 0.75
+    },
+    "phases": [
+      {
+        "name": "established_earth_and_orbital_preparation",
+        "days": 45,
+        "facilities": [
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_quarry",
+            "units": 2,
+            "extraction": "base.extraction.crust_mineral"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 2,
+            "extraction": "base.extraction.crust_ore"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.industrial_water_intake",
+            "units": 1,
+            "extraction": "base.extraction.water_intake"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.ore_processing",
+            "units": 1,
+            "process": "base.process.ore_processing"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.metallurgy",
+            "units": 1,
+            "process": "base.process.metallurgy"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fabrication_workshop",
+            "units": 2,
+            "process": "base.process.standard_structural_components"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.basic_machinery_works",
+            "units": 1,
+            "process": "base.process.basic_machinery"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.industrial_machinery_assembly",
+            "units": 1,
+            "process": "base.process.industrial_machinery_assembly"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.construction_yard",
+            "units": 2
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fission_power_unit",
+            "units": 3
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.research_laboratory",
+            "units": 2
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.food_farm",
+            "units": 1,
+            "process": "base.process.food_production"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.vehicle_assembly",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 2
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_construction_platform",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_logistics_node",
+            "units": 1
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_sintering",
+            "units": 1,
+            "process": "base.process.mineral_sintering"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.machine_shop",
+            "units": 2,
+            "process": "base.process.basic_machining"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.microelectronics_fab",
+            "units": 1,
+            "process": "base.process.microelectronics_fabrication"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.heavy_equipment_assembly",
+            "units": 1,
+            "process": "base.process.heavy_equipment_assembly"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fabrication_workshop",
+            "units": 1,
+            "process": "base.process.structural_fabrication"
+          }
+        ],
+        "fleet": [
+          {
+            "node": "base.location.earth_industrial",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_surface_cargo_lander",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.deep_space_probe",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+            "units": 2
+          }
+        ],
+        "research_provider_allocations": [
+          {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 2
+          }
+        ],
+        "research_stages": [
+          {
+            "node": "base.location.earth_industrial",
+            "research": "CH-COMBUSTION-01",
+            "stage": "theory"
+          }
+        ],
+        "survey_activities": [
+          {
+            "node": "base.node.low_earth_orbit",
+            "provider": "base.survey_provider.orbital_resource_mapping",
+            "source": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "mode": "interplanetary_remote_spectrometry",
+            "units": 1,
+            "cell": "base.cell.moon.polar_cold_trap",
+            "resource": "base.resource.volatile_bearing_material",
+            "starting_progress": 0
+          }
+        ],
+        "science_campaigns": [
+          {
+            "campaign": "base.scientific_exploration.cislunar_environment_observation",
+            "vehicle": "base.vehicle.deep_space_probe"
+          }
+        ],
+        "founding_projects": [
+          {
+            "staging_node": "base.node.low_earth_orbit",
+            "recipe": "base.founding.robotic_surface_outpost",
+            "target_cell": "base.cell.moon.polar_cold_trap",
+            "vehicle": "base.vehicle.reusable_surface_cargo_lander"
+          }
+        ],
+        "market_buys": [
+          {
+            "node": "base.location.earth_industrial",
+            "provider": "base.market_provider.earth_industrial",
+            "resource": "base.resource.machinery",
+            "requested_t": 20
+          }
+        ],
+        "assumed_funds_musd": 12.0,
+        "extraction_sites": [
+          {
+            "node": "base.location.earth_industrial",
+            "developed_cells": [
+              "base.cell.earth.industrial_core"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.mineral_feedstock",
+                "level": 3
+              },
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.metal_ore",
+                "level": 3
+              },
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.water",
+                "level": 3
+              }
+            ]
+          }
+        ],
+        "spatial_projects": [
+          {
+            "node": "base.location.earth_industrial",
+            "recipe": "base.construction.surface_cell_development",
+            "units": 1
+          }
+        ]
+      },
+      {
+        "name": "conditional_surface_industry_and_supply",
+        "days": 120,
+        "facilities": [
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_quarry",
+            "units": 2,
+            "extraction": "base.extraction.crust_mineral"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 2,
+            "extraction": "base.extraction.crust_ore"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.industrial_water_intake",
+            "units": 1,
+            "extraction": "base.extraction.water_intake"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.ore_processing",
+            "units": 2,
+            "process": "base.process.ore_processing"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.metallurgy",
+            "units": 1,
+            "process": "base.process.metallurgy"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fabrication_workshop",
+            "units": 2,
+            "process": "base.process.standard_structural_components"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.basic_machinery_works",
+            "units": 1,
+            "process": "base.process.basic_machinery"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.industrial_machinery_assembly",
+            "units": 1,
+            "process": "base.process.industrial_machinery_assembly"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.construction_yard",
+            "units": 2
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fission_power_unit",
+            "units": 3
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.research_laboratory",
+            "units": 3
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.food_farm",
+            "units": 1,
+            "process": "base.process.food_production"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.vehicle_assembly",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 2
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_construction_platform",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_logistics_node",
+            "units": 1
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 2
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.volatile_extractor",
+            "units": 2,
+            "extraction": "base.extraction.cold_volatiles"
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.volatile_processing",
+            "units": 1,
+            "process": "base.process.volatile_water_recovery"
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.breathable_surface_life_support",
+            "units": 1,
+            "supported_person_days_per_day": 0
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.habitat",
+            "units": 1
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.surface_distribution_hub",
+            "units": 1
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.construction_yard",
+            "units": 1
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_sintering",
+            "units": 1,
+            "process": "base.process.mineral_sintering"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.machine_shop",
+            "units": 2,
+            "process": "base.process.basic_machining"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.microelectronics_fab",
+            "units": 1,
+            "process": "base.process.microelectronics_fabrication"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.heavy_equipment_assembly",
+            "units": 1,
+            "process": "base.process.heavy_equipment_assembly"
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fabrication_workshop",
+            "units": 1,
+            "process": "base.process.structural_fabrication"
+          }
+        ],
+        "fleet": [
+          {
+            "node": "base.location.earth_industrial",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_surface_cargo_lander",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.deep_space_probe",
+            "units": 1
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+            "units": 2
+          }
+        ],
+        "research_provider_allocations": [
+          {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 3
+          }
+        ],
+        "research_stages": [
+          {
+            "node": "base.location.earth_industrial",
+            "research": "RP-RESOURCE-CHAIN-10",
+            "stage": "theory"
+          }
+        ],
+        "extraction_sites": [
+          {
+            "node": "base.location.earth_industrial",
+            "developed_cells": [
+              "base.cell.earth.industrial_core"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.mineral_feedstock",
+                "level": 3
+              },
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.metal_ore",
+                "level": 3
+              },
+              {
+                "cell": "base.cell.earth.industrial_core",
+                "resource": "base.resource.water",
+                "level": 3
+              }
+            ]
+          },
+          {
+            "node": "conditional.moon.south_pole",
+            "developed_cells": [
+              "base.cell.moon.polar_cold_trap"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.moon.polar_cold_trap",
+                "resource": "base.resource.volatile_bearing_material",
+                "level": 3
+              }
+            ]
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "resource": "base.resource.machinery",
+            "t_per_day": 0.25
+          },
+          {
+            "origin": "base.node.low_earth_orbit",
+            "destination": "base.node.lunar_orbit",
+            "resource": "base.resource.machinery",
+            "t_per_day": 0.08
+          }
+        ],
+        "transport_allocations": [
+          {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2
+          },
+          {
+            "origin": "base.node.low_earth_orbit",
+            "destination": "base.node.lunar_orbit",
+            "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+            "units": 2
+          }
+        ],
+        "spatial_projects": [
+          {
+            "node": "conditional.moon.south_pole",
+            "recipe": "base.construction.surface_cell_development",
+            "units": 1
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "earth_dry_processing_and_conditional_surface",
+      "updates": []
+    },
+    {
+      "name": "water_intensive_metal_recovery",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.ore_processing",
+          "process": "base.process.wet_ore_beneficiation"
+        }
+      ]
+    },
+    {
+      "name": "surface_solar_capacity_investment",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "conditional.moon.south_pole",
+          "id": "base.facility.surface_solar_power_grid",
+          "units": 6
+        }
+      ]
+    },
+    {
+      "name": "surface_extraction_and_processing_growth",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "conditional.moon.south_pole",
+          "id": "base.facility.volatile_extractor",
+          "units": 6
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "conditional.moon.south_pole",
+          "id": "base.facility.volatile_processing",
+          "units": 3
+        }
+      ]
+    },
+    {
+      "name": "research_capacity_investment",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.research_laboratory",
+          "units": 5
+        },
+        {
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.research_laboratory",
+          "units": 5
+        }
+      ]
+    },
+    {
+      "name": "conditional_surface_population",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "conditional.moon.south_pole",
+          "id": "base.facility.breathable_surface_life_support",
+          "supported_person_days_per_day": 2
+        }
+      ]
+    },
+    {
+      "name": "more_launch_capacity_same_requested_cargo",
+      "updates": [
+        {
+          "collection": "fleet",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.vehicle.reusable_launch_vehicle",
+          "units": 4
+        },
+        {
+          "collection": "transport_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "origin": "base.location.earth_industrial",
+          "destination": "base.node.low_earth_orbit",
+          "id": "base.vehicle.reusable_launch_vehicle",
+          "units": 4
+        }
+      ]
+    },
+    {
+      "name": "earth_mining_investment_without_new_cell",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.metal_ore_mine",
+          "units": 6
+        }
+      ]
+    },
+    {
+      "name": "earth_developed_area_instead_of_mining_units",
+      "updates": [
+        {
+          "collection": "extraction_sites",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "developed_cells": [
+            "base.cell.earth.industrial_core",
+            "base.cell.earth.inland"
+          ],
+          "knowledge": [
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.mineral_feedstock",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.metal_ore",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.water",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.mineral_feedstock",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.metal_ore",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.water",
+              "level": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lunar_power_site_and_developed_area",
+      "updates": [
+        {
+          "collection": "solar_sites",
+          "node": "conditional.moon.south_pole",
+          "id": "base.facility.surface_solar_power_grid",
+          "context": "base.cell.moon.south_polar_ridge"
+        },
+        {
+          "collection": "extraction_sites",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "conditional.moon.south_pole",
+          "developed_cells": [
+            "base.cell.moon.polar_cold_trap",
+            "base.cell.moon.south_polar_ridge"
+          ],
+          "knowledge": [
+            {
+              "cell": "base.cell.moon.polar_cold_trap",
+              "resource": "base.resource.volatile_bearing_material",
+              "level": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "connected_earth_upstream_and_downstream_capacity_growth",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.metal_ore_mine",
+          "units": 8
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.ore_processing",
+          "units": 4
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.metallurgy",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.machine_shop",
+          "units": 4
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.mineral_sintering",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.microelectronics_fab",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.industrial_machinery_assembly",
+          "units": 2
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.fission_power_unit",
+          "units": 5
+        }
+      ]
+    },
+    {
+      "name": "connected_growth_with_developed_resource_area",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.metal_ore_mine",
+          "units": 8
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.ore_processing",
+          "units": 4
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.metallurgy",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.machine_shop",
+          "units": 4
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.mineral_sintering",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.microelectronics_fab",
+          "units": 3
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.industrial_machinery_assembly",
+          "units": 2
+        },
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.fission_power_unit",
+          "units": 5
+        },
+        {
+          "collection": "extraction_sites",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "developed_cells": [
+            "base.cell.earth.industrial_core",
+            "base.cell.earth.inland"
+          ],
+          "knowledge": [
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.mineral_feedstock",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.metal_ore",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.industrial_core",
+              "resource": "base.resource.water",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.mineral_feedstock",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.metal_ore",
+              "level": 3
+            },
+            {
+              "cell": "base.cell.earth.inland",
+              "resource": "base.resource.water",
+              "level": 3
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

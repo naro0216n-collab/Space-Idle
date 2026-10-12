@@ -78,6 +78,7 @@ def test_multiphase_resource_balance_and_transfer_do_not_perform_hidden_settleme
             ]}
     result = evaluate(plan, app=definitions)
     prior_stock = defaultdict(float, {(a, resource): .1 for resource in resources})
+    outstanding_receipts = defaultdict(float)
     assert "not settled Game flow" in " ".join(result["assumptions"])
     assert any(row["shortfall_t"] > 0 for phase in result["phases"] for row in phase["resources"])
     for phase in result["phases"]:
@@ -94,6 +95,10 @@ def test_multiphase_resource_balance_and_transfer_do_not_perform_hidden_settleme
             assert row["net_t"] == pytest.approx(sources - needs)
             assert row["notional_end_t"] == pytest.approx(row["start_t"] + row["net_t"])
             assert row["shortfall_t"] == pytest.approx(max(0, -row["notional_end_t"]))
+            outstanding_receipts[key] += row["received_t"]
+            assert row["cumulative_unverified_incoming_cargo_t"] == pytest.approx(outstanding_receipts[key])
+            assert row["shortfall_without_assumed_arrivals_t"] == pytest.approx(max(
+                0, outstanding_receipts[key] - row["notional_end_t"]))
             shipped[key[1]] += row["shipped_t"]
             received[key[1]] += row["received_t"]
         assert shipped == pytest.approx(received)
@@ -101,6 +106,39 @@ def test_multiphase_resource_balance_and_transfer_do_not_perform_hidden_settleme
     # Added facilities require investment independently of elapsed operation.
     assert any(row["construction_demand_t"] > 0 for row in result["phases"][1]["resources"])
     assert all(row["construction_demand_t"] == 0 for row in result["phases"][0]["resources"])
+
+
+
+def test_unsettled_incoming_cargo_never_becomes_an_assured_resource_balance(definitions):
+    """A Process covered only by assumed OD arrivals remains exposed to non-delivery."""
+    from scripts.analysis_balance import summarize_projection
+
+    facility, process = next((f, p) for f, p in _compatible_processes(definitions._simulation)
+                             if p.inputs_per_day and f.process_throughput_per_day > 0)
+    resource, units_per_batch = next(iter(process.inputs_per_day.items()))
+    days = 9
+    rate = facility.process_throughput_per_day * units_per_batch
+    asset = {"node": "cargo.destination", "facility": str(facility.id),
+             "units": 1, "process": str(process.id)}
+    report = evaluate({"initial_facilities": [asset],
+                       "initial_stock": [{"node": "cargo.origin", "resource": str(resource),
+                                          "amount_t": days * rate}],
+                       "phases": [{"name": "conditional delivery", "days": days,
+                                   "facilities": [asset], "transfers": [
+                                       {"origin": "cargo.origin", "destination": "cargo.destination",
+                                        "resource": str(resource), "t_per_day": rate}]}]},
+                      app=definitions)
+    phase = report["phases"][0]
+    received = _rows(phase)[("cargo.destination", str(resource))]
+    assert received["received_t"] == pytest.approx(days * rate)
+    assert received["shortfall_t"] == pytest.approx(0)
+    assert received["shortfall_without_assumed_arrivals_t"] == pytest.approx(days * rate)
+    assert received["cumulative_unverified_incoming_cargo_t"] == pytest.approx(days * rate)
+    assert phase["od_transport_constraints"][0]["nominal_capacity_t_per_day"] is None
+    summary = summarize_projection(report)["phases"][0]
+    assert any(row["node"] == "cargo.destination" and row["resource"] == str(resource)
+               and row["shortfall_without_assumed_arrivals_t"] == pytest.approx(days * rate)
+               for row in summary["conditional_incoming_cargo_risks_by_node"])
 
 
 def test_registered_facility_quantity_contributions_follow_every_definition(definitions):
@@ -879,7 +917,8 @@ def test_case_differences_trace_new_definition_activities_and_missing_time_bases
                row["reason"] == "missing_baseline_phase" for row in result["differences"])
     summary = __import__("scripts.analysis_balance", fromlist=["summarize"]).summarize(compared)
     assert "upgrade_projects" in summary["difference_sections"]
-    assert summary["cases"][1]["summary"]["phases"][0]["science_activity_bounds"]
+    assert any("science_activity_bounds" in phase["changed_sections"]
+               for phase in summary["cases"][1]["changed_phases"])
 
 
 def test_fleet_research_provider_competes_for_held_units_and_uses_registered_levels(definitions):
@@ -1178,7 +1217,10 @@ def test_lunar_world_solar_and_extraction_composition_keeps_resource_power_inves
     assert {"constraints", "power_world_context", "extraction_world_context", "resources", "resource_contributions"} <= {
         row["section"] for row in comparison["differences"]
     }
-    assert all(c["summary"]["phases"][0]["power_world_context"] for c in summaries["cases"])
+    assert summaries["cases"][0]["summary"]["phases"][0]["power_world_context"]
+    assert summaries["cases"][1]["relative_to_baseline"] == summaries["baseline_case"]
+    assert any("power_world_context" in phase["changed_sections"]
+               for phase in summaries["cases"][1]["changed_phases"])
 
 
 def test_solar_world_site_configuration_rejects_ambiguity(definitions):
@@ -1211,3 +1253,151 @@ def test_solar_world_site_configuration_rejects_ambiguity(definitions):
                        "cases": [{"name": "before"}, {"name": "changed", "updates": [
                            {"collection": "solar_sites", "node": "site", "id": "unknown.facility", "day": 1},
                        ]}]}, app=definitions)
+
+
+def test_investment_and_operating_resource_pressures_reconcile_with_actual_definition_ledger(definitions):
+    """A single ledger must distinguish capital, sustained throughput and finite opening Stock."""
+    from scripts.analysis_balance import summarize_projection
+
+    sim = definitions._simulation
+    facility, process = next((f, p) for f, p in _compatible_processes(sim)
+                             if p.inputs_per_day and not set(p.inputs_per_day) <= set(p.outputs_per_day))
+    resource = str(next(res for res in process.inputs_per_day if res not in process.outputs_per_day))
+    node, days = "sensitivity.stock", 12
+    asset = {"node": node, "facility": str(facility.id), "units": 2,
+             "process": str(process.id), "duty": .75}
+    starting_stock = 30.0
+    evaluation = evaluate({"initial_facilities": [asset],
+                           "initial_stock": [{"node": node, "resource": resource,
+                                              "amount_t": starting_stock}],
+                           "phases": [{"name": "active", "days": days, "facilities": [asset]}]},
+                          app=definitions)
+    phase = evaluation["phases"][0]
+    for row in phase["resources"]:
+        investment = sum(row[key] for key in (
+            "construction_demand_t", "vehicle_build_demand_t", "research_material_demand_t",
+            "science_material_demand_t", "founding_payload_demand_t"))
+        assert row["one_time_investment_and_activity_demand_t"] == pytest.approx(investment)
+        assert row["nominal_recurring_net_t_per_day"] * days == pytest.approx(
+            row["net_t"] + investment)
+        if row["nominal_recurring_net_t_per_day"] < -1e-12 and row["start_t"] >= investment:
+            assert row["conditional_stock_exhaustion_days_after_investment"] == pytest.approx(
+                (row["start_t"] - investment) / -row["nominal_recurring_net_t_per_day"])
+        else:
+            assert row["conditional_stock_exhaustion_days_after_investment"] is None
+    starving = _rows(phase)[(node, resource)]
+    assert starving["nominal_recurring_net_t_per_day"] < 0
+    summary = summarize_projection(evaluation)["phases"][0]
+    assert any(row["node"] == node and row["resource"] == resource
+               for row in summary["recurring_resource_pressures_by_node"])
+    # No actual inventory, lifecycle transition or additional Resource Source is generated.
+    assert all(item["origin_kind"] != "automatic_supply" for item in phase["resource_contributions"])
+
+
+def test_process_method_sensitivity_compares_registered_operating_chemistry_not_authored_target_rate(definitions):
+    """Any registered compatible alternative changes material inputs without inventing throughput."""
+    sim = definitions._simulation
+    pairs = list(_compatible_processes(sim))
+    alternative = next((f, a, b) for f, a in pairs for f2, b in pairs
+                       if f.id == f2.id and a.id != b.id and
+                       (a.inputs_per_day != b.inputs_per_day or a.outputs_per_day != b.outputs_per_day))
+    facility, first, second = alternative
+    node = "chosen.method"
+    asset = {"node": node, "facility": str(facility.id), "units": 2,
+             "process": str(first.id), "duty": .5}
+    plan = {"initial_facilities": [asset], "phases": [
+        {"name": "operation", "days": 10, "facilities": [asset]}]}
+    comparison = compare_cases({"base_plan": plan, "cases": [
+        {"name": "selected_first", "updates": []},
+        {"name": "selected_second", "updates": [{"collection": "facilities", "phase": "operation",
+            "node": node, "id": str(facility.id), "process": str(second.id)}]},
+    ]}, app=definitions)
+    initial = _rows(comparison["cases"][0]["projection"]["phases"][0])
+    revised = _rows(comparison["cases"][1]["projection"]["phases"][0])
+    for resource in set(first.inputs_per_day) | set(second.inputs_per_day):
+        assert revised.get((node, str(resource)), {}).get("process_demand_t", 0) == pytest.approx(
+            10 * facility.process_throughput_per_day * second.inputs_per_day.get(resource, 0))
+    assert any(row["section"] == "resource_contributions" for row in comparison["differences"])
+    assert any(initial.get(key, {}).get("net_t") != revised.get(key, {}).get("net_t")
+               for key in set(initial) | set(revised))
+    with pytest.raises(ValueError, match="preserve Process/Extraction kind"):
+        compare_cases({"base_plan": plan, "cases": [{"name": "illegal", "updates": [
+            {"collection": "facilities", "phase": "operation", "node": node,
+             "id": str(facility.id), "extraction": "unrelated"}]}]}, app=definitions)
+
+
+def test_cross_domain_portfolio_preserves_demand_capacity_and_unknowns_across_strategies(definitions):
+    """An explicit portfolio exercises multiple Domains without making its build counts normative."""
+    import json
+    from pathlib import Path
+    from scripts.analysis_balance import summarize
+
+    plan = json.loads((Path(__file__).parents[1] / "evaluation_plans" /
+                       "connected_industry_science_settlement_tradeoffs.json").read_text())
+    projection = compare_cases(plan, app=definitions)
+    assert len(projection["cases"]) == len(plan["cases"])
+    assert {row["section"] for row in projection["differences"]} >= {
+        "resources", "research_point_balance", "constraints", "extraction_world_context",
+        "resource_contributions", "transport_services"}
+    base = projection["cases"][0]["projection"]["phases"]
+    early, late = base
+    assert early["survey_activities"] and early["science_campaigns"] and early["founding_projects"]
+    assert early["market_provider_constraints"]
+    assert late["transport_services"] and late["od_transport_constraints"]
+    assert any(row["notional_end_without_assumed_arrivals_t"] < row["notional_end_t"]
+               for row in late["resources"] if row["received_t"] > 0)
+    assert late["extraction_world_context"] and late["power_world_context"]
+    assert all(not row["status"].startswith("successful") for row in late["transport_services"])
+    for case in projection["cases"]:
+        for phase in case["projection"]["phases"]:
+            for row in phase["resources"]:
+                assert row["one_time_investment_and_activity_demand_t"] >= 0
+                assert row["net_t"] == pytest.approx(
+                    row["nominal_recurring_net_t_per_day"] * phase["days"] -
+                    row["one_time_investment_and_activity_demand_t"])
+            constraints = {(row["node"], row["service"]): row for row in phase["service_constraints"]}
+            for node, service in constraints:
+                contributions = [s for s in phase["service_contributions"]
+                                 if (s["node"], s["service"]) == (node, service)]
+                assert sum(c["rate_per_day"] for c in contributions if c["role"] == "nominal_supply") == pytest.approx(
+                    constraints[(node, service)]["nominal_capacity_per_day"])
+            for row in phase["constraints"]:
+                assert row["conditional_housing_gap_people"] == pytest.approx(max(
+                    0, row["conditional_supported_residents_people"] - row["housing_nominal_people"]))
+    from scripts.analysis_balance import _SUMMARY_ROW_IDENTITY, summarize_projection
+
+    overview = summarize(projection)
+    assert len(overview["cases"]) == len(projection["cases"])
+    baseline_phases = overview["cases"][0]["summary"]["phases"]
+    for phase in baseline_phases:
+        assert "power_and_population_by_node" in phase
+        assert "recurring_resource_pressures_by_node" in phase
+        for collection in ("resource_shortfalls_by_node", "service_shortfalls_by_node"):
+            assert all(len(row["drivers"]) <= 3 and
+                       row["total_driver_count"] >= len(row["drivers"]) and
+                       row["driver_detail_section"] in ("resource_contributions", "service_contributions")
+                       for row in phase[collection])
+    for case, summarized in zip(projection["cases"][1:], overview["cases"][1:]):
+        assert summarized["relative_to_baseline"] == overview["baseline_case"]
+        assert summarized["unchanged_quantities_omitted"] is True
+        by_name = {phase["name"]: phase for phase in summarize_projection(case["projection"])["phases"]}
+        baseline_by_name = {phase["name"]: phase for phase in baseline_phases}
+        for phase in summarized["changed_phases"]:
+            base, target = baseline_by_name[phase["name"]], by_name[phase["name"]]
+            assert set(phase["changed_sections"]) == {
+                key for key in target if key not in {"name", "days", "detail_sections"}
+                and target[key] != base[key]}
+            for section, change in phase["changed_sections"].items():
+                if section not in _SUMMARY_ROW_IDENTITY:
+                    continue
+                fields = _SUMMARY_ROW_IDENTITY[section]
+                identity = lambda row: tuple(row[key] for key in fields)
+                before = {identity(row): row for row in base[section]}
+                after = {identity(row): row for row in target[section]}
+                assert {identity(row) for row in change["changed_or_added"]} == {
+                    key for key in after if before.get(key) != after[key]}
+                assert {identity(row) for row in change["no_longer_listed"]} == set(before) - set(after)
+    # The default overview omits full unchanged case ledgers and detailed deltas.
+    assert "differences" not in overview
+    assert len(json.dumps(overview)) < len(json.dumps([
+        summarize_projection(case["projection"]) for case in projection["cases"]]))

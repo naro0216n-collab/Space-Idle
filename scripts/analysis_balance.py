@@ -12,7 +12,7 @@ Usage: python scripts/analysis_balance.py plan.json > report.json
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 import json
 from math import isfinite
@@ -282,6 +282,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         label="initial Fleet", allow_turnarounds=False,
     ).items()}
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
+    # Cumulative authored receipts are conditional upon actual Cargo settlement.
+    # This is an algebraic lower Stock-bound, not a second logistics scheduler.
+    unverified_cargo_receipts = defaultdict(float)
     report = []
     seen_research_stages = set()
     seen_science_campaigns = set()
@@ -323,6 +326,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         life_support_inputs = defaultdict(float)
         life_support_supplied = defaultdict(float)
         life_support_committed = defaultdict(float)
+        housing_nominal = defaultdict(int)
         research_points = 0.0
         research_work = 0.0
         external = defaultdict(float)
@@ -373,6 +377,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             })
             if (process_id or extraction_id) and duty > 0:
                 unassessed.add("shared_power_service_and_resource_allocation")
+            # Housing is a physical installed capacity; it is not an
+            # operating-process rate and cannot be multiplied by duty.
+            housing_nominal[node] += facility.housing_capacity * units
             if facility.life_support is not None:
                 life_support_supplied[node] += facility.life_support.person_days_per_day * mult
                 life_support_committed[node] += people
@@ -1193,6 +1200,23 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
                      - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - science_inputs[key] - founding_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
+            unverified_cargo_receipts[key] += received[key]
+            without_assumed_arrivals = end[key] - unverified_cargo_receipts[key]
+            # Separate the phase's acquisition/project burden from its
+            # nominal recurring load. Both are already booked in the single
+            # Resource ledger; this classification does not make either flow
+            # executable or change projected stock.
+            investment_t = (construction[key] + vehicle_inputs[key] + research_inputs[key]
+                            + science_inputs[key] + founding_inputs[key])
+            recurring_delta = delta + investment_t
+            recurring_rate = recurring_delta / days
+            # This is a conditional stationary-rate exhaustion scale, not a
+            # forecast completion/depletion date. In particular, prior
+            # negative notional stock is never treated as usable inventory.
+            opening_after_investment = start - investment_t
+            exhaustion = (opening_after_investment / -recurring_rate
+                          if opening_after_investment >= 0 and recurring_rate < -1e-12
+                          else None)
             breakdown.append({
                 "node": key[0], "resource": key[1], "start_t": start,
                 "production_t": produced[key], "process_demand_t": process_inputs[key],
@@ -1205,8 +1229,15 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
+                "cumulative_unverified_incoming_cargo_t": unverified_cargo_receipts[key],
+                "notional_end_without_assumed_arrivals_t": without_assumed_arrivals,
+                "shortfall_without_assumed_arrivals_t": max(0.0, -without_assumed_arrivals),
                 "net_t": delta, "notional_end_t": end[key],
                 "shortfall_t": max(0.0, -end[key]),
+                "one_time_investment_and_activity_demand_t": investment_t,
+                "nominal_recurring_net_t_per_day": recurring_rate,
+                "conditional_stock_exhaustion_days_after_investment": exhaustion,
+                "opening_investment_stock_shortfall_t": max(0.0, investment_t - max(0.0, start)),
             })
         stocks = defaultdict(float, end)
         start_rp = stored_research_points
@@ -1260,7 +1291,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "conditional_scientific_exploration_reward_points_not_awarded": science_reward_conditional,
         }
         constraints = []
-        for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | {n for n, _ in services}):
+        for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | set(housing_nominal) | {n for n, _ in services}):
             construction_supply = services[(node, "construction_work")] * days
             constraints.append({
                 "node": node, "power_generation_nominal_mw": power_supply[node],
@@ -1272,6 +1303,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "life_support_nominal_person_days_per_day": life_support_supplied[node],
                 "life_support_assigned_person_days_per_day": life_support_committed[node],
                 "life_support_gap_person_days_per_day": max(0.0, life_support_committed[node] - life_support_supplied[node]),
+                "housing_nominal_people": housing_nominal[node],
+                "conditional_supported_residents_people": life_support_committed[node],
+                "conditional_housing_gap_people": max(0.0, life_support_committed[node] - housing_nominal[node]),
                 "cargo_transfer_demand_t_per_day": services[(node, "required:cargo_transfer")],
                 "cargo_transfer_nominal_capacity_t_per_day": services[(node, "cargo_transfer")],
                 "cargo_transfer_gap_t_per_day": max(0.0, services[(node, "required:cargo_transfer")] - services[(node, "cargo_transfer")]),
@@ -1306,10 +1340,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                                         "notional_occupied_t": occupied,
                                         "capacity_excess_t": max(0.0, occupied - cap)})
         system_resources = _aggregate_by_dimension(breakdown, "resource", (
+            "one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day",
             "production_t", "process_demand_t", "maintenance_demand_t",
             "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
             "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "external_net_t",
-            "shipped_t", "received_t", "net_t", "notional_end_t", "shortfall_t",
+            "shipped_t", "received_t", "cumulative_unverified_incoming_cargo_t",
+            "notional_end_without_assumed_arrivals_t", "shortfall_without_assumed_arrivals_t",
+            "net_t", "notional_end_t", "shortfall_t",
         ))
         system_services = _aggregate_by_dimension(service_constraints, "service", (
             "required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day",
@@ -1381,8 +1418,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
-                "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
-                "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
+                "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
+                "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
                 "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
@@ -1455,9 +1492,12 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                 raise ValueError("empty transport allocation sensitivity")
         elif collection in ("facilities", "fleet", "research_provider_allocations"):
             _keys(change, {"phase", "collection", "node", "id", "units", "duty",
-                           "turnarounds_per_unit_per_day", "level"},
+                           "turnarounds_per_unit_per_day", "level", "process", "extraction",
+                           "supported_person_days_per_day", "extraction_yield_fraction"},
                   {"phase", "collection", "node", "id"}, "case update")
-            allowed = ({"units", "duty"} if collection == "facilities" else
+            allowed = ({"units", "duty", "process", "extraction",
+                        "supported_person_days_per_day", "extraction_yield_fraction"}
+                       if collection == "facilities" else
                        {"units", "turnarounds_per_unit_per_day"} if collection == "fleet" else
                        {"units", "duty", "level"})
             edits = {k: v for k, v in change.items() if k in allowed}
@@ -1469,6 +1509,15 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             candidates = [row for phase in phases for row in phase.get(collection, ())
                           if row["node"] == change["node"] and row[key] == change["id"]]
             identity = (collection, change["phase"], change["node"], change["id"])
+            if collection == "facilities" and ("process" in edits or "extraction" in edits):
+                if len(candidates) != 1 or not ("process" in candidates[0] or "extraction" in candidates[0]):
+                    raise ValueError("method sensitivity requires exactly one existing operating Facility")
+                # The analyst may select a different registered method, never
+                # introduce a new simultaneous Process/Extraction assignment.
+                if ("process" in edits) != ("process" in candidates[0]):
+                    raise ValueError("method sensitivity must preserve Process/Extraction kind")
+                if ("extraction" in edits) != ("extraction" in candidates[0]):
+                    raise ValueError("method sensitivity must preserve Process/Extraction kind")
         else:
             raise ValueError(f"unsupported sensitivity collection: {collection!r}")
         if identity in seen:
@@ -1533,17 +1582,19 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                  ("amount_t",)),
                 ("service_constraints", ("node", "service"),
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
-                ("system_resources", ("resource",), ("production_t", "process_demand_t",
+                ("system_resources", ("resource",), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "production_t", "process_demand_t",
                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
                       "fleet_turnaround_demand_t", "transport_service_demand_t", "notional_end_t", "shortfall_t")),
                 ("system_services", ("service",), ("required_per_day", "nominal_capacity_per_day",
                        "nominal_gap_per_day")),
-                ("resources", ("node", "resource"), ("production_t", "process_demand_t",
+                ("resources", ("node", "resource"), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "opening_investment_stock_shortfall_t", "conditional_stock_exhaustion_days_after_investment", "production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-                       "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
+                       "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t", "cumulative_unverified_incoming_cargo_t", "shortfall_without_assumed_arrivals_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
                        "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
-                       "life_support_gap_person_days_per_day", "construction_work_required", "construction_work_nominal_capacity",
+                       "life_support_gap_person_days_per_day", "housing_nominal_people",
+                       "conditional_supported_residents_people", "conditional_housing_gap_people",
+                       "construction_work_required", "construction_work_nominal_capacity",
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
                 ("od_transport_constraints", ("origin", "destination"),
                  ("demand_t_per_day", "nominal_capacity_t_per_day", "nominal_gap_t_per_day")),
@@ -1586,7 +1637,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                                 value = values[metric]
                                 if metric in {"cycle_days", "duration_days", "conditional_minimum_days",
                                               "marginal_efficiency", "pre_investment_work_lower_bound_days",
-                                              "conditional_lower_bound_days"}:
+                                              "conditional_lower_bound_days",
+                                              "conditional_stock_exhaustion_days_after_investment"}:
                                     grouped[key][metric] = old if old == value else None
                                 else:
                                     grouped[key][metric] = (old + value if old is not None and value is not None
@@ -1627,6 +1679,25 @@ def compare_cases(payload: dict, *, app=None) -> dict:
             "cases": results, "differences": differences}
 
 
+def _leading_activity_drivers(phase: dict, collection: str, *, node: str,
+                              category: str, identifier: str, quantity: str,
+                              top: int = 3) -> dict:
+    """A bounded and clearly non-exhaustive view of the full activity ledger.
+
+    The detailed report remains the single source for exact reconciliation;
+    multiple activities with the same Definition remain distinct there.
+    """
+    entries = [row for row in phase[collection]
+               if row["node"] == node and row[category] == identifier
+               and abs(row[quantity]) > 1e-12]
+    entries.sort(key=lambda row: (-abs(row[quantity]), row["origin_kind"],
+                                  str(row["origin_definition"]), row.get("dimension", row.get("role", ""))))
+    fields = ("origin_kind", "origin_definition", "dimension", "amount_t") if collection == "resource_contributions" else (
+        "origin_kind", "origin_definition", "role", "rate_per_day")
+    return {"drivers": [{key: row[key] for key in fields} for row in entries[:top]],
+            "total_driver_count": len(entries), "driver_detail_section": collection}
+
+
 def summarize_projection(projection: dict) -> dict:
     """Overview of unlike quantities, with sections traceable in the full projection.
 
@@ -1636,16 +1707,58 @@ def summarize_projection(projection: dict) -> dict:
     """
     phases = []
     for phase in projection["phases"]:
+        def resource_drivers(row):
+            return _leading_activity_drivers(phase, "resource_contributions", node=row["node"],
+                                             category="resource", identifier=row["resource"],
+                                             quantity="amount_t")
+
+        def service_drivers(row):
+            return _leading_activity_drivers(phase, "service_contributions", node=row["node"],
+                                             category="service", identifier=row["service"],
+                                             quantity="rate_per_day")
+
         phases.append({
             "name": phase["name"], "days": phase["days"],
             "scale": phase["scale"],
             "resource_shortfalls_by_node": [
-                {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"]}
+                {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"],
+                 "opening_investment_stock_shortfall_t": row["opening_investment_stock_shortfall_t"],
+                 "one_time_investment_and_activity_demand_t": row["one_time_investment_and_activity_demand_t"],
+                 "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
+                 "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"],
+                 "shortfall_without_assumed_arrivals_t": row["shortfall_without_assumed_arrivals_t"],
+                 **resource_drivers(row)}
                 for row in phase["resources"] if row["shortfall_t"] > 1e-12
             ],
+            "conditional_incoming_cargo_risks_by_node": [
+                {"node": row["node"], "resource": row["resource"],
+                 "cumulative_unverified_incoming_cargo_t": row["cumulative_unverified_incoming_cargo_t"],
+                 "shortfall_with_assumed_arrivals_t": row["shortfall_t"],
+                 "shortfall_without_assumed_arrivals_t": row["shortfall_without_assumed_arrivals_t"],
+                 "status": "incoming_cargo_not_settled_or_guaranteed"}
+                for row in phase["resources"] if row["cumulative_unverified_incoming_cargo_t"] > 1e-12
+            ],
+            "recurring_resource_pressures_by_node": [
+                {"node": row["node"], "resource": row["resource"],
+                 "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
+                 "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"]}
+                for row in phase["resources"] if row["nominal_recurring_net_t_per_day"] < -1e-12
+            ],
             "service_shortfalls_by_node": [
-                {"node": row["node"], "service": row["service"], "gap_per_day": row["nominal_gap_per_day"]}
+                {"node": row["node"], "service": row["service"], "gap_per_day": row["nominal_gap_per_day"],
+                 **service_drivers(row)}
                 for row in phase["service_constraints"] if row["nominal_gap_per_day"] > 1e-12
+            ],
+            "power_and_population_by_node": [
+                {k: row[k] for k in ("node", "power_generation_nominal_mw", "power_demand_nominal_mw",
+                                         "power_gap_mw", "life_support_nominal_person_days_per_day",
+                                         "life_support_assigned_person_days_per_day",
+                                         "life_support_gap_person_days_per_day", "housing_nominal_people",
+                                         "conditional_supported_residents_people", "conditional_housing_gap_people")}
+                for row in phase["constraints"]
+                if row["power_generation_nominal_mw"] > 0 or row["power_demand_nominal_mw"] > 0
+                or row["housing_nominal_people"] > 0 or row["life_support_nominal_person_days_per_day"] > 0
+                or row["life_support_assigned_person_days_per_day"] > 0
             ],
             "research_point_balance": phase["research_point_balance"],
             "research_service_constraints": phase["research_service_constraints"],
@@ -1681,17 +1794,101 @@ def summarize_projection(projection: dict) -> dict:
             "model": "definition_quantity_summary_v1", "phases": phases}
 
 
+_SUMMARY_ROW_IDENTITY = {
+    "resource_shortfalls_by_node": ("node", "resource"),
+    "recurring_resource_pressures_by_node": ("node", "resource"),
+    "conditional_incoming_cargo_risks_by_node": ("node", "resource"),
+    "service_shortfalls_by_node": ("node", "service"),
+    "power_and_population_by_node": ("node",),
+    "od_transport_constraints": ("origin", "destination"),
+    "extraction_world_context": ("node", "resource", "output_resource"),
+    "power_world_context": ("node", "facility"),
+    "science_activity_bounds": ("campaign", "origin"),
+    "survey_capacity_bounds": ("node", "provider", "target_cell", "target_resource"),
+    "founding_investment": ("staging_node", "recipe", "target"),
+    "market_provider_bounds": ("provider", "resource"),
+}
+
+
+def _relative_phase_overview(baseline: dict, chosen: dict) -> dict:
+    """Only modified conditions appear; omissions mean *unchanged*, not available.
+
+    This is a display reduction of two projections, never a second quantity
+    calculator or an interpretation of successful Research/Movement/Allocation.
+    """
+    changed = {}
+    for section, after in chosen.items():
+        if section in {"name", "days", "detail_sections"}:
+            continue
+        before = baseline.get(section)
+        if before == after:
+            continue
+        fields = _SUMMARY_ROW_IDENTITY.get(section)
+        if fields is None or not isinstance(before, list) or not isinstance(after, list):
+            if section == "unassessed_constraints":
+                changed[section] = {"new": sorted(set(after) - set(before)),
+                                    "no_longer_listed": sorted(set(before) - set(after))}
+            else:
+                changed[section] = after
+            continue
+        # Some sources (e.g. multiple Survey allocations) may share an identity.
+        # Do not collapse activity rows into an invented combined provider.
+        def grouped(rows):
+            result = defaultdict(list)
+            for row in rows:
+                result[tuple(row[field] for field in fields)].append(row)
+            return result
+        initial, altered = grouped(before), grouped(after)
+        new_rows = [row for key in sorted(altered) if initial.get(key) != altered[key]
+                    for row in altered[key]]
+        removed_keys = [dict(zip(fields, key)) for key in sorted(initial)
+                        if key not in altered]
+        changed[section] = {"changed_or_added": new_rows,
+                            "no_longer_listed": removed_keys,
+                            "full_details_section": section}
+    return {"name": chosen["name"], "days": chosen["days"],
+            "changed_sections": changed}
+
+
 def summarize(result: dict) -> dict:
-    """Retain case identities, comparison dimensions, and drill-down references."""
+    """A complete baseline and explicit *changes* for each alternative.
+
+    Unlike a second copy of every unchanged phase/ledger, this remains usable
+    with many cases. An absent case quantity means unchanged from baseline, NOT
+    zero. Detailed unabridged report includes full per-case rows and differences.
+    """
     if "cases" not in result:
         return summarize_projection(result)
+    baseline = result["cases"][0]
+    baseline_summary = summarize_projection(baseline["projection"])
+    case_overviews = [{"name": baseline["name"], "summary": baseline_summary}]
+    for case in result["cases"][1:]:
+        summary = summarize_projection(case["projection"])
+        if len(summary["phases"]) != len(baseline_summary["phases"]) or any(
+            lhs["name"] != rhs["name"] or lhs["days"] != rhs["days"]
+            for lhs, rhs in zip(baseline_summary["phases"], summary["phases"])
+        ):
+            # Different durations/phase sets are not equivalent quantity bases.
+            case_overviews.append({"name": case["name"], "summary": summary,
+                                   "incomparable_phase_basis": True})
+            continue
+        case_overviews.append({"name": case["name"], "relative_to_baseline": baseline["name"],
+                               "unchanged_quantities_omitted": True,
+                               "changed_phases": [
+                                   _relative_phase_overview(base_phase, chosen_phase)
+                                   for base_phase, chosen_phase in zip(
+                                       baseline_summary["phases"], summary["phases"])
+                                   if base_phase != chosen_phase]})
+    differences_by_case = {case["name"]: Counter() for case in result["cases"][1:]}
+    for row in result["differences"]:
+        differences_by_case[row["case"]][row["section"]] += 1
     return {"model": "definition_quantity_comparison_summary_v1",
-            "baseline_case": result["baseline_case"],
-            "cases": [{"name": case["name"], "summary": summarize_projection(case["projection"])}
-                      for case in result["cases"]],
+            "baseline_case": baseline["name"], "cases": case_overviews,
             "difference_sections": sorted({row["section"] for row in result["differences"]}),
-            "differences": result["differences"]}
-
+            "difference_counts_by_case_and_section": [
+                {"case": case["name"], "sections": dict(sorted(differences_by_case[case["name"]].items()))}
+                for case in result["cases"][1:]],
+            "full_differences_detail_section": "differences"}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
