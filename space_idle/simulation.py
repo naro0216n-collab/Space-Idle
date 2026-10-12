@@ -109,6 +109,7 @@ class TickAllocations:
     power_by_location: dict[SpatialNodeId, PowerSnapshot]
     services: ServiceCapacityAllocationPlan
     transport: LogisticsExecutionAllocation
+    maintenance_fulfillment_by_facility: dict[EntityId, float]
 
 
 ALLOCATION_LOGISTICS = "logistics_authorization"
@@ -1276,6 +1277,20 @@ class Simulation:
         max_iterations = 64
         damping = 0.5
         previous_target_factors: dict[EntityId, float] | None = None
+        feasible_feedback = None
+        unsupported_feedback_seen = False
+        converged = False
+
+        def feedback_is_supported(assumed, projected) -> bool:
+            # A provider may offer less than its fulfilled Maintenance allows,
+            # but never more. A same-priority consumer can consume the very
+            # material that maintains its provider, so an exact fixed point
+            # need not exist for the discrete priority allocator.
+            return all(
+                assumed.get(facility_id, 1.0)
+                <= projected.get(facility_id, 1.0) + convergence_tolerance
+                for facility_id in set(assumed) | set(projected)
+            )
 
         def factor_delta(left, right) -> float:
             facility_ids = set(left) | set(right)
@@ -1303,6 +1318,18 @@ class Simulation:
             ) = resolve_for_maintenance(maintenance_factors)
 
             facility_ids = set(maintenance_factors) | set(next_maintenance_factors)
+            if feedback_is_supported(maintenance_factors, next_maintenance_factors):
+                candidate = (
+                    dict(maintenance_factors),
+                    (power_by_location, provider_plan, execution,
+                     next_maintenance_factors, transport_usage,
+                     transport_reference_usage, transport_surface_factors,
+                     transport_surface_limits),
+                )
+                if feasible_feedback is None or math.fsum(candidate[0].values()) > math.fsum(feasible_feedback[0].values()):
+                    feasible_feedback = candidate
+            else:
+                unsupported_feedback_seen = True
             delta = factor_delta(next_maintenance_factors, maintenance_factors)
             target_is_stable = (
                 previous_target_factors is not None
@@ -1329,6 +1356,7 @@ class Simulation:
                     verified_factors, maintenance_factors
                 )
                 if verification_delta <= convergence_tolerance:
+                    converged = True
                     break
                 next_maintenance_factors = verified_factors
                 facility_ids = set(maintenance_factors) | set(verified_factors)
@@ -1353,7 +1381,14 @@ class Simulation:
                         transport_surface_factors,
                         transport_surface_limits,
                     ) = candidate_result
+                    converged = True
                     break
+
+            # A physically safe candidate and an unsafe one bracket a provider
+            # feedback boundary. Refine that boundary directly instead of
+            # oscillating through the same discrete allocation outcomes.
+            if feasible_feedback is not None and unsupported_feedback_seen:
+                break
 
             previous_target_factors = dict(next_maintenance_factors)
             maintenance_factors = {
@@ -1364,10 +1399,45 @@ class Simulation:
                 )
                 for facility_id in sorted(facility_ids, key=str)
             }
-        else:
-            raise RuntimeError(
-                "tick allocation provider dependencies did not converge"
-            )
+        if not converged:
+            # Competing maintenance and the service that it enables can form
+            # a discontinuous feedback loop under priority allocation. In that
+            # case there is no exact fixed point. Select a deterministic,
+            # physically supported service cap rather than allowing a provider
+            # to supply more than its actual allocated maintenance sustains or
+            # rejecting the entire game day. This is unused potential supply,
+            # not a new resource, service provider, or maintenance settlement.
+            if feasible_feedback is None:
+                minimum = {facility_id: 0.0 for facility_id in maintenance_factors}
+                minimum_result = resolve_for_maintenance(minimum)
+                if not feedback_is_supported(minimum, minimum_result[3]):
+                    raise RuntimeError("tick allocation has no physically supported provider supply")
+                feasible_feedback = (minimum, minimum_result)
+
+            supported_factors, supported_result = feasible_feedback
+            rejected_factors = {facility_id: 1.0 for facility_id in supported_factors}
+            # Refine the supported lower bound toward full available provider
+            # capacity. Each accepted step is reallocated and verified against
+            # the actual Maintenance outcome; unsuccessful steps change no State.
+            for _ in range(18):
+                candidate_factors = {
+                    facility_id: (supported_factors[facility_id] + rejected_factors[facility_id]) / 2.0
+                    for facility_id in sorted(supported_factors, key=str)
+                }
+                candidate_result = resolve_for_maintenance(candidate_factors)
+                if feedback_is_supported(candidate_factors, candidate_result[3]):
+                    supported_factors, supported_result = candidate_factors, candidate_result
+                else:
+                    rejected_factors = candidate_factors
+
+            maintenance_factors = supported_factors
+            (
+                power_by_location, provider_plan, execution, actual_factors,
+                transport_usage, transport_reference_usage,
+                transport_surface_factors, transport_surface_limits,
+            ) = supported_result
+            if not feedback_is_supported(maintenance_factors, actual_factors):
+                raise RuntimeError("tick provider supply exceeds settled maintenance")
 
         resources = ResourceAllocationProjection(
             self._resource_projection_from_execution(execution)
@@ -1412,6 +1482,10 @@ class Simulation:
             power_by_location,
             services,
             transport,
+            (
+                {} if self.maintenance is None
+                else self.maintenance.satisfaction_projection(execution)
+            ),
         )
 
     def _execute_tick_domains(

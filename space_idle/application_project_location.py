@@ -223,6 +223,7 @@ class LocationProjectorMixin:
         service_allocations = decision.allocations.services
         resource_allocations = decision.allocations.resources
         execution_allocations = decision.allocations.execution
+        maintenance_fulfillment = decision.allocations.maintenance_fulfillment_by_facility
 
         facilities = []
         for facility in sorted(
@@ -256,13 +257,18 @@ class LocationProjectorMixin:
             operating_blockers = list(activation_failures)
             if active_and_compatible and power_utilization < 1.0 - 1e-9:
                 operating_blockers.append(("power", "電力配分不足"))
-            maintenance_satisfaction = power.maintenance_factor_by_facility.get(
+            maintenance_satisfaction = maintenance_fulfillment.get(facility.id, 1.0)
+            supported_provider_factor = power.maintenance_factor_by_facility.get(
                 facility.id, 1.0
             )
             if maintenance_satisfaction < 1.0 - 1e-9:
                 operating_blockers.append(("maintenance", "維持資源充足率不足"))
+            if supported_provider_factor < maintenance_satisfaction - 1e-7:
+                operating_blockers.append((
+                    "provider_feedback", "維持資源と活動の競合による提供能力制約"
+                ))
             operational_utilization = (
-                power_utilization * maintenance_satisfaction
+                power_utilization * supported_provider_factor
                 if active_and_compatible else 0.0
             )
             recovery_potential = sim.facilities.decommission_salvage(facility.id)

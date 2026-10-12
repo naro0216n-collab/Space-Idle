@@ -154,3 +154,78 @@ def test_current_tick_maintenance_fulfillment_controls_power_and_service_capacit
     assert row.maintenance_satisfaction == pytest.approx(0.0)
     assert service.nominal_rate > 0.0
     assert service.enabled_rate == pytest.approx(0.0)
+
+
+def test_transport_resource_competition_never_overstates_maintained_service_and_roundtrips(tmp_path):
+    """Transport may consume the stock maintaining its own handling provider.
+
+    A discontinuous same-priority feedback can have no exact equality fixed
+    point. The authorized provider supply must still be supportable by actual
+    maintenance settlement, without dropping Cargo, Stock or time progression.
+    """
+    from datetime import datetime, timezone
+    from space_idle import (
+        AdvanceTime, CreateTradeOrder, CreateTransportAllocation,
+        GetTransportAllocationOptions, SetTargetStock,
+    )
+    from space_idle.content.base_market import EARTH_MARKET_INTERFACE
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import capture_state, load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    for origin, destination, vehicle in (
+        (ids.EARTH, ids.LEO, ids.REUSABLE_LAUNCH_VEHICLE),
+        (ids.LEO, ids.LUNAR_ORBIT, ids.REUSABLE_ORBITAL_CARGO_TUG),
+    ):
+        option = next(
+            row for row in app.query(GetTransportAllocationOptions(str(origin), str(destination))).options
+            if row.vehicle_definition_id == str(vehicle)
+        )
+        assert app.execute(CreateTransportAllocation(
+            str(vehicle), str(origin), str(destination),
+            target_forward_t_per_day=option.nominal_capacity.forward_t_per_day,
+            target_reverse_t_per_day=0.0,
+        )).created_id
+    for node, resource_id, target in (
+        (ids.LEO, ids.PROPELLANT, 0.9),
+        (ids.LUNAR_ORBIT, ids.PROPELLANT, 3.2),
+        (ids.LUNAR_ORBIT, ids.MACHINERY, 3.0),
+        (ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS, 5.0),
+    ):
+        assert app.execute(SetTargetStock(str(node), str(resource_id), target)).created_id
+    assert app.execute(CreateTradeOrder(
+        "buy", str(ids.PROPELLANT), str(EARTH_MARKET_INTERFACE), quantity_target_t=45.0,
+    )).created_id
+
+    def verify_supported_allocation(game):
+        sim = game._simulation
+        decision = sim.tick_decision_projection()
+        settled = sim.maintenance.satisfaction_projection(decision.allocations.execution)
+        for power in decision.allocations.power_by_location.values():
+            for facility_id, supplied_factor in power.maintenance_factor_by_facility.items():
+                assert 0.0 <= supplied_factor <= settled[facility_id] + 1e-8
+        # Application must distinguish actually settled Maintenance from a
+        # deliberately conservative, lower available Service supply.
+        location = game.query(GetOperationalNode(str(ids.LEO)))
+        for facility in location.facilities:
+            facility_id = EntityId(facility.id)
+            assert facility.maintenance_satisfaction == pytest.approx(settled[facility_id])
+            provider_factor = decision.allocations.power_by_location[ids.LEO].maintenance_factor_by_facility[facility_id]
+            if provider_factor < settled[facility_id] - 1e-7:
+                assert any(blocker.code == "provider_feedback" for blocker in facility.operating_blockers)
+
+    for _ in range(7):
+        verify_supported_allocation(app)
+        app.execute(AdvanceTime(1))
+    stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / "maintenance_cargo_feedback.json"
+    save_game(app, path, saved_at=stamp)
+    restored, _ = load_game(path, build_game_application_for_load, now=stamp)
+    assert capture_state(restored._simulation) == capture_state(sim)
+    for game in (app, restored):
+        verify_supported_allocation(game)
+        game.execute(AdvanceTime(3))
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert sim.inventory.amount(ids.LEO, ids.STRUCTURAL_COMPONENTS) >= 0
+    assert sim.day == 10
