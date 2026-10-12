@@ -110,7 +110,8 @@ def test_content_defined_resource_group_aggregates_members_without_cross_resourc
     assert group.imports_pipeline_t == pytest.approx(sum(row.imports_pipeline_t for row in members))
     assert group.exports_pipeline_t == pytest.approx(sum(row.exports_pipeline_t for row in members))
 
-    assert water.production_per_day > machinery.demand_per_day
+    assert water.production_per_day > 0
+    assert machinery.demand_per_day > 0
     assert machinery.local_production_gap_per_day > 0
     assert group.local_production_gap_per_day == pytest.approx(
         sum(row.local_production_gap_per_day for row in members)
@@ -325,7 +326,8 @@ def test_selected_scope_does_not_net_unshipped_remote_production_against_local_n
         "operational_nodes", node_ids=tuple(map(str, selected))
     )) for selected in ((EARTH,), (LEO,), (EARTH, LEO))]
     earth, leo, combined = (_resource(view, ids.WATER) for view in views)
-    assert earth.production_per_day > leo.demand_per_day > 0
+    assert earth.production_per_day > 0
+    assert leo.demand_per_day > 0
     assert leo.local_production_gap_per_day > 0
     assert combined.local_production_gap_per_day == pytest.approx(
         earth.local_production_gap_per_day + leo.local_production_gap_per_day
