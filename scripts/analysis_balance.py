@@ -56,7 +56,7 @@ def _asset_rows(rows, sim, nodes, *, label):
     """One method per Facility block; sum units by definition for construction."""
     result = []
     for row in rows:
-        _keys(row, {"node", "facility", "units", "process", "extraction", "duty", "extraction_yield_fraction"},
+        _keys(row, {"node", "facility", "units", "process", "extraction", "duty", "extraction_yield_fraction", "supported_person_days_per_day"},
               {"node", "facility", "units"}, label)
         node = _identifier(row["node"], nodes, "node")
         name = _identifier(row["facility"], sim.facilities.definitions, "facility")
@@ -73,6 +73,12 @@ def _asset_rows(rows, sim, nodes, *, label):
         yield_factor = _number(row.get("extraction_yield_fraction", 0), "extraction_yield_fraction")
         if yield_factor > 1:
             raise ValueError("extraction_yield_fraction cannot exceed 1")
+        people = _number(row.get("supported_person_days_per_day", 0), "supported_person_days_per_day")
+        support = definition.life_support
+        if people > 0 and support is None:
+            raise ValueError(f"facility {name} has no Life Support capability")
+        if support is not None and people > units * support.person_days_per_day:
+            raise ValueError("assigned Life Support exceeds nominal person-days")
         if process_id and extraction_id:
             raise ValueError("one Facility block cannot run a Process and Extraction simultaneously")
         if process_id is not None:
@@ -85,7 +91,7 @@ def _asset_rows(rows, sim, nodes, *, label):
             method_id = _identifier(extraction_id, sim.extraction.specs, "extraction method")
             if not sim.extraction.specs[DefinitionId(method_id)].required_capabilities <= capabilities:
                 raise ValueError(f"extraction {method_id} incompatible with facility {name}")
-        result.append((node, name, units, process_id, extraction_id, duty, yield_factor))
+        result.append((node, name, units, process_id, extraction_id, duty, yield_factor, people))
     return sorted(result)
 
 
@@ -121,7 +127,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
 
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
     previous = defaultdict(int)
-    for node, name, units, _p, _e, _d, _y in initial:
+    for node, name, units, _p, _e, _d, _y, _people in initial:
         previous[(node, name)] += units
     report = []
     seen_research_stages = set()
@@ -139,6 +145,9 @@ def evaluate(plan: dict, *, app=None) -> dict:
         construction = defaultdict(float)
         vehicle_inputs = defaultdict(float)
         research_inputs = defaultdict(float)
+        life_support_inputs = defaultdict(float)
+        life_support_supplied = defaultdict(float)
+        life_support_committed = defaultdict(float)
         research_points = 0.0
         research_work = 0.0
         external = defaultdict(float)
@@ -150,10 +159,15 @@ def evaluate(plan: dict, *, app=None) -> dict:
         services = defaultdict(float)
         storage = defaultdict(float)
         # Everything here is a request or nominal nameplate, never settled flow.
-        for node, name, units, process_id, extraction_id, duty, yield_factor in assets:
+        for node, name, units, process_id, extraction_id, duty, yield_factor, people in assets:
             current[(node, name)] += units
             facility = sim.facilities.definitions[DefinitionId(name)]
             mult = units * duty
+            if facility.life_support is not None:
+                life_support_supplied[node] += facility.life_support.person_days_per_day * mult
+                life_support_committed[node] += people
+                for resource_id, amount in facility.life_support.net_resources:
+                    life_support_inputs[(node, str(resource_id))] += amount * people * days
             if process_id:
                 proc = sim.industry.processes[DefinitionId(process_id)]
                 for res, quantity in proc.inputs_per_day.items():
@@ -254,18 +268,19 @@ def evaluate(plan: dict, *, app=None) -> dict:
             services[(origin, "required:cargo_transfer")] += amount / days
             services[(dest, "required:cargo_transfer")] += amount / days
         end = {}
-        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(research_inputs) | set(external) | set(shipped) | set(received)
+        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
         breakdown = []
         for key in sorted(keys):
             start = stocks[key]
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
-                     - vehicle_inputs[key] - research_inputs[key] + external[key] - shipped[key] + received[key])
+                     - vehicle_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
             breakdown.append({
                 "node": key[0], "resource": key[1], "start_t": start,
                 "production_t": produced[key], "process_demand_t": process_inputs[key],
                 "maintenance_demand_t": maintenance[key], "construction_demand_t": construction[key],
                 "vehicle_build_demand_t": vehicle_inputs[key], "research_material_demand_t": research_inputs[key],
+                "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
                 "net_t": delta, "notional_end_t": end[key],
@@ -273,7 +288,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
             })
         stocks = defaultdict(float, end)
         constraints = []
-        for node in sorted(set(power_supply) | set(power_load) | set(work) | {n for n, _ in services}):
+        for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | {n for n, _ in services}):
             construction_supply = services[(node, "construction_work")] * days
             constraints.append({
                 "node": node, "power_generation_nominal_mw": power_supply[node],
@@ -282,6 +297,9 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "construction_work_required": work[node],
                 "construction_work_nominal_capacity": construction_supply,
                 "construction_work_gap": max(0.0, work[node] - construction_supply),
+                "life_support_nominal_person_days_per_day": life_support_supplied[node],
+                "life_support_assigned_person_days_per_day": life_support_committed[node],
+                "life_support_gap_person_days_per_day": max(0.0, life_support_committed[node] - life_support_supplied[node]),
                 "cargo_transfer_demand_t_per_day": services[(node, "required:cargo_transfer")],
                 "cargo_transfer_nominal_capacity_t_per_day": services[(node, "cargo_transfer")],
                 "cargo_transfer_gap_t_per_day": max(0.0, services[(node, "required:cargo_transfer")] - services[(node, "cargo_transfer")]),
@@ -316,6 +334,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction yield is an explicitly authored fraction of installed capacity, not geology/knowledge/eligibility validation.",
                 "Research stages contribute their authored RP, work and physical inputs; Research time and provider availability are not simulated.",
+                "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
                 "Maintenance approximates invested material using base construction recipe; upgrade and salvage are not simulated.",
@@ -352,9 +371,10 @@ def compare_cases(payload: dict, *, app=None) -> dict:
             for section, key_fields, metrics in (
                 ("resources", ("node", "resource"), ("production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
-                       "research_material_demand_t", "notional_end_t", "shortfall_t")),
+                       "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
-                       "power_gap_mw", "construction_work_required", "construction_work_nominal_capacity",
+                       "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
+                       "life_support_gap_person_days_per_day", "construction_work_required", "construction_work_nominal_capacity",
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),

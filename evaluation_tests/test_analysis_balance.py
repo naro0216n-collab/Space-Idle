@@ -148,3 +148,22 @@ def test_case_differences_keep_independent_dimensions(definitions):
                  if row["section"] == "constraints" and row["identity"]["node"] == str(ids.EARTH))
     assert power["delta_from_baseline"]["power_generation_nominal_mw"] == 20
     assert all(row["section"] != "aggregate_score" for row in result["differences"])
+
+
+def test_life_support_resource_demand_is_a_distinct_authored_population_load(definitions):
+    facilities = [{"node": str(ids.EARTH),
+                   "facility": str(ids.BREATHABLE_SURFACE_LIFE_SUPPORT),
+                   "units": 1, "duty": .5, "supported_person_days_per_day": 100}]
+    projection = evaluate({"initial_facilities": facilities,
+                           "phases": [{"name": "inhabited", "days": 10,
+                                       "facilities": facilities}]}, app=definitions)
+    phase = projection["phases"][0]
+    assert _resource(phase, ids.EARTH, ids.FOOD)["life_support_demand_t"] == pytest.approx(1.)
+    assert _resource(phase, ids.EARTH, ids.WATER)["life_support_demand_t"] == pytest.approx(2.)
+    node = next(item for item in phase["constraints"] if item["node"] == str(ids.EARTH))
+    assert node["life_support_nominal_person_days_per_day"] == 80
+    assert node["life_support_assigned_person_days_per_day"] == 100
+    assert node["life_support_gap_person_days_per_day"] == 20
+    invalid = [{**facilities[0], "supported_person_days_per_day": 200}]
+    with pytest.raises(ValueError, match="Life Support exceeds"):
+        evaluate({"phases": [{"name": "invalid", "days": 1, "facilities": invalid}]}, app=definitions)
