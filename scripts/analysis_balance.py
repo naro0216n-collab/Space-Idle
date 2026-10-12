@@ -290,6 +290,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         transport_service_inputs = defaultdict(float)
         fleet_report = []
         research_inputs = defaultdict(float)
+        research_service_work = defaultdict(float)
+        theory_execution_work = 0.0
         science_inputs = defaultdict(float)
         founding_inputs = defaultdict(float)
         founding_activity_details = []
@@ -313,6 +315,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         services = defaultdict(float)
         storage = defaultdict(float)
         activity_sources = []
+        # Definition-derived resource flows and explicitly authored assumptions
+        # share this single accounting path; the ledger is only provenance.
+        resource_origins = defaultdict(float)
+        def book(mapping, dimension, node, resource, amount, origin_kind, origin_id, basis="definition_x_composition"):
+            mapping[(node, str(resource))] += amount
+            resource_origins[(node, str(resource), dimension, origin_kind, str(origin_id), basis)] += amount
         unassessed = set()
         stage_details = []
         transfer_details = []
@@ -341,13 +349,18 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 life_support_supplied[node] += facility.life_support.person_days_per_day * mult
                 life_support_committed[node] += people
                 for resource_id, amount in facility.life_support.net_resources:
-                    life_support_inputs[(node, str(resource_id))] += amount * people * days
+                    book(life_support_inputs, "life_support_demand_t", node, resource_id,
+                         amount * people * days, "facility_life_support", name)
             if process_id:
                 proc = sim.industry.processes[DefinitionId(process_id)]
                 for res, quantity in proc.inputs_per_day.items():
-                    _accumulate(process_inputs, (node, str(res)), quantity * mult * facility.process_throughput_per_day * days)
+                    book(process_inputs, "process_demand_t", node, res,
+                         quantity * mult * facility.process_throughput_per_day * days,
+                         "process", process_id)
                 for res, quantity in proc.outputs_per_day.items():
-                    _accumulate(produced, (node, str(res)), quantity * mult * facility.process_throughput_per_day * days)
+                    book(produced, "production_t", node, res,
+                         quantity * mult * facility.process_throughput_per_day * days,
+                         "process", process_id)
             if extraction_id:
                 method = sim.extraction.specs[DefinitionId(extraction_id)]
                 nominal = mult * facility.extraction_capacity_t_per_day
@@ -365,7 +378,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                         unassessed.add("extraction_yield_is_authored_not_world_derived")
                     extracted = nominal * days * yield_factor
                     extraction_assumed[key] += extracted
-                    produced[key] += extracted
+                    book(produced, "production_t", node, method.output_resource_id, extracted,
+                         "extraction_method", extraction_id, "authored_extraction_yield")
                 elif yield_factor != 0 or any(
                     row["node"] == node and row["facility"] == name and
                     row.get("extraction") == extraction_id and "extraction_yield_fraction" in row
@@ -393,8 +407,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             recipe = sim.projects.recipes.get(facility.id)
             if recipe:
                 for req in recipe.resources:
-                    maintenance[(node, str(req.resource_id))] += (req.amount_t * facility.maintenance_fraction_per_year / 365.0
-                                                                  * units * days)
+                    book(maintenance, "maintenance_demand_t", node, req.resource_id,
+                         req.amount_t * facility.maintenance_fraction_per_year / 365.0 * units * days,
+                         "facility_maintenance", name)
         for (node, resource), group in sorted(extraction_groups.items()):
             context = extraction_contexts.get(node)
             if context is None:
@@ -418,7 +433,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             out_resource = str(group[0][0].output_resource_id)
             key = node, out_resource
             extraction_assumed[key] += output
-            produced[key] += output
+            book(produced, "production_t", node, out_resource, output,
+                 "extraction_opportunity", resource, "world_definition_x_authored_knowledge")
             extraction_context_report.append({
                 "node": node, "resource": resource, "output_resource": out_resource,
                 "world_body": context["body"], "world_cells": list(context["cells"]),
@@ -446,7 +462,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if recipe is None:
                 raise ValueError(f"no construction recipe for {key[1]}")
             for req in recipe.resources:
-                construction[(key[0], str(req.resource_id))] += req.amount_t * delta
+                book(construction, "construction_demand_t", key[0], req.resource_id,
+                     req.amount_t * delta, "facility_construction", key[1])
             work[key[0]] += recipe.construction_work * delta
         # Explicit Spatial Development demand is a registered one-time
         # project recipe; it never constructs Cells or awards territory.
@@ -457,7 +474,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             units = _integer(row["units"], "Spatial Development projects", positive=True)
             recipe = sim.projects.spatial_recipes[DefinitionId(rid)]
             for req in recipe.resources:
-                construction[(node, str(req.resource_id))] += req.amount_t * units
+                book(construction, "construction_demand_t", node, req.resource_id,
+                     req.amount_t * units, "spatial_development", rid)
             work[node] += recipe.construction_work * units
             spatial_activity_details.append({
                 "node": node, "recipe": rid, "units": units,
@@ -490,7 +508,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if upgraded[(node, facility_id)] > current[(node, facility_id)]:
                 raise ValueError("upgrade projects exceed selected installed Facility units")
             for req in recipe.resources:
-                construction[(node, str(req.resource_id))] += req.amount_t * units
+                book(construction, "construction_demand_t", node, req.resource_id,
+                     req.amount_t * units, "facility_upgrade", f"{facility_id}/level:{target_level}")
             work[node] += recipe.construction_work * units
             upgrade_activity_details.append({
                 "node": node, "facility": facility_id, "target_level": target_level,
@@ -521,51 +540,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         } for node, amount in sorted(work.items()) if amount > 0]
         if investment_constraints:
             unassessed.add("construction_material_delivery_and_ordering")
-        # RP is an organization-owned numerical dimension, never an Inventory
-        # Resource. A research source must be assigned to a real authored
-        # Facility group; Fleet providers are deliberately not modeled yet.
-        research_generation_per_day = 0.0
-        research_storage_nominal = 0.0
-        research_execution_per_day = 0.0
-        research_crew_demand_per_day = 0.0
-        assigned_source_units = defaultdict(int)
-        for row in phase.get("research_provider_allocations", ()):
-            _keys(row, {"node", "provider", "source_facility", "units", "level", "duty"},
-                  {"node", "provider", "source_facility", "units"}, "research provider")
-            name = _identifier(row["provider"], sim.research.providers, "research provider")
-            provider = sim.research.providers[DefinitionId(name)]
-            if provider.source_kind.value != "facility":
-                raise ValueError("Fleet-backed research providers require separate Fleet assumptions")
-            facility_name = _identifier(row["source_facility"], sim.facilities.definitions, "research source Facility")
-            facility = sim.facilities.definitions[DefinitionId(facility_name)]
-            if not provider.required_source_capabilities <= {c.id for c in facility.capability_supplies}:
-                raise ValueError("research provider not compatible with source Facility")
-            units = _integer(row["units"], "research source units", positive=True)
-            key = (row["node"], facility_name)
-            assigned_source_units[key] += units
-            if assigned_source_units[key] > current[key]:
-                raise ValueError(f"research provider requires more installed Facilities: {key}")
-            level = _integer(row.get("level", 1), "research provider level", positive=True)
-            level_spec = next((candidate for candidate in provider.levels if candidate.level == level), None)
-            if level_spec is None:
-                raise ValueError(f"unknown research provider level: {name}/{level}")
-            duty = _number(row.get("duty", 1), "research provider duty")
-            if duty > 1:
-                raise ValueError("research provider duty cannot exceed 1")
-            activity_sources.append({"kind": "research_provider", "node": row["node"],
-                                     "definition": name, "source_facility": facility_name,
-                                     "level": level, "units": units, "duty": duty,
-                                     "quantity_source": "definition_x_selected_allocation",
-                                     "graph_evidence": _graph_evidence(graph_nodes, relation_index, (("research_provider", name),))})
-            unassessed.add("research_source_power_crew_site_technology_and_finite_allocation")
-            if any(n == row["node"] and f == facility_name and (proc or extraction)
-                   for n, f, _u, proc, extraction, _d, _y, _people in assets):
-                unassessed.add("research_and_industry_share_facility_sources")
-            research_generation_per_day += units * duty * level_spec.generation_points_per_day
-            research_execution_per_day += units * duty * level_spec.research_execution_per_day
-            research_storage_nominal += units * level_spec.storage_capacity_points
-            research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
-                                              * provider.crew_person_days_per_research_point)
         # Asset counts, unlike production work orders, persist across phases.
         # An explicit Fleet composition describes the *whole* current holding;
         # otherwise build orders accumulate on the existing holding.
@@ -592,7 +566,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         for (node, vehicle_id), added in sorted(builds.items()):
             vehicle = vehicles[vehicle_id]
             for res, amount in vehicle.production.resources:
-                vehicle_inputs[(node, str(res))] += amount * added
+                book(vehicle_inputs, "vehicle_build_demand_t", node, res,
+                     amount * added, "vehicle_manufacture", vehicle_id)
             if vehicle.production.service_type:
                 services[(node, f"required:{vehicle.production.service_type}")] += added * vehicle.production.days / days
         for (node, vehicle_id), units in sorted(current_fleet.items()):
@@ -602,7 +577,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             cycles_per_unit = fleet_spec.get((node, vehicle_id), (units, 0))[1] if fleet_spec is not None else 0
             cycles = units * cycles_per_unit * days
             for resource, amount in vehicle.maintenance.resources:
-                vehicle_turnaround_inputs[(node, str(resource))] += amount * cycles
+                book(vehicle_turnaround_inputs, "fleet_turnaround_demand_t", node, resource,
+                     amount * cycles, "fleet_turnaround", vehicle_id, "definition_x_authored_turnarounds")
             if vehicle.maintenance.service_type:
                 services[(node, f"required:{vehicle.maintenance.service_type}")] += (
                     cycles * vehicle.maintenance.turnaround_days / days
@@ -617,11 +593,72 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             fleet_report.append({"node": node, "vehicle": vehicle_id,
                                  "units": units, "units_built": builds.get((node, vehicle_id), 0),
                                  "assumed_turnarounds": cycles})
+        committed_fleet = defaultdict(int)
+        # RP is an organization-owned quantity. Each Provider must reference an
+        # explicitly held compatible Facility or Fleet source. Fleet Providers
+        # reserve those units across research, Survey, Transport and science.
+        research_generation_per_day = 0.0
+        research_storage_nominal = 0.0
+        research_execution_per_day = 0.0
+        research_crew_demand_per_day = 0.0
+        assigned_source_units = defaultdict(int)
+        for row in phase.get("research_provider_allocations", ()):
+            _keys(row, {"node", "provider", "source_facility", "source_vehicle", "units", "level", "duty"},
+                  {"node", "provider", "units"}, "research provider")
+            name = _identifier(row["provider"], sim.research.providers, "research provider")
+            provider = sim.research.providers[DefinitionId(name)]
+            node = _identifier(row["node"], nodes, "research source Node")
+            if ("source_facility" in row) == ("source_vehicle" in row):
+                raise ValueError("research provider requires exactly one typed source")
+            units = _integer(row["units"], "research source units", positive=True)
+            if provider.source_kind.value == "facility":
+                if "source_facility" not in row:
+                    raise ValueError("Facility Research Provider requires a source Facility")
+                source = _identifier(row["source_facility"], sim.facilities.definitions, "research source Facility")
+                facility = sim.facilities.definitions[DefinitionId(source)]
+                if not provider.accepts_source(cap.id for cap in facility.capability_supplies):
+                    raise ValueError("research provider not compatible with source Facility")
+                assigned_source_units[(node, source)] += units
+                if assigned_source_units[(node, source)] > current[(node, source)]:
+                    raise ValueError("research provider requires more installed Facilities")
+            else:
+                if "source_vehicle" not in row:
+                    raise ValueError("Fleet Research Provider requires a source Vehicle")
+                source = _identifier(row["source_vehicle"], vehicles, "research source Vehicle")
+                if not provider.accepts_source(vehicles[source].performance.generic_capabilities):
+                    raise ValueError("research provider not compatible with source Vehicle")
+                committed_fleet[(node, source)] += units
+                if committed_fleet[(node, source)] > current_fleet.get((node, source), 0):
+                    raise ValueError("research provider reuses Fleet holdings")
+                if fleet_spec is not None and fleet_spec.get((node, source), (0, 0))[1] > 0:
+                    raise ValueError("Fleet Research Provider overlaps authored turnarounds")
+            level = _integer(row.get("level", 1), "research provider level", positive=True)
+            level_spec = next((candidate for candidate in provider.levels if candidate.level == level), None)
+            if level_spec is None:
+                raise ValueError(f"unknown research provider level: {name}/{level}")
+            duty = _number(row.get("duty", 1), "research provider duty")
+            if duty > 1:
+                raise ValueError("research provider duty cannot exceed 1")
+            activity_sources.append({"kind": "research_provider", "node": row["node"],
+                                     "definition": name, "source_kind": provider.source_kind.value,
+                                     "source_definition": source,
+                                     "level": level, "units": units, "duty": duty,
+                                     "quantity_source": "definition_x_selected_allocation",
+                                     "graph_evidence": _graph_evidence(graph_nodes, relation_index, (("research_provider", name),))})
+            unassessed.add("research_source_site_technology_crew_power_and_finite_allocation")
+            if provider.source_kind.value == "facility" and any(
+                n == node and f == source and (proc or extraction)
+                for n, f, _u, proc, extraction, _d, _y, _people in assets):
+                unassessed.add("research_and_industry_share_facility_sources")
+            research_generation_per_day += units * duty * level_spec.generation_points_per_day
+            research_execution_per_day += units * duty * level_spec.research_execution_per_day
+            research_storage_nominal += units * level_spec.storage_capacity_points
+            research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
+                                              * provider.crew_person_days_per_research_point)
         # Selected Fleet is reserved once across authored OD services. The
         # Transport owner's read-only preview supplies paths, cycle, payload,
         # propellant, servicing, infrastructure and blockers. This tool does
         # not settle dispatch or turn any preview into an Allocation State.
-        committed_fleet = defaultdict(int)
         for row in phase.get("transport_allocations", ()):
             _keys(row, {"origin", "destination", "vehicle", "units", "duty", "day"},
                   {"origin", "destination", "vehicle", "units"}, "transport allocation")
@@ -663,7 +700,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 # Registered full-cycle resource inputs are a declared
                 # nameplate-utilization condition, not delivered Cargo flow.
                 for location, resource, quantity in plan_preview.resource_t_per_full_utilization_day:
-                    transport_service_inputs[(str(location), str(resource))] += quantity * units * duty * days
+                    book(transport_service_inputs, "transport_service_demand_t", str(location), resource,
+                         quantity * units * duty * days, "transport_service", vehicle_id,
+                         "transport_domain_plan_x_selected_fleet")
                 maintenance_spec = vehicles[vehicle_id].maintenance
                 if maintenance_spec.service_type:
                     services[(origin, f"required:{maintenance_spec.service_type}")] += (
@@ -709,7 +748,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
                     raise ValueError("Scientific Exploration reuses Fleet holdings committed to other activities")
             for resource, quantity in campaign.consumable_resources:
-                science_inputs[(origin, str(resource))] += quantity
+                book(science_inputs, "science_material_demand_t", origin, resource,
+                     quantity, "scientific_exploration", campaign_id)
             science_reward_conditional += campaign.research_points_total
             science_activity_details.append({
                 "campaign": campaign_id, "origin": origin,
@@ -807,7 +847,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     raise ValueError("Founding reuses Fleet holdings committed to other activities")
             resources = {str(r.resource_id): r.amount_t for r in recipe.payload_resources}
             for resource, amount in resources.items():
-                founding_inputs[(origin, resource)] += amount
+                book(founding_inputs, "founding_payload_demand_t", origin, resource,
+                     amount, "founding_method", recipe_id)
             services[(origin, f"required:{recipe.preparation_service_type}")] += (
                 recipe.preparation_work / days
             )
@@ -843,18 +884,40 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             seen_research_stages.add(key)
             if hasattr(spec, "resources"):
                 for res, amount in spec.resources.items():
-                    research_inputs[(row["node"], str(res))] += amount
+                    book(research_inputs, "research_material_demand_t", row["node"], res,
+                         amount, "research_stage", f"{rid}/{spec.stage_id}")
             research_points += getattr(spec, "research_point_cost", 0.0)
             research_work += getattr(spec, "required_work", 0.0)
             requirements = []
+            # The Research owner's execution bundle applies each typed finite
+            # Requirement per unit of stage progress: RP for Theory, work for
+            # Prototype/Demonstration. Do not silently discard these demands.
+            progress_amount = (getattr(spec, "research_point_cost", 0.0)
+                               or getattr(spec, "required_work", 0.0))
             for requirement in getattr(spec, "execution_requirements", ()):
                 if isinstance(requirement, ServiceCapacityRequirement):
+                    scope = ("organization" if requirement.scope.value == "ORGANIZATION"
+                             else f"node:{requirement.constraint_node_id or row['node']}")
+                    if (scope, requirement.service_type) == ("organization", "research_execution") and spec.stage_type.value == "theory":
+                        theory_execution_work += requirement.amount_per_execution * progress_amount
+                    research_service_work[(scope, requirement.service_type)] += (
+                        requirement.amount_per_execution * progress_amount)
+                    if requirement.scope.value != "ORGANIZATION":
+                        services[(scope, f"required:{requirement.service_type}")] += (
+                            requirement.amount_per_execution * progress_amount / days)
                     requirements.append({"kind": "service", "name": requirement.service_type,
                                          "amount_per_execution": requirement.amount_per_execution,
-                                         "scope": requirement.scope.value})
+                                         "scope": requirement.scope.value,
+                                         "total_required": requirement.amount_per_execution * progress_amount})
                 elif isinstance(requirement, ResourceRequirement):
+                    node = str(requirement.constraint_node_id or row["node"])
+                    book(research_inputs, "research_material_demand_t", node, requirement.resource_id,
+                         requirement.amount_per_execution * progress_amount,
+                         "research_stage_execution", f"{rid}/{spec.stage_id}")
                     requirements.append({"kind": "resource", "name": str(requirement.resource_id),
-                                         "amount_per_execution": requirement.amount_per_execution})
+                                         "amount_per_execution": requirement.amount_per_execution,
+                                         "total_required_t": requirement.amount_per_execution * progress_amount,
+                                         "node": node})
                 elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement,
                                               StockOrPoolAdmissionRequirement)):
                     requirements.append({"kind": type(requirement).__name__,
@@ -943,7 +1006,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             rate = row["net_t_per_day"]
             if type(rate) not in (int, float) or not isfinite(rate):
                 raise ValueError("external rate must be finite")
-            external[(row["node"], row["resource"])] += rate * days
+            book(external, "external_net_t", row["node"], row["resource"],
+                 rate * days, "external_rate", "analyst_assumption", "authored_external_net_rate")
             unassessed.add("external_market_supply_funds_and_lead_time")
         # Transfers are an authored delivered-volume assumption, NOT routing or
         # Fleet dispatch. Origin debit and destination credit use the same mass;
@@ -956,8 +1020,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 raise ValueError("transfer requires two distinct nodes")
             res = _identifier(row["resource"], known_resource, "Resource")
             amount = _number(row["t_per_day"], "transfer rate") * days
-            shipped[(origin, res)] += amount
-            received[(dest, res)] += amount
+            book(shipped, "shipped_t", origin, res, amount, "authored_transfer", f"{origin}->{dest}", "authored_delivery_assumption")
+            book(received, "received_t", dest, res, amount, "authored_transfer", f"{origin}->{dest}", "authored_delivery_assumption")
             services[(origin, "required:cargo_transfer")] += amount / days
             services[(dest, "required:cargo_transfer")] += amount / days
             # A physical OD capacity is shared across all Resource demands.
@@ -1023,15 +1087,37 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # A rate comparison is a physical lower bound only, not a simulated
         # Research execution date. RP admission, stage order and daily settlement
         # are deliberately not replicated here.
-        theory_days_by_execution = (research_points / research_execution_per_day
-                                    if research_execution_per_day > 0 else None)
+        theory_days_by_execution = (theory_execution_work / research_execution_per_day
+                                    if research_execution_per_day > 0 else
+                                    0.0 if theory_execution_work == 0 else None)
         theory_days_by_generation = (
             max(0.0, research_points - max(0.0, start_rp)) / research_generation_per_day
             if research_generation_per_day > 0 else
             (0.0 if research_points <= max(0.0, start_rp) else None)
         )
+        organization_research_execution_work = research_service_work.get(("organization", "research_execution"), 0.0)
+        research_services = []
+        for (scope, service), amount in sorted(research_service_work.items()):
+            capacity = (research_execution_per_day if (scope, service) ==
+                        ("organization", "research_execution") else None)
+            research_services.append({
+                "scope": scope, "service": service, "total_required": amount,
+                "nominal_capacity_per_day": capacity,
+                "conditional_lower_bound_days": (amount / capacity if capacity and capacity > 0 else
+                                                  0.0 if amount == 0 else None),
+                "status": "conditional_shared_organization_capacity" if capacity is not None
+                          else "service_capacity_not_assessed",
+            })
+            if capacity is None:
+                unassessed.add("research_execution_service_capacity_not_assessed")
         research_metrics = {
             "execution_capacity_lower_bound_days": theory_days_by_execution,
+            "total_research_execution_work": organization_research_execution_work,
+            "total_execution_capacity_lower_bound_days": (
+                organization_research_execution_work / research_execution_per_day
+                if research_execution_per_day > 0 else
+                0.0 if organization_research_execution_work == 0 else None
+            ),
             "generation_capacity_lower_bound_days": theory_days_by_generation,
             "phase_execution_capacity_points": research_execution_per_day * days,
             "phase_execution_capacity_gap_points": max(0.0, research_points - research_execution_per_day * days),
@@ -1105,6 +1191,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
                        "research_stages": stage_details,
+                       "research_service_constraints": research_services,
                        "spatial_projects": spatial_activity_details,
                        "upgrade_projects": upgrade_activity_details,
                        "science_campaigns": science_activity_details,
@@ -1118,6 +1205,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "od_transport_constraints": od_transport_constraints,
                        "extraction_world_context": extraction_context_report,
                        "resources": breakdown,
+                       "resource_contributions": [
+                           {"node": node, "resource": resource, "dimension": dimension,
+                            "origin_kind": kind, "origin_definition": source,
+                            "quantity_basis": basis, "amount_t": amount}
+                           for (node, resource, dimension, kind, source, basis), amount
+                           in sorted(resource_origins.items()) if abs(amount) > 1e-12
+                       ],
                        "system_resources": system_resources, "system_services": system_services,
                        "fleet": fleet_report,
                        "scale": {"facility_units": sum(current.values()),
@@ -1150,7 +1244,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
-                "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility provider assignment, without technology/site/crew availability validation.",
+                "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
                 "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
@@ -1286,6 +1380,10 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                                     "section": "research_point_balance", "identity": {"pool": "organization"},
                                     "delta_from_baseline": rp_delta})
             for section, key_fields, metrics in (
+                ("research_service_constraints", ("scope", "service"),
+                 ("total_required", "nominal_capacity_per_day", "conditional_lower_bound_days")),
+                ("resource_contributions", ("node", "resource", "dimension", "origin_kind", "origin_definition", "quantity_basis"),
+                 ("amount_t",)),
                 ("service_constraints", ("node", "service"),
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
                 ("system_resources", ("resource",), ("production_t", "process_demand_t",
@@ -1338,7 +1436,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                                 old = grouped[key][metric]
                                 value = values[metric]
                                 if metric in {"cycle_days", "duration_days", "conditional_minimum_days",
-                                              "marginal_efficiency", "pre_investment_work_lower_bound_days"}:
+                                              "marginal_efficiency", "pre_investment_work_lower_bound_days",
+                                              "conditional_lower_bound_days"}:
                                     grouped[key][metric] = old if old == value else None
                                 else:
                                     grouped[key][metric] = (old + value if old is not None and value is not None
@@ -1400,6 +1499,7 @@ def summarize_projection(projection: dict) -> dict:
                 for row in phase["service_constraints"] if row["nominal_gap_per_day"] > 1e-12
             ],
             "research_point_balance": phase["research_point_balance"],
+            "research_service_constraints": phase["research_service_constraints"],
             "investment_constraints": phase["investment_constraints"],
             "od_transport_constraints": phase["od_transport_constraints"],
             "extraction_world_context": phase["extraction_world_context"],
@@ -1422,7 +1522,7 @@ def summarize_projection(projection: dict) -> dict:
             "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
             "detail_sections": [
-                "activity_sources", "resources", "service_constraints", "research_stages",
+                "activity_sources", "resources", "resource_contributions", "service_constraints", "research_stages", "research_service_constraints",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],

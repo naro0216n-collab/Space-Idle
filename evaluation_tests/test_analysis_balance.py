@@ -856,3 +856,115 @@ def test_case_differences_trace_new_definition_activities_and_missing_time_bases
     summary = __import__("scripts.analysis_balance", fromlist=["summarize"]).summarize(compared)
     assert "upgrade_projects" in summary["difference_sections"]
     assert summary["cases"][1]["summary"]["phases"][0]["science_activity_bounds"]
+
+
+def test_fleet_research_provider_competes_for_held_units_and_uses_registered_levels(definitions):
+    """A Fleet-backed research source is not also free Transport or Survey capacity."""
+    sim = definitions._simulation
+    fleet_providers = [p for p in sim.research.providers.values() if p.source_kind.value == "fleet"]
+    for provider in fleet_providers:
+        for vehicle in sim.research.compatible_vehicle_definitions(provider.id):
+            node = "research.fleet.node"
+            destination = "research.fleet.destination"
+            level = provider.levels[0]
+            allocation = {"node": node, "provider": str(provider.id),
+                          "source_vehicle": str(vehicle.id), "units": 2, "level": level.level,
+                          "duty": 0.6}
+            base = {"initial_fleet": [{"node": node, "vehicle": str(vehicle.id), "units": 3}],
+                    "phases": [{"name": "comparison", "days": 5, "facilities": [],
+                                "research_provider_allocations": [allocation]}]}
+            rp = evaluate(base, app=definitions)["phases"][0]["research_point_balance"]
+            assert rp["nominal_generation_points"] == pytest.approx(2 * .6 * level.generation_points_per_day * 5)
+            assert rp["nominal_storage_capacity_points"] == pytest.approx(2 * level.storage_capacity_points)
+            assert rp["nominal_execution_per_day"] == pytest.approx(2 * .6 * level.research_execution_per_day)
+            conflicting = deepcopy(base)
+            conflicting["phases"][0]["transport_allocations"] = [{
+                "origin": node, "destination": destination,
+                "vehicle": str(vehicle.id), "units": 2}]
+            with pytest.raises(ValueError, match="reuse Fleet holdings"):
+                evaluate(conflicting, app=definitions)
+            conflicting = deepcopy(base)
+            conflicting["phases"][0]["research_provider_allocations"][0]["source_facility"] = str(vehicle.id)
+            with pytest.raises(ValueError, match="exactly one typed source"):
+                evaluate(conflicting, app=definitions)
+            conflicting = deepcopy(base)
+            conflicting["phases"][0]["fleet"] = [{
+                "node": node, "vehicle": str(vehicle.id), "units": 3,
+                "turnarounds_per_unit_per_day": .5}]
+            with pytest.raises(ValueError, match="overlaps authored turnarounds"):
+                evaluate(conflicting, app=definitions)
+
+
+def test_resource_contributions_reconcile_by_source_with_all_projected_dimensions(definitions):
+    """The origin ledger is a view of the same accounting, not a competing calculator."""
+    import json
+    from pathlib import Path
+    from scripts.analysis_balance import compare_cases
+
+    named = ("industrial_scale_comparison", "industrial_fleet_scale_comparison",
+             "cross_domain_industrial_research_logistics", "world_growth_research_logistics")
+    dimensions = ("production_t", "process_demand_t", "maintenance_demand_t",
+                  "construction_demand_t", "vehicle_build_demand_t",
+                  "fleet_turnaround_demand_t", "transport_service_demand_t",
+                  "research_material_demand_t", "science_material_demand_t",
+                  "founding_payload_demand_t", "life_support_demand_t",
+                  "external_net_t", "shipped_t", "received_t")
+    before = deepcopy(capture_state(definitions._simulation))
+    for name in named:
+        data = json.loads((Path(__file__).resolve().parent.parent / "evaluation_plans" / f"{name}.json").read_text())
+        result = compare_cases(data, app=definitions) if "cases" in data else evaluate(data, app=definitions)
+        projections = [case["projection"] for case in result["cases"]] if "cases" in result else [result]
+        for projection in projections:
+            for phase in projection["phases"]:
+                attributed = defaultdict(float)
+                for item in phase["resource_contributions"]:
+                    assert item["quantity_basis"] and item["origin_definition"]
+                    assert item["dimension"] in dimensions
+                    attributed[(item["node"], item["resource"], item["dimension"])] += item["amount_t"]
+                for row in phase["resources"]:
+                    for dimension in dimensions:
+                        assert attributed[(row["node"], row["resource"], dimension)] == pytest.approx(
+                            row[dimension], abs=1e-9), (name, phase["name"], row["node"], row["resource"], dimension)
+    assert capture_state(definitions._simulation) == before
+
+
+def test_typed_research_stages_include_shared_execution_demand_beyond_theory(definitions):
+    """Prototype and Demonstration share finite Research execution with Theory."""
+    from space_idle.execution_requirements import ServiceCapacityRequirement
+    sim = definitions._simulation
+    stages = [(str(r.id), s) for r in sim.research.definitions.values() for s in r.stage_specs
+              if getattr(s, "required_work", 0) > 0 and any(
+                  isinstance(req, ServiceCapacityRequirement) and
+                  req.scope.value == "ORGANIZATION" and req.service_type == "research_execution"
+                  for req in s.execution_requirements)]
+    assert stages  # A registered typed stage, not a fabricated work requirement.
+    research_id, stage = stages[0]
+    theory = sim.research.definitions[next(r for r in sim.research.definitions if str(r) == research_id)].stage_specs[0]
+    provider = next(p for p in sim.research.providers.values() if p.source_kind.value == "facility"
+                    and p.levels[0].research_execution_per_day > 0)
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if provider.accepts_source(cap.id for cap in f.capability_supplies))
+    asset = {"node": "research.node", "facility": str(facility.id), "units": 1}
+    rate = provider.levels[0].research_execution_per_day
+    phase = evaluate({"initial_facilities": [asset], "phases": [{
+        "name": "registered stage contract", "days": 10, "facilities": [asset],
+        "research_provider_allocations": [{"node": asset["node"], "provider": str(provider.id),
+                                           "source_facility": str(facility.id), "units": 1}],
+        "research_stages": [
+            {"node": asset["node"], "research": research_id, "stage": theory.stage_id},
+            {"node": asset["node"], "research": research_id, "stage": stage.stage_id}],
+    }]}, app=definitions)["phases"][0]
+    expected_work = 0.0
+    for spec in (theory, stage):
+        for req in spec.execution_requirements:
+            if isinstance(req, ServiceCapacityRequirement) and req.scope.value == "ORGANIZATION" and req.service_type == "research_execution":
+                expected_work += req.amount_per_execution * (getattr(spec, "research_point_cost", 0) or spec.required_work)
+    research = phase["research_point_balance"]
+    assert research["total_research_execution_work"] == pytest.approx(expected_work)
+    assert research["total_execution_capacity_lower_bound_days"] == pytest.approx(expected_work / rate)
+    assert phase["research_service_constraints"] == [{
+        "scope": "organization", "service": "research_execution", "total_required": expected_work,
+        "nominal_capacity_per_day": rate,
+        "conditional_lower_bound_days": pytest.approx(expected_work / rate),
+        "status": "conditional_shared_organization_capacity",
+    }]
