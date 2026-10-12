@@ -177,6 +177,8 @@ Maintenanceのpacket実行・照合に失敗した場合は、同じtransaction�
 - **Fast CI**：`develop`へのpublish後、Unit / architecture、clean package install、Chromium direct HTTP smoke、次回復元用`source-snapshot`を検証する。run結果は次のpublish判断に必要な時点で確認する。
 - **Full Validation**：`main`反映候補、ユーザー要求、Persistence schema変更、Simulation Orchestrator処理順変更、package / server / launcher変更、Fast CIの範囲外となるOS・ブラウザ検証に使用する。Gameplay、Windows、WebKitは該当変更の検証時に実行する。
 
+バランス調整は通常pytest/Fast CIの合否に結び付けず、`python scripts/analysis_balance.py <plan.json>`を明示実行して数量Definitionに基づく設備構成・段階別収支を比較する。出力は計画需要・名目容量・未充足の推計であり、Game Stateでも実配分でもない。計算モデル固有の検証は`evaluation_tests/`に置く。攻略Commandを自動選択してバランスを評価しない。短い実Application検証は計算係数や機能契約の照合に限定する。
+
 Browser E2Eは`playwright/run_suite.py <scenario...>`へ対象Scenarioを明示して実行する。各Scenarioは独立したBrowserContext、GameRuntime、保存用一時ディレクトリ、HTTP serverを使用し、状態を共有しない。
 
 ## iPad development server
