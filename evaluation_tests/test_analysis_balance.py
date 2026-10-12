@@ -487,3 +487,183 @@ def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity
             "operation": "add", "kind": "facility", "id": "invalid.partial.asset",
             "source_id": str(source_facility),
         }])
+
+
+def test_stage_requirements_investment_bounds_and_unassessed_constraints_are_not_execution_claims(definitions):
+    """Balance evidence distinguishes registered obligations, chosen scale and unresolved execution."""
+    sim = definitions._simulation
+    source = next((facility for facility in sim.facilities.definitions.values()
+                   if facility.id in sim.projects.recipes and
+                   sim.projects.recipes[facility.id].construction_work > 0))
+    tech = next(definition for definition in sim.research.definitions.values()
+                if any(stage.stage_type.value == "operational_experience" for stage in definition.stage_specs))
+    exp = next(stage for stage in tech.stage_specs if stage.stage_type.value == "operational_experience")
+    node = "planned.satellite"
+    plan = {"phases": [{"name": "acquisition", "days": 6,
+                        "facilities": [{"node": node, "facility": str(source.id), "units": 2}],
+                        "research_stages": [{"node": node, "research": str(tech.id), "stage": exp.stage_id}]}]}
+    report = evaluate(plan, app=definitions)["phases"][0]
+    assert report["investment_constraints"][0]["pre_investment_work_lower_bound_days"] is None
+    assert report["investment_constraints"][0]["status"] == "unassessed_no_initial_capacity"
+    assert report["research_stages"][0]["experience_requirements"] == dict(exp.requirements)
+    assert report["research_stages"][0]["direct_prerequisites"] == sorted(str(x) for x in tech.prerequisites)
+    assert "operational_experience_not_generated_by_elapsed_time" in report["unassessed_constraints"]
+    assert "new_facilities_operate_before_construction_completion" in report["unassessed_constraints"]
+    assert report["activity_sources"][0]["quantity_source"] == "definition_x_selected_composition"
+
+
+def test_case_sensitivity_changes_times_stocks_and_solar_without_copying_a_plan(definitions):
+    from space_idle.power import SolarGeneration
+    sim = definitions._simulation
+    facility = next((facility for facility in sim.facilities.definitions.values()
+                     if (p := sim.power.specs.get(facility.id)) and isinstance(p.generation, SolarGeneration)
+                     and facility.id in sim.projects.recipes))
+    resource = next(iter(definitions._catalog.resources))
+    node = "author.selected"
+    asset = {"node": node, "facility": str(facility.id), "units": 1}
+    base = {"initial_facilities": [asset], "initial_stock": [
+                {"node": node, "resource": str(resource), "amount_t": 5}],
+            "solar_yield": {node: .7},
+            "phases": [{"name": "activity", "days": 8, "facilities": [asset]}]}
+    original = deepcopy(base)
+    output = compare_cases({"base_plan": base, "cases": [{"name": "first"},
+        {"name": "vary", "updates": [
+            {"collection": "solar_yield", "node": node, "factor": .8},
+            {"collection": "initial_stock", "node": node, "id": str(resource), "amount_t": 10},
+            {"collection": "phase", "phase": "activity", "days": 10},
+        ]}]}, app=definitions)
+    assert base == original
+    assert output["cases"][0]["projection"]["phases"][0]["days"] == 8
+    assert output["cases"][1]["projection"]["phases"][0]["days"] == 10
+    assert any(row["section"] == "incomparable_phase_basis" for row in output["differences"])
+    with pytest.raises(ValueError, match="duplicate case update"):
+        compare_cases({"base_plan": base, "cases": [{"name": "x", "updates": [
+            {"collection": "phase", "phase": "activity", "days": 1},
+            {"collection": "phase", "phase": "activity", "days": 2},
+        ]}]}, app=definitions)
+
+
+def test_world_cell_extraction_scales_with_shared_opportunity_without_fake_site_state(definitions):
+    """Selected real World cells change a pure physical bound, not actual Simulation state."""
+    sim = definitions._simulation
+    graph = sim.extraction.graph
+    candidates = []
+    for facility in sim.facilities.definitions.values():
+        if not facility.extraction_capacity_t_per_day:
+            continue
+        for method in sim.extraction.compatible_methods(facility.id):
+            for cell in graph.surface_cells.values():
+                if cell.resource_potential_by_resource.get(method.resource_id, 0) > 0:
+                    candidates.append((facility, method, cell))
+    facility, method, cell = next((f, m, c) for f, m, c in candidates
+                                   if sim.extraction.opportunity_for_cells(
+                                       m.resource_id, (m,), (c.id,), 0,
+                                       eligible=lambda _m, _c: True) > 0)
+    node = "scenario.surface"
+    initial = [{"node": node, "facility": str(facility.id), "units": 1,
+                "extraction": str(method.id)}]
+    knowledge = [{"cell": str(cell.id), "resource": str(method.resource_id), "level": 3}]
+    def projection(units, with_knowledge):
+        asset = {**initial[0], "units": units}
+        return evaluate({"initial_facilities": [asset], "phases": [
+            {"name": "physical", "days": 3, "facilities": [asset],
+             "extraction_sites": [{"node": node, "developed_cells": [str(cell.id)],
+                                   "knowledge": knowledge if with_knowledge else []}]}]},
+                        app=definitions)["phases"][0]
+    before = deepcopy(capture_state(sim))
+    one = projection(1, True)
+    two = projection(2, True)
+    no_knowledge = projection(1, False)
+    def produced(report):
+        return _rows(report)[node, str(method.output_resource_id)]["production_t"]
+    if method.minimum_knowledge_level is not None:
+        assert produced(no_knowledge) == 0
+    assert produced(two) > produced(one) > 0
+    assert produced(two) < 2 * produced(one)
+    assert two["extraction_world_context"][0]["world_cells"] == [str(cell.id)]
+    assert "extraction_site_technology_service_and_stock_allocation" in two["unassessed_constraints"]
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="non-surface World node"):
+        evaluate({"phases": [{"name": "illegal", "days": 1, "facilities": [],
+                  "extraction_sites": [{"node": str(next(iter(graph.nodes))),
+                                        "developed_cells": [str(cell.id)]}]}]}, app=definitions)
+
+
+def test_od_transport_preview_requires_selected_fleet_and_never_settles_cargo(definitions):
+    """Fleet service is a conditional Domain preview, not a fictional delivery."""
+    origin, destination = "base.node.low_earth_orbit", "base.node.lunar_orbit"
+    vehicle = "base.vehicle.reusable_orbital_cargo_tug"
+    resource = "base.resource.structural_components"
+    phase = {"name": "haul", "days": 12, "facilities": [],
+             "transfers": [{"origin": origin, "destination": destination,
+                            "resource": resource, "t_per_day": .5}],
+             "transport_allocations": [{"origin": origin, "destination": destination,
+                                        "vehicle": vehicle, "units": 1}]}
+    plan = {"initial_fleet": [{"node": origin, "vehicle": vehicle, "units": 1}],
+            "phases": [phase]}
+    sim = definitions._simulation
+    before = deepcopy(capture_state(sim))
+    projection = evaluate(plan, app=definitions)["phases"][0]
+    transfer = projection["transfer_requirements"][0]
+    assert transfer["status"] == "cargo_arrival_unassessed"
+    assert transfer["required_t"] == pytest.approx(6)
+    by_node = _rows(projection)
+    assert by_node[(origin, resource)]["shipped_t"] == pytest.approx(6)
+    assert by_node[(destination, resource)]["received_t"] == pytest.approx(6)
+    od = projection["od_transport_constraints"][0]
+    service = projection["transport_services"][0]
+    assert service["quantity_source"] == "transport_domain_plan_x_selected_fleet"
+    if service["blockers"]:
+        assert od["status"] != "conditional_capacity_not_cargo_settlement"
+    assert "transport_cycle_capacity_not_settled_cargo" in projection["unassessed_constraints"]
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="reuse Fleet holdings"):
+        evaluate({**plan, "phases": [{**phase, "transport_allocations":
+                  phase["transport_allocations"] * 2}]}, app=definitions)
+
+
+def test_summary_preserves_unassessed_limits_and_drill_down(definitions):
+    from scripts.analysis_balance import summarize, summarize_projection
+
+    base = {"initial_stock": [{"node": "A", "resource": "base.resource.water", "amount_t": 1}],
+            "phases": [{"name": "comparison", "days": 4, "facilities": [],
+                        "transfers": [{"origin": "A", "destination": "B",
+                                       "resource": "base.resource.water", "t_per_day": 2}]}]}
+    full = evaluate(base, app=definitions)
+    summary = summarize_projection(full)
+    assert summary["phases"][0]["resource_shortfalls_by_node"]
+    assert summary["phases"][0]["od_transport_constraints"][0]["nominal_capacity_t_per_day"] is None
+    assert "resources" in summary["phases"][0]["detail_sections"]
+    assert "resources" not in summary["phases"][0]
+    comparison = compare_cases({"cases": [{"name": "baseline", "plan": base},
+                                           {"name": "variant", "plan": deepcopy(base)}]}, app=definitions)
+    assert [case["name"] for case in summarize(comparison)["cases"]] == ["baseline", "variant"]
+
+
+def test_world_and_od_composition_sensitivity_changes_only_selected_conditions(definitions):
+    from space_idle.shared import DefinitionId
+    sim = definitions._simulation
+    quarry = sim.facilities.definitions[DefinitionId("base.facility.mineral_quarry")]
+    method = sim.extraction.compatible_methods(quarry.id)[0]
+    cell = next(c for c in sim.extraction.graph.surface_cells.values()
+                if sim.extraction.opportunity_for_cells(method.resource_id, (method,), [c.id], 0,
+                       eligible=lambda _method, _cell: True) > 0)
+    base = {"initial_facilities": [{"node": "site", "facility": str(quarry.id),
+                                     "units": 3, "extraction": str(method.id)}],
+            "phases": [{"name": "steady", "days": 8,
+                        "facilities": [{"node": "site", "facility": str(quarry.id),
+                                        "units": 3, "extraction": str(method.id)}],
+                        "extraction_sites": [{"node": "site", "developed_cells": [str(cell.id)]}]}]}
+    result = compare_cases({"base_plan": base, "cases": [
+        {"name": "unmeasured"},
+        {"name": "measured", "updates": [{"collection": "extraction_sites", "phase": "steady",
+                                          "node": "site", "knowledge": [
+                {"cell": str(cell.id), "resource": str(method.resource_id), "level": 3}]}]},
+    ]}, app=definitions)
+    original = result["cases"][0]["projection"]["phases"][0]
+    measured = result["cases"][1]["projection"]["phases"][0]
+    if method.minimum_knowledge_level is not None:
+        assert measured["extraction_world_context"][0]["diminishing_output_t_per_day"] > (
+            original["extraction_world_context"][0]["diminishing_output_t_per_day"])
+    assert base["phases"][0]["extraction_sites"][0].get("knowledge") is None
+    assert any(row["section"] == "resources" for row in result["differences"])

@@ -23,7 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
-from space_idle.shared import DefinitionId
+from space_idle.shared import DefinitionId, SurfaceCellId, SpatialNodeId
+from space_idle.exploration_models import KnowledgeLevel
+from space_idle.execution_requirements import (
+    ServiceCapacityRequirement, ResourceRequirement, PoolRequirement,
+    PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
+)
 
 
 def _number(value, name, *, strictly_positive=False):
@@ -125,6 +130,54 @@ def _aggregate_by_dimension(rows, dimension, fields):
             for name, values in sorted(grouped.items())]
 
 
+def _extraction_contexts(rows, sim, nodes, known_resource):
+    """Read selected World cells without adding hypothetical Game State.
+
+    Knowledge values here are *scenario claims*, never resolved Survey State.
+    A context does not establish Location founding, accessible service or method
+    Technology. In particular, no non-surface World node can acquire ore.
+    """
+    contexts = {}
+    graph = sim.extraction.graph
+    for row in rows:
+        _keys(row, {"node", "developed_cells", "knowledge", "day"},
+              {"node", "developed_cells"}, "extraction context")
+        node = _identifier(row["node"], nodes, "node")
+        if node in contexts:
+            raise ValueError(f"duplicate extraction context: {node}")
+        if node in {str(key) for key in graph.nodes}:
+            raise ValueError(f"non-surface World node cannot contain developed Cells: {node}")
+        cells = row["developed_cells"]
+        if not isinstance(cells, list) or not cells or len(set(cells)) != len(cells):
+            raise ValueError("developed_cells must be nonempty and unique")
+        cell_defs = []
+        for cell in cells:
+            cell_id = _identifier(cell, graph.surface_cells, "Surface Cell")
+            cell_defs.append(graph.surface_cells[SurfaceCellId(cell_id)])
+        if len({cell.body_id for cell in cell_defs}) != 1:
+            raise ValueError("extraction site cannot combine cells from different bodies")
+        knowledge = {}
+        for value in row.get("knowledge", ()):
+            _keys(value, {"cell", "resource", "level"}, {"cell", "resource", "level"}, "survey knowledge")
+            if value["cell"] not in cells:
+                raise ValueError("knowledge cell must be within selected developed Cells")
+            resource = _identifier(value["resource"], known_resource, "Resource")
+            if type(value["level"]) is not int:
+                raise ValueError("knowledge level must be an integer")
+            try:
+                level = KnowledgeLevel(value["level"])
+            except ValueError as exc:
+                raise ValueError("unknown survey knowledge level") from exc
+            key = (value["cell"], resource)
+            if key in knowledge:
+                raise ValueError(f"duplicate Knowledge assumption: {key}")
+            knowledge[key] = level
+        day = _integer(row.get("day", 0), "World opportunity reference day")
+        contexts[node] = {"cells": tuple(cells), "knowledge": knowledge,
+                          "body": str(cell_defs[0].body_id), "day": day}
+    return contexts
+
+
 def evaluate(plan: dict, *, app=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
 
@@ -146,6 +199,10 @@ def evaluate(plan: dict, *, app=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("fleet", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("vehicle_builds", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("external_rates", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("extraction_sites", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("research_provider_allocations", ()))
+    nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
+    nodes.update(str(row["destination"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
     known_resource = {str(r) for r in catalog.resources}
     stocks = defaultdict(float)
     for row in plan.get("initial_stock", ()):
@@ -170,11 +227,14 @@ def evaluate(plan: dict, *, app=None) -> dict:
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     report = []
     seen_research_stages = set()
+    previous_assets = initial
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations"},
               {"name", "days", "facilities"}, "phase")
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
+        extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
+                                                    sim, nodes, known_resource)
         current = defaultdict(int)
         produced = defaultdict(float)
         process_inputs = defaultdict(float)
@@ -184,6 +244,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
         construction = defaultdict(float)
         vehicle_inputs = defaultdict(float)
         vehicle_turnaround_inputs = defaultdict(float)
+        transport_service_inputs = defaultdict(float)
         fleet_report = []
         research_inputs = defaultdict(float)
         life_support_inputs = defaultdict(float)
@@ -199,11 +260,26 @@ def evaluate(plan: dict, *, app=None) -> dict:
         power_load = defaultdict(float)
         services = defaultdict(float)
         storage = defaultdict(float)
+        activity_sources = []
+        unassessed = set()
+        stage_details = []
+        transfer_details = []
+        transport_services = []
+        transport_supply_by_od = defaultdict(float)
+        extraction_groups = defaultdict(list)
+        extraction_context_report = []
         # Everything here is a request or nominal nameplate, never settled flow.
         for node, name, units, process_id, extraction_id, duty, yield_factor, people in assets:
             current[(node, name)] += units
             facility = sim.facilities.definitions[DefinitionId(name)]
             mult = units * duty
+            activity_sources.append({
+                "kind": "facility", "node": node, "definition": name,
+                "units": units, "duty": duty, "process": process_id, "extraction": extraction_id,
+                "quantity_source": "definition_x_selected_composition",
+            })
+            if (process_id or extraction_id) and duty > 0:
+                unassessed.add("shared_power_service_and_resource_allocation")
             if facility.life_support is not None:
                 life_support_supplied[node] += facility.life_support.person_days_per_day * mult
                 life_support_committed[node] += people
@@ -217,12 +293,28 @@ def evaluate(plan: dict, *, app=None) -> dict:
                     _accumulate(produced, (node, str(res)), quantity * mult * facility.process_throughput_per_day * days)
             if extraction_id:
                 method = sim.extraction.specs[DefinitionId(extraction_id)]
-                _accumulate(extraction_nominal, (node, str(method.output_resource_id)),
-                            mult * facility.extraction_capacity_t_per_day * days)
-                _accumulate(extraction_assumed, (node, str(method.output_resource_id)),
-                            mult * facility.extraction_capacity_t_per_day * days * yield_factor)
-                _accumulate(produced, (node, str(method.output_resource_id)),
-                            mult * facility.extraction_capacity_t_per_day * days * yield_factor)
+                nominal = mult * facility.extraction_capacity_t_per_day
+                key = (node, str(method.output_resource_id))
+                extraction_nominal[key] += nominal * days
+                extraction_groups[(node, str(method.resource_id))].append((method, nominal))
+                if node not in extraction_contexts:
+                    # Legacy explicit yield remains a conditional sensitivity
+                    # input; absence never manufactures proven production.
+                    if "extraction_yield_fraction" not in next(row for row in phase["facilities"]
+                            if row["node"] == node and row["facility"] == name
+                            and row.get("extraction") == extraction_id):
+                        unassessed.add("extraction_opportunity_geology_and_knowledge")
+                    else:
+                        unassessed.add("extraction_yield_is_authored_not_world_derived")
+                    extracted = nominal * days * yield_factor
+                    extraction_assumed[key] += extracted
+                    produced[key] += extracted
+                elif yield_factor != 0 or any(
+                    row["node"] == node and row["facility"] == name and
+                    row.get("extraction") == extraction_id and "extraction_yield_fraction" in row
+                    for row in phase["facilities"]
+                ):
+                    raise ValueError("World extraction context and authored yield cannot both govern one asset")
             for supply in facility.service_capacity_supplies:
                 _accumulate(services, (node, supply.service_type), supply.nominal_rate * mult)
             if facility.id in sim.projects.construction_providers:
@@ -246,11 +338,51 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 for req in recipe.resources:
                     maintenance[(node, str(req.resource_id))] += (req.amount_t * facility.maintenance_fraction_per_year / 365.0
                                                                   * units * days)
+        for (node, resource), group in sorted(extraction_groups.items()):
+            context = extraction_contexts.get(node)
+            if context is None:
+                continue
+            methods = tuple(method for method, nominal in group if nominal > 0)
+            knowledge = context["knowledge"]
+            def eligible(method, cell):
+                required = method.minimum_knowledge_level
+                return required is None or knowledge.get((str(cell), str(method.resource_id)), KnowledgeLevel.UNKNOWN) >= required
+            opportunity = sim.extraction.opportunity_for_cells(
+                DefinitionId(resource), methods, context["cells"], context["day"], eligible=eligible,
+            )
+            adjusted_capacity = 0.0
+            for method, nominal in group:
+                method_opportunity = sim.extraction.opportunity_for_cells(
+                    DefinitionId(resource), (method,), context["cells"], context["day"], eligible=eligible,
+                )
+                adjusted_capacity += (nominal * min(1.0, method_opportunity / opportunity)
+                                      if opportunity > 1e-12 else 0.0)
+            output = sim.extraction.diminishing_response(adjusted_capacity, opportunity) * days
+            out_resource = str(group[0][0].output_resource_id)
+            key = node, out_resource
+            extraction_assumed[key] += output
+            produced[key] += output
+            extraction_context_report.append({
+                "node": node, "resource": resource, "output_resource": out_resource,
+                "world_body": context["body"], "world_cells": list(context["cells"]),
+                "knowledge_source": "authored_knowledge_levels_not_survey_state",
+                "world_reference_day": context["day"],
+                "effective_opportunity": opportunity,
+                "adjusted_installed_capacity_t_per_day": adjusted_capacity,
+                "diminishing_output_t_per_day": output / days,
+                "marginal_efficiency": sim.extraction.marginal_response(adjusted_capacity, opportunity),
+                "status": "conditional_world_definition_upper_bound_not_allocated",
+            })
+            unassessed.add("extraction_site_technology_service_and_stock_allocation")
+            if any(method.minimum_knowledge_level is not None for method, _ in group):
+                unassessed.add("survey_knowledge_levels_are_authored_assumptions")
         for key in set(current) | set(previous):
             units = current[key]
             if units < previous[key]:
                 raise ValueError(f"Facility removal at {key} requires an explicit retirement model")
             delta = units - previous[key]
+            if delta > 0:
+                unassessed.add("new_facilities_operate_before_construction_completion")
             if not delta:
                 continue
             recipe = sim.projects.recipes.get(DefinitionId(key[1]))
@@ -261,6 +393,23 @@ def evaluate(plan: dict, *, app=None) -> dict:
             work[key[0]] += recipe.construction_work * delta
         facility_units_added = sum(max(0, current[k] - previous[k]) for k in current)
         previous = current
+        # The existing (pre-investment) capacity is the only defensible bound
+        # for the investment work: new providers cannot construct themselves.
+        existing_construction = defaultdict(float)
+        for node, name, units, _p, _e, duty, _y, _people in previous_assets:
+            provider = sim.projects.construction_providers.get(DefinitionId(name))
+            if provider:
+                existing_construction[node] += provider.work_per_day * units * duty
+        investment_constraints = [{
+            "node": node, "required_work": amount,
+            "pre_investment_work_per_day": existing_construction[node],
+            "pre_investment_work_lower_bound_days": (
+                amount / existing_construction[node] if existing_construction[node] > 0 else None
+            ),
+            "status": "conditional_lower_bound" if existing_construction[node] > 0 else "unassessed_no_initial_capacity",
+        } for node, amount in sorted(work.items()) if amount > 0]
+        if investment_constraints:
+            unassessed.add("construction_material_delivery_and_ordering")
         # RP is an organization-owned numerical dimension, never an Inventory
         # Resource. A research source must be assigned to a real authored
         # Facility group; Fleet providers are deliberately not modeled yet.
@@ -292,6 +441,14 @@ def evaluate(plan: dict, *, app=None) -> dict:
             duty = _number(row.get("duty", 1), "research provider duty")
             if duty > 1:
                 raise ValueError("research provider duty cannot exceed 1")
+            activity_sources.append({"kind": "research_provider", "node": row["node"],
+                                     "definition": name, "source_facility": facility_name,
+                                     "level": level, "units": units, "duty": duty,
+                                     "quantity_source": "definition_x_selected_allocation"})
+            unassessed.add("research_source_power_crew_site_technology_and_finite_allocation")
+            if any(n == row["node"] and f == facility_name and (proc or extraction)
+                   for n, f, _u, proc, extraction, _d, _y, _people in assets):
+                unassessed.add("research_and_industry_share_facility_sources")
             research_generation_per_day += units * duty * level_spec.generation_points_per_day
             research_execution_per_day += units * duty * level_spec.research_execution_per_day
             research_storage_nominal += units * level_spec.storage_capacity_points
@@ -338,9 +495,86 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 services[(node, f"required:{vehicle.maintenance.service_type}")] += (
                     cycles * vehicle.maintenance.turnaround_days / days
                 )
+            activity_sources.append({"kind": "fleet", "node": node, "definition": vehicle_id,
+                                     "units": units, "turnarounds_per_unit_per_day": cycles_per_unit,
+                                     "quantity_source": "definition_x_selected_composition"})
+            if cycles_per_unit:
+                unassessed.add("fleet_turnarounds_without_movement_or_route_validation")
             fleet_report.append({"node": node, "vehicle": vehicle_id,
                                  "units": units, "units_built": builds.get((node, vehicle_id), 0),
                                  "assumed_turnarounds": cycles})
+        # Selected Fleet is reserved once across authored OD services. The
+        # Transport owner's read-only preview supplies paths, cycle, payload,
+        # propellant, servicing, infrastructure and blockers. This tool does
+        # not settle dispatch or turn any preview into an Allocation State.
+        committed_fleet = defaultdict(int)
+        for row in phase.get("transport_allocations", ()):
+            _keys(row, {"origin", "destination", "vehicle", "units", "duty", "day"},
+                  {"origin", "destination", "vehicle", "units"}, "transport allocation")
+            origin = _identifier(row["origin"], nodes, "origin")
+            destination = _identifier(row["destination"], nodes, "destination")
+            if origin == destination:
+                raise ValueError("transport allocation requires distinct endpoints")
+            vehicle_id = _identifier(row["vehicle"], vehicles, "Vehicle")
+            units = _integer(row["units"], "transport Fleet units", positive=True)
+            duty = _number(row.get("duty", 1.0), "transport operating duty")
+            if duty > 1:
+                raise ValueError("transport operating duty cannot exceed 1")
+            day = _integer(row.get("day", 0), "transport World reference day")
+            committed_fleet[(origin, vehicle_id)] += units
+            available = current_fleet.get((origin, vehicle_id), 0)
+            if committed_fleet[(origin, vehicle_id)] > available:
+                raise ValueError(f"transport allocations reuse Fleet holdings: {(origin, vehicle_id)}")
+            if fleet_spec is not None and fleet_spec.get((origin, vehicle_id), (0, 0))[1] > 0:
+                raise ValueError("transport service cycles and authored Fleet turnarounds overlap")
+            try:
+                plan_preview = sim.transport.transport_service_plan_for(
+                    DefinitionId(vehicle_id), SpatialNodeId(origin), SpatialNodeId(destination), day=day,
+                )
+            except (KeyError, ValueError) as exc:
+                plan_preview = None
+                blockers = [f"transport_plan_not_available:{type(exc).__name__}:{exc}"]
+            else:
+                blockers = list(plan_preview.blockers)
+            if plan_preview is None or plan_preview.cycle_days <= 0 or not plan_preview.forward_path:
+                unassessed.add("transport_route_or_cycle_not_derivable")
+                forward_capacity = reverse_capacity = None
+            else:
+                capacity = sim.transport.capacity_for_service_units(plan_preview.nominal_per_unit, units)
+                forward_capacity = capacity.forward_t_per_day * duty
+                reverse_capacity = capacity.reverse_t_per_day * duty
+                transport_supply_by_od[(origin, destination)] += forward_capacity
+                if plan_preview.reverse_path:
+                    transport_supply_by_od[(destination, origin)] += reverse_capacity
+                # Registered full-cycle resource inputs are a declared
+                # nameplate-utilization condition, not delivered Cargo flow.
+                for location, resource, quantity in plan_preview.resource_t_per_full_utilization_day:
+                    transport_service_inputs[(str(location), str(resource))] += quantity * units * duty * days
+                maintenance_spec = vehicles[vehicle_id].maintenance
+                if maintenance_spec.service_type:
+                    services[(origin, f"required:{maintenance_spec.service_type}")] += (
+                        units * duty * plan_preview.turnaround_days / plan_preview.cycle_days
+                    )
+            transport_services.append({
+                "origin": origin, "destination": destination, "vehicle": vehicle_id,
+                "fleet_units": units, "duty": duty, "world_reference_day": day,
+                "forward_capacity_t_per_day": forward_capacity,
+                "reverse_capacity_t_per_day": reverse_capacity,
+                "forward_latency_days": (plan_preview.forward_latency_days if plan_preview and plan_preview.forward_path else None),
+                "reverse_latency_days": plan_preview.reverse_latency_days if plan_preview else None,
+                "cycle_days": (plan_preview.cycle_days if plan_preview and plan_preview.cycle_days > 0 else None),
+                "forward_path": list(map(str, plan_preview.forward_path)) if plan_preview else [],
+                "reverse_path": list(map(str, plan_preview.reverse_path)) if plan_preview else [],
+                "infrastructure_requirements": [list(map(str, requirement))
+                                                for requirement in plan_preview.infrastructure_requirements] if plan_preview else [],
+                "blockers": blockers,
+                "quantity_source": "transport_domain_plan_x_selected_fleet",
+                "status": "conditional_capacity_upper_bound" if not blockers and forward_capacity is not None
+                          else "blockers_or_route_unassessed",
+            })
+            unassessed.add("transport_fleet_activation_eligible_infrastructure_finite_allocation")
+        if committed_fleet:
+            unassessed.add("transport_cycle_capacity_not_settled_cargo")
         previous_fleet = current_fleet
         for row in phase.get("research_stages", ()):
             _keys(row, {"node", "research", "stage"}, {"node", "research", "stage"}, "research stage")
@@ -359,6 +593,36 @@ def evaluate(plan: dict, *, app=None) -> dict:
                     research_inputs[(row["node"], str(res))] += amount
             research_points += getattr(spec, "research_point_cost", 0.0)
             research_work += getattr(spec, "required_work", 0.0)
+            requirements = []
+            for requirement in getattr(spec, "execution_requirements", ()):
+                if isinstance(requirement, ServiceCapacityRequirement):
+                    requirements.append({"kind": "service", "name": requirement.service_type,
+                                         "amount_per_execution": requirement.amount_per_execution,
+                                         "scope": requirement.scope.value})
+                elif isinstance(requirement, ResourceRequirement):
+                    requirements.append({"kind": "resource", "name": str(requirement.resource_id),
+                                         "amount_per_execution": requirement.amount_per_execution})
+                elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement,
+                                              StockOrPoolAdmissionRequirement)):
+                    requirements.append({"kind": type(requirement).__name__,
+                                         "name": requirement.pool_id,
+                                         "amount_per_execution": requirement.amount_per_execution})
+            stage_details.append({
+                "node": row["node"], "research": rid, "stage": spec.stage_id,
+                "stage_type": spec.stage_type.value,
+                "direct_prerequisites": sorted(str(r) for r in definition.prerequisites),
+                "point_cost": getattr(spec, "research_point_cost", 0.0),
+                "work": getattr(spec, "required_work", 0.0),
+                "experience_requirements": dict(sorted(getattr(spec, "requirements", {}).items())),
+                "resource_requirements_t": {str(r): amount for r, amount in
+                                            sorted(getattr(spec, "resources", {}).items(), key=lambda pair: str(pair[0]))},
+                "execution_requirements": requirements,
+                "source": f"research:{rid}/stage:{spec.stage_id}",
+                "status": "not_scheduled_or_eligibility_checked",
+            })
+            unassessed.add("research_stage_order_prerequisites_site_and_execution_allocation")
+            if spec.stage_type.value == "operational_experience":
+                unassessed.add("operational_experience_not_generated_by_elapsed_time")
         for row in phase.get("external_rates", ()):
             _keys(row, {"node", "resource", "net_t_per_day"}, {"node", "resource", "net_t_per_day"}, "external rate")
             _identifier(row["resource"], known_resource, "Resource")
@@ -366,6 +630,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
             if type(rate) not in (int, float) or not isfinite(rate):
                 raise ValueError("external rate must be finite")
             external[(row["node"], row["resource"])] += rate * days
+            unassessed.add("external_market_supply_funds_and_lead_time")
         # Transfers are an authored delivered-volume assumption, NOT routing or
         # Fleet dispatch. Origin debit and destination credit use the same mass;
         # per-day cargo handling demand is separately exposed for each end.
@@ -381,19 +646,54 @@ def evaluate(plan: dict, *, app=None) -> dict:
             received[(dest, res)] += amount
             services[(origin, "required:cargo_transfer")] += amount / days
             services[(dest, "required:cargo_transfer")] += amount / days
+            # A physical OD capacity is shared across all Resource demands.
+            # The per-resource row never claims that entire capacity as its own.
+            transfer_details.append({"origin": origin, "destination": dest,
+                                     "resource": res, "required_t": amount,
+                                     "required_t_per_day": amount / days,
+                                     "source": "authored_delivery_assumption",
+                                     "status": "cargo_arrival_unassessed"})
+            unassessed.add("transport_fleet_cycle_propellant_latency_and_arrival")
+        od_demands = defaultdict(float)
+        for row in transfer_details:
+            od_demands[(row["origin"], row["destination"])] += row["required_t_per_day"]
+        od_transport_constraints = []
+        for (origin, destination), required in sorted(od_demands.items()):
+            matched = [allocation for allocation in transport_services
+                       if (allocation["origin"], allocation["destination"]) == (origin, destination)
+                       or ((allocation["destination"], allocation["origin"]) == (origin, destination)
+                           and allocation["reverse_path"])]
+            defined = bool(matched) and all(
+                (allocation["forward_capacity_t_per_day"] is not None
+                 if allocation["origin"] == origin else allocation["reverse_capacity_t_per_day"] is not None)
+                for allocation in matched
+            )
+            blocked = any(allocation["blockers"] for allocation in matched)
+            capacity = transport_supply_by_od[(origin, destination)] if defined else None
+            od_transport_constraints.append({
+                "origin": origin, "destination": destination,
+                "demand_t_per_day": required, "nominal_capacity_t_per_day": capacity,
+                "nominal_gap_t_per_day": (max(0.0, required - capacity) if capacity is not None else None),
+                "status": ("fleet_route_unassessed" if not defined else
+                           "blocked_nominal_capacity_only" if blocked else
+                           "conditional_capacity_not_cargo_settlement"),
+                "blockers": sorted({blocker for allocation in matched for blocker in allocation["blockers"]}),
+            })
         end = {}
-        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
+        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(transport_service_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
         breakdown = []
         for key in sorted(keys):
             start = stocks[key]
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
-                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
+                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
             breakdown.append({
                 "node": key[0], "resource": key[1], "start_t": start,
                 "production_t": produced[key], "process_demand_t": process_inputs[key],
                 "maintenance_demand_t": maintenance[key], "construction_demand_t": construction[key],
-                "vehicle_build_demand_t": vehicle_inputs[key], "fleet_turnaround_demand_t": vehicle_turnaround_inputs[key], "research_material_demand_t": research_inputs[key],
+                "vehicle_build_demand_t": vehicle_inputs[key], "fleet_turnaround_demand_t": vehicle_turnaround_inputs[key],
+                "transport_service_demand_t": transport_service_inputs[key],
+                "research_material_demand_t": research_inputs[key],
                 "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
@@ -404,7 +704,21 @@ def evaluate(plan: dict, *, app=None) -> dict:
         start_rp = stored_research_points
         generated_rp = research_generation_per_day * days
         stored_research_points += generated_rp - research_points
+        # A rate comparison is a physical lower bound only, not a simulated
+        # Research execution date. RP admission, stage order and daily settlement
+        # are deliberately not replicated here.
+        theory_days_by_execution = (research_points / research_execution_per_day
+                                    if research_execution_per_day > 0 else None)
+        theory_days_by_generation = (
+            max(0.0, research_points - max(0.0, start_rp)) / research_generation_per_day
+            if research_generation_per_day > 0 else
+            (0.0 if research_points <= max(0.0, start_rp) else None)
+        )
         research_metrics = {
+            "execution_capacity_lower_bound_days": theory_days_by_execution,
+            "generation_capacity_lower_bound_days": theory_days_by_generation,
+            "phase_execution_capacity_points": research_execution_per_day * days,
+            "phase_execution_capacity_gap_points": max(0.0, research_points - research_execution_per_day * days),
             "start_points": start_rp, "nominal_generation_points": generated_rp,
             "research_stage_demand_points": research_points,
             "notional_end_points": stored_research_points,
@@ -463,13 +777,22 @@ def evaluate(plan: dict, *, app=None) -> dict:
         system_resources = _aggregate_by_dimension(breakdown, "resource", (
             "production_t", "process_demand_t", "maintenance_demand_t",
             "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-            "research_material_demand_t", "life_support_demand_t", "external_net_t",
+            "transport_service_demand_t", "research_material_demand_t", "life_support_demand_t", "external_net_t",
             "shipped_t", "received_t", "net_t", "notional_end_t", "shortfall_t",
         ))
         system_services = _aggregate_by_dimension(service_constraints, "service", (
             "required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day",
         ))
-        report.append({"name": phase["name"], "days": days, "resources": breakdown,
+        report.append({"name": phase["name"], "days": days,
+                       "activity_sources": activity_sources,
+                       "unassessed_constraints": sorted(unassessed),
+                       "investment_constraints": investment_constraints,
+                       "research_stages": stage_details,
+                       "transfer_requirements": transfer_details,
+                       "transport_services": transport_services,
+                       "od_transport_constraints": od_transport_constraints,
+                       "extraction_world_context": extraction_context_report,
+                       "resources": breakdown,
                        "system_resources": system_resources, "system_services": system_services,
                        "fleet": fleet_report,
                        "scale": {"facility_units": sum(current.values()),
@@ -487,6 +810,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
                        "nominal_services_per_day": [dict(node=n, service=s, capacity=q)
                                                      for (n, s), q in sorted(services.items())
                                                      if not s.startswith("required:")]})
+        previous_assets = assets
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
             "assumptions": [
@@ -494,12 +818,12 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "Facility changes take effect at phase start; construction work is a separate nominal demand, not scheduled completion.",
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
-                "Extraction yield is an explicitly authored fraction of installed capacity, not geology/knowledge/eligibility validation.",
-                "Research stages contribute authored RP, work and physical inputs. RP supply requires an authored compatible Facility provider assignment, without technology/site/crew availability validation.",
+                "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
+                "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility provider assignment, without technology/site/crew availability validation.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
                 "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
-                "Fleet turnaround frequency is an explicit activity assumption; no movements, propellant consumption or utilization are inferred.",
+                "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
                 "Maintenance approximates invested material using base construction recipe; upgrade and salvage are not simulated.",
@@ -507,44 +831,82 @@ def evaluate(plan: dict, *, app=None) -> dict:
 
 
 def _apply_case_updates(base: dict, updates: list) -> dict:
-    """Edit declared quantities, never synthesize a build order or choose an asset."""
+    """Apply bounded, identity-addressed sensitivity changes to one shared case.
+
+    Only existing rows/fields can be changed; this never chooses a facility,
+    research programme, site, purchase, or logistics plan on the user's behalf.
+    """
     if not isinstance(updates, list):
         raise ValueError("case updates must be a list")
     plan = deepcopy(base)
-    # Independently authored phase lists must remain independent even when a
-    # Python caller reused the same list object when composing the input.
-    for phase in plan["phases"]:
-        for collection in ("facilities", "fleet"):
-            if collection in phase:
-                phase[collection] = [dict(row) for row in phase[collection]]
     seen = set()
     for change in updates:
-        _keys(change, {"phase", "collection", "node", "id", "units", "duty",
-                       "turnarounds_per_unit_per_day"},
-              {"phase", "collection", "node", "id"}, "case update")
-        name = change["collection"]
-        if name not in ("facilities", "fleet"):
-            raise ValueError(f"case updates cannot edit {name!r}")
-        if (name == "facilities" and "turnarounds_per_unit_per_day" in change) or (name == "fleet" and "duty" in change):
-            raise ValueError("case update attributes do not belong to selected asset kind")
-        if not {"units", "duty", "turnarounds_per_unit_per_day"} & set(change):
-            raise ValueError("case update must change at least one quantity")
-        identity = (change["phase"], name, change["node"], change["id"])
+        if not isinstance(change, dict):
+            raise ValueError("case update must be an object")
+        collection = change.get("collection")
+        if collection == "phase":
+            _keys(change, {"collection", "phase", "days"}, {"collection", "phase", "days"}, "case update")
+            candidates = [row for row in plan["phases"] if row["name"] == change["phase"]]
+            edits = {"days": change["days"]}
+            identity = (collection, change["phase"])
+        elif collection == "solar_yield":
+            _keys(change, {"collection", "node", "factor"}, {"collection", "node", "factor"}, "case update")
+            if change["node"] not in plan.get("solar_yield", {}):
+                raise ValueError("solar sensitivity requires an existing declared site factor")
+            candidates = [plan["solar_yield"]]
+            edits = {change["node"]: change["factor"]}
+            identity = (collection, change["node"])
+        elif collection == "initial_stock":
+            _keys(change, {"collection", "node", "id", "amount_t"},
+                  {"collection", "node", "id", "amount_t"}, "case update")
+            candidates = [row for row in plan.get("initial_stock", ())
+                          if row["node"] == change["node"] and row["resource"] == change["id"]]
+            edits = {"amount_t": change["amount_t"]}
+            identity = (collection, change["node"], change["id"])
+        elif collection == "extraction_sites":
+            _keys(change, {"collection", "phase", "node", "developed_cells", "knowledge", "day"},
+                  {"collection", "phase", "node"}, "case update")
+            edits = {key: change[key] for key in ("developed_cells", "knowledge", "day") if key in change}
+            candidates = [row for phase in plan["phases"] if phase["name"] == change["phase"]
+                          for row in phase.get("extraction_sites", ()) if row["node"] == change["node"]]
+            identity = (collection, change["phase"], change["node"])
+            if not edits:
+                raise ValueError("empty extraction site sensitivity")
+        elif collection == "transport_allocations":
+            _keys(change, {"collection", "phase", "origin", "destination", "id", "units", "duty", "day"},
+                  {"collection", "phase", "origin", "destination", "id"}, "case update")
+            edits = {key: change[key] for key in ("units", "duty", "day") if key in change}
+            candidates = [row for phase in plan["phases"] if phase["name"] == change["phase"]
+                          for row in phase.get("transport_allocations", ())
+                          if row["origin"] == change["origin"] and row["destination"] == change["destination"]
+                          and row["vehicle"] == change["id"]]
+            identity = (collection, change["phase"], change["origin"], change["destination"], change["id"])
+            if not edits:
+                raise ValueError("empty transport allocation sensitivity")
+        elif collection in ("facilities", "fleet", "research_provider_allocations"):
+            _keys(change, {"phase", "collection", "node", "id", "units", "duty",
+                           "turnarounds_per_unit_per_day", "level"},
+                  {"phase", "collection", "node", "id"}, "case update")
+            allowed = ({"units", "duty"} if collection == "facilities" else
+                       {"units", "turnarounds_per_unit_per_day"} if collection == "fleet" else
+                       {"units", "duty", "level"})
+            edits = {k: v for k, v in change.items() if k in allowed}
+            if not edits or (set(change) - {"phase", "collection", "node", "id"}) - allowed:
+                raise ValueError("invalid asset sensitivity fields")
+            phases = [p for p in plan["phases"] if p["name"] == change["phase"]]
+            key = ("facility" if collection == "facilities" else
+                   "vehicle" if collection == "fleet" else "provider")
+            candidates = [row for phase in phases for row in phase.get(collection, ())
+                          if row["node"] == change["node"] and row[key] == change["id"]]
+            identity = (collection, change["phase"], change["node"], change["id"])
+        else:
+            raise ValueError(f"unsupported sensitivity collection: {collection!r}")
         if identity in seen:
             raise ValueError(f"duplicate case update: {identity}")
         seen.add(identity)
-        matched_phases = [row for row in plan["phases"] if row["name"] == change["phase"]]
-        if len(matched_phases) != 1:
-            raise ValueError(f"case update requires a unique phase: {change['phase']}")
-        phase = matched_phases[0]
-        key = "facility" if name == "facilities" else "vehicle"
-        rows = phase.setdefault(name, [])
-        matched = [row for row in rows if row["node"] == change["node"] and row[key] == change["id"]]
-        if len(matched) != 1:
-            raise ValueError(f"case update requires one existing {name} row: {identity}")
-        for field in ("units", "duty", "turnarounds_per_unit_per_day"):
-            if field in change:
-                matched[0][field] = change[field]
+        if len(candidates) != 1:
+            raise ValueError(f"case update requires exactly one existing target: {identity}")
+        candidates[0].update(edits)
     return plan
 
 
@@ -578,10 +940,14 @@ def compare_cases(payload: dict, *, app=None) -> dict:
         alternative_phases = alternative["projection"]["phases"]
         for index, (left, right) in enumerate(zip(baseline, alternative_phases)):
             if left["name"] != right["name"] or left["days"] != right["days"]:
+                differences.append({"case": alternative["name"], "baseline_phase": left["name"],
+                                    "phase": right["name"], "section": "incomparable_phase_basis",
+                                    "baseline_days": left["days"], "case_days": right["days"]})
                 continue  # Different time bases cannot be compared as like quantities.
             left_rp, right_rp = left["research_point_balance"], right["research_point_balance"]
             rp_delta = {key: right_rp[key] - left_rp[key] for key in left_rp
-                        if abs(right_rp[key] - left_rp[key]) > 1e-12}
+                        if isinstance(right_rp[key], (int, float)) and isinstance(left_rp[key], (int, float))
+                        and abs(right_rp[key] - left_rp[key]) > 1e-12}
             if rp_delta:
                 differences.append({"case": alternative["name"], "phase": left["name"],
                                     "section": "research_point_balance", "identity": {"pool": "organization"},
@@ -591,16 +957,18 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
                 ("system_resources", ("resource",), ("production_t", "process_demand_t",
                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
-                      "fleet_turnaround_demand_t", "notional_end_t", "shortfall_t")),
+                      "fleet_turnaround_demand_t", "transport_service_demand_t", "notional_end_t", "shortfall_t")),
                 ("system_services", ("service",), ("required_per_day", "nominal_capacity_per_day",
                        "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-                       "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
+                       "transport_service_demand_t", "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
                        "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
                        "life_support_gap_person_days_per_day", "construction_work_required", "construction_work_nominal_capacity",
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
+                ("od_transport_constraints", ("origin", "destination"),
+                 ("demand_t_per_day", "nominal_capacity_t_per_day", "nominal_gap_t_per_day")),
                 ("fleet", ("node", "vehicle"), ("units", "units_built", "assumed_turnarounds")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),
@@ -609,24 +977,84 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                     return {tuple(row[key] for key in key_fields): row for row in items}
                 l, r = indexed(left[section]), indexed(right[section])
                 for key in sorted(set(l) | set(r)):
-                    delta = {metric: r.get(key, {}).get(metric, 0.0) - l.get(key, {}).get(metric, 0.0)
-                             for metric in metrics}
-                    delta = {metric: value for metric, value in delta.items() if abs(value) > 1e-12}
-                    if delta:
-                        differences.append({"case": alternative["name"], "phase": left["name"],
-                                            "section": section, "identity": dict(zip(key_fields, key)),
-                                            "delta_from_baseline": delta})
+                    delta = {}
+                    incomparable = {}
+                    for metric in metrics:
+                        before = l.get(key, {}).get(metric, 0.0)
+                        after = r.get(key, {}).get(metric, 0.0)
+                        if before is None or after is None:
+                            if before != after:
+                                incomparable[metric] = {"baseline": before, "case": after}
+                            continue
+                        if abs(after - before) > 1e-12:
+                            delta[metric] = after - before
+                    if delta or incomparable:
+                        change = {"case": alternative["name"], "phase": left["name"],
+                                  "section": section, "identity": dict(zip(key_fields, key))}
+                        if delta:
+                            change["delta_from_baseline"] = delta
+                        if incomparable:
+                            change["incomparable_unassessed_metrics"] = incomparable
+                        differences.append(change)
     return {"model": "definition_quantity_comparison_v1", "baseline_case": results[0]["name"],
             "cases": results, "differences": differences}
 
 
+def summarize_projection(projection: dict) -> dict:
+    """Overview of unlike quantities, with sections traceable in the full projection.
+
+    This is not a ranking or feasibility score. Only positive shortfalls and
+    explicit unresolved limits are surfaced; all Definition coefficients remain
+    available in the unabridged read-only report.
+    """
+    phases = []
+    for phase in projection["phases"]:
+        phases.append({
+            "name": phase["name"], "days": phase["days"],
+            "scale": phase["scale"],
+            "resource_shortfalls_by_node": [
+                {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"]}
+                for row in phase["resources"] if row["shortfall_t"] > 1e-12
+            ],
+            "service_shortfalls_by_node": [
+                {"node": row["node"], "service": row["service"], "gap_per_day": row["nominal_gap_per_day"]}
+                for row in phase["service_constraints"] if row["nominal_gap_per_day"] > 1e-12
+            ],
+            "research_point_balance": phase["research_point_balance"],
+            "investment_constraints": phase["investment_constraints"],
+            "od_transport_constraints": phase["od_transport_constraints"],
+            "extraction_world_context": phase["extraction_world_context"],
+            "unassessed_constraints": phase["unassessed_constraints"],
+            "detail_sections": [
+                "activity_sources", "resources", "service_constraints", "research_stages",
+                "transport_services", "transfer_requirements", "system_resources", "system_services",
+            ],
+        })
+    return {"content_id": projection["content_id"], "world_definition_id": projection["world_definition_id"],
+            "model": "definition_quantity_summary_v1", "phases": phases}
+
+
+def summarize(result: dict) -> dict:
+    """Retain case identities, comparison dimensions, and drill-down references."""
+    if "cases" not in result:
+        return summarize_projection(result)
+    return {"model": "definition_quantity_comparison_summary_v1",
+            "baseline_case": result["baseline_case"],
+            "cases": [{"name": case["name"], "summary": summarize_projection(case["projection"])}
+                      for case in result["cases"]],
+            "difference_sections": sorted({row["section"] for row in result["differences"]}),
+            "differences": result["differences"]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plan", type=Path, help="JSON phases specifying Facility counts, duties and material movement")
+    parser.add_argument("plan", type=Path, help="JSON phases specifying activities, assets and demands")
+    parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
     args = parser.parse_args()
     payload = json.loads(args.plan.read_text(encoding="utf-8"))
     result = compare_cases(payload) if "cases" in payload else evaluate(payload)
-    json.dump(result, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
+    json.dump(summarize(result) if args.summary else result, sys.stdout,
+              ensure_ascii=False, indent=2, allow_nan=False)
     print()
 
 

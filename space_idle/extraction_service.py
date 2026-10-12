@@ -97,11 +97,11 @@ class ExtractionService:
         location = self.graph.locations.get(location_id)
         if location is None:
             return 0.0
-        return math.fsum(
-            self.graph.surface_cells[cell_id].resource_potential_by_resource.get(method.resource_id, 0.0)
-            * self._cell_accessibility(method, cell_id, day)
-            for cell_id in sorted(location.developed_cell_ids, key=str)
-            if self._knowledge_cell_eligible(method, cell_id, method.resource_id)
+        return self.opportunity_for_cells(
+            method.resource_id, (method,), location.developed_cell_ids, day,
+            eligible=lambda candidate, cell: self._knowledge_cell_eligible(
+                candidate, cell, method.resource_id,
+            ),
         )
 
     def method_opportunity_blockers(
@@ -236,22 +236,33 @@ class ExtractionService:
                              and not self.missing_method_technologies(spec))
         if not active_specs:
             return 0.0
+        return self.opportunity_for_cells(
+            resource_id, active_specs, location.developed_cell_ids, day,
+            eligible=lambda method, cell: self._knowledge_cell_eligible(method, cell, resource_id),
+        )
+
+    def opportunity_for_cells(
+        self, resource_id: DefinitionId, methods: tuple[ExtractionSpec, ...],
+        cells, day: int, *, eligible,
+    ) -> float:
+        """Shared physical Resource opportunity for a selected Cell/Method set.
+
+        Eligibility is supplied by its owner: Survey for live extraction, or an
+        explicitly labeled Knowledge assumption for offline comparison. Multiple
+        methods see the same Resource potential only once, never once per rig.
+        No Location, Facility or Survey state is created by this calculation.
+        """
         total = 0.0
-        for cell_id in sorted(location.developed_cell_ids, key=str):
+        for cell_id in sorted(set(cells), key=str):
             cell = self.graph.surface_cells[cell_id]
             potential = cell.resource_potential_by_resource.get(resource_id, 0.0)
             if potential <= 1e-12:
                 continue
-            eligible_specs = [
-                spec for spec in active_specs
-                if self._knowledge_cell_eligible(spec, cell_id, resource_id)
-            ]
-            if not eligible_specs:
-                continue
-            accessibility = max(
-                (self._cell_accessibility(spec, cell_id, day) for spec in eligible_specs),
-                default=0.0,
-            )
+            accessibility = max((
+                self._cell_accessibility(method, cell_id, day)
+                for method in methods
+                if method.resource_id == resource_id and eligible(method, cell_id)
+            ), default=0.0)
             total += potential * accessibility
         return total
 
