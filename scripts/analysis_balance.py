@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from copy import deepcopy
 import json
 from math import isfinite
 from pathlib import Path
@@ -95,6 +96,35 @@ def _asset_rows(rows, sim, nodes, *, label):
     return sorted(result)
 
 
+def _fleet_rows(rows, vehicles, nodes, *, label, allow_turnarounds):
+    """Fleet holdings are quantities, not synthetic per-unit Vehicle entities."""
+    result = {}
+    for row in rows:
+        allowed = {"node", "vehicle", "units"}
+        if allow_turnarounds:
+            allowed.add("turnarounds_per_unit_per_day")
+        _keys(row, allowed, {"node", "vehicle", "units"}, label)
+        node = _identifier(row["node"], nodes, "node")
+        vehicle = _identifier(row["vehicle"], vehicles, "vehicle")
+        key = (node, vehicle)
+        if key in result:
+            raise ValueError(f"duplicate Fleet holdings at {key}")
+        units = _integer(row["units"], "Fleet units")
+        cycles = _number(row.get("turnarounds_per_unit_per_day", 0), "Fleet turnaround frequency")
+        result[key] = (units, cycles)
+    return result
+
+
+def _aggregate_by_dimension(rows, dimension, fields):
+    """Combine like quantities without netting away shortages at different nodes."""
+    grouped = defaultdict(lambda: defaultdict(float))
+    for row in rows:
+        for field in fields:
+            grouped[row[dimension]][field] += row[field]
+    return [dict({dimension: name}, **{field: values[field] for field in fields})
+            for name, values in sorted(grouped.items())]
+
+
 def evaluate(plan: dict, *, app=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
 
@@ -102,7 +132,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
     Scenario authors must explicitly provide solar yield and all outside inflows.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_research_points", "phases", "solar_yield"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield"}, {"phases"}, "plan")
     if app is None:
         app = build_game_application_for_load()
     sim, catalog = app._simulation, app._catalog
@@ -112,6 +142,9 @@ def evaluate(plan: dict, *, app=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("facilities", ()))
     nodes.update(str(row["node"]) for row in plan.get("initial_facilities", ()))
     nodes.update(str(row["node"]) for row in plan.get("initial_stock", ()))
+    nodes.update(str(row["node"]) for row in plan.get("initial_fleet", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("fleet", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("vehicle_builds", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("external_rates", ()))
     known_resource = {str(r) for r in catalog.resources}
     stocks = defaultdict(float)
@@ -129,11 +162,16 @@ def evaluate(plan: dict, *, app=None) -> dict:
     previous = defaultdict(int)
     for node, name, units, _p, _e, _d, _y, _people in initial:
         previous[(node, name)] += units
+    vehicles = {str(vehicle.id): vehicle for vehicle in sim.transport.vehicle_definitions()}
+    previous_fleet = {key: units for key, (units, _cycles) in _fleet_rows(
+        plan.get("initial_fleet", ()), vehicles, nodes,
+        label="initial Fleet", allow_turnarounds=False,
+    ).items()}
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     report = []
     seen_research_stages = set()
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "research_stages", "research_provider_allocations"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations"},
               {"name", "days", "facilities"}, "phase")
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
@@ -145,6 +183,8 @@ def evaluate(plan: dict, *, app=None) -> dict:
         maintenance = defaultdict(float)
         construction = defaultdict(float)
         vehicle_inputs = defaultdict(float)
+        vehicle_turnaround_inputs = defaultdict(float)
+        fleet_report = []
         research_inputs = defaultdict(float)
         life_support_inputs = defaultdict(float)
         life_support_supplied = defaultdict(float)
@@ -219,6 +259,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
             for req in recipe.resources:
                 construction[(key[0], str(req.resource_id))] += req.amount_t * delta
             work[key[0]] += recipe.construction_work * delta
+        facility_units_added = sum(max(0, current[k] - previous[k]) for k in current)
         previous = current
         # RP is an organization-owned numerical dimension, never an Inventory
         # Resource. A research source must be assigned to a real authored
@@ -256,15 +297,51 @@ def evaluate(plan: dict, *, app=None) -> dict:
             research_storage_nominal += units * level_spec.storage_capacity_points
             research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
                                               * provider.crew_person_days_per_research_point)
-        for row in phase.get("vehicle_builds", ()):
-            _keys(row, {"node", "vehicle", "units"}, {"node", "vehicle", "units"}, "vehicle build")
-            name = _identifier(row["vehicle"], {str(d.id) for d in sim.transport.vehicle_definitions()}, "vehicle")
-            units = _integer(row["units"], "vehicle units", positive=True)
-            vehicle = next(v for v in sim.transport.vehicle_definitions() if str(v.id) == name)
+        # Asset counts, unlike production work orders, persist across phases.
+        # An explicit Fleet composition describes the *whole* current holding;
+        # otherwise build orders accumulate on the existing holding.
+        if "fleet" in phase and phase.get("vehicle_builds"):
+            raise ValueError("fleet holdings and vehicle_builds cannot both specify acquisitions")
+        fleet_spec = _fleet_rows(phase.get("fleet", ()), vehicles, nodes,
+                                 label="Fleet", allow_turnarounds=True) if "fleet" in phase else None
+        builds = defaultdict(int)
+        if fleet_spec is not None:
+            current_fleet = {key: units for key, (units, _cycles) in fleet_spec.items()}
+            for key in set(previous_fleet) | set(current_fleet):
+                delta = current_fleet.get(key, 0) - previous_fleet.get(key, 0)
+                if delta < 0:
+                    raise ValueError(f"Fleet removal at {key} requires explicit retirement/relocation assumptions")
+                builds[key] = delta
+        else:
+            current_fleet = dict(previous_fleet)
+            for row in phase.get("vehicle_builds", ()):
+                _keys(row, {"node", "vehicle", "units"}, {"node", "vehicle", "units"}, "vehicle build")
+                key = (_identifier(row["node"], nodes, "node"),
+                       _identifier(row["vehicle"], vehicles, "vehicle"))
+                builds[key] += _integer(row["units"], "vehicle units", positive=True)
+                current_fleet[key] = current_fleet.get(key, 0) + row["units"]
+        for (node, vehicle_id), added in sorted(builds.items()):
+            vehicle = vehicles[vehicle_id]
             for res, amount in vehicle.production.resources:
-                vehicle_inputs[(row["node"], str(res))] += amount * units
+                vehicle_inputs[(node, str(res))] += amount * added
             if vehicle.production.service_type:
-                services[(row["node"], f"required:{vehicle.production.service_type}")] += units * vehicle.production.days / days
+                services[(node, f"required:{vehicle.production.service_type}")] += added * vehicle.production.days / days
+        for (node, vehicle_id), units in sorted(current_fleet.items()):
+            if units == 0:
+                continue
+            vehicle = vehicles[vehicle_id]
+            cycles_per_unit = fleet_spec.get((node, vehicle_id), (units, 0))[1] if fleet_spec is not None else 0
+            cycles = units * cycles_per_unit * days
+            for resource, amount in vehicle.maintenance.resources:
+                vehicle_turnaround_inputs[(node, str(resource))] += amount * cycles
+            if vehicle.maintenance.service_type:
+                services[(node, f"required:{vehicle.maintenance.service_type}")] += (
+                    cycles * vehicle.maintenance.turnaround_days / days
+                )
+            fleet_report.append({"node": node, "vehicle": vehicle_id,
+                                 "units": units, "units_built": builds.get((node, vehicle_id), 0),
+                                 "assumed_turnarounds": cycles})
+        previous_fleet = current_fleet
         for row in phase.get("research_stages", ()):
             _keys(row, {"node", "research", "stage"}, {"node", "research", "stage"}, "research stage")
             rid = _identifier(row["research"], sim.research.definitions, "research")
@@ -305,18 +382,18 @@ def evaluate(plan: dict, *, app=None) -> dict:
             services[(origin, "required:cargo_transfer")] += amount / days
             services[(dest, "required:cargo_transfer")] += amount / days
         end = {}
-        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
+        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
         breakdown = []
         for key in sorted(keys):
             start = stocks[key]
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
-                     - vehicle_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
+                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
             breakdown.append({
                 "node": key[0], "resource": key[1], "start_t": start,
                 "production_t": produced[key], "process_demand_t": process_inputs[key],
                 "maintenance_demand_t": maintenance[key], "construction_demand_t": construction[key],
-                "vehicle_build_demand_t": vehicle_inputs[key], "research_material_demand_t": research_inputs[key],
+                "vehicle_build_demand_t": vehicle_inputs[key], "fleet_turnaround_demand_t": vehicle_turnaround_inputs[key], "research_material_demand_t": research_inputs[key],
                 "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
@@ -383,7 +460,22 @@ def evaluate(plan: dict, *, app=None) -> dict:
             storage_constraints.append({"node": node, "pool": pool, "physical_capacity_t": cap,
                                         "notional_occupied_t": occupied,
                                         "capacity_excess_t": max(0.0, occupied - cap)})
+        system_resources = _aggregate_by_dimension(breakdown, "resource", (
+            "production_t", "process_demand_t", "maintenance_demand_t",
+            "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
+            "research_material_demand_t", "life_support_demand_t", "external_net_t",
+            "shipped_t", "received_t", "net_t", "notional_end_t", "shortfall_t",
+        ))
+        system_services = _aggregate_by_dimension(service_constraints, "service", (
+            "required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day",
+        ))
         report.append({"name": phase["name"], "days": days, "resources": breakdown,
+                       "system_resources": system_resources, "system_services": system_services,
+                       "fleet": fleet_report,
+                       "scale": {"facility_units": sum(current.values()),
+                                 "facility_units_added": facility_units_added,
+                                 "fleet_units": sum(current_fleet.values()),
+                                 "fleet_units_built": sum(builds.values())},
                        "constraints": constraints, "service_constraints": service_constraints,
                        "storage": storage_constraints,
                        "extraction_projections_t": [dict(node=node, resource=res, nominal_t=q,
@@ -406,9 +498,54 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "Research stages contribute authored RP, work and physical inputs. RP supply requires an authored compatible Facility provider assignment, without technology/site/crew availability validation.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
+                "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
+                "Fleet turnaround frequency is an explicit activity assumption; no movements, propellant consumption or utilization are inferred.",
+                "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
                 "Maintenance approximates invested material using base construction recipe; upgrade and salvage are not simulated.",
             ], "phases": report}
+
+
+def _apply_case_updates(base: dict, updates: list) -> dict:
+    """Edit declared quantities, never synthesize a build order or choose an asset."""
+    if not isinstance(updates, list):
+        raise ValueError("case updates must be a list")
+    plan = deepcopy(base)
+    # Independently authored phase lists must remain independent even when a
+    # Python caller reused the same list object when composing the input.
+    for phase in plan["phases"]:
+        for collection in ("facilities", "fleet"):
+            if collection in phase:
+                phase[collection] = [dict(row) for row in phase[collection]]
+    seen = set()
+    for change in updates:
+        _keys(change, {"phase", "collection", "node", "id", "units", "duty",
+                       "turnarounds_per_unit_per_day"},
+              {"phase", "collection", "node", "id"}, "case update")
+        name = change["collection"]
+        if name not in ("facilities", "fleet"):
+            raise ValueError(f"case updates cannot edit {name!r}")
+        if (name == "facilities" and "turnarounds_per_unit_per_day" in change) or (name == "fleet" and "duty" in change):
+            raise ValueError("case update attributes do not belong to selected asset kind")
+        if not {"units", "duty", "turnarounds_per_unit_per_day"} & set(change):
+            raise ValueError("case update must change at least one quantity")
+        identity = (change["phase"], name, change["node"], change["id"])
+        if identity in seen:
+            raise ValueError(f"duplicate case update: {identity}")
+        seen.add(identity)
+        matched_phases = [row for row in plan["phases"] if row["name"] == change["phase"]]
+        if len(matched_phases) != 1:
+            raise ValueError(f"case update requires a unique phase: {change['phase']}")
+        phase = matched_phases[0]
+        key = "facility" if name == "facilities" else "vehicle"
+        rows = phase.setdefault(name, [])
+        matched = [row for row in rows if row["node"] == change["node"] and row[key] == change["id"]]
+        if len(matched) != 1:
+            raise ValueError(f"case update requires one existing {name} row: {identity}")
+        for field in ("units", "duty", "turnarounds_per_unit_per_day"):
+            if field in change:
+                matched[0][field] = change[field]
+    return plan
 
 
 def compare_cases(payload: dict, *, app=None) -> dict:
@@ -417,7 +554,7 @@ def compare_cases(payload: dict, *, app=None) -> dict:
     Comparison never selects a best plan, and reports physical dimensions
     separately rather than summing unlike Resource kinds into a score.
     """
-    _keys(payload, {"cases"}, {"cases"}, "case comparison")
+    _keys(payload, {"cases", "base_plan"}, {"cases"}, "case comparison")
     cases = payload["cases"]
     if not isinstance(cases, list) or not cases:
         raise ValueError("comparison requires cases")
@@ -426,11 +563,15 @@ def compare_cases(payload: dict, *, app=None) -> dict:
     results = []
     names = set()
     for case in cases:
-        _keys(case, {"name", "plan"}, {"name", "plan"}, "case")
+        _keys(case, {"name", "plan", "updates"}, {"name"}, "case")
+        if ("plan" in case and ("updates" in case or "base_plan" in payload)) or ("plan" not in case and "base_plan" not in payload):
+            raise ValueError("case requires a plan or a shared base_plan with updates, not both")
         if not isinstance(case["name"], str) or not case["name"] or case["name"] in names:
             raise ValueError("case names must be unique and nonempty")
         names.add(case["name"])
-        results.append({"name": case["name"], "projection": evaluate(case["plan"], app=app)})
+        case_plan = (case["plan"] if "plan" in case else
+                     _apply_case_updates(payload["base_plan"], case.get("updates", [])))
+        results.append({"name": case["name"], "projection": evaluate(case_plan, app=app)})
     differences = []
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
@@ -448,13 +589,19 @@ def compare_cases(payload: dict, *, app=None) -> dict:
             for section, key_fields, metrics in (
                 ("service_constraints", ("node", "service"),
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
+                ("system_resources", ("resource",), ("production_t", "process_demand_t",
+                      "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
+                      "fleet_turnaround_demand_t", "notional_end_t", "shortfall_t")),
+                ("system_services", ("service",), ("required_per_day", "nominal_capacity_per_day",
+                       "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("production_t", "process_demand_t",
-                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
+                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
                        "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
                        "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
                        "life_support_gap_person_days_per_day", "construction_work_required", "construction_work_nominal_capacity",
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
+                ("fleet", ("node", "vehicle"), ("units", "units_built", "assumed_turnarounds")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),
             ):

@@ -1269,17 +1269,34 @@ def run(browser) -> dict[str, object]:
             # blockers for individual Vehicle service modes are displayed in the
             # Inspector. Selecting a nonexistent "unlocked" badge silently fell
             # back to the first route and made the blocker checks vacuous.
+            # The HTTP UI snapshot intentionally scopes Movement plans to the
+            # inspected node. Choosing a global candidate not in that scope
+            # tests an invisible control, not a browser functionality failure.
+            inspected_node = page.evaluate(
+                "() => window.SpaceIdleApp.state.selectedGlobalNodeId || window.SpaceIdleApp.state.operationalNodeId"
+            )
+            scoped_plans = runtime.query(GetMovementPlans(
+                touching_node_id=inspected_node, include_modes=True,
+            )).data.items
+            # The actual rendered candidates must match the scoped Application
+            # projection, rather than merely accepting an arbitrary visible row.
+            visible_ids = set(movement_plan_buttons.evaluate_all(
+                "buttons => buttons.map(button => button.dataset.movementPlanId)"
+            ))
+            _assert(visible_ids == {row.id for row in scoped_plans},
+                    "movement candidates must equal the selected node's Application projection")
             plan_with_blocked_mode = next(
-                (row for row in runtime.query(GetMovementPlans()).data.items
+                (row for row in scoped_plans
                  if any(not mode.service_feasible and mode.blockers for mode in row.modes)),
                 None,
             )
             _assert(plan_with_blocked_mode is not None,
-                    "the shipped scenario must expose a constrained Movement service mode")
+                    "the inspected node must expose a constrained Movement service mode")
             movement_plan_button = page.locator(
                 f'.movement-plan-button[data-movement-plan-id="{plan_with_blocked_mode.id}"]'
             )
-            movement_plan_button.wait_for(state="visible", timeout=10000)
+            _assert(movement_plan_button.is_visible(),
+                    "scoped Movement Plan must be visibly selectable")
             movement_plan_button.click()
             page.locator("#movementPlanInspectorContent .detail-card").first.wait_for(timeout=10000)
             _assert(

@@ -296,3 +296,173 @@ def test_case_comparison_preserves_named_dimensions_and_validates_inputs(definit
     with pytest.raises(ValueError, match="removal"):
         evaluate({"initial_facilities": [{"node": node, "facility": str(facility.id), "units": 1}],
                   "phases": [{"name": "remove", "days": 1, "facilities": []}]}, app=definitions)
+
+
+def test_large_multisite_asset_holding_reports_global_needs_without_selecting_build_order(definitions):
+    """Bulk investments produce typed demand without pretending to schedule a strategy.
+
+    Inventory shortages in one node cannot be satisfied by surplus at another
+    without an explicitly authored transfer, even when system net stock is positive.
+    """
+    sim = definitions._simulation
+    facilities = sorted(sim.facilities.definitions.values(), key=lambda row: str(row.id))
+    vehicles = sorted(sim.transport.vehicle_definitions(), key=lambda row: str(row.id))
+    assert facilities and vehicles
+    site_a, site_b = "industrial.a", "industrial.b"
+    # Real registered definitions, scaled counts, and an explicit fleet work
+    # frequency are independent experiment inputs rather than target values.
+    initial_assets = [{"node": site_a, "facility": str(f.id), "units": 20} for f in facilities]
+    initial_fleet = [{"node": site_a, "vehicle": str(v.id), "units": 30} for v in vehicles]
+    holding_fleet = [{"node": site_a, "vehicle": str(v.id), "units": 40,
+                      "turnarounds_per_unit_per_day": .1} for v in vehicles]
+    demand = next((res for v in vehicles for res, amount in v.production.resources if amount > 0), None)
+    assert demand is not None
+    plan = {
+        "initial_facilities": initial_assets,
+        "initial_fleet": initial_fleet,
+        "initial_stock": [{"node": site_b, "resource": str(demand), "amount_t": 1000000}],
+        "solar_yield": {site_a: .6},
+        "phases": [{"name": "fleet expansion", "days": 12,
+                    "facilities": [{**row, "units": row["units"] + 10} for row in initial_assets],
+                    "fleet": holding_fleet}],
+    }
+    phase = evaluate(plan, app=definitions)["phases"][0]
+    assert phase["scale"] == {
+        "facility_units": len(facilities) * 30,
+        "facility_units_added": len(facilities) * 10,
+        "fleet_units": len(vehicles) * 40,
+        "fleet_units_built": len(vehicles) * 10,
+    }
+    assert len(phase["fleet"]) == len(vehicles)
+    for row in phase["fleet"]:
+        assert row["units_built"] == 10
+        assert row["assumed_turnarounds"] == pytest.approx(40 * .1 * 12)
+    resources = _rows(phase)
+    for vehicle in vehicles:
+        for resource, amount in vehicle.production.resources:
+            assert resources[(site_a, str(resource))]["vehicle_build_demand_t"] >= 10 * amount
+        for resource, amount in vehicle.maintenance.resources:
+            assert resources[(site_a, str(resource))]["fleet_turnaround_demand_t"] >= 40 * .1 * 12 * amount
+    totals = {row["resource"]: row for row in phase["system_resources"]}
+    for resource in totals:
+        local_rows = [r for r in phase["resources"] if r["resource"] == resource]
+        assert totals[resource]["shortfall_t"] == pytest.approx(sum(r["shortfall_t"] for r in local_rows))
+        assert totals[resource]["net_t"] == pytest.approx(sum(r["net_t"] for r in local_rows))
+    assert totals[str(demand)]["notional_end_t"] > 0
+    assert resources[(site_a, str(demand))]["shortfall_t"] > 0
+    assert totals[str(demand)]["shortfall_t"] > 0
+    for service in phase["system_services"]:
+        rows = [r for r in phase["service_constraints"] if r["service"] == service["service"]]
+        assert service["nominal_gap_per_day"] == pytest.approx(sum(r["nominal_gap_per_day"] for r in rows))
+    assert any("not scheduled completion" in assumption for assumption in evaluate(plan, app=definitions)["assumptions"])
+
+
+def test_fleet_holdings_are_preserved_between_phases_and_production_is_counted_once(definitions):
+    vehicle = next(v for v in definitions._simulation.transport.vehicle_definitions() if v.production.resources)
+    site = "fleet.production.site"
+    spec = {"node": site, "vehicle": str(vehicle.id), "units": 5}
+    plan = {"initial_fleet": [spec], "phases": [
+        {"name": "acquire", "days": 2, "facilities": [],
+         "vehicle_builds": [{"node": site, "vehicle": str(vehicle.id), "units": 15}]},
+        {"name": "operate", "days": 20, "facilities": [],
+         "fleet": [{**spec, "units": 20, "turnarounds_per_unit_per_day": .2}]},
+    ]}
+    first, second = evaluate(plan, app=definitions)["phases"]
+    assert first["fleet"] == [{"node": site, "vehicle": str(vehicle.id),
+                               "units": 20, "units_built": 15, "assumed_turnarounds": 0}]
+    assert second["fleet"][0]["units_built"] == 0
+    assert second["fleet"][0]["assumed_turnarounds"] == pytest.approx(80)
+    assert second["scale"]["fleet_units_built"] == 0
+    assert all(row["vehicle_build_demand_t"] == 0 for row in second["resources"])
+    with pytest.raises(ValueError, match="removal"):
+        evaluate({"initial_fleet": [spec], "phases": [{"name": "discard", "days": 1,
+                                                        "facilities": [], "fleet": []}]}, app=definitions)
+    with pytest.raises(ValueError, match="cannot both"):
+        evaluate({"phases": [{"name": "double", "days": 1, "facilities": [],
+                              "fleet": [spec], "vehicle_builds": [spec]}]}, app=definitions)
+
+
+def test_shared_scale_cases_only_edit_declared_quantities(definitions):
+    facility = next(iter(definitions._simulation.facilities.definitions))
+    vehicle = next(iter(definitions._simulation.transport.vehicle_defs))
+    node = "scenario.scale"
+    base = {"initial_facilities": [{"node": node, "facility": str(facility), "units": 3}],
+            "initial_fleet": [{"node": node, "vehicle": str(vehicle), "units": 1}],
+            "phases": [{"name": "growth", "days": 10,
+                        "facilities": [{"node": node, "facility": str(facility), "units": 3}],
+                        "fleet": [{"node": node, "vehicle": str(vehicle), "units": 1}]}]}
+    payload = {"base_plan": base, "cases": [
+        {"name": "as authored"},
+        {"name": "increased commitments", "updates": [
+            {"phase": "growth", "collection": "facilities", "node": node, "id": str(facility), "units": 30},
+            {"phase": "growth", "collection": "fleet", "node": node, "id": str(vehicle),
+             "units": 100, "turnarounds_per_unit_per_day": .2},
+        ]},
+    ]}
+    result = compare_cases(payload, app=definitions)
+    assert base["phases"][0]["facilities"][0]["units"] == 3
+    first, second = (case["projection"]["phases"][0] for case in result["cases"])
+    assert second["scale"]["facility_units"] == 30
+    assert second["scale"]["fleet_units"] == 100
+    assert second["scale"]["fleet_units_built"] == 99
+    assert first["scale"]["fleet_units_built"] == 0
+    assert any(diff["section"] == "fleet" for diff in result["differences"])
+    with pytest.raises(ValueError, match="duplicate case update"):
+        bad = deepcopy(payload)
+        bad["cases"][1]["updates"].append(bad["cases"][1]["updates"][0])
+        compare_cases(bad, app=definitions)
+    with pytest.raises(ValueError, match="existing"):
+        bad = deepcopy(payload)
+        bad["cases"][1]["updates"][0]["id"] = "unregistered.facility"
+        compare_cases(bad, app=definitions)
+
+
+def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity_contract():
+    """One Content list entry can add a Facility or Vehicle through normal owners."""
+    from scripts.analysis_variants import apply_content_variant
+    from space_idle.shared import DefinitionId
+
+    base = build_game_application_for_load()
+    sim = base._simulation
+    source_facility = next(fid for fid in sim.facilities.definitions
+                           if fid in sim.projects.recipes and fid in sim.power.specs)
+    source_vehicle = next(vid for vid, vehicle in sim.transport.vehicle_defs.items()
+                          if vehicle.production.resources)
+    resource = next(iter(base._catalog.resources))
+    new_facility, new_vehicle = "variant.facility.scale", "variant.vehicle.scale"
+    changes = [
+        {"operation": "add", "kind": "asset_bundle", "asset_kind": "facility",
+         "id": new_facility, "source_id": str(source_facility), "edits": [
+             {"kind": "facility", "field": "display_name", "value": "Experimental Industry"},
+             {"kind": "construction", "field": "resources", "value": {str(resource): 5}},
+             {"kind": "facility", "field": "maintenance_fraction_per_year", "value": .12},
+         ]},
+        {"operation": "add", "kind": "asset_bundle", "asset_kind": "vehicle",
+         "id": new_vehicle, "source_id": str(source_vehicle), "edits": [
+             {"kind": "vehicle", "field": "display_name", "value": "Experimental Fleet"},
+             {"kind": "vehicle", "field": "production_resources", "value": {str(resource): 4}},
+             {"kind": "vehicle", "field": "production_days", "value": 8},
+         ]},
+    ]
+    app = build_game_application_for_load(
+        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, changes),
+    )
+    new_sim = app._simulation
+    assert DefinitionId(new_facility) in new_sim.facilities.definitions
+    assert DefinitionId(new_facility) in new_sim.projects.recipes
+    assert DefinitionId(new_facility) in new_sim.projects.decommission_recipes
+    assert DefinitionId(new_facility) in new_sim.power.specs
+    assert DefinitionId(new_vehicle) in new_sim.transport.vehicle_defs
+    assert DefinitionId(new_facility) not in sim.facilities.definitions
+    assert DefinitionId(new_vehicle) not in sim.transport.vehicle_defs
+    phase = evaluate({"phases": [{"name": "capacity", "days": 10, "facilities": [
+        {"node": "one", "facility": new_facility, "units": 100}],
+        "fleet": [{"node": "one", "vehicle": new_vehicle, "units": 50}]}]}, app=app)["phases"][0]
+    row = _rows(phase)[("one", str(resource))]
+    assert row["construction_demand_t"] == pytest.approx(500)
+    assert row["vehicle_build_demand_t"] == pytest.approx(200)
+    assert row["maintenance_demand_t"] == pytest.approx(500 * .12 / 365 * 10)
+    assert phase["scale"]["facility_units"] == 100
+    assert phase["scale"]["fleet_units_built"] == 50
+    with pytest.raises(ValueError, match="new target"):
+        apply_content_variant(new_sim, app._catalog, changes)

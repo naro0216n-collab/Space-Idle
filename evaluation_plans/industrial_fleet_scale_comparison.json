@@ -1,0 +1,325 @@
+{
+  "base_plan": {
+    "initial_stock": [
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.machinery",
+        "amount_t": 1000
+      },
+      {
+        "node": "base.location.earth_industrial",
+        "resource": "base.resource.structural_components",
+        "amount_t": 1500
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.machinery",
+        "amount_t": 300
+      },
+      {
+        "node": "base.node.low_earth_orbit",
+        "resource": "base.resource.structural_components",
+        "amount_t": 300
+      },
+      {
+        "node": "base.node.lunar_orbit",
+        "resource": "base.resource.structural_components",
+        "amount_t": 200
+      }
+    ],
+    "solar_yield": {
+      "base.location.earth_industrial": 0.8,
+      "base.node.low_earth_orbit": 0.85,
+      "base.node.lunar_orbit": 0.7
+    },
+    "phases": [
+      {
+        "name": "deployment",
+        "days": 45,
+        "facilities": [
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.construction_yard",
+            "units": 8
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fission_power_unit",
+            "units": 8
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.basic_machinery_works",
+            "units": 15
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_quarry",
+            "units": 20
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.food_farm",
+            "units": 12
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.cryogenic_storage",
+            "units": 7
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_assembly_yard",
+            "units": 5
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 12
+          },
+          {
+            "node": "base.node.lunar_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 6
+          }
+        ],
+        "fleet": [
+          {
+            "node": "base.location.earth_industrial",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 25,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+            "units": 18,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.lunar_orbit",
+            "vehicle": "base.vehicle.reusable_surface_cargo_lander",
+            "units": 12,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.orbital_observation_spacecraft",
+            "units": 15,
+            "turnarounds_per_unit_per_day": 0.03
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "resource": "base.resource.machinery",
+            "t_per_day": 0.8
+          },
+          {
+            "origin": "base.node.low_earth_orbit",
+            "destination": "base.node.lunar_orbit",
+            "resource": "base.resource.structural_components",
+            "t_per_day": 0.5
+          }
+        ]
+      },
+      {
+        "name": "sustained_operations",
+        "days": 180,
+        "facilities": [
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.construction_yard",
+            "units": 8
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.fission_power_unit",
+            "units": 8
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.basic_machinery_works",
+            "units": 15
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.mineral_quarry",
+            "units": 20
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.food_farm",
+            "units": 12
+          },
+          {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.cryogenic_storage",
+            "units": 7
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_assembly_yard",
+            "units": 5
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 12
+          },
+          {
+            "node": "base.node.lunar_orbit",
+            "facility": "base.facility.orbital_solar_array",
+            "units": 6
+          }
+        ],
+        "fleet": [
+          {
+            "node": "base.location.earth_industrial",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 25,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_orbital_cargo_tug",
+            "units": 18,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.lunar_orbit",
+            "vehicle": "base.vehicle.reusable_surface_cargo_lander",
+            "units": 12,
+            "turnarounds_per_unit_per_day": 0.03
+          },
+          {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.orbital_observation_spacecraft",
+            "units": 15,
+            "turnarounds_per_unit_per_day": 0.03
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "resource": "base.resource.machinery",
+            "t_per_day": 0.8
+          },
+          {
+            "origin": "base.node.low_earth_orbit",
+            "destination": "base.node.lunar_orbit",
+            "resource": "base.resource.structural_components",
+            "t_per_day": 0.5
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "installed_asset_group"
+    },
+    {
+      "name": "expanded_industrial_and_fleet_group",
+      "updates": [
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.construction_yard",
+          "units": 64
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.fission_power_unit",
+          "units": 64
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.basic_machinery_works",
+          "units": 120
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.mineral_quarry",
+          "units": 160
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.food_farm",
+          "units": 96
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.cryogenic_storage",
+          "units": 56
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.orbital_assembly_yard",
+          "units": 40
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.orbital_solar_array",
+          "units": 96
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "facilities",
+          "node": "base.node.lunar_orbit",
+          "id": "base.facility.orbital_solar_array",
+          "units": 48
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "fleet",
+          "node": "base.location.earth_industrial",
+          "id": "base.vehicle.reusable_launch_vehicle",
+          "units": 200,
+          "turnarounds_per_unit_per_day": 0.03
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "fleet",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.reusable_orbital_cargo_tug",
+          "units": 144,
+          "turnarounds_per_unit_per_day": 0.03
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "fleet",
+          "node": "base.node.lunar_orbit",
+          "id": "base.vehicle.reusable_surface_cargo_lander",
+          "units": 96,
+          "turnarounds_per_unit_per_day": 0.03
+        },
+        {
+          "phase": "sustained_operations",
+          "collection": "fleet",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.orbital_observation_spacecraft",
+          "units": 120,
+          "turnarounds_per_unit_per_day": 0.03
+        }
+      ]
+    }
+  ]
+}

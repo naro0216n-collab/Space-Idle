@@ -461,6 +461,59 @@ def _change_movement_rule_membership(sim: Simulation, change: Mapping) -> None:
     sim.transport.invalidate_movement_plans()
 
 
+def _add_asset_bundle(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
+    """Register a complete typed asset variant from one authored list entry.
+
+    Definitions remain owned by their original Domains. This composes a new
+    Facility or Vehicle together with applicable acquisition and service specs;
+    it is not a runtime Content owner, a copy of Player State or a Core alias.
+    """
+    data = _definition_fields(change, {"operation", "kind", "asset_kind", "id", "source_id"},
+                              {"edits"}, "asset bundle")
+    if data["operation"] != "add" or data["kind"] != "asset_bundle":
+        raise ValueError("asset bundle must be an addition")
+    asset_kind = data["asset_kind"]
+    if asset_kind not in ("facility", "vehicle"):
+        raise ValueError("asset bundle requires facility or vehicle asset_kind")
+    source_id, target_id = DefinitionId(str(data["source_id"])), DefinitionId(str(data["id"]))
+    if not str(source_id) or not str(target_id):
+        raise ValueError("asset bundle requires nonempty identifiers")
+    collections = _owned_definition_collections(sim)
+    owner = collections[asset_kind][0]
+    if source_id not in owner or target_id in owner:
+        raise ValueError("asset bundle requires an existing source and new target ID")
+    related = ("facility", "construction", "decommission", "power",
+               "storage_provider", "construction_provider") if asset_kind == "facility" else ("vehicle",)
+    for kind in related:
+        definitions = collections[kind][0]
+        if source_id not in definitions:
+            continue
+        if target_id in definitions:
+            raise ValueError(f"asset bundle target already registered: {kind}/{target_id}")
+        _change_owned_definition(sim, {"operation": "add", "kind": kind,
+                                       "id": str(target_id), "source_id": str(source_id)})
+    if asset_kind == "facility":
+        # Upgrade recipes are keyed by (Facility, target level), unlike the
+        # ordinary construction and decommission recipes.
+        for (facility_id, level), recipe in tuple(sim.projects.upgrade_recipes.items()):
+            if facility_id == source_id:
+                key = target_id, level
+                if key in sim.projects.upgrade_recipes:
+                    raise ValueError(f"duplicate asset upgrade recipe {key}")
+                sim.projects.upgrade_recipes[key] = replace(recipe, facility_def_id=target_id)
+    edits = data.get("edits", [])
+    if not isinstance(edits, list):
+        raise ValueError("asset bundle edits must be a list")
+    for edit in edits:
+        if not isinstance(edit, Mapping) or "kind" not in edit or "field" not in edit:
+            raise ValueError("asset bundle edits must be typed field changes")
+        if set(edit) - {"kind", "field", "value", "resource_id", "pool_key"}:
+            raise ValueError("asset bundle edit contains unexpected fields")
+        if edit["kind"] not in related:
+            raise ValueError("asset bundle edit must affect its own asset Definitions")
+        apply_content_variant(sim, catalog, ({**edit, "operation": "edit", "id": str(target_id)},))
+
+
 def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
     """Author typed Content additions/deletions in a fresh pre-Scenario composition.
 
@@ -473,6 +526,9 @@ def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change:
 
     action = change.get("operation")
     kind = change.get("kind")
+    if kind == "asset_bundle":
+        _add_asset_bundle(sim, catalog, change)
+        return
     if kind in ("surface_movement_rule", "surface_access_movement_rule", "spaceflight_movement_rule"):
         _change_movement_rule_membership(sim, change)
         return
@@ -552,6 +608,31 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             amounts = dict(getattr(process, field_name))
             amounts[resource_id] = _finite_nonnegative(value)
             sim.industry.processes[definition_id] = replace(process, **{field_name: amounts})
+        elif kind in ("facility", "vehicle") and field_name == "display_name":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("display name must be nonempty")
+            domain = (sim.facilities.definitions if kind == "facility" else sim.transport.vehicle_defs)
+            domain[definition_id] = replace(domain[definition_id], display_name=value)
+        elif kind in ("construction", "decommission") and field_name == "resources":
+            from space_idle.projects import BuildResourceRequirement
+            definition = (sim.projects.recipes if kind == "construction" else
+                          sim.projects.decommission_recipes)[definition_id]
+            amounts = _resource_amounts(value, "construction resources")
+            requirements = tuple(BuildResourceRequirement(resource, quantity)
+                                 for resource, quantity in amounts.items())
+            if kind == "construction":
+                sim.projects.recipes[definition_id] = replace(definition, resources=requirements)
+            else:
+                sim.projects.decommission_recipes[definition_id] = replace(definition, resources=requirements)
+        elif kind == "vehicle" and field_name in ("production_resources", "turnaround_resources"):
+            amounts = _resource_amounts(value, "Vehicle resource requirements")
+            vehicle = sim.transport.vehicle_defs[definition_id]
+            requirements = tuple(sorted(amounts.items()))
+            if field_name == "production_resources":
+                vehicle = replace(vehicle, production=replace(vehicle.production, resources=requirements))
+            else:
+                vehicle = replace(vehicle, maintenance=replace(vehicle.maintenance, resources=requirements))
+            sim.transport.vehicle_defs[definition_id] = vehicle
         elif kind == "facility" and field_name in (
             "maintenance_fraction_per_year", "process_throughput_per_day",
             "extraction_capacity_t_per_day", "housing_capacity"
