@@ -56,13 +56,13 @@ def build_power_specs() -> dict:
         ids.VEHICLE_ASSEMBLY_FACILITY: PowerSpec(None, 0.18),
         ids.GRID_POWER_SUPPLY: PowerSpec(FixedGeneration(20.0), 0.0),
         ids.ORBITAL_FISSION_POWER: PowerSpec(FixedGeneration(0.6), 0.03),
-        ids.ORBITAL_LOGISTICS_NODE: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.12),
+        ids.ORBITAL_LOGISTICS_NODE: PowerSpec(SolarGeneration(0.35 / 0.62, 1361.0), 0.12, standby_load_mw=0.04),
         # On-board low-output autonomous power serves the deployment itself,
         # not an industrial base or a full-scale orbital reactor. Physical
         # Resource cost and maintenance are paid by the founding recipe.
-        ids.AUTONOMOUS_SURFACE_OUTPOST: PowerSpec(FixedGeneration(0.12), 0.035),
-        ids.AUTONOMOUS_ORBITAL_OUTPOST: PowerSpec(FixedGeneration(0.14), 0.045),
-        ids.ROBOTIC_SURVEY_PACKAGE: PowerSpec(SolarGeneration(0.55 / 0.78, 1361.0), 0.08),
+        ids.AUTONOMOUS_SURFACE_OUTPOST: PowerSpec(FixedGeneration(0.12), 0.035, standby_load_mw=0.025),
+        ids.AUTONOMOUS_ORBITAL_OUTPOST: PowerSpec(FixedGeneration(0.14), 0.045, standby_load_mw=0.03),
+        ids.ROBOTIC_SURVEY_PACKAGE: PowerSpec(SolarGeneration(0.55 / 0.78, 1361.0), 0.08, standby_load_mw=0.025),
         ids.SURFACE_POWER_GRID: PowerSpec(SolarGeneration(1.0 / 0.78, 1361.0), 0.05),
         ids.INDUSTRIAL_POWER_BLOCK: PowerSpec(FixedGeneration(2.0), 0.05),
         ids.CONSTRUCTION_YARD: PowerSpec(None, 0.15),

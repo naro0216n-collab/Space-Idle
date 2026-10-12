@@ -6,7 +6,10 @@ from space_idle import GetOperationalNode, build_game_application
 from space_idle.catalog import ResourceDef
 from space_idle.content import base_ids as ids
 from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
+from space_idle.power import PowerSnapshot, PowerSpec
 from space_idle.shared import DefinitionId, SpatialNodeId
+from space_idle.validation import validate_simulation_configuration
+from space_idle.validation_support import ConfigurationError
 
 
 def test_unrestricted_ordinary_inventory_and_shared_finite_special_storage():
@@ -85,3 +88,77 @@ def test_unrestricted_capacity_is_not_written_to_stock_or_storage_snapshots():
     with pytest.raises(ValueError, match="nonfinite inventory stock"):
         inventory.add(node, resource, 1e308)
     assert inventory.amount(node, resource) == 1e308
+
+
+def test_special_storage_power_fulfillment_and_pause_preserve_only_physically_available_capacity():
+    app = build_game_application()
+    sim = app._simulation
+    node = ids.LUNAR_ORBIT
+    facility = next(
+        row for row in sim.facilities.all_at(node)
+        if row.definition_id == ids.ORBITAL_LOGISTICS_NODE
+    )
+    pool = sim.inventory.storage_pool_for_resource(ids.PROPELLANT)
+    base_infrastructure = sim.storage.infrastructure_capacity_t[(node, pool)]
+    capacity = sim.storage.providers[facility.definition_id].capacity_t_by_pool[pool]
+    assert pool in sim.storage.providers[facility.definition_id].power_sensitive_pools
+    assert sim.inventory.admission_state(node, ids.PROPELLANT).usable_capacity_t == pytest.approx(
+        base_infrastructure + capacity
+    )
+
+    sim.facilities.pause(facility.id)
+    sim.refresh_storage()
+    paused = app.query(GetOperationalNode(str(node)))
+    special = next(row for row in paused.storage if row.storage_pool_key == pool)
+    assert special.physical_capacity_t == pytest.approx(base_infrastructure + capacity)
+    assert special.usable_capacity_t == pytest.approx(base_infrastructure)
+    assert next(row for row in paused.inventory if row.resource_id == str(ids.WATER)).admission_capacity is None
+
+    # Pausing ordinary output does not withdraw cryogenic preservation when
+    # its standby demand is supplied by another power asset.
+    power_unit = sim.facilities.install(ids.ORBITAL_FISSION_POWER, node)
+    sim.refresh_storage()
+    assert sim.inventory.admission_state(node, ids.PROPELLANT).usable_capacity_t == pytest.approx(
+        base_infrastructure + capacity
+    )
+    sim.facilities.pause(power_unit)
+    sim.refresh_storage()
+    assert sim.inventory.admission_state(node, ids.PROPELLANT).usable_capacity_t == pytest.approx(
+        base_infrastructure
+    )
+
+    sim.facilities.resume(facility.id)
+    sim.refresh_storage()
+    assert sim.inventory.admission_state(node, ids.PROPELLANT).usable_capacity_t == pytest.approx(
+        base_infrastructure + capacity
+    )
+    # Power availability is an admission constraint, not a modification to
+    # physical storage hardware or existing Resource ownership.
+    without_power = sim.power.snapshot(node, sim.facilities, sim.day)
+    dark = PowerSnapshot(
+        0.0, without_power.demand_mw, 0.0, {},
+        without_power.maintenance_factor_by_facility,
+    )
+    sim.storage.refresh_node(node, sim.day, dark)
+    admission = sim.inventory.admission_state(node, ids.PROPELLANT)
+    assert admission.physical_capacity_t == pytest.approx(base_infrastructure + capacity)
+    assert admission.usable_capacity_t == pytest.approx(base_infrastructure)
+
+
+def test_power_sensitive_storage_requires_real_power_and_cryogenic_content_has_standby():
+    app = build_game_application()
+    sim = app._simulation
+    for definition_id, spec in sim.storage.providers.items():
+        if not spec.power_sensitive_pools:
+            continue
+        assert sim.power.specs[definition_id].load_mw > 0
+        assert sim.power.specs[definition_id].standby_load_mw > 0
+    validate_simulation_configuration(sim)
+
+    provider_id = ids.ORBITAL_LOGISTICS_NODE
+    original = sim.power.specs[provider_id]
+    sim.power.specs[provider_id] = PowerSpec(
+        original.generation, load_mw=0.0, standby_load_mw=0.0
+    )
+    with pytest.raises(ConfigurationError, match="active power demand"):
+        validate_simulation_configuration(sim)

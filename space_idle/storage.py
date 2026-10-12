@@ -88,10 +88,13 @@ class StorageService:
             if provider is None:
                 continue
             compatible = self.facilities.is_environmentally_compatible(facility, day)
+            # A power-sensitive pool must have an actual fulfilled Power
+            # requirement. A paused or unpowered provider with no request
+            # cannot silently receive full utilization by default.
             utilization = (
-                1.0
+                0.0
                 if power is None
-                else max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+                else max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 0.0)))
             )
             maintenance = (
                 1.0

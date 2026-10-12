@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from .facilities import FacilityBook, FacilityState
+from .facilities import FacilityBook, FacilityLifecycle, FacilityState
 from .service_capacity import ServiceCapacityRequest, allocate_service_capacity
 from .shared import DefinitionId, EntityId, SpatialNodeId
 from .spatial import EnvironmentResolver, IlluminationField, SpatialContextId
@@ -115,6 +115,10 @@ class PowerService:
         generation_by_facility: dict[EntityId, float] = {}
         demand = 0.0
         for facility in facilities.all_at(operational_node_id):
+            # Irreversible decommissioning removes active power supply and
+            # operating demand, not merely the facility's Capability supply.
+            if facility.lifecycle is FacilityLifecycle.DECOMMISSIONING:
+                continue
             if not facilities.is_environmentally_compatible(facility, day):
                 continue
             spec = self.specs.get(facility.definition_id)

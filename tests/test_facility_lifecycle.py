@@ -37,6 +37,7 @@ from space_idle.research import (
 )
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.storage import StorageProviderSpec
+from space_idle.power import PowerSpec, FixedGeneration
 
 DECOMMISSION_TARGET = DefinitionId("test.facility.decommission_target")
 STORAGE_DECOMMISSION_TARGET = DefinitionId("test.facility.storage_decommission_target")
@@ -49,6 +50,9 @@ def _build_decommission_fixture_application(*, for_load: bool = False):
     app._catalog.resources[SALVAGE_RESOURCE] = ResourceDef(SALVAGE_RESOURCE, "Recoverable components")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
+    )
+    sim.power.specs[DECOMMISSION_TARGET] = PowerSpec(
+        FixedGeneration(0.4), load_mw=0.05, standby_load_mw=0.01
     )
     sim.projects.decommission_recipes[DECOMMISSION_TARGET] = FacilityDecommissionRecipe(
         DECOMMISSION_TARGET, construction_work=12.0
@@ -84,6 +88,7 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
         row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if row.id == str(facility_id)
     )
+    assert sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw_by_facility[facility_id] > 0
     expected_salvage = dict(facility_row.expected_salvage)
     assert facility_row.lifecycle == FacilityLifecycle.NORMAL.value
     assert expected_salvage == {str(SALVAGE_RESOURCE): 5.0}
@@ -111,6 +116,9 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert active.target_kind == "facility_decommission"
     assert active.irreversible_started
     assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING
+    decommissioning_power = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
+    assert facility_id not in decommissioning_power.generation_mw_by_facility
+    assert all(row.owner_id != facility_id for row in decommissioning_power.requests)
     assert not sim.facilities.is_active_and_compatible(sim.facilities.facilities[facility_id], sim.day)
     with pytest.raises(ApplicationError):
         app.execute(CancelBuild(project_id))

@@ -50,6 +50,10 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition_id in facility_defs, f"storage provider references unknown facility: {definition_id}")
         _require(all(isfinite(v) and v >= 0 for v in spec.capacity_t_by_pool.values()), f"negative storage capacity: {definition_id}")
         _require(spec.power_sensitive_pools.issubset(spec.capacity_t_by_pool), f"unknown power-sensitive storage pool: {definition_id}")
+        if spec.power_sensitive_pools:
+            power_spec = sim.power.specs.get(definition_id)
+            _require(power_spec is not None and power_spec.load_mw > 0,
+                     f"power-sensitive storage requires an active power demand: {definition_id}")
 
 
 def validate_runtime(sim: Any) -> None:
