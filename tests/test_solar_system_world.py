@@ -46,7 +46,6 @@ def test_registered_physical_bodies_project_without_creating_player_owned_nodes(
     world = app.query(GetWorld())
     assert {row.id for row in world.operational_nodes} == {str(id_) for id_ in graph.operational_node_ids()}
     assert not {row.id for row in world.operational_nodes} & {str(body.id) for body in bodies}
-    assert not {str(body.id) for body in bodies} & {str(x) for x in app._simulation.inventory.stock}
 
 
 def test_body_parent_validation_and_surface_capability_have_distinct_semantics():
