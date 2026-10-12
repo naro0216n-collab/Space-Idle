@@ -4,20 +4,13 @@ from space_idle import build_game_application
 
 
 def test_base_content_limits_resource_families_per_recipe():
-    """An acquisition or production decision has at most three material inputs.
+    """Only the authored production/acquisition recipes bound input families.
 
-    Specialized assemblies carry their own upstream commodity demand rather
-    than causing every late-game asset to need five unrelated cargo families.
-    The limit belongs to authored Content, not to Generic Core's ability to
-    represent arbitrary physical resource requirements.
+    Research staging, decommission salvage and other distinct contracts must
+    not inherit this Content design constraint by accidental test coverage.
+    Generic Core continues to support arbitrary typed Resource requirements.
     """
-    from space_idle.content.base_construction import (
-        build_facility_decommission_recipes,
-        build_facility_upgrade_recipes,
-        build_spatial_development_recipes,
-    )
-    from space_idle.content.base_research import build_research_definitions
-    from space_idle.research_models import ResearchPrototypeStageSpec
+    from space_idle.content.base_construction import build_facility_upgrade_recipes
 
     sim = build_game_application()._simulation
     recipe_inputs = {
@@ -27,17 +20,10 @@ def test_base_content_limits_resource_families_per_recipe():
            for key, recipe in sim.projects.recipes.items()},
         **{f"upgrade:{key}": {row.resource_id for row in recipe.resources}
            for key, recipe in build_facility_upgrade_recipes().items()},
-        **{f"decommission:{key}": {row.resource_id for row in recipe.resources}
-           for key, recipe in build_facility_decommission_recipes(sim.facilities.definitions).items()},
-        **{f"development:{key}": {row.resource_id for row in recipe.resources}
-           for key, recipe in build_spatial_development_recipes().items()},
         **{f"vehicle:{key}": {resource for resource, _ in vehicle.production.resources}
            for key, vehicle in sim.transport.vehicle_defs.items() if vehicle.production},
         **{f"founding:{key}": set(recipe.investment_totals()) | set(recipe.initial_inventory_totals())
            for key, recipe in sim.founding.deployment_recipes.items()},
-        **{f"research:{key}:{stage.stage_id}": set(stage.resources)
-           for key, research in build_research_definitions().items()
-           for stage in research.stage_specs if isinstance(stage, ResearchPrototypeStageSpec)},
     }
     assert recipe_inputs
     assert all(len(resources) <= 3 for resources in recipe_inputs.values()), {

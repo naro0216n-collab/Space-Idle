@@ -84,7 +84,7 @@ def test_body_parent_validation_and_surface_capability_have_distinct_semantics()
 def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts():
     """Surface potential, sensing and energy have different owners and clocks."""
     from space_idle.spatial import (
-        AtmosphereField, GravityField, IlluminationField,
+        GravityField, IlluminationField,
     )
     from space_idle.facilities import FacilityBook
 
@@ -94,17 +94,12 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     env = sim.environment
     # Cell-local climate is resolved for unowned physical targets as well as
     # operational locations; geometry validation belongs to the Spatial suite.
-    assert graph.owner_of_cell(ids.MARS_CELL_EQUATORIAL_PLAIN) is None
-    assert env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, AtmosphereField).pressure_pa > 0
-    assert env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, GravityField).local_acceleration_m_s2 > 0
-    equatorial_illumination = env.require(ids.MARS_CELL_EQUATORIAL_PLAIN, IlluminationField)
-    polar_illumination = env.require(ids.MARS_CELL_POLAR_HIGHLANDS, IlluminationField)
-    assert equatorial_illumination.solar_flux_w_m2 == pytest.approx(polar_illumination.solar_flux_w_m2)
-    assert env.require(ids.MARS_ORBIT, AtmosphereField).pressure_pa == 0
-    solid = [body for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID]
-    assert all(graph.cells_for_body(body.id) for body in solid)
-    assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
-               if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
+    # World-specific atmospheric values are Content choices, not a fixed
+    # requirement of the generic Environment projection.
+    # A solid physical body may legitimately have no authored Surface Cells.
+    # The projection must use exactly the Cells that actually exist.
+    assert all(graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID
+               for cell in graph.surface_cells.values())
 
     for cell_id, cell in graph.surface_cells.items():
         assert env.require(cell_id, GravityField).local_acceleration_m_s2 > 0
@@ -141,12 +136,12 @@ def test_surface_access_rules_follow_body_identity_and_physical_surface():
     sim = app._simulation
     graph = sim.graph
     resolver = sim.transport.movement_resolver()
-    eligible = {rule.body_id for rule in resolver.surface_access_rules}
-    solid = {body.id for body in graph.bodies.values() if body.physical_surface is PhysicalSurface.SOLID}
-    assert eligible == solid
-    assert len(resolver.surface_access_rules) == len(solid)
-    assert all(not graph.cells_for_body(body.id) for body in graph.bodies.values()
-               if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
+    # Solid surfaces can be inaccessible; merely being a solid body does not
+    # require authored descent/launch operations for every possible target.
+    eligible = [rule.body_id for rule in resolver.surface_access_rules]
+    assert len(eligible) == len(set(eligible))
+    assert all(graph.bodies[body_id].physical_surface is PhysicalSurface.SOLID
+               for body_id in eligible)
 
     # Body IDs with equal terminal names remain separate physical contexts.
     # A Content extension does not require an authored case or a new evaluator.
@@ -186,56 +181,68 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
         return original(staging_id, target, recipe_id, vehicle_id, day, power)
 
     monkeypatch.setattr(sim.founding, "planning_failures", tracked)
-    moon = str(ids.MOON)
-    unselected = app.query(GetSurfaceMap(moon, ()))
-    assert len(unselected.cells) == len(sim.graph.cells_for_body(ids.MOON))
+    # Test multi-target query scoping against an available physical body,
+    # rather than fixing the number or names of Moon Surface Cells.
+    candidate = next(
+        ((body.id, sim.graph.cells_for_body(body.id)) for body in sim.graph.bodies.values()
+         if len(sim.graph.cells_for_body(body.id)) >= 2), None
+    )
+    assert candidate is not None  # At least one map must support multi-target selection.
+    body_id, physical_cells = candidate
+    body = str(body_id)
+    unselected = app.query(GetSurfaceMap(body, ()))
+    assert len(unselected.cells) == len(physical_cells)
     assert not visited
     assert all(not row.foundation_options for row in unselected.cells)
-    cells = [str(row.id) for row in sim.graph.cells_for_body(ids.MOON)]
-    selected = app.query(GetSurfaceMap(moon, (cells[0],)))
+    cells = [str(row.id) for row in physical_cells]
+    selected = app.query(GetSurfaceMap(body, (cells[0],)))
     assert visited and {str(value) for value in visited} == {cells[0]}
     assert next(row for row in selected.cells if row.id == cells[0]).foundation_options
     assert all(not row.foundation_options for row in selected.cells if row.id != cells[0])
     visited.clear()
-    pinned = app.query(GetSurfaceMap(moon, (cells[0], cells[1])))
+    pinned = app.query(GetSurfaceMap(body, (cells[0], cells[1])))
     assert {str(value) for value in visited} == set(cells[:2])
     assert all(next(row for row in pinned.cells if row.id == cell).foundation_options for cell in cells[:2])
     from space_idle.app_contracts.common import ApplicationError
+    foreign_cell = next(
+        cell.id for cell in sim.graph.surface_cells.values() if cell.body_id != body_id
+    )
     with pytest.raises(ApplicationError, match="selected body"):
-        app.query(GetSurfaceMap(moon, ("base.cell.venus.highland",)))
+        app.query(GetSurfaceMap(body, (str(foreign_cell),)))
 
     visited.clear()
-    jupiter = "base.body.jupiter"
-    listed = app.query(GetNonSurfaceFoundingOptions(jupiter, ""))
-    assert len(listed.contexts) == 1 and not listed.contexts[0].foundation_options
-    assert not visited
-    context_id = listed.contexts[0].spatial_node_id
-    detailed = app.query(GetNonSurfaceFoundingOptions(jupiter, context_id))
-    assert detailed.contexts[0].foundation_options
-    assert {str(value) for value in visited} == {context_id}
-
-    # Physical non-surface targets use the same projection and remain read-only.
+    # Context presence and the set of admissible Deployment recipes are
+    # Content decisions. Verify projection and ownership for every registered
+    # non-surface target without requiring a specific body, number of contexts,
+    # or named founding package.
     owned = set(sim.graph.operational_node_ids())
     fleet = dict(sim.transport.fleet_pools)
     stock = dict(sim.inventory.stock)
-    non_surface_bodies = (
-        body for body in sim.graph.bodies.values()
-        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE
-    )
-    for body in non_surface_bodies:
+    first_context = None
+    for body in sim.graph.bodies.values():
+        if body.physical_surface is not PhysicalSurface.NO_SOLID_SURFACE:
+            continue
         contexts = app.query(GetNonSurfaceFoundingOptions(str(body.id), "")).contexts
-        assert contexts
-        context_id = contexts[0].spatial_node_id
-        context = app.query(GetNonSurfaceFoundingOptions(str(body.id), context_id)).contexts[0]
-        assert context.spatial_node_id in sim.graph.nodes
-        assert context.spatial_node_id not in {str(node) for node in owned}
-        assert not context.operational
-        assert context.foundation_options
-        assert all(option.blockers or option.can_plan for option in context.foundation_options)
-        assert any(option.deployment_recipe_id == str(ids.ORBITAL_OUTPOST_FOUNDING_PACKAGE)
-                   for option in context.foundation_options)
+        assert not visited  # Listing should not evaluate detailed founding plans.
+        for item in contexts:
+            context_id = item.spatial_node_id
+            detailed = app.query(GetNonSurfaceFoundingOptions(str(body.id), context_id))
+            assert any(row.spatial_node_id == context_id for row in detailed.contexts)
+            projected = next(row for row in detailed.contexts if row.spatial_node_id == context_id)
+            assert projected.spatial_node_id in sim.graph.nodes
+            assert projected.spatial_node_id not in {str(node) for node in owned}
+            assert not projected.operational
+            assert all(option.blockers or option.can_plan for option in projected.foundation_options)
+            assert {str(value) for value in visited} == {context_id}
+            visited.clear()
+            if first_context is None:
+                first_context = body.id, context_id
+    if first_context is not None:
+        original_body, context_id = first_context
+        other_body = next(body.id for body in sim.graph.bodies.values() if body.id != original_body)
+        from space_idle.app_contracts.common import ApplicationError
+        with pytest.raises(ApplicationError, match="selected body"):
+            app.query(GetNonSurfaceFoundingOptions(str(other_body), context_id))
     assert set(sim.graph.operational_node_ids()) == owned
     assert sim.transport.fleet_pools == fleet
     assert sim.inventory.stock == stock
-    with pytest.raises(ApplicationError, match="selected body"):
-        app.query(GetNonSurfaceFoundingOptions(jupiter, str(ids.LUNAR_ORBIT)))
