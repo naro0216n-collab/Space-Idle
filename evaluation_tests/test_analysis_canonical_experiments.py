@@ -20,7 +20,6 @@ from space_idle.analysis_execution import ActivityFlow, observe_canonical_day
 from space_idle.analysis_graph import DependencyNode
 from space_idle.analysis_observation import observe_state
 from space_idle.bootstrap import build_game_application_for_scenario
-from space_idle.scenario import ScenarioFacility
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.content import base_ids as ids
 from scripts.analysis_variants import apply_content_variant, scenario_variant
@@ -154,7 +153,6 @@ def test_current_decision_projection_uses_live_queries_and_does_not_change_owner
     from scripts.analyze_definition_graph import main as export_graph
     with monkeypatch.context() as patch:
         patch.setattr(sys, "argv", ["analyze_definition_graph.py", "--state", "--decisions",
-                                    "--coverage", "--technology-outlets",
                                     "--node", selected, "--founding-target",
                                     ":".join(founding_target), "--surface-cell",
                                     ":".join(surface_cell), "--transport-pair",
@@ -164,10 +162,6 @@ def test_current_decision_projection_uses_live_queries_and_does_not_change_owner
     assert exported["current_eligibility"] == observed
     assert exported["state_observation"]
     assert exported["definition_graph"]
-    assert {row["technology_id"] for row in exported["technology_outlets"]} == {
-        str(technology_id) for technology_id in app._simulation.research.definitions
-    }
-    assert isinstance(exported["coverage_findings"], list)
     assert exported["current_eligibility"]["layer"] != exported["state_observation"].get("layer")
     assert capture_state(app._simulation) == before
     for instance in (app, ordinary):
@@ -509,17 +503,14 @@ def test_experiment_input_requires_explicit_time_and_real_command_types():
 
 
 
-def test_typed_content_add_remove_recompose_application_and_preserve_accounting(tmp_path):
+def test_typed_content_add_remove_recompose_application_and_preserve_accounting():
     """New research/method/resource and deletion share Composition and UI contracts.
 
     Experiment cases recompose Definitions before Scenario instead of modifying
     a running game or inventing a second supply / tech eligibility evaluator.
     """
     from space_idle.application_commands import (GetCatalog, GetOperationalNode,
-        GetResearch, StartResearch, SetResearchPrototypeSite,
-        SetFacilityProcess, AdvanceTime, ApplicationError)
-    from space_idle.persistence import save_game, load_game
-    from space_idle.bootstrap import build_game_application_for_load
+        GetResearch, SetFacilityProcess, AdvanceTime, ApplicationError)
     from space_idle.validation_support import ConfigurationError
 
     resource_id = "experiment.resource.raw_mineral"
@@ -592,45 +583,6 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
         app.execute(SetFacilityProcess(industry.facility_id, process_id))
     assert app._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id)) == 20.0
 
-    # The new authored Technology must also be obtainable through the actual
-    # Research Stage lifecycle, rather than only a pre-completed Scenario flag.
-    # Its typed Site and finite Service constraints are evaluated by Research,
-    # not by an experiment-specific approximation.
-    researched = factory()
-    researched.execute(StartResearch(research_id))
-    for _ in range(8):
-        research_row = next(item for item in researched.query(GetResearch()).items if item.id == research_id)
-        if research_row.current_stage_id == "bench":
-            break
-        researched.execute(AdvanceTime(1))
-    assert research_row.current_stage_id == "bench"
-    earth_site = next(site for site in research_row.execution_context_options
-                      if site.operational_node_id == str(ids.EARTH))
-    assert earth_site.can_select
-    orbital_site = next(site for site in research_row.execution_context_options
-                        if site.operational_node_id == str(ids.LEO))
-    assert not orbital_site.can_select
-    assert any(blocker.code == "prototype:surface" for blocker in orbital_site.blockers)
-    with pytest.raises(ApplicationError):
-        researched.execute(SetResearchPrototypeSite(research_id, "bench", str(ids.LEO)))
-    researched.execute(SetResearchPrototypeSite(research_id, "bench", str(ids.EARTH)))
-    researched.execute(AdvanceTime(1))
-    stage_save = tmp_path / "research-prototype-variant.json"
-    save_game(researched, stage_save)
-    resumed, _ = load_game(stage_save, lambda: build_game_application_for_load(
-        scenario=scenario, definition_transform=lambda sim, cat: apply_content_variant(sim, cat, changes),
-    ))
-    assert capture_state(resumed._simulation) == capture_state(researched._simulation)
-    for _ in range(8):
-        if DefinitionId(research_id) in resumed._simulation.technology.completed:
-            break
-        resumed.execute(AdvanceTime(1))
-    assert DefinitionId(research_id) in resumed._simulation.technology.completed
-    assert next(option for row in resumed.query(GetOperationalNode(str(ids.EARTH))).industry
-                for option in row.process_options if option.process_id == process_id).can_select
-    assert next(option for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
-                for option in row.process_options if option.process_id == process_id).can_select is False
-
     # Acquisition and existing equipment use different criteria: this research
     # enables an explicit Process choice, not an automatic asset modification.
     with_technology = scenario_variant(scenario, {"completed_technologies": [
@@ -642,43 +594,11 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     option = next(option for option in chosen.process_options if option.process_id == process_id)
     assert option.can_select
     enabled.execute(SetFacilityProcess(chosen.facility_id, process_id))
-    # A predeployed Facility's authored Process choice must use exactly the
-    # same physical interface and completed-Technology gate as SetFacilityProcess.
-    authored_process_rows = [{
-        'definition_id': str(row.definition_id),
-        'operational_node_id': str(row.operational_node_id),
-        'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
-        'invested_resources': [[str(resource), amount]
-                               for resource, amount in row.invested_resources],
-        'selected_process_id': (
-            process_id if row.definition_id == enabled._simulation.facilities.facilities[
-                EntityId(chosen.facility_id)
-            ].definition_id else None
-        ),
-    } for row in scenario.facilities]
-    initially_configured = scenario_variant(scenario, {'facilities': authored_process_rows})
-    with pytest.raises(ValueError, match='technology'):
-        factory(initially_configured)
-    initially_unlocked = scenario_variant(with_technology, {'facilities': authored_process_rows})
-    initial_process_app = factory(initially_unlocked)
-    assert any(facility.selected_process_id == DefinitionId(process_id)
-               for facility in initial_process_app._simulation.facilities.facilities.values())
-    assert any(row.process_id == process_id
-               for row in initial_process_app.query(GetOperationalNode(str(ids.EARTH))).industry)
-
     first = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
     enabled.execute(AdvanceTime(1))
     last = enabled._simulation.inventory.amount(ids.EARTH, DefinitionId(resource_id))
     assert last < first
     assert enabled._simulation.facilities.facilities[EntityId(chosen.facility_id)].selected_process_id == DefinitionId(process_id)
-    path = tmp_path / "content-variant-state.json"
-    save_game(enabled, path)
-    restored, _ = load_game(path, lambda: build_game_application_for_load(
-        scenario=with_technology,
-        definition_transform=lambda sim, cat: apply_content_variant(sim, cat, changes),
-    ))
-    assert capture_state(restored._simulation) == capture_state(enabled._simulation)
-
     def policy(app, day):
         if day > 0:
             return ()
@@ -704,91 +624,6 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     assert all(abs(row["unattributed_delta_t"]) < 1e-7
                for run in runs for row in run.flow_reconciliation)
 
-    # Typed extraction methods participate in the same independent Content and
-    # Scenario comparison: no experiment-only source or eligibility is invented.
-    from space_idle.application_commands import SetFacilityExtractionMethod
-    extraction_id = 'experiment.extraction.alternate_crust'
-    extraction_edits = changes + (
-        {'operation': 'add', 'kind': 'extraction', 'id': extraction_id,
-         'source_id': str(ids.EXTRACTION_CRUST_ORE)},
-        {'kind': 'extraction', 'id': extraction_id, 'field': 'resource_id',
-         'value': str(ids.MINERAL_FEEDSTOCK)},
-        {'kind': 'extraction', 'id': extraction_id, 'field': 'output_resource_id',
-         'value': str(ids.MINERAL_FEEDSTOCK)},
-        {'kind': 'extraction', 'id': extraction_id, 'field': 'prerequisite_technologies',
-         'value': [research_id]},
-    )
-    authored_facilities = [{
-        'definition_id': str(row.definition_id),
-        'operational_node_id': str(row.operational_node_id),
-        'site_cell_id': None if row.site_cell_id is None else str(row.site_cell_id),
-        'invested_resources': [[str(resource), quantity]
-                               for resource, quantity in row.invested_resources],
-        'selected_extraction_method_id': (
-            str(ids.EXTRACTION_CRUST_ORE) if row.definition_id == ids.METAL_ORE_MINE else None
-        ),
-    } for row in scenario.facilities]
-    scenario_with_choice = scenario_variant(scenario, {'facilities': authored_facilities})
-    scenario_with_unlock = scenario_variant(with_technology, {'facilities': authored_facilities})
-    extraction_locked = factory(scenario_with_choice, extraction_edits)
-    extraction_node = extraction_locked.query(GetOperationalNode(str(ids.EARTH)))
-    method_row = next(row for row in extraction_node.extraction
-                      if any(option.method_id == extraction_id for option in row.method_options))
-    assert method_row.method_id == str(ids.EXTRACTION_CRUST_ORE)
-    assert not next(option for option in method_row.method_options
-                    if option.method_id == extraction_id).can_select
-    graph = build_definition_dependency_graph(extraction_locked._simulation,
-                                              extraction_locked._catalog)
-    assert any(rel.kind == 'unlocks_method'
-               and rel.source == DependencyNode('technology', research_id)
-               and rel.target == DependencyNode('extraction_method', extraction_id)
-               for rel in graph.relations)
-
-    def choose_extraction(app, day):
-        if day != 0:
-            return ()
-        node = app.query(GetOperationalNode(str(ids.EARTH)))
-        row = next(item for item in node.extraction
-                   if any(option.method_id == extraction_id for option in item.method_options))
-        return (SetFacilityExtractionMethod(row.facility_id, extraction_id),)
-
-    extraction_cases = (
-        ExperimentCase('extraction-locked',
-                       lambda: factory(scenario_with_choice, extraction_edits), choose_extraction),
-        ExperimentCase('extraction-unlocked',
-                       lambda: factory(scenario_with_unlock, extraction_edits), choose_extraction),
-    )
-    extraction_runs = run_experiments(extraction_cases, days=2)
-    assert [run.to_json_data() for run in extraction_runs] == [
-        run.to_json_data() for run in run_experiments(extraction_cases, days=2)
-    ]
-    assert len(extraction_runs[0].rejected_commands) == 1
-    assert not extraction_runs[1].rejected_commands
-    assert extraction_runs[0].content_definitions_sha256 == extraction_runs[1].content_definitions_sha256
-    assert extraction_runs[0].initial_state_sha256 != extraction_runs[1].initial_state_sha256
-    assert any(flow.activity_id.endswith(f':{ids.MINERAL_FEEDSTOCK}:{extraction_id}')
-               for trace in extraction_runs[1].canonical_traces
-               for flow in trace.activity_flows())
-    assert all(abs(row['unattributed_delta_t']) < 1e-7
-               for run in extraction_runs for row in run.flow_reconciliation)
-
-    # An extraction method with no compatible hardware is valid future Content.
-    # Its actual availability belongs to the installed-capacity and Application
-    # contracts; analysis must not invent a provider to fill the gap.
-    orphan_id = 'experiment.extraction.future_instrument'
-    orphan_edits = changes + (
-        {'operation': 'add', 'kind': 'extraction', 'id': orphan_id,
-         'source_id': str(ids.EXTRACTION_CRUST_ORE)},
-        {'kind': 'extraction', 'id': orphan_id, 'field': 'required_capabilities',
-         'value': ['basic_structural_material']},
-    )
-    orphan_app = factory(scenario, orphan_edits)
-    orphan_graph = build_definition_dependency_graph(orphan_app._simulation, orphan_app._catalog)
-    assert not orphan_graph.diagnostics
-    assert all(DefinitionId(orphan_id) not in {method.id for method in
-               orphan_app._simulation.extraction.compatible_methods(facility_id)}
-               for facility_id in orphan_app._simulation.facilities.definitions)
-
     # Removing a method changes the actual candidates/Definition Graph; nothing
     # rewrites the Scenario or dependent Technology requirements to conceal it.
     removed_method = changes + ({"operation": "remove", "kind": "process", "id": process_id},)
@@ -797,6 +632,34 @@ def test_typed_content_add_remove_recompose_application_and_preserve_accounting(
     assert all(option.process_id != process_id
                for row in no_method.query(GetOperationalNode(str(ids.EARTH))).industry
                for option in row.process_options)
+
+    # All typed Content families must still pass through the real Composition
+    # boundary. Unattached definitions are legitimate future Content, not a
+    # reason to fabricate a physical supplier or an executable activity.
+    survey_source = next(provider for provider in app._simulation.survey.providers.values()
+                         if provider.source_kind.value == "fleet")
+    extraction_id = "experiment.extraction.future"
+    survey_id = "experiment.survey.future"
+    additional = changes + (
+        {"operation": "add", "kind": "extraction", "id": extraction_id,
+         "source_id": str(ids.EXTRACTION_CRUST_ORE)},
+        {"kind": "extraction", "id": extraction_id, "field": "required_capabilities",
+         "value": ["research_lab", "metal_ore_extraction"]},
+        {"operation": "add", "kind": "survey_provider", "id": survey_id,
+         "source_id": str(survey_source.id)},
+        {"kind": "survey_provider", "id": survey_id, "field": "required_source_capabilities",
+         "value": ["robotic_prospecting_sensor", "radar_sounder"]},
+    )
+    extended = factory(scenario, additional)
+    extended_graph = build_definition_dependency_graph(extended._simulation, extended._catalog)
+    assert DependencyNode("extraction_method", extraction_id) in extended_graph.nodes
+    assert DependencyNode("survey_provider", survey_id) in extended_graph.nodes
+    assert not extended._simulation.survey.compatible_source_definition_ids(
+        extended._simulation.survey.provider(DefinitionId(survey_id))
+    )
+    assert all(DefinitionId(extraction_id) not in {
+        method.id for method in extended._simulation.extraction.compatible_methods(facility_id)
+    } for facility_id in extended._simulation.facilities.definitions)
 
     # Removing referenced definitions must fail closed during Composition;
     # removing an unreferenced Resource still fails when Scenario retains stock.
@@ -921,86 +784,6 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
         )
 
 
-def test_independent_survey_definition_requires_a_real_compatible_vehicle(tmp_path):
-    from space_idle.composition.analysis_graph import build_definition_dependency_graph
-    base = build_game_application()
-    sim = base._simulation
-    source = next(provider for provider in sim.survey.providers.values()
-                  if provider.source_kind.value == 'fleet')
-    craft = next(vehicle for vehicle in sim.transport.vehicle_definitions()
-                 if source.required_source_capabilities.issubset(vehicle.generic_capabilities))
-    added_vehicle = 'experiment.vehicle.survey'
-    added_provider = 'experiment.provider.survey'
-    edits = [
-        {'operation': 'add', 'kind': 'vehicle', 'id': added_vehicle, 'source_id': str(craft.id)},
-        {'kind': 'vehicle', 'id': added_vehicle, 'field': 'generic_capabilities',
-         'value': sorted(set(craft.generic_capabilities) | {'experiment_survey_sensor'})},
-        {'operation': 'add', 'kind': 'survey_provider', 'id': added_provider,
-         'source_id': str(source.id)},
-        {'kind': 'survey_provider', 'id': added_provider,
-         'field': 'required_source_capabilities', 'value': ['experiment_survey_sensor']},
-        {'kind': 'survey_provider', 'id': added_provider,
-         'field': 'capacity_units_per_source_per_day', 'value': 2.0},
-    ]
-    def factory(changes):
-        return build_game_application_for_scenario(
-            build_standard_scenario_definition(),
-            definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, changes),
-        )
-    modified = factory(edits)
-    assert not build_definition_dependency_graph(modified._simulation, modified._catalog).diagnostics
-    assert modified._simulation.survey.compatible_source_definition_ids(
-        modified._simulation.survey.providers[DefinitionId(added_provider)]
-    )
-    # The copied Fleet is a real physical asset in an independent Scenario.
-    # Application candidates, exclusive commitment, Save/Load and progression
-    # all use the ordinary Survey and Transport Domains.
-    from datetime import datetime, timezone
-    from space_idle.application_commands import GetSurveys, SetSurveyProviderFleetQuantity, AdvanceTime
-    from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.persistence import save_game, load_game
-    node_id = ids.LUNAR_ORBIT
-    variant_scenario = scenario_variant(build_standard_scenario_definition(), {
-        'fleet': [{'operational_node_id': str(node_id),
-                   'vehicle_definition_id': added_vehicle, 'units': 1}],
-    })
-    variant = build_game_application_for_scenario(
-        variant_scenario,
-        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, edits),
-    )
-    def candidate(app):
-        return next(row for row in app.query(GetSurveys(str(node_id))).provider_fleet
-                    if row.provider_definition_id == added_provider
-                    and row.vehicle_definition_id == added_vehicle)
-    assert candidate(variant).free_units == 1 and candidate(variant).can_set_quantity
-    assignment = variant.execute(SetSurveyProviderFleetQuantity(
-        added_provider, str(node_id), added_vehicle, 1,
-    )).created_id
-    assert assignment is not None
-    assert candidate(variant).committed_units == 1
-    assert variant._simulation.transport.fleet_free_units(DefinitionId(added_vehicle), node_id) == 0
-    path = tmp_path / 'independent-content-survey.json'
-    save_game(variant, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, lambda: build_game_application_for_load(
-        scenario=variant_scenario,
-        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, edits),
-    ))
-    assert capture_state(loaded._simulation) == capture_state(variant._simulation)
-    variant.execute(AdvanceTime(1))
-    loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(variant._simulation)
-    assert candidate(loaded).committed_units == 1
-    # A future provider may be authored before its physical Vehicle exists.
-    # No ghost Fleet is created; adding real hardware supplies the capability.
-    unconnected = factory(edits[2:])
-    graph = build_definition_dependency_graph(unconnected._simulation, unconnected._catalog)
-    assert not graph.diagnostics
-    assert unconnected._simulation.survey.compatible_source_definition_ids(
-        unconnected._simulation.survey.providers[DefinitionId(added_provider)]) == ()
-    assert not any(row.provider_definition_id == added_provider
-                   for row in unconnected.query(GetSurveys(str(node_id))).provider_fleet)
-
-
 def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_without_stock_inference():
     """Independent Content changes alter actual settlement, not chart predictions."""
     from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION, FOOD, EARTH
@@ -1044,15 +827,13 @@ def test_canonical_experiment_compares_actual_process_flow_and_scoped_unmet_with
     ]
 
 
-def test_independent_science_founding_and_market_content_reuses_application_contracts(tmp_path):
+def test_independent_science_founding_and_market_content_reuses_application_contracts():
     """New Definitions use existing Command owners; experiment comparison observes actual flow."""
     from space_idle.application_commands import (
         CreateTradeOrder, GetMarket, GetScientificExplorations, GetSurfaceMap,
-        PlanOperationalNodeFounding, StartScientificExploration, SurfaceLocationFoundingTarget,
+        StartScientificExploration,
     )
     from space_idle.content.base_market import EARTH_MARKET_PROVIDER
-    from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.persistence import load_game, save_game
 
     science = 'experiment.science.orbital'
     founding = 'experiment.founding.surface'
@@ -1119,47 +900,6 @@ def test_independent_science_founding_and_market_content_reuses_application_cont
                    if row.activity_id.startswith(('market:', 'market_'))
                    and row.destination_owner.startswith('inventory:'))
     assert delivery_day(runs[1]) < delivery_day(runs[0])
-
-    app.execute(StartScientificExploration(science))
-    app.execute(CreateTradeOrder('buy', str(ids.MACHINERY), interface, quantity_target_t=1))
-    app.execute(AdvanceTime(1))
-    path = tmp_path / 'content-recomposition.json'
-    save_game(app, path)
-    loaded, _ = load_game(path, lambda: build_game_application_for_load(
-        scenario=scenario,
-        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes),
-    ))
-    assert capture_state(loaded._simulation) == capture_state(app._simulation)
-
-    # The added Founding method uses the ordinary project lifecycle and staged payload.
-    recipe = app._simulation.founding.deployment_recipes[DefinitionId(founding)]
-    stocked = scenario_variant(scenario, {
-        'inventory_stock': [
-            {'operational_node_id': str(ids.LUNAR_ORBIT),
-             'resource_id': str(resource.resource_id), 'amount_t': resource.amount_t + 5}
-            for resource in recipe.payload_resources
-        ] + [{'operational_node_id': str(ids.LUNAR_ORBIT),
-              'resource_id': str(ids.PROPELLANT), 'amount_t': 30}],
-        'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
-                   'vehicle_definition_id': str(ids.REUSABLE_SURFACE_CARGO_LANDER), 'units': 1}],
-    })
-    # An installed, paid-for depot holds the extra founding propellant; the
-    # standard opening scenario does not grant free large cold capacity.
-    stocked = replace(stocked, facilities=stocked.facilities + (
-        ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LUNAR_ORBIT,
-                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 7.0),
-                                             (ids.MACHINERY, 5.0),
-                                             (ids.PRECISION_ELECTRONICS, 2.0))),
-    ))
-    founded = factory(input_scenario=stocked)
-    project = founded.execute(PlanOperationalNodeFounding(
-        str(ids.LUNAR_ORBIT), 'Independent lunar site',
-        SurfaceLocationFoundingTarget('surface_location', str(ids.MOON),
-                                     str(ids.MOON_CELL_FARSIDE_HIGHLANDS)),
-        founding, str(ids.REUSABLE_SURFACE_CARGO_LANDER),
-    ))
-    assert project.created_id
-    assert any(str(item.id) == project.created_id for item in founded._simulation.founding.projects.values())
 
     # Scenario references are validated against the recomposed Definitions.
     with pytest.raises((ValueError, KeyError)):

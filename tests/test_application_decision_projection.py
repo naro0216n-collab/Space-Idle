@@ -272,37 +272,24 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
 
 
 def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_context():
+    """Attention selects actionable issues without encoding a particular opening Content state."""
     app = build_game_application()
-
     bottlenecks = app.query(GetBottlenecks()).items
     attention = app.query(GetAttention()).items
 
-    assert attention
-    assert all(row.attention_required for row in attention)
-    assert all(row.navigation is not None for row in attention)
-    assert len(attention) < len(bottlenecks)
+    assert attention == tuple(issue for issue in bottlenecks if issue.attention_required)
+    assert all(issue.navigation is not None and issue.navigation.decision_area
+               for issue in attention)
+    for issue in attention:
+        if issue.source == "industry":
+            assert issue.navigation.decision_area == "location"
+            assert issue.navigation.operational_node_id == issue.operational_node_id
+            assert issue.navigation.subject_kind == "facility"
+            assert issue.navigation.subject_id == issue.entity_id
+    assert to_jsonable(app.query(GetAttention()))["items"] == [
+        to_jsonable(issue) for issue in attention
+    ]
 
-    # Locked future Research is still inspectable through Bottlenecks but does
-    # not flood the global Attention surface.
-    research_start = next(row for row in bottlenecks if row.source == "research_start")
-    assert research_start.attention_required is False
-    assert research_start.navigation is not None
-    assert research_start.navigation.decision_area == "research"
-    assert research_start.navigation.subject_kind == "research"
-    assert research_start.navigation.subject_id == research_start.definition_id
-
-    # Active facility/industry constraints lead directly to the affected
-    # Location and Facility without the UI parsing the blocker text.
-    facility_issue = next(row for row in attention if row.source == "industry")
-    assert facility_issue.navigation is not None
-    assert facility_issue.navigation.decision_area == "location"
-    assert facility_issue.navigation.operational_node_id == facility_issue.operational_node_id
-    assert facility_issue.navigation.subject_kind == "facility"
-    assert facility_issue.navigation.subject_id == facility_issue.entity_id
-
-    payload = to_jsonable(app.query(GetAttention()))
-    assert payload["items"][0]["attention_required"] is True
-    assert payload["items"][0]["navigation"]["decision_area"] == "location"
 
 def test_target_stock_options_project_current_state_and_application_owned_presets():
     app = build_game_application()

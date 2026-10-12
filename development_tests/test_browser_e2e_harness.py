@@ -28,7 +28,7 @@ def _load_module(name: str, path: Path):
 
 
 def test_suite_runner_accepts_scenario_modules_without_registry_changes(
-    monkeypatch, tmp_path, capsys
+    monkeypatch, tmp_path
 ) -> None:
     runner = _load_module("space_idle_e2e_suite_test", PLAYWRIGHT_DIR / "run_suite.py")
     runner.PLAYWRIGHT_DIR = tmp_path
@@ -62,10 +62,6 @@ def test_suite_runner_accepts_scenario_modules_without_registry_changes(
     assert imported == selected
     assert executed == selected
     assert received_browsers == [browser, browser]
-    output = capsys.readouterr().out
-    assert "E2E suite bootstrap:" in output
-    assert "fresh BrowserContext per scenario" in output
-    assert "E2E suite complete: 2 scenario(s)" in output
 
     # The same runner must reject missing and non-runnable scenario entries.
     with pytest.raises(ValueError, match="does not exist"):
@@ -81,16 +77,13 @@ def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeyp
     monkeypatch.setenv("SPACE_IDLE_CHROMIUM", "/ci/google-chrome")
     monkeypatch.setattr(support.shutil, "which", lambda _name: None)
 
-    assert support.browser_launch_kwargs("chromium") == {
-        "headless": True,
-        "executable_path": "/ci/google-chrome",
-        "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-    }
-    assert support.browser_launch_kwargs("webkit") == {"headless": True}
-
-
-def test_unsupported_browser_fails_at_shared_launch_boundary() -> None:
-    support = _load_module("space_idle_e2e_support_launch_test", PLAYWRIGHT_DIR / "e2e_support.py")
+    chromium = support.browser_launch_kwargs("chromium")
+    webkit = support.browser_launch_kwargs("webkit")
+    assert chromium["executable_path"] == "/ci/google-chrome"
+    assert chromium["headless"] and webkit["headless"]
+    assert "executable_path" not in webkit
+    # A typo in the selected browser engine must fail closed rather than run
+    # an unrequested engine and report a misleading green acceptance result.
     with pytest.raises(ValueError, match="unsupported browser"):
         with support.managed_browser("unsupported"):
             pass

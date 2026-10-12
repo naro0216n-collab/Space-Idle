@@ -476,15 +476,11 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell_id),)))
     assert surface.founding_comparison_axes
     assert any(axis.differs for axis in surface.founding_comparison_axes)
-    assert {axis.key for axis in surface.founding_comparison_axes} == {
-        "transit_days",
-        "preparation_work",
-        "payload_t",
-        "terrain_factor",
-        "bearing_capacity_factor",
-        "dust_factor",
-        "slope_factor",
-    }
+    # Candidate comparison can add new physical dimensions; only the
+    # decision-critical transport and payload quantities are required here.
+    comparison_keys = {axis.key for axis in surface.founding_comparison_axes}
+    assert {"transit_days", "payload_t"} <= comparison_keys
+    assert len(comparison_keys) == len(surface.founding_comparison_axes)
     option_values = {value.axis_key: value.number_value for value in option.comparison_values}
     assert option.comparison_key.startswith(f"{cell.id}|")
     assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}

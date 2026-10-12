@@ -152,30 +152,40 @@ def test_surface_access_rules_follow_body_identity_and_physical_surface():
     assert all(graph.bodies[body_id].physical_surface is PhysicalSurface.SOLID
                for body_id in eligible)
 
-    # Body IDs with equal terminal names remain separate physical contexts.
-    # A Content extension does not require an authored case or a new evaluator.
+    # Synthetic bodies avoid making the continued existence of a particular
+    # authored atmospheric planet a prerequisite for testing the generic rule.
+    # Equal terminal names remain distinct physical contexts; atmosphere and
+    # gravity, not names, determine the movement requirements.
     from space_idle.content.base_transport import build_surface_access_movement_rules
-    from space_idle.spatial import AtmosphereField
-    reference = next(
-        rule for rule in resolver.surface_access_rules
-        if rule.descent_operations and rule.descent_operations[0].operation_type == "atmospheric_entry"
-    )
-    source_body = graph.bodies[reference.body_id]
-    environment = sim.facilities.environment
-    suffix = str(source_body.id).split(".")[-1]
-    for namespace in ("test.outer", "test.inner"):
-        new_body_id = CelestialBodyId(f"{namespace}.{suffix}")
-        graph.add_body(replace(source_body, id=new_body_id))
-        environment.static.body_facets[(new_body_id, AtmosphereField)] = (
-            environment.static.body_facets[(source_body.id, AtmosphereField)]
-        )
-    all_profiles = build_surface_access_movement_rules(graph, environment)
-    assert len({profile.id for profile in all_profiles}) == len(all_profiles)
-    for namespace in ("test.outer", "test.inner"):
-        new_body_id = CelestialBodyId(f"{namespace}.{suffix}")
-        generated = next(profile for profile in all_profiles if profile.body_id == new_body_id)
-        assert generated.gateway_capability_id == reference.gateway_capability_id
-        assert generated.descent_operations == reference.descent_operations
+    from space_idle.spatial import AtmosphereField, EnvironmentResolver, StaticFacetStore
+    from space_idle.transport import TransportOperationKind
+
+    world = SpatialGraph()
+    system = StarSystemId("test.system.access")
+    geometry = CharacteristicTransportGeometry((0.0,))
+    world.add_star_system(StarSystemDef(system, "Test access system", geometry))
+    facets = StaticFacetStore()
+    for name, pressure in (("test.outer.same", 100_000.0),
+                           ("test.inner.same", 100_000.0),
+                           ("test.vacuum.same", 0.0),
+                           ("test.unknown.same", None)):
+        body_id = CelestialBodyId(name)
+        world.add_body(CelestialBodyDef(
+            body_id, name, 2_000.0, system, geometry, reference_gravity_m_s2=4.0,
+        ))
+        if pressure is not None:
+            facets.set_body(body_id, AtmosphereField(pressure, 0.0, {}))
+    generated = build_surface_access_movement_rules(world, EnvironmentResolver(world, facets))
+    by_body = {str(rule.body_id): rule for rule in generated}
+    assert set(by_body) == {"test.outer.same", "test.inner.same", "test.vacuum.same"}
+    outer, inner = by_body["test.outer.same"], by_body["test.inner.same"]
+    assert outer.id != inner.id
+    assert outer.gateway_capability_id == inner.gateway_capability_id == "launch_operations"
+    assert outer.descent_operations == inner.descent_operations
+    assert outer.descent_operations[0].operation_type == TransportOperationKind.ATMOSPHERIC_ENTRY
+    vacuum = by_body["test.vacuum.same"]
+    assert vacuum.gateway_capability_id == "surface_distribution"
+    assert vacuum.descent_operations[0].operation_type == TransportOperationKind.LANDING
 
 
 def test_founding_projections_are_scoped_to_explicit_targets_without_losing_other_cell_geography(monkeypatch):
