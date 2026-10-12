@@ -102,7 +102,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
     Scenario authors must explicitly provide solar yield and all outside inflows.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "phases", "solar_yield"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_research_points", "phases", "solar_yield"}, {"phases"}, "plan")
     if app is None:
         app = build_game_application_for_load()
     sim, catalog = app._simulation, app._catalog
@@ -129,10 +129,11 @@ def evaluate(plan: dict, *, app=None) -> dict:
     previous = defaultdict(int)
     for node, name, units, _p, _e, _d, _y, _people in initial:
         previous[(node, name)] += units
+    stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     report = []
     seen_research_stages = set()
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "research_stages"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "research_stages", "research_provider_allocations"},
               {"name", "days", "facilities"}, "phase")
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
@@ -219,6 +220,42 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 construction[(key[0], str(req.resource_id))] += req.amount_t * delta
             work[key[0]] += recipe.construction_work * delta
         previous = current
+        # RP is an organization-owned numerical dimension, never an Inventory
+        # Resource. A research source must be assigned to a real authored
+        # Facility group; Fleet providers are deliberately not modeled yet.
+        research_generation_per_day = 0.0
+        research_storage_nominal = 0.0
+        research_execution_per_day = 0.0
+        research_crew_demand_per_day = 0.0
+        assigned_source_units = defaultdict(int)
+        for row in phase.get("research_provider_allocations", ()):
+            _keys(row, {"node", "provider", "source_facility", "units", "level", "duty"},
+                  {"node", "provider", "source_facility", "units"}, "research provider")
+            name = _identifier(row["provider"], sim.research.providers, "research provider")
+            provider = sim.research.providers[DefinitionId(name)]
+            if provider.source_kind.value != "facility":
+                raise ValueError("Fleet-backed research providers require separate Fleet assumptions")
+            facility_name = _identifier(row["source_facility"], sim.facilities.definitions, "research source Facility")
+            facility = sim.facilities.definitions[DefinitionId(facility_name)]
+            if not provider.required_source_capabilities <= {c.id for c in facility.capability_supplies}:
+                raise ValueError("research provider not compatible with source Facility")
+            units = _integer(row["units"], "research source units", positive=True)
+            key = (row["node"], facility_name)
+            assigned_source_units[key] += units
+            if assigned_source_units[key] > current[key]:
+                raise ValueError(f"research provider requires more installed Facilities: {key}")
+            level = _integer(row.get("level", 1), "research provider level", positive=True)
+            level_spec = next((candidate for candidate in provider.levels if candidate.level == level), None)
+            if level_spec is None:
+                raise ValueError(f"unknown research provider level: {name}/{level}")
+            duty = _number(row.get("duty", 1), "research provider duty")
+            if duty > 1:
+                raise ValueError("research provider duty cannot exceed 1")
+            research_generation_per_day += units * duty * level_spec.generation_points_per_day
+            research_execution_per_day += units * duty * level_spec.research_execution_per_day
+            research_storage_nominal += units * level_spec.storage_capacity_points
+            research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
+                                              * provider.crew_person_days_per_research_point)
         for row in phase.get("vehicle_builds", ()):
             _keys(row, {"node", "vehicle", "units"}, {"node", "vehicle", "units"}, "vehicle build")
             name = _identifier(row["vehicle"], {str(d.id) for d in sim.transport.vehicle_definitions()}, "vehicle")
@@ -287,6 +324,19 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "shortfall_t": max(0.0, -end[key]),
             })
         stocks = defaultdict(float, end)
+        start_rp = stored_research_points
+        generated_rp = research_generation_per_day * days
+        stored_research_points += generated_rp - research_points
+        research_metrics = {
+            "start_points": start_rp, "nominal_generation_points": generated_rp,
+            "research_stage_demand_points": research_points,
+            "notional_end_points": stored_research_points,
+            "point_shortfall": max(0.0, -stored_research_points),
+            "nominal_storage_capacity_points": research_storage_nominal,
+            "storage_excess_points": max(0.0, stored_research_points - research_storage_nominal),
+            "nominal_execution_per_day": research_execution_per_day,
+            "crew_requirement_person_days_per_day": research_crew_demand_per_day,
+        }
         constraints = []
         for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | {n for n, _ in services}):
             construction_supply = services[(node, "construction_work")] * days
@@ -304,6 +354,24 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "cargo_transfer_nominal_capacity_t_per_day": services[(node, "cargo_transfer")],
                 "cargo_transfer_gap_t_per_day": max(0.0, services[(node, "required:cargo_transfer")] - services[(node, "cargo_transfer")]),
             })
+        # Demand and nominal supply for every typed Service are exposed side by
+        # side. Never treat a missing provider as satisfied or turn this
+        # comparison into a second priority allocator.
+        service_keys = {(node, name.removeprefix("required:"))
+                        for (node, name) in services}
+        service_keys.update((node, "construction_work") for node in work)
+        service_constraints = []
+        for node, service in sorted(service_keys):
+            required_per_day = services[(node, f"required:{service}")]
+            if service == "construction_work":
+                required_per_day += work[node] / days
+            nominal = services[(node, service)]
+            service_constraints.append({
+                "node": node, "service": service,
+                "required_per_day": required_per_day,
+                "nominal_capacity_per_day": nominal,
+                "nominal_gap_per_day": max(0.0, required_per_day - nominal),
+            })
         storage_constraints = []
         pool_keys = set(storage)
         pool_keys.update((n, catalog.resources[DefinitionId(r)].storage_pool_key)
@@ -316,11 +384,13 @@ def evaluate(plan: dict, *, app=None) -> dict:
                                         "notional_occupied_t": occupied,
                                         "capacity_excess_t": max(0.0, occupied - cap)})
         report.append({"name": phase["name"], "days": days, "resources": breakdown,
-                       "constraints": constraints, "storage": storage_constraints,
+                       "constraints": constraints, "service_constraints": service_constraints,
+                       "storage": storage_constraints,
                        "extraction_projections_t": [dict(node=node, resource=res, nominal_t=q,
                                                          assumed_t=extraction_assumed[(node, res)])
                                                     for (node, res), q in sorted(extraction_nominal.items())],
                        "research_point_demand": research_points,
+                       "research_point_balance": research_metrics,
                        "research_work_demand": research_work,
                        "nominal_services_per_day": [dict(node=n, service=s, capacity=q)
                                                      for (n, s), q in sorted(services.items())
@@ -333,7 +403,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction yield is an explicitly authored fraction of installed capacity, not geology/knowledge/eligibility validation.",
-                "Research stages contribute their authored RP, work and physical inputs; Research time and provider availability are not simulated.",
+                "Research stages contribute authored RP, work and physical inputs. RP supply requires an authored compatible Facility provider assignment, without technology/site/crew availability validation.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
@@ -368,7 +438,16 @@ def compare_cases(payload: dict, *, app=None) -> dict:
         for index, (left, right) in enumerate(zip(baseline, alternative_phases)):
             if left["name"] != right["name"] or left["days"] != right["days"]:
                 continue  # Different time bases cannot be compared as like quantities.
+            left_rp, right_rp = left["research_point_balance"], right["research_point_balance"]
+            rp_delta = {key: right_rp[key] - left_rp[key] for key in left_rp
+                        if abs(right_rp[key] - left_rp[key]) > 1e-12}
+            if rp_delta:
+                differences.append({"case": alternative["name"], "phase": left["name"],
+                                    "section": "research_point_balance", "identity": {"pool": "organization"},
+                                    "delta_from_baseline": rp_delta})
             for section, key_fields, metrics in (
+                ("service_constraints", ("node", "service"),
+                 ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
                        "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),

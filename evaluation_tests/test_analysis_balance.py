@@ -167,3 +167,43 @@ def test_life_support_resource_demand_is_a_distinct_authored_population_load(def
     invalid = [{**facilities[0], "supported_person_days_per_day": 200}]
     with pytest.raises(ValueError, match="Life Support exceeds"):
         evaluate({"phases": [{"name": "invalid", "days": 1, "facilities": invalid}]}, app=definitions)
+
+
+def test_vehicle_production_and_construction_work_expose_nominal_service_gaps(definitions):
+    vehicle = next(v for v in definitions._simulation.transport.vehicle_definitions()
+                   if v.production.service_type and v.production.days > 0 and v.production.resources)
+    phase = evaluate({"phases": [{"name": "production-demand", "days": 2,
+                                   "facilities": [],
+                                   "vehicle_builds": [{"node": str(ids.EARTH),
+                                                       "vehicle": str(vehicle.id), "units": 2}]}]}, app=definitions)["phases"][0]
+    row = next(s for s in phase["service_constraints"] if s["service"] == vehicle.production.service_type)
+    assert row["required_per_day"] == pytest.approx(vehicle.production.days)
+    assert row["nominal_capacity_per_day"] == 0
+    assert row["nominal_gap_per_day"] == pytest.approx(vehicle.production.days)
+    for resource, quantity in vehicle.production.resources:
+        assert _resource(phase, ids.EARTH, resource)["vehicle_build_demand_t"] == pytest.approx(2 * quantity)
+
+
+def test_research_capacity_uses_compatible_installed_provider_without_free_rp(definitions):
+    facility = str(ids.GENERAL_RESEARCH_LAB)
+    provider = definitions._simulation.research.providers[ids.GENERAL_RESEARCH_LAB]
+    research = next(t for t in definitions._simulation.research.definitions.values()
+                    if any(hasattr(stage, "research_point_cost") for stage in t.stage_specs))
+    theory = next(stage for stage in research.stage_specs if hasattr(stage, "research_point_cost"))
+    asset = {"node": str(ids.EARTH), "facility": facility, "units": 1}
+    plan = {"initial_facilities": [asset], "phases": [{"name": "research", "days": 30,
+            "facilities": [asset],
+            "research_provider_allocations": [{"node": str(ids.EARTH), "provider": str(provider.id),
+                                               "source_facility": facility, "units": 1}],
+            "research_stages": [{"node": str(ids.EARTH), "research": str(research.id),
+                                 "stage": theory.stage_id}]}]}
+    phase = evaluate(plan, app=definitions)["phases"][0]
+    balance = phase["research_point_balance"]
+    assert balance["nominal_generation_points"] == pytest.approx(30 * provider.levels[0].generation_points_per_day)
+    assert balance["research_stage_demand_points"] == theory.research_point_cost
+    assert balance["notional_end_points"] == pytest.approx(balance["nominal_generation_points"] - theory.research_point_cost)
+    assert balance["nominal_storage_capacity_points"] == provider.levels[0].storage_capacity_points
+    invalid = deepcopy(plan)
+    invalid["phases"][0]["research_provider_allocations"][0]["units"] = 2
+    with pytest.raises(ValueError, match="more installed Facilities"):
+        evaluate(invalid, app=definitions)
