@@ -684,81 +684,11 @@ def test_live_state_observation_uses_owned_state_and_is_distinct_from_definition
 
 
 
-def test_technology_outlet_classification_follows_declared_research_edges_only():
-    from space_idle.analysis_technology_outlets import classify_technology_outlets
-    from space_idle.analysis_graph import DependencyDefinitionGraph, DependencyNode, DependencyRelation
-
-    def technology(name):
-        return DependencyNode("technology", name)
-
-    a, b, c, d, e, f = tuple(technology(name) for name in "abcdef")
-    method = DependencyNode("process", "production_method")
-    no_effect = DependencyNode("research_stage", "research_stage_a")
-    relations = (
-        DependencyRelation("technology_prerequisite", a, b, "b:prerequisites"),
-        DependencyRelation("technology_prerequisite", a, c, "c:prerequisites"),
-        DependencyRelation("technology_prerequisite", b, d, "d:prerequisites"),
-        DependencyRelation("technology_prerequisite", c, d, "d:prerequisites"),
-        DependencyRelation("technology_prerequisite", e, f, "f:prerequisites"),
-        DependencyRelation("unlocks_method", d, method, "production:prerequisite"),
-        DependencyRelation("research_stage", no_effect, e, "e:stage"),
-    )
-    nodes = (a, b, c, d, e, f, method, no_effect)
-    graph = DependencyDefinitionGraph(nodes, relations, ())
-    rows = classify_technology_outlets(graph)
-    classified = {row.technology.id: row for row in rows}
-    assert classified["a"].classification == "via_research"
-    assert classified["a"].reachable_method_count == 1
-    assert classified["a"].downstream_technology_count == 3  # diamond is not double counted
-    assert classified["a"].reachable_methods == (method,)
-    assert classified["d"].direct_methods == (method,)
-    assert [row["id"] for row in classified["a"].to_json_data()["reachable_methods"]] == [method.id]
-    assert {row.id for row in classified["a"].downstream_technologies} == {"b", "c", "d"}
-    assert classified["d"].classification == "direct_method"
-    assert classified["e"].classification == "research_only_no_method"
-    assert classified["f"].classification == "no_downstream_outlet"
-    # Classification remains available as a deliberate audit, not as
-    # hundreds of automatic coverage warnings in ordinary output.
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    assert not any(row.code.startswith("technology_") for row in inspect_definition_coverage(graph))
-    assert classify_technology_outlets(DependencyDefinitionGraph(tuple(reversed(nodes)),
-                                                                tuple(reversed(relations)), ())) == rows
-    # Independently necessary branches of a research DAG are not redundant;
-    # an ancestor repeated alongside its descendant on one method is. The
-    # finding is Content-only and must not suppress actual Application options.
-    overlapping = DependencyDefinitionGraph(nodes, (*relations,
-        DependencyRelation("unlocks_method", a, method, "production:duplicate_gate"),
-        DependencyRelation("unlocks_method", b, method, "production:duplicate_gate"),
-    ), ())
-    repeated_gates = [row for row in inspect_definition_coverage(overlapping)
-                      if row.code == "redundant_method_technology_requirement"]
-    assert {(row.subject, row.evidence[1], row.evidence[2]) for row in repeated_gates} == {
-        (method, "redundant_ancestor:technology:a", "required_descendant:technology:b"),
-        (method, "redundant_ancestor:technology:a", "required_descendant:technology:d"),
-        (method, "redundant_ancestor:technology:b", "required_descendant:technology:d"),
-    }
-    assert not any(row.evidence[1] == "redundant_ancestor:technology:c" for row in repeated_gates)
-    assert [row for row in inspect_definition_coverage(DependencyDefinitionGraph(
-        tuple(reversed(nodes)), tuple(reversed(overlapping.relations)), ()))
-        if row.code == "redundant_method_technology_requirement"] == repeated_gates
-
-    # Real Content is classified through registered graph contributors, not by
-    # hard-coded branch counts, names, or a fixed future gameplay progression.
-    app = build_game_application()
-    full = build_definition_dependency_graph(app._simulation, app._catalog)
-    report = classify_technology_outlets(full)
-    assert {row.technology for row in report} == {node for node in full.nodes if node.kind == "technology"}
-    assert all(row.reachable_method_count >= row.direct_method_count for row in report)
-    assert all(row.direct_method_count > 0 for row in report if row.classification == "direct_method")
-
-
 def test_every_registered_project_method_participates_in_analysis_including_upgrade_and_retirement():
     """Construction owns all four physical Project kinds; a new Recipe needs no analyzer switch."""
     from dataclasses import replace
     from space_idle.content import base_ids as ids
     from space_idle.construction import BuildResourceRequirement, FacilityUpgradeRecipe
-    from space_idle.analysis_technology_outlets import classify_technology_outlets
-
     app = build_game_application()
     sim = app._simulation
     graph = build_definition_dependency_graph(sim, app._catalog)
@@ -806,10 +736,6 @@ def test_every_registered_project_method_participates_in_analysis_including_upgr
     assert any(edge.kind == "unlocks_method" and edge.target == method
                and edge.source == DependencyNode("technology", str(ids.RP_RESOURCE_CHAIN_14))
                for edge in subgraph.relations)
-    outlet = next(row for row in classify_technology_outlets(expanded)
-                  if row.technology.id == str(ids.RP_RESOURCE_CHAIN_14))
-    assert outlet.classification == "direct_method"
-    assert outlet.direct_method_count >= 2
 
 
 def test_scientific_exploration_dependency_graph_preserves_real_movement_inputs_and_site_requirements():

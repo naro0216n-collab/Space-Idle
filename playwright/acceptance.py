@@ -593,14 +593,6 @@ def run(browser) -> dict[str, object]:
             _assert("建設後の維持Resource需要" in build_option_inspector_text, "construction candidate inspector must expose recurring material demand")
             _assert("資材準備見込み" in build_option_inspector_text, "construction candidate inspector must expose projected material readiness at the decision point")
             _assert("現地利用可能" in build_option_inspector_text, "construction candidate inspector must expose current local material availability")
-            # Build options have unrelated engineering purposes. Their individual
-            # capabilities, materials and blockers must not become a pinned
-            # cross-purpose score comparison.
-            _assert(
-                page.locator('#inspectorContent [data-construction-compare-pin]').count() == 0,
-                "Construction candidates must expose physical details without a cross-purpose pin comparison",
-            )
-
             # Process selection is a Direct Action. A facility with a process
             # option keeps the choices visible and does not require a second Apply.
             page.locator('[data-section-tab="location"][data-tab="facilities"]').click()
@@ -609,10 +601,6 @@ def run(browser) -> dict[str, object]:
             ).click()
             _assert(page.locator('#inspectorContent [data-facility-process]').count() > 0,
                     "Application process options must reach the Facility Inspector")
-            _assert(
-                page.locator('#inspectorContent [data-process-compare-pin]').count() == 0,
-                "Process options must not require a redundant pinned comparison",
-            )
             _assert(page.locator('#inspectorContent [data-facility-process][aria-pressed="true"]').count() == 1,
                     "current process must remain visibly selected")
 

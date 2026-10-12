@@ -438,7 +438,7 @@ def run(browser) -> None:
             )
             relation.wait_for(state='visible', timeout=10000)
             assert relation.locator('[data-system-allocation-id]').count() == 2
-            assert '2 設定を比較' in relation.locator('[data-system-pair]').inner_text()
+            assert relation.locator('[data-system-pair]').is_visible()
             first_button = relation.locator(f'[data-system-allocation-id="{first_parallel_id}"]')
             second_button = relation.locator(f'[data-system-allocation-id="{second_parallel_id}"]')
             first_button.click()

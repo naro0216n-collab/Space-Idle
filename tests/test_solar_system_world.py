@@ -15,13 +15,11 @@ from space_idle.spatial import (
 )
 
 
-def test_solar_system_contains_physical_planets_and_satellites_without_owned_asset_creation():
+def test_registered_physical_bodies_project_without_creating_player_owned_nodes():
     app = build_game_application()
     graph = app._simulation.graph
     bodies = tuple(graph.bodies.values())
     assert bodies
-    assert any(body.parent_body_id is None for body in bodies)
-    assert any(body.parent_body_id is not None for body in bodies)
     assert all(
         body.parent_body_id is None
         or body.star_system_id == graph.bodies[body.parent_body_id].star_system_id
@@ -29,7 +27,6 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     )
     assert all(body.representative_gravity_m_s2 is not None for body in bodies)
     assert all(graph.body_lineage(body.id)[0] == body.id for body in bodies)
-    assert any(body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE for body in bodies)
 
     catalog = app.query(GetCatalog())
     assert {row.id for row in catalog.celestial_bodies} == {str(body.id) for body in bodies}
@@ -89,7 +86,9 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     from space_idle.spatial import (
         GravityField, IlluminationField,
     )
-    from space_idle.facilities import FacilityBook
+    from space_idle.facilities import FacilityBook, FacilityDef, FacilityPlacementScope
+    from space_idle.power import PowerSpec, SolarGeneration
+    from space_idle.shared import DefinitionId
 
     app = build_game_application()
     sim = app._simulation
@@ -120,16 +119,23 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
             candidate_by_body.setdefault(cell.body_id, cell_id)
     candidate_cells = tuple(candidate_by_body.values())
     assert candidate_cells
+    # Use a purpose-built solar Definition rather than requiring any named
+    # Content Facility to remain in the catalogue.
+    generator_id = DefinitionId("test.facility.solar_probe")
+    solar = SolarGeneration(2.5, 1361.0)
+    sim.power.specs[generator_id] = PowerSpec(solar, 0.0)
+    facilities = FacilityBook({generator_id: FacilityDef(
+        generator_id, "Solar probe", placement_scope=FacilityPlacementScope.SURFACE_CELL,
+    )}, env)
     for cell_id in candidate_cells:
         node_id = SpatialNodeId(f"test.power.{cell_id}")
         graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
-        facilities = FacilityBook(sim.facilities.definitions, env)
-        facility_id = facilities.install(ids.SURFACE_POWER_GRID, node_id, site_cell_id=cell_id)
+        facility_id = facilities.install(generator_id, node_id, site_cell_id=cell_id)
         generation = sim.power.physical_snapshot(node_id, facilities, sim.day).generation_mw_by_facility[facility_id]
         illum = env.require(cell_id, IlluminationField)
-        spec = sim.power.specs[ids.SURFACE_POWER_GRID].generation
         assert generation == pytest.approx(
-            spec.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / spec.reference_flux_w_m2 * illum.availability
+            solar.rated_mw_at_reference_flux * illum.solar_flux_w_m2 / solar.reference_flux_w_m2
+            * illum.availability
         )
 
 

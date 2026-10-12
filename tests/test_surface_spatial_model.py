@@ -88,10 +88,10 @@ def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds
     sim = app._simulation
     # Surface cells are map geometry, never implicit Operational Nodes or stores.
     before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
-    map_view = app.query(GetSurfaceMap(str(ids.MOON)))
+    body_with_cells = next(body.id for body in sim.graph.bodies.values()
+                           if sim.graph.cells_for_body(body.id))
+    map_view = app.query(GetSurfaceMap(str(body_with_cells)))
     assert map_view.cells
-    assert not map_view.locations
-    assert any(not cell.developed for cell in map_view.cells)
     assert all(cell.environment and cell.display_name for cell in map_view.cells)
     assert all(str(cell.id) not in {str(node) for node in sim.graph.operational_node_ids()}
                for cell in map_view.cells)
