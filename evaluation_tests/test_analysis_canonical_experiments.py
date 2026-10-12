@@ -59,9 +59,10 @@ def test_current_decision_projection_uses_live_queries_and_does_not_change_owner
                           for context in app.query(GetNonSurfaceFoundingOptions(body.id)).contexts
                           if not context.operational)
     transport_pair = (world.operational_nodes[0].id, world.operational_nodes[1].id)
-    surface = next(body for body in app.query(GetCatalog()).celestial_bodies
-                   if body.id == "base.body.earth")
-    surface_cell = (surface.id, app.query(GetSurfaceMap(surface.id)).cells[0].id)
+    # Any registered physical Surface Cell is a valid projection scope. This
+    # does not require a named Earth cell or a particular new-game geography.
+    sample_cell = next(iter(app._simulation.graph.surface_cells.values()))
+    surface_cell = (str(sample_cell.body_id), str(sample_cell.id))
     observed = observe_application_decisions(
         app, operational_node_ids=scope,
         founding_targets=(founding_target,), surface_cells=(surface_cell,),
@@ -163,7 +164,9 @@ def test_current_decision_projection_uses_live_queries_and_does_not_change_owner
     assert exported["current_eligibility"] == observed
     assert exported["state_observation"]
     assert exported["definition_graph"]
-    assert len(exported["technology_outlets"]) == len(app.query(GetResearch()).items)
+    assert {row["technology_id"] for row in exported["technology_outlets"]} == {
+        str(technology_id) for technology_id in app._simulation.research.definitions
+    }
     assert isinstance(exported["coverage_findings"], list)
     assert exported["current_eligibility"]["layer"] != exported["state_observation"].get("layer")
     assert capture_state(app._simulation) == before

@@ -6,7 +6,7 @@ and actual canonical settlement flows remain separate observation layers.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 
 from space_idle.application import GameApplication
 from space_idle.application_commands import (
@@ -33,6 +33,11 @@ def observe_application_decisions(
     rows: list[dict] = []
 
     def json_value(value):
+        # Application-projected options contain nested typed records. The
+        # optional exporter may render them, but must not re-implement any
+        # Domain decision or leak Python instances into JSON output.
+        if is_dataclass(value) and not isinstance(value, type):
+            return json_value(asdict(value))
         if isinstance(value, (tuple, list)):
             return [json_value(item) for item in value]
         if isinstance(value, dict):
