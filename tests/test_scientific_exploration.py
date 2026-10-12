@@ -667,8 +667,8 @@ def _finish_unoperated_science(app):
     assert ids.MARS_ORBIT not in sim.graph.operational_node_ids()
 
 
-def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_and_abort(
-    tmp_path, short_interplanetary_transit,
+def test_unoperated_science_preserves_physical_fleet_and_resource_ownership(
+    short_interplanetary_transit,
 ):
     app = build_game_application()
     sim = app._simulation
@@ -734,57 +734,11 @@ def test_unoperated_science_conserves_fleet_resources_and_state_through_replay_a
     # Scoping to an operational Node cannot materialize a remote Fleet unit.
     scoped = observe_state(sim, operational_node_ids=frozenset((ids.LEO,)))
     assert not any(row.kind == "fleet_detached" for row in scoped.metrics)
-    path = tmp_path / "unoperated-science.json"
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    loaded, _ = load_game(path, build_game_application_for_load)
-    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
-    assert capture_state(loaded._simulation)["scientific_exploration"] == capture_state(app._simulation)["scientific_exploration"]
-    assert loaded.query(GetFleet()).commitments == app.query(GetFleet()).commitments
-    original_metrics = observe_state(sim).metrics
-    restored_metrics = observe_state(loaded._simulation).metrics
-    # Save/Load retains physical quantity semantics; storage occupation may
-    # differ by a few floating-point ulps across supported Python versions.
-    identity = lambda row: (row.kind, row.subject_id, row.context_id, row.unit, row.provenance)
-    assert tuple(map(identity, restored_metrics)) == tuple(map(identity, original_metrics))
-    assert [row.quantity for row in restored_metrics] == pytest.approx(
-        [row.quantity for row in original_metrics], abs=1e-9,
-    )
-    for current in (app, loaded):
-        current._simulation.research.stored_points = 0.0
-        current.execute(AdvanceTime(12))
-        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "return_preparing"
-        current.execute(AdvanceTime(1))
-        assert current._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "returning"
-    assert capture_state(loaded._simulation)["transport"] == capture_state(app._simulation)["transport"]
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    returning_load, _ = load_game(path, build_game_application_for_load)
-    assert capture_state(returning_load._simulation)["transport"] == capture_state(app._simulation)["transport"]
-    for current in (app, loaded, returning_load):
-        _finish_unoperated_science(current)
-    expected = capture_state(app._simulation)
-    for counterpart in (loaded, returning_load):
-        snapshot = capture_state(counterpart._simulation)
-        assert snapshot["transport"] == expected["transport"]
-        assert snapshot["scientific_exploration"] == expected["scientific_exploration"]
-    assert state.phase.value == "complete"
-    definition = sim.scientific_exploration.definitions[ids.MARS_ORBIT_SCIENCE_EXPLORATION]
-    assert state.research_points_awarded == pytest.approx(definition.research_points_total)
-    assert capture_state(sim)["survey"] == before_survey
+    # Generic Save/Load and campaign disposition are exercised by their owner
+    # contracts. This case owns only detached Fleet/resource visibility.
     assert set(sim.graph.operational_node_ids()) == initial_owned_nodes
-    assert app.query(GetLogisticsSummary()).fleet_units == initial_fleet_count + 1
+    assert capture_state(sim)["survey"] == before_survey
     assert sim.transport.fleet_owned_units() == initial_fleet_count + 1
-    assert not any(row.kind == "fleet_detached" and row.context_id == target_context
-                   for row in observe_state(sim).metrics)
-    for node, resource, _, _ in needs:
-        assert sim.inventory.amount(node, resource) <= initial_balances[node, resource]
-
-    aborted = build_game_application()
-    _start_unoperated_science(aborted)
-    aborted.execute(AbortScientificExploration(str(ids.MARS_ORBIT_SCIENCE_EXPLORATION)))
-    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "outbound"
-    _arrive_unoperated_science_on_abort(aborted)
-    _finish_unoperated_science(aborted)
-    assert aborted._simulation.scientific_exploration.campaigns[ids.MARS_ORBIT_SCIENCE_EXPLORATION].phase.value == "aborted"
 
 
 def _arrive_unoperated_science_on_abort(app):

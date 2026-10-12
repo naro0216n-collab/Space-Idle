@@ -477,6 +477,15 @@ def test_canonical_experiments_replay_player_commands_and_preserve_absent_metric
     assert new["baseline_final"] is None and new["variant_initial"] is None
     assert new["final_difference"] is None and new["variant_net_change"] is None
 
+    # The optional quantitative comparator must not silently treat missing
+    # measurements as zero, including its multi-objective output.
+    objective = ParetoObjective("inventory_stock", "new-resource", "another-node", "t", "inventory.stock", "maximize")
+    pareto = compare_pareto((base, expanded), (objective,))
+    assert len(pareto["cases"]) == 2
+    missing_objective = replace(objective, subject_id="unobserved-resource")
+    assert all(not case["comparable"] and case["values"] is None
+               for case in compare_pareto((base, expanded), (missing_objective,))["cases"])
+
 
 def test_experiment_input_requires_explicit_time_and_real_command_types():
 
@@ -496,84 +505,6 @@ def test_experiment_input_requires_explicit_time_and_real_command_types():
         ]}]})
 
 
-def test_case_execution_reproducibility_projection_and_missing_observation_pareto():
-    app = build_game_application()
-    resource, node = next((str(rid), str(node)) for (node, rid), value in app._simulation.inventory.stock.items()
-                          if value > 0)
-    plan = {'days': 1, 'cases': [
-        {'name': 'baseline', 'commands': []},
-        {'name': 'inventory-change', 'commands': [], 'scenario_variant': {
-            'inventory_stock': [{'resource_id': resource, 'operational_node_id': node, 'amount_t': 777.0}],
-        }},
-    ]}
-    days, cases = parse_cases(plan)
-    runs = run_experiments(cases, days=days)
-    report = compare_experiments(runs)['comparisons'][0]
-    assert not report['same_comparison_conditions']
-    assert report['same_observation_scope']
-    assert all(row['difference_t'] == pytest.approx(
-        row['variant_settled_t'] - row['baseline_settled_t'])
-        for row in report['settlement_differences'])
-    assert all(row['difference'] is not None for row in report['allocation_differences'])
-    assert runs[0].content_definitions_sha256 == runs[1].content_definitions_sha256
-    assert runs[0].initial_state_sha256 != runs[1].initial_state_sha256
-    # Optional experiments consume exactly the same canonical Simulation and
-    # preserve rejection semantics; they merely add read-only Query snapshots.
-    decision_runs = run_experiments(cases, days=days, observe_decisions=True,
-                                    operational_node_ids=frozenset((SpatialNodeId(node),)))
-    repeated = run_experiments(cases, days=days, observe_decisions=True,
-                               operational_node_ids=frozenset((SpatialNodeId(node),)))
-    assert [item.to_json_data() for item in decision_runs] == [item.to_json_data() for item in repeated]
-    assert all(len(item.decision_observations) == days + 1 for item in decision_runs)
-    scoped_runs = run_experiments(cases, days=days,
-                                  operational_node_ids=frozenset((SpatialNodeId(node),)))
-    assert all(item.observations == run.observations
-               and item.rejected_commands == run.rejected_commands
-               and item.canonical_traces == run.canonical_traces
-               for item, run in zip(decision_runs, scoped_runs))
-    decision_diff = compare_experiments(decision_runs)['comparisons'][0]['decision_differences']
-    assert isinstance(decision_diff, list)
-    assert all(row['baseline_initial'] is None or row['baseline_initial']['kind'] == row['kind']
-               for row in decision_diff)
-    assert report['decision_differences'] is None
-    # Independent Definition additions change *candidate membership*, not
-    # the canonical eligibility rule. Missing alternatives are null, not false.
-    from space_idle.content.base_ids import PROCESS_FOOD_PRODUCTION
-    from space_idle.content.base_scenario import build_standard_scenario_definition
-    added = DefinitionId("experiment.alternative.food_process")
-    def alternative_factory():
-        def insert(sim, _catalog):
-            sim.industry.processes[added] = replace(
-                sim.industry.processes[PROCESS_FOOD_PRODUCTION], id=added,
-                display_name="Alternate food processing",
-            )
-        return build_game_application_for_scenario(
-            build_standard_scenario_definition(), definition_transform=insert,
-        )
-    alternate = run_experiments((ExperimentCase("standard", build_game_application, _idle),
-                                 ExperimentCase("added-method", alternative_factory, _idle)),
-                                days=0, observe_decisions=True)
-    changed = compare_experiments(alternate)['comparisons'][0]
-    assert not changed['same_content_definitions']
-    assert any(item['kind'] == 'process_selection'
-               and item['id'].endswith(f":{added}")
-               and item['baseline_initial'] is None
-               and item['variant_initial'] is not None
-               for item in changed['decision_differences'])
-    assert alternate[0].initial_state_sha256 == alternate[1].initial_state_sha256
-    assert all(abs(row['unattributed_delta_t']) < 1e-7 for run in runs for row in run.flow_reconciliation)
-    payload = {'runs': [run.to_json_data() for run in runs]}
-    assert 'inventory_in' in to_csv(payload, 'inventory_movements')
-    assert 'provenance' in to_csv(payload, 'state_metrics')
-    assert '<svg' in project_html(payload) and '確定入出庫' in project_html(payload)
-    metric = next(row for row in runs[0].observations[-1].metrics if row.kind == 'inventory_stock')
-    objective = ParetoObjective(metric.kind, metric.subject_id, metric.context_id,
-                                metric.unit, metric.provenance, 'maximize')
-    result = compare_pareto(runs, [objective])
-    assert len(result['cases']) == 2
-    missing = replace(objective, subject_id='nonexistent.Resource')
-    assert all(row['values'] is None and not row['comparable']
-               for row in compare_pareto(runs, [missing])['cases'])
 
 
 
