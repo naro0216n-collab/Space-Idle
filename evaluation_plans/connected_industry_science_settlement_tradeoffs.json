@@ -1311,6 +1311,94 @@
           }
         }
       ]
+    },
+    {
+      "name": "one_shot_crew_to_orbit_small",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "passenger_transfers",
+          "phase": "established_earth_and_orbital_preparation",
+          "row": {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2,
+            "people": 6,
+            "assumed_onboard_days": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "one_shot_crew_to_orbit_at_seat_limit",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "passenger_transfers",
+          "phase": "established_earth_and_orbital_preparation",
+          "row": {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2,
+            "people": 12,
+            "assumed_onboard_days": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "one_shot_crew_to_orbit_above_seat_limit",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "passenger_transfers",
+          "phase": "established_earth_and_orbital_preparation",
+          "row": {
+            "origin": "base.location.earth_industrial",
+            "destination": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.reusable_launch_vehicle",
+            "units": 2,
+            "people": 13,
+            "assumed_onboard_days": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "crewed_deep_space_science_fleet_and_industrial_provisioning",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "fleet",
+          "phase": "established_earth_and_orbital_preparation",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.nuclear_thermal_crew_ship",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "fleet",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "vehicle": "base.vehicle.nuclear_thermal_crew_ship",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "science_campaigns",
+          "phase": "established_earth_and_orbital_preparation",
+          "row": {
+            "campaign": "base.scientific_exploration.crewed_mars_orbit_expedition",
+            "vehicle": "base.vehicle.nuclear_thermal_crew_ship"
+          }
+        }
+      ]
     }
   ]
 }

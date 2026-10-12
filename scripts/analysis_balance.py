@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
+from space_idle.transport import MovementEndpoint
 from space_idle.spatial import IlluminationField
 from space_idle.shared import DefinitionId, SurfaceCellId, SpatialNodeId
 from space_idle.exploration_models import KnowledgeLevel
@@ -237,6 +238,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("survey_activities", ()))
     nodes.update(str(row["staging_node"]) for phase in plan["phases"] for row in phase.get("founding_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("market_buys", ()))
+    nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("passenger_transfers", ()))
+    nodes.update(str(row["destination"]) for phase in plan["phases"] for row in phase.get("passenger_transfers", ()))
     nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
     nodes.update(str(row["destination"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
     known_resource = {str(r) for r in catalog.resources}
@@ -291,7 +294,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     previous_assets = initial
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "market_buys", "assumed_funds_musd"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
               {"name", "days", "facilities"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
@@ -316,7 +319,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         theory_execution_work = 0.0
         science_inputs = defaultdict(float)
         founding_inputs = defaultdict(float)
+        passenger_provisions = defaultdict(float)
         founding_activity_details = []
+        passenger_activity_details = []
         market_activity_details = []
         science_reward_conditional = 0.0
         science_activity_details = []
@@ -878,6 +883,35 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 committed_fleet[(origin, vehicle_id)] += campaign.required_units
                 if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
                     raise ValueError("Scientific Exploration reuses Fleet holdings committed to other activities")
+            # Mission requirements and onboard survival are distinct registered
+            # inputs.  The owning Scientific Exploration Domain provisions the
+            # *entire* on-site activity when the target has no established Node.
+            # Transit/return days cannot be derived without a real Movement
+            # path, so only that known on-site floor is counted here.
+            crew_seat_gap = None
+            crew_site_days = None
+            crew_site_provisions = None
+            crew_minimum_loaded_mass = None
+            if campaign.required_crew and assigned_vehicle is not None:
+                accommodation = vehicles[vehicle_id].passengers
+                if accommodation.seats == 0:
+                    raise ValueError("crewed Scientific Exploration requires passenger-rated Vehicle")
+                crew_seat_gap = max(0, campaign.required_crew -
+                                    accommodation.supportable_seats(campaign.required_units))
+                if isinstance(campaign.destination, MovementEndpoint):
+                    crew_site_days = campaign.duration_days
+                    crew_site_provisions = accommodation.required_provisions(
+                        campaign.required_crew, crew_site_days)
+                    for resource, amount in crew_site_provisions.items():
+                        book(science_inputs, "science_material_demand_t", origin, resource,
+                             amount, "scientific_exploration_crew_site_provisions", campaign_id,
+                             "vehicle_passenger_accommodation_x_registered_site_activity_lower_bound")
+                    crew_minimum_loaded_mass = (
+                        campaign.minimum_payload_t * campaign.required_units
+                        + accommodation.loaded_payload_mass(campaign.required_crew, crew_site_provisions))
+                unassessed.add("scientific_crew_transit_and_return_provisions_not_assessed")
+            elif campaign.required_crew:
+                unassessed.add("scientific_crew_vehicle_not_selected")
             for resource, quantity in campaign.consumable_resources:
                 book(science_inputs, "science_material_demand_t", origin, resource,
                      quantity, "scientific_exploration", campaign_id)
@@ -888,6 +922,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "selected_vehicle": assigned_vehicle,
                 "required_fleet_units": campaign.required_units,
                 "required_crew": campaign.required_crew,
+                "crew_seat_gap_people": crew_seat_gap,
+                "crew_registered_site_days_lower_bound": crew_site_days,
+                "crew_site_provisions_lower_bound_t": (
+                    {str(resource): amount for resource, amount in sorted(crew_site_provisions.items())}
+                    if crew_site_provisions is not None else None),
+                "crew_minimum_loaded_payload_lower_bound_t": crew_minimum_loaded_mass,
                 "duration_days": campaign.duration_days,
                 "conditional_rp_reward": campaign.research_points_total,
                 "consumable_resources_t": {str(r): q for r, q in campaign.consumable_resources},
@@ -1074,6 +1114,65 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             unassessed.add("research_stage_order_prerequisites_site_and_execution_allocation")
             if spec.stage_type.value == "operational_experience":
                 unassessed.add("operational_experience_not_generated_by_elapsed_time")
+        # A selected one-shot dedicated passenger trip consumes real Vehicle
+        # accommodation provisions, not a fictional Population-as-Cargo item.
+        # Fleet is reserved against every other selected activity once. Travel
+        # duration is authored because no Movement/Cargo timeline is executed.
+        for row in phase.get("passenger_transfers", ()):
+            _keys(row, {"origin", "destination", "vehicle", "units", "people", "assumed_onboard_days"},
+                  {"origin", "destination", "vehicle", "units", "people", "assumed_onboard_days"},
+                  "passenger transfer")
+            origin = _identifier(row["origin"], nodes, "passenger origin")
+            destination = _identifier(row["destination"], nodes, "passenger destination")
+            if origin == destination:
+                raise ValueError("passenger transfer requires distinct nodes")
+            vehicle_id = _identifier(row["vehicle"], vehicles, "passenger Vehicle")
+            vehicle = vehicles[vehicle_id]
+            accommodation = vehicle.passengers
+            if accommodation.seats == 0:
+                raise ValueError("dedicated passenger transfer requires passenger-rated Vehicle")
+            units = _integer(row["units"], "passenger Fleet units", positive=True)
+            people = _integer(row["people"], "passenger count", positive=True)
+            onboard_days = _number(row["assumed_onboard_days"], "assumed onboard days", strictly_positive=True)
+            committed_fleet[(origin, vehicle_id)] += units
+            if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
+                raise ValueError("passenger transfer reuses Fleet holdings committed to other activities")
+            if fleet_spec is not None and fleet_spec.get((origin, vehicle_id), (0, 0))[1] > 0:
+                raise ValueError("dedicated passenger transfer cannot overlap authored Fleet turnarounds")
+            provisions = accommodation.required_provisions(people, onboard_days)
+            loaded_mass = accommodation.loaded_payload_mass(people, provisions)
+            for resource, quantity in provisions.items():
+                book(passenger_provisions, "passenger_provisions_demand_t", origin, resource,
+                     quantity, "passenger_transfer", f"{vehicle_id}:{origin}->{destination}",
+                     "vehicle_passenger_accommodation_x_authored_people_and_duration")
+            seats = accommodation.supportable_seats(units)
+            payload_envelope = vehicle.performance.payload_t * units
+            passenger_activity_details.append({
+                "origin": origin, "destination": destination, "vehicle": vehicle_id,
+                "reserved_fleet_units": units, "requested_people": people,
+                "nominal_supportable_seats": seats,
+                "nominal_seat_gap_people": max(0, people - seats),
+                "assumed_onboard_days": onboard_days,
+                "person_mass_t": people * accommodation.person_mass_t,
+                "onboard_provisions_t": {str(resource): quantity for resource, quantity in sorted(provisions.items())},
+                "total_departure_payload_t": loaded_mass,
+                "vehicle_nameplate_payload_upper_bound_t": payload_envelope,
+                "nameplate_payload_gap_t": max(0.0, loaded_mass - payload_envelope),
+                "vehicle_endurance_days": vehicle.performance.endurance_days,
+                "assumed_duration_exceeds_vehicle_endurance": (
+                    vehicle.performance.endurance_days is not None
+                    and onboard_days > vehicle.performance.endurance_days
+                ),
+                "onboard_power_supply_mw": accommodation.onboard_power_mw * units,
+                "onboard_power_requirement_mw": accommodation.power_mw_per_person * people,
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("vehicle", vehicle_id),)),
+                "status": "dedicated_departure_conditions_only_no_route_population_or_arrival_settlement",
+            })
+            unassessed.add("passenger_dedicated_movement_propellant_route_departure_and_arrival_unassessed")
+            unassessed.add("passenger_origin_population_and_destination_housing_life_support_unassessed")
+            if onboard_days > days:
+                unassessed.add("passenger_onboard_duration_extends_beyond_comparison_phase")
         # Market Definition supply is an upper bound on a shared provider's
         # notional window, not a free Resource inflow. Purchases only affect
         # stock if authored separately as explicit external settlement claims.
@@ -1193,12 +1292,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "blockers": sorted({blocker for allocation in matched for blocker in allocation["blockers"]}),
             })
         end = {}
-        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(transport_service_inputs) | set(research_inputs) | set(science_inputs) | set(founding_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
+        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(transport_service_inputs) | set(research_inputs) | set(science_inputs) | set(founding_inputs) | set(passenger_provisions) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
         breakdown = []
         for key in sorted(keys):
             start = stocks[key]
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
-                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - science_inputs[key] - founding_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
+                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - science_inputs[key] - founding_inputs[key] - passenger_provisions[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
             unverified_cargo_receipts[key] += received[key]
             without_assumed_arrivals = end[key] - unverified_cargo_receipts[key]
@@ -1207,7 +1306,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             # Resource ledger; this classification does not make either flow
             # executable or change projected stock.
             investment_t = (construction[key] + vehicle_inputs[key] + research_inputs[key]
-                            + science_inputs[key] + founding_inputs[key])
+                            + science_inputs[key] + founding_inputs[key] + passenger_provisions[key])
             recurring_delta = delta + investment_t
             recurring_rate = recurring_delta / days
             # This is a conditional stationary-rate exhaustion scale, not a
@@ -1226,6 +1325,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "research_material_demand_t": research_inputs[key],
                 "science_material_demand_t": science_inputs[key],
                 "founding_payload_demand_t": founding_inputs[key],
+                "passenger_provisions_demand_t": passenger_provisions[key],
                 "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
@@ -1343,7 +1443,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day",
             "production_t", "process_demand_t", "maintenance_demand_t",
             "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-            "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "external_net_t",
+            "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t", "external_net_t",
             "shipped_t", "received_t", "cumulative_unverified_incoming_cargo_t",
             "notional_end_without_assumed_arrivals_t", "shortfall_without_assumed_arrivals_t",
             "net_t", "notional_end_t", "shortfall_t",
@@ -1362,6 +1462,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "science_campaigns": science_activity_details,
                        "survey_activities": survey_activity_details,
                        "founding_projects": founding_activity_details,
+                       "passenger_transfer_requirements": passenger_activity_details,
                        "market_buys": market_activity_details,
                        "market_provider_constraints": market_provider_constraints,
                        "market_funds_condition": market_funds,
@@ -1410,9 +1511,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Facility changes take effect at phase start; construction work is a separate nominal demand, not scheduled completion.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
                 "Facility Upgrade projects consume registered materials and work, without Level transition, completion sequencing, or updated provider capability.",
-                "Scientific Exploration campaigns include registered resources and potential RP rewards, without dispatch, progression, RP award or Crew consumption simulation.",
+                "Scientific Exploration campaigns include registered resources and potential RP rewards; for selected crewed trips to unestablished physical targets, onboard Resource demand covers only the registered site-duration lower bound, not unknown travel or return. No mission or Population progression is executed.",
                 "Survey is a conditional Provider/Mode/Target capacity comparison; no Survey State, reach, eligibility, or progress is executed.",
                 "Founding projects consume registered deployment payloads and preparation service; they do not found Nodes, transfer cargo, or build Facilities in-place.",
+                "Dedicated passenger transfer requirements use actual Vehicle accommodation and one-shot Fleet commitments with authored onboard duration. They do not prove Movement, dispatch, population availability, destination admission or Cargo settlement.",
                 "Market provider supply, replenishment, price and lead time bound explicitly requested purchases; they are not settled Market delivery or new Resource Stock.",
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
@@ -1444,29 +1546,32 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             raise ValueError("case update must be an object")
         collection = change.get("collection")
         if change.get("action") == "add":
-            # Cases can select *additional* real assets and source allocations,
-            # rather than copying every phase to compare a new capability.
+            # Cases can select *additional* real assets and activities, rather
+            # than copying every phase to compare a new capability.
             # This changes only the comparison composition. No acquisition,
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facilities", "fleet", "research_provider_allocations"}:
-                raise ValueError("case addition requires an asset or Research Provider collection")
+            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns"}:
+                raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
                 raise ValueError("case addition row must be an object")
-            key = ("facility" if collection == "facilities" else
-                   "vehicle" if collection == "fleet" else "provider")
-            if not isinstance(row.get("node"), str) or not isinstance(row.get(key), str):
-                raise ValueError("case addition requires an explicit node and Definition ID")
+            identity_fields = ({"facilities": ("node", "facility"),
+                                "fleet": ("node", "vehicle"),
+                                "research_provider_allocations": ("node", "provider"),
+                                "passenger_transfers": ("origin", "destination", "vehicle"),
+                                "science_campaigns": ("campaign",)})[collection]
+            if any(not isinstance(row.get(key), str) or not row[key] for key in identity_fields):
+                raise ValueError("case addition requires explicit node endpoints and Definition ID")
             phases = [phase for phase in plan["phases"] if phase["name"] == change["phase"]]
             if len(phases) != 1:
                 raise ValueError("case addition requires exactly one existing phase")
             rows = phases[0].setdefault(collection, [])
-            if any(existing.get("node") == row["node"] and existing.get(key) == row[key]
-                   for existing in rows):
-                raise ValueError("case addition cannot duplicate a selected source")
-            identity = (collection, change["phase"], row["node"], row[key])
+            if any(tuple(existing.get(key) for key in identity_fields) ==
+                   tuple(row[key] for key in identity_fields) for existing in rows):
+                raise ValueError("case addition cannot duplicate a selected source or activity")
+            identity = (collection, change["phase"], *(row[key] for key in identity_fields))
             if identity in seen:
                 raise ValueError(f"duplicate case update: {identity}")
             seen.add(identity)
@@ -1614,12 +1719,12 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
                 ("system_resources", ("resource",), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "production_t", "process_demand_t",
                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
-                      "fleet_turnaround_demand_t", "transport_service_demand_t", "notional_end_t", "shortfall_t")),
+                      "fleet_turnaround_demand_t", "transport_service_demand_t", "passenger_provisions_demand_t", "notional_end_t", "shortfall_t")),
                 ("system_services", ("service",), ("required_per_day", "nominal_capacity_per_day",
                        "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "opening_investment_stock_shortfall_t", "conditional_stock_exhaustion_days_after_investment", "production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-                       "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t", "cumulative_unverified_incoming_cargo_t", "shortfall_without_assumed_arrivals_t")),
+                       "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t", "cumulative_unverified_incoming_cargo_t", "shortfall_without_assumed_arrivals_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
                        "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
                        "life_support_gap_person_days_per_day", "housing_nominal_people",
@@ -1644,9 +1749,15 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                 ("survey_activities", ("node", "provider", "source", "mode", "target_cell", "target_resource"),
                  ("units", "nominal_progress_per_day", "conditional_minimum_days")),
                 ("science_campaigns", ("campaign",),
-                 ("conditional_rp_reward", "required_fleet_units", "required_crew", "duration_days")),
+                 ("conditional_rp_reward", "required_fleet_units", "required_crew", "duration_days",
+                  "crew_seat_gap_people", "crew_registered_site_days_lower_bound",
+                  "crew_minimum_loaded_payload_lower_bound_t")),
                 ("founding_projects", ("staging_node", "recipe", "target"),
                  ("payload_t", "required_vehicle_units", "preparation_work")),
+                ("passenger_transfer_requirements", ("origin", "destination", "vehicle"),
+                 ("requested_people", "reserved_fleet_units", "nominal_supportable_seats",
+                  "nominal_seat_gap_people", "assumed_onboard_days", "total_departure_payload_t",
+                  "vehicle_nameplate_payload_upper_bound_t", "nameplate_payload_gap_t")),
                 ("market_provider_constraints", ("provider", "resource"),
                  ("total_requested_t", "nominal_cost_musd", "conditional_arrival_window_upper_bound_t",
                   "theoretical_shortfall_t")),
@@ -1797,7 +1908,9 @@ def summarize_projection(projection: dict) -> dict:
             "extraction_world_context": phase["extraction_world_context"],
             "power_world_context": phase["power_world_context"],
             "science_activity_bounds": [
-                {k: item[k] for k in ("campaign", "origin", "duration_days", "conditional_rp_reward", "status")}
+                {k: item[k] for k in ("campaign", "origin", "duration_days", "conditional_rp_reward",
+                                     "required_crew", "crew_seat_gap_people", "crew_registered_site_days_lower_bound",
+                                     "crew_site_provisions_lower_bound_t", "crew_minimum_loaded_payload_lower_bound_t", "status")}
                 for item in phase["science_campaigns"]],
             "survey_capacity_bounds": [
                 {k: item[k] for k in ("node", "provider", "target_cell", "target_resource",
@@ -1808,6 +1921,13 @@ def summarize_projection(projection: dict) -> dict:
                 for item in phase["spatial_projects"]] + [
                 {k: item[k] for k in ("node", "facility", "target_level", "units", "required_construction_work", "status")}
                 for item in phase["upgrade_projects"]],
+            "passenger_transfer_requirements": [
+                {k: item[k] for k in ("origin", "destination", "vehicle", "requested_people",
+                                     "nominal_supportable_seats", "nominal_seat_gap_people",
+                                     "assumed_onboard_days", "total_departure_payload_t",
+                                     "vehicle_nameplate_payload_upper_bound_t", "nameplate_payload_gap_t",
+                                     "assumed_duration_exceeds_vehicle_endurance", "status")}
+                for item in phase["passenger_transfer_requirements"]],
             "founding_investment": [
                 {k: item[k] for k in ("staging_node", "recipe", "target", "payload_t", "preparation_work", "status")}
                 for item in phase["founding_projects"]],
@@ -1816,7 +1936,7 @@ def summarize_projection(projection: dict) -> dict:
             "unassessed_constraints": phase["unassessed_constraints"],
             "detail_sections": [
                 "activity_sources", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
-                "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects",
+                "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
         })
@@ -1836,6 +1956,7 @@ _SUMMARY_ROW_IDENTITY = {
     "science_activity_bounds": ("campaign", "origin"),
     "survey_capacity_bounds": ("node", "provider", "target_cell", "target_resource"),
     "founding_investment": ("staging_node", "recipe", "target"),
+    "passenger_transfer_requirements": ("origin", "destination", "vehicle"),
     "market_provider_bounds": ("provider", "resource"),
 }
 

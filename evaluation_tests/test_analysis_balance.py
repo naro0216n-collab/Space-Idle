@@ -1447,3 +1447,122 @@ def test_sensitivity_can_add_new_registered_asset_and_provider_without_duplicate
         compare_cases({"base_plan": {"phases": [{"name": "investment", "days": 30,
             "facilities": [asset]}]}, "cases": [{"name": "bad", "updates":
             [additions[0]]}]}, app=definitions)
+
+
+def test_registered_passenger_accommodations_book_once_as_one_time_fleet_provisioning(definitions):
+    """Each crew-rated Vehicle brings its own seats, life support and Resource rates."""
+    sim = definitions._simulation
+    initial_state = deepcopy(capture_state(sim))
+    for vehicle in sim.transport.vehicle_definitions():
+        accommodation = vehicle.passengers
+        if accommodation.seats == 0:
+            continue
+        origin = "hypothetical.passenger.origin"
+        dest = "hypothetical.passenger.destination"
+        units, people, onboard_days, phase_days = 3, 2, 4.5, 30
+        fleet = [{"node": origin, "vehicle": str(vehicle.id), "units": units}]
+        result = evaluate({"initial_fleet": fleet,
+                           "phases": [{"name": "selected one-shot", "days": phase_days,
+                                       "facilities": [], "fleet": fleet,
+                                       "passenger_transfers": [{"origin": origin, "destination": dest,
+                                                                "vehicle": str(vehicle.id),
+                                                                "units": units, "people": people,
+                                                                "assumed_onboard_days": onboard_days}]}]},
+                          app=definitions)
+        phase = result["phases"][0]
+        row, = phase["passenger_transfer_requirements"]
+        provisions = accommodation.required_provisions(people, onboard_days)
+        assert row["nominal_supportable_seats"] == accommodation.supportable_seats(units)
+        assert row["nominal_seat_gap_people"] == max(0, people - accommodation.supportable_seats(units))
+        assert row["total_departure_payload_t"] == pytest.approx(accommodation.loaded_payload_mass(people, provisions))
+        assert row["vehicle_nameplate_payload_upper_bound_t"] == pytest.approx(vehicle.performance.payload_t * units)
+        assert "no_route_population_or_arrival_settlement" in row["status"]
+        resource_rows = _rows(phase)
+        for resource, amount in provisions.items():
+            matched = resource_rows[(origin, str(resource))]
+            assert matched["passenger_provisions_demand_t"] == pytest.approx(amount)
+            assert matched["one_time_investment_and_activity_demand_t"] == pytest.approx(amount)
+            assert matched["nominal_recurring_net_t_per_day"] == pytest.approx(0)
+            contributions = [item for item in phase["resource_contributions"]
+                             if item["resource"] == str(resource) and item["node"] == origin]
+            assert sum(item["amount_t"] for item in contributions) == pytest.approx(-0 + amount)
+            assert {item["origin_kind"] for item in contributions} == {"passenger_transfer"}
+        assert "passenger_dedicated_movement_propellant_route_departure_and_arrival_unassessed" in phase["unassessed_constraints"]
+    assert capture_state(sim) == initial_state
+
+
+def test_passenger_comparison_shares_fleet_with_other_activities_and_preserves_seat_shortfall(definitions):
+    """One-shot people cannot reuse the same Fleet; their mass is not extra Cargo."""
+    from scripts.analysis_balance import compare_cases, summarize
+
+    sim = definitions._simulation
+    vehicle = next(v for v in sim.transport.vehicle_definitions() if v.passengers.supportable_seats(1) > 0)
+    origin, dest = "passenger.origin", "passenger.dest"
+    asset = {"node": origin, "vehicle": str(vehicle.id), "units": 2}
+    plan = {"initial_fleet": [asset], "phases": [{"name": "movement window", "days": 8,
+                                                  "facilities": [], "fleet": [asset]}]}
+    change = {"action": "add", "collection": "passenger_transfers", "phase": "movement window",
+              "row": {"origin": origin, "destination": dest, "vehicle": str(vehicle.id),
+                      "units": 2, "people": vehicle.passengers.supportable_seats(2) + 1,
+                      "assumed_onboard_days": 2}}
+    result = compare_cases({"base_plan": plan, "cases": [
+        {"name": "no trip"}, {"name": "dedicated trip", "updates": [change]}]}, app=definitions)
+    detail = result["cases"][1]["projection"]["phases"][0]["passenger_transfer_requirements"][0]
+    assert detail["nominal_seat_gap_people"] == 1
+    assert detail["nameplate_payload_gap_t"] == pytest.approx(
+        max(0, detail["total_departure_payload_t"] - detail["vehicle_nameplate_payload_upper_bound_t"]))
+    assert any(row["section"] == "passenger_transfer_requirements" for row in result["differences"])
+    changed = summarize(result)["cases"][1]["changed_phases"][0]["changed_sections"]
+    assert "passenger_transfer_requirements" in changed
+    # All two units are already claimed by the dedicated transfer.
+    invalid = deepcopy(plan)
+    invalid["phases"][0]["passenger_transfers"] = [change["row"]]
+    invalid["phases"][0]["transport_allocations"] = [
+        {"origin": origin, "destination": dest, "vehicle": str(vehicle.id), "units": 1}]
+    with pytest.raises(ValueError, match="reuses Fleet"):
+        evaluate(invalid, app=definitions)
+    invalid = deepcopy(plan)
+    invalid["phases"][0]["passenger_transfers"] = [change["row"]]
+    invalid["phases"][0]["fleet"] = [{**asset, "turnarounds_per_unit_per_day": 0.1}]
+    with pytest.raises(ValueError, match="overlap authored Fleet turnarounds"):
+        evaluate(invalid, app=definitions)
+
+
+def test_scientific_exploration_crew_site_resources_are_registered_lower_bounds(definitions):
+    """Crew site days are physical at an unfounded target; flight duration remains unknown."""
+    from space_idle.transport import MovementEndpoint
+
+    sim = definitions._simulation
+    initial_state = deepcopy(capture_state(sim))
+    crewed = [c for c in sim.scientific_exploration.definitions.values() if c.required_crew]
+    assert crewed
+    for campaign in crewed:
+        vehicle = next(v for v in sim.transport.vehicle_definitions()
+                       if v.passengers.supportable_seats(campaign.required_units) >= campaign.required_crew)
+        origin = str(campaign.origin_id)
+        fleet = {"node": origin, "vehicle": str(vehicle.id), "units": campaign.required_units}
+        report = evaluate({"initial_fleet": [fleet], "phases": [
+            {"name": "selected campaign", "days": 70, "facilities": [], "fleet": [fleet],
+             "science_campaigns": [{"campaign": str(campaign.id), "vehicle": str(vehicle.id)}]}]},
+            app=definitions)["phases"][0]
+        detail, = report["science_campaigns"]
+        assert detail["crew_seat_gap_people"] == 0
+        extra = (vehicle.passengers.required_provisions(campaign.required_crew, campaign.duration_days)
+                 if isinstance(campaign.destination, MovementEndpoint) else {})
+        if extra:
+            assert detail["crew_registered_site_days_lower_bound"] == pytest.approx(campaign.duration_days)
+            assert detail["crew_site_provisions_lower_bound_t"] == {
+                str(resource): pytest.approx(amount) for resource, amount in extra.items()}
+            assert detail["crew_minimum_loaded_payload_lower_bound_t"] == pytest.approx(
+                campaign.minimum_payload_t * campaign.required_units +
+                vehicle.passengers.loaded_payload_mass(campaign.required_crew, extra))
+        else:
+            assert detail["crew_site_provisions_lower_bound_t"] is None
+            assert detail["crew_registered_site_days_lower_bound"] is None
+        resources = _rows(report)
+        for resource in set(extra) | {resource for resource, _ in campaign.consumable_resources}:
+            nominal = sum(amount for item, amount in campaign.consumable_resources if item == resource)
+            assert resources[(origin, str(resource))]["science_material_demand_t"] == pytest.approx(
+                nominal + extra.get(resource, 0))
+        assert "scientific_crew_transit_and_return_provisions_not_assessed" in report["unassessed_constraints"]
+    assert capture_state(sim) == initial_state
