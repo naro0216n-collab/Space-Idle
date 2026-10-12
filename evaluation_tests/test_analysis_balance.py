@@ -207,3 +207,55 @@ def test_research_capacity_uses_compatible_installed_provider_without_free_rp(de
     invalid["phases"][0]["research_provider_allocations"][0]["units"] = 2
     with pytest.raises(ValueError, match="more installed Facilities"):
         evaluate(invalid, app=definitions)
+
+
+def test_orbital_manufacturing_scale_and_freight_compete_in_numeric_plans(definitions):
+    """Compare simultaneous upstream output, investment and logistics demand.
+
+    A long scripted construction/launch sequence cannot demonstrate that an
+    orbital factory count is a sensible balance choice. Both configurations
+    refer to the same registered processes and vehicle recipe, and all their
+    distinct Resource/Service demands remain visible without assuming a
+    successful build, shipment or dispatch.
+    """
+    node, source = str(ids.LEO), str(ids.EARTH)
+
+    def plan(workshops, terminals):
+        return {"phases": [{
+            "name": "orbital-industry", "days": 10,
+            "facilities": [
+                {"node": node, "facility": str(ids.ORBITAL_MATERIALS_WORKSHOP),
+                 "units": workshops, "process": str(ids.PROCESS_STANDARD_STRUCTURAL_COMPONENTS)},
+                {"node": node, "facility": str(ids.ORBITAL_HEAVY_CARGO_TERMINAL),
+                 "units": terminals},
+                {"node": node, "facility": str(ids.ORBITAL_ASSEMBLY_YARD), "units": 1},
+            ],
+            "vehicle_builds": [{"node": node, "vehicle": str(ids.HEAVY_ORBITAL_FREIGHTER),
+                                "units": 1}],
+            "transfers": [{"origin": source, "destination": node,
+                           "resource": str(ids.BULK_STRUCTURE), "t_per_day": 2}],
+        }]}
+
+    small = evaluate(plan(1, 1), app=definitions)["phases"][0]
+    expanded = evaluate(plan(3, 2), app=definitions)["phases"][0]
+    product = ids.STRUCTURAL_COMPONENTS
+    feedstock = ids.BULK_STRUCTURE
+    assert _resource(expanded, ids.LEO, product)["production_t"] == pytest.approx(
+        3 * _resource(small, ids.LEO, product)["production_t"])
+    assert _resource(expanded, ids.LEO, feedstock)["process_demand_t"] == pytest.approx(
+        3 * _resource(small, ids.LEO, feedstock)["process_demand_t"])
+    assert _resource(expanded, ids.LEO, product)["vehicle_build_demand_t"] == pytest.approx(
+        _resource(small, ids.LEO, product)["vehicle_build_demand_t"])
+    assert _resource(expanded, ids.LEO, feedstock)["received_t"] == pytest.approx(
+        _resource(small, ids.LEO, feedstock)["received_t"])
+    assert _resource(expanded, ids.LEO, product)["construction_demand_t"] > (
+        _resource(small, ids.LEO, product)["construction_demand_t"])
+    assert _resource(expanded, ids.LEO, product)["maintenance_demand_t"] > (
+        _resource(small, ids.LEO, product)["maintenance_demand_t"])
+    first_service = {row["service"]: row for row in small["service_constraints"]}
+    next_service = {row["service"]: row for row in expanded["service_constraints"]}
+    assert next_service["cargo_transfer"]["nominal_capacity_per_day"] > (
+        first_service["cargo_transfer"]["nominal_capacity_per_day"])
+    assert next_service["cargo_transfer"]["required_per_day"] == pytest.approx(
+        first_service["cargo_transfer"]["required_per_day"])
+    assert any("not settled Game flow" in note for note in evaluate(plan(3, 2), app=definitions)["assumptions"])

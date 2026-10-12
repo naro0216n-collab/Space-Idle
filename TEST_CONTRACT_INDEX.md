@@ -33,13 +33,21 @@ pytest suite collects `tests/` only; evaluation scenarios run explicitly via
 | Movement, vehicles and Fleet | `tests/test_movement_planning.py`, `tests/test_vehicle_configuration.py`, `tests/test_vehicle_production.py`, `tests/test_fleet_allocations.py`, `tests/test_fleet_retirement.py` | Physical operation requirements, Fleet ownership/commitment, production/retirement |
 | Research and scientific operations | `tests/test_research_phase_model.py`, `tests/test_research_execution.py`, `tests/test_scientific_exploration.py`, `tests/test_survey_progression.py` | Research DAG and stage execution, experiment, survey, provider commitments |
 | Base Content contract | `tests/test_base_content_research_resource_integration.py`, `tests/test_solar_system_world.py` | Resource input limits, generic Research/asset eligibility and registered World geometry |
-| Evaluation and diagnostic scenarios (explicit run) | `evaluation_tests/test_content_technology_operation_paths.py`, `evaluation_tests/test_definition_dependency_graph.py`, `evaluation_tests/test_analysis_canonical_experiments.py`, `evaluation_tests/test_analysis_balance.py` | Definition-driven nominal facility/Resource quantity scenarios separate from canonical flow contracts, world-specific site and extraction comparisons, optional dependency diagnostics and alternative Content experiments; independent of default contract suite and Fast CI |
+| Quantitative Content balance (explicit run) | `evaluation_tests/test_analysis_balance.py` | Definition-derived multistage Resource, construction, maintenance, population, Research, transport and Service demand comparisons. Notional shortages are not actual failed Commands or settled Flow, and no fixed playthrough is a pass criterion |
+| Content integration samples (explicit run) | `evaluation_tests/test_content_technology_operation_paths.py` | Representative real Application method selection, eligibility and short cross-Domain handoffs; physical construction, vehicle lifecycle, transport arrival and Save/Load are owned by the regular contract modules, not by extended fixed-asset playthroughs |
+| Analysis/observation tooling (explicit run) | `evaluation_tests/test_analysis_canonical_experiments.py`, `evaluation_tests/test_definition_dependency_graph.py` | Optional definition diagnostics, scoped live observations, canonical trace custody, reproducible experimental comparisons and export contracts. Neither is a balance optimization success gate |
 | Application decision state | `tests/test_application_decision_projection.py` | Player-facing blockers, options, projections, scope and read-only behavior |
 | HTTP and packaged WebUI boundary | `tests/test_api_server.py` | Command/revision/query routing, persistence endpoints, resource serving |
 | Publish Gateway transport | `development_tests/test_publish_request.py` | Snapshot restore, fixed-slot packets, transaction safety and gateway contract |
 | Workflow and control-plane maintenance | `development_tests/test_workflow_maintenance.py`, `development_tests/test_publish_control_maintenance.py` | Workflow-only/control-only transactions and rehydration |
 | Test and browser runners | `development_tests/test_local_test_run.py`, `development_tests/test_browser_e2e_harness.py` | Real pytest exit versus external tool timeout, scenario discovery and browser isolation |
 | Interactive browser acceptance | `playwright/acceptance.py`, `playwright/interaction_continuity.py`, `playwright/logistics_ui.py` | Direct browser-to-server decisions, persisted drafts and navigation, logistics controls |
+
+Core tests deliberately allow production or maintenance to halt from finite supply;
+long-term survival of a fixed set of installed Facilities is not a contract.
+Use the quantity model for alternate equipment scales and demands, and test
+any Core defect independently with a minimal legal state and actual transition.
+The optional evaluation suites do not set a release/CI completion threshold.
 
 `tests/conftest.py`, `development_tests/script_harness.py`, and
 `playwright/e2e_support.py` supply test inputs and orchestration, not a separate
