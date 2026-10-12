@@ -30,6 +30,9 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
     _projection_service_edges_cache: dict[int, tuple[TransportServiceSupply, ...]] | None = field(
         default=None, init=False, repr=False
     )
+    _projection_service_adjacency_cache: dict[int, tuple[tuple[TransportServiceSupply, ...], dict]] | None = field(
+        default=None, init=False, repr=False
+    )
     _projection_service_path_cache: dict[tuple[object, ...], tuple[str, ...]] | None = field(
         default=None, init=False, repr=False
     )
@@ -71,6 +74,7 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
         root_scope = self._projection_cache_depth == 0
         if root_scope:
             self._projection_service_edges_cache = {}
+            self._projection_service_adjacency_cache = {}
             self._projection_service_path_cache = {}
             self._projection_service_path_failure_cache = {}
             self._projection_candidate_paths_cache = {}
@@ -81,6 +85,7 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
             self._projection_cache_depth -= 1
             if root_scope:
                 self._projection_service_edges_cache = None
+                self._projection_service_adjacency_cache = None
                 self._projection_service_path_cache = None
                 self._projection_service_path_failure_cache = None
                 self._projection_candidate_paths_cache = None

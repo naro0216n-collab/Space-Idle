@@ -65,6 +65,10 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
         },
     )
     assert plan.allocated(row.id) == pytest.approx(4)
+    assert plan.bundle(row.id) == row
+    assert plan.allocation(row.id) == plan.allocations[0]
+    assert plan.allocations_for_owner("test", row.owner_id) == plan.allocations
+    assert plan.allocations_for_owner("other", row.owner_id) == ()
     assert plan.used_by_constraint[resource_constraint(NODE, ORE)] == pytest.approx(8)
     assert plan.used_by_constraint[service_constraint(NODE, "power")] == pytest.approx(4)
     assert plan.used_by_constraint[admission_constraint(NODE, "bulk")] == pytest.approx(6)
@@ -249,6 +253,14 @@ def test_shared_allocators_preserve_priority_progressive_fairness_and_registrati
     )
     assert prioritized_service.allocated(high_service.id) == pytest.approx(3.0)
     assert prioritized_service.allocated(low_service.id) == pytest.approx(1.0)
+    assert prioritized_service.request(high_service.id) == high_service
+    assert prioritized_service.allocation(high_service.id).allocated_rate == pytest.approx(3.0)
+    assert prioritized_service.allocations_for_owner("test", high_service.owner_id) == (
+        prioritized_service.allocation(high_service.id),
+    )
+    summary = prioritized_service.summary(NODE, "test_service")
+    assert (summary.requested_rate, summary.allocated_rate, summary.spare_rate) == pytest.approx((6.0, 4.0, 0.0))
+    assert prioritized_service.summary(NODE, "absent").allocated_rate == 0.0
 
 
 def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key():

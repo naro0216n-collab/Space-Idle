@@ -181,6 +181,9 @@ class Simulation:
     _analysis_decision_observer: Callable[[TickDecisionProjection], None] | None = field(
         default=None, init=False, repr=False, compare=False,
     )
+    _active_locations_projection: frozenset[SpatialNodeId] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     def __post_init__(self) -> None:
         # A freshly composed Simulation has not yet executed the day-0 boundary.
@@ -252,7 +255,22 @@ class Simulation:
         """
         self._ensure_current_boundary_settled()
 
+    @contextmanager
+    def _active_location_scope(self):
+        """Reuse location membership only before Domain state execution."""
+        if self._active_locations_projection is not None:
+            yield
+            return
+        self._active_locations_projection = frozenset(self._active_locations())
+        try:
+            yield
+        finally:
+            self._active_locations_projection = None
+
     def _active_locations(self) -> set[SpatialNodeId]:
+        cached = self._active_locations_projection
+        if cached is not None:
+            return set(cached)
         locations = {facility.operational_node_id for facility in self.facilities.facilities.values()}
         locations.update(project.operational_node_id for project in self.projects.projects.values())
         if self.founding is not None:
@@ -567,7 +585,11 @@ class Simulation:
 
     def tick_decision_projection(self) -> TickDecisionProjection:
         """Project current intent, planning and allocation without mutation."""
-        with self.derived_projection_scope():
+        with (
+            self.derived_projection_scope(),
+            self._active_location_scope(),
+            self.facilities.compatible_projection_scope(),
+        ):
             snapshot = self._physical_tick_snapshot()
             intents = self._generate_tick_intents(snapshot)
             plan = self._plan_tick(intents)
@@ -1600,19 +1622,22 @@ class Simulation:
         # Phase 2-6 use one immutable physical snapshot. Reuse pure derived
         # candidates/plans inside that scope rather than rebuilding them per stage.
         with self.derived_projection_scope():
-            # Phase 2: Physical snapshot.
-            snapshot = self._physical_tick_snapshot()
-            # Phase 3: Intent generation.
-            intents = self._generate_tick_intents(snapshot)
-            # Phase 4: Planning.
-            plan = self._plan_tick(intents)
-            # Phase 5: Allocation.
-            allocations = self._allocate_tick(snapshot, intents, plan)
-            observer = observe_decision if observe_decision is not None else self._analysis_decision_observer
-            if observer is not None:
-                # An opt-in observer reads the allocation that actually executes,
-                # without invoking the planner a second time.
-                observer(TickDecisionProjection(snapshot, intents, plan, allocations))
+            # Phase 2-5 share the same immutable Facility membership/eligibility.
+            # Drop those derived indexes before Domain execution mutates State.
+            with self._active_location_scope(), self.facilities.compatible_projection_scope():
+                # Phase 2: Physical snapshot.
+                snapshot = self._physical_tick_snapshot()
+                # Phase 3: Intent generation.
+                intents = self._generate_tick_intents(snapshot)
+                # Phase 4: Planning.
+                plan = self._plan_tick(intents)
+                # Phase 5: Allocation.
+                allocations = self._allocate_tick(snapshot, intents, plan)
+                observer = observe_decision if observe_decision is not None else self._analysis_decision_observer
+                if observer is not None:
+                    # An opt-in observer reads the allocation that actually executes,
+                    # without invoking the planner a second time.
+                    observer(TickDecisionProjection(snapshot, intents, plan, allocations))
             # Phase 6: Domain execution.
             activities = self._execute_tick_domains(snapshot, allocations)
         # Phase 7: Logistics / Movement progression.

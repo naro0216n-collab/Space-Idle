@@ -78,6 +78,23 @@ def _project_row(app, project_id):
     return next(row for row in app.query(GetProjects()).items if row.id == project_id)
 
 
+def test_facility_node_projection_does_not_outlive_its_physical_snapshot():
+    app = build_game_application()
+    book = app._simulation.facilities
+    before = tuple(book.all_at(ids.EARTH))
+    with book.compatible_projection_scope():
+        assert tuple(book.all_at(ids.EARTH)) == before
+        with book.compatible_projection_scope():
+            assert tuple(book.all_at(ids.EARTH)) == before
+    new_id = book.install(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH)
+    with book.compatible_projection_scope():
+        assert len(book.all_at(ids.EARTH)) == len(before) + 1
+        assert book.all_at(ids.EARTH)[-1].id == new_id
+    book.begin_decommission(new_id)
+    book.finalize_decommission(new_id)
+    assert tuple(book.all_at(ids.EARTH)) == before
+
+
 def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservation(tmp_path):
     app = _build_decommission_fixture_application()
     sim = app._simulation

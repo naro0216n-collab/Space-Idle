@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, Mapping, Protocol, TYPE_CHECKING
 
@@ -202,6 +202,10 @@ class ServiceCapacityAllocationPlan:
     supply_nominal: Mapping[tuple[SpatialNodeId, str], float]
     supply_enabled: Mapping[tuple[SpatialNodeId, str], float]
     supply_limiting_factors: Mapping[tuple[SpatialNodeId, str], tuple[str, ...]]
+    _requests_by_id: dict[EntityId, ServiceCapacityRequest] = field(init=False, repr=False, compare=False)
+    _allocations_by_id: dict[EntityId, ServiceCapacityAllocation] = field(init=False, repr=False, compare=False)
+    _allocations_by_owner: dict[tuple[str, EntityId], tuple[ServiceCapacityAllocation, ...]] = field(init=False, repr=False, compare=False)
+    _totals_by_scope: dict[tuple[SpatialNodeId, str], tuple[float, float]] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         request_ids = [request.id for request in self.requests]
@@ -210,43 +214,45 @@ class ServiceCapacityAllocationPlan:
             raise ValueError("duplicate service capacity request id")
         if set(request_ids) != set(allocation_ids) or len(request_ids) != len(allocation_ids):
             raise ValueError("service capacity allocation plan must contain one allocation per request")
+        request_by_id = {row.id: row for row in self.requests}
+        allocation_by_id = {row.request_id: row for row in self.allocations}
+        by_owner: dict[tuple[str, EntityId], list[ServiceCapacityAllocation]] = {}
+        for row in self.allocations:
+            request = request_by_id[row.request_id]
+            by_owner.setdefault((request.owner_kind, request.owner_id), []).append(row)
+        requested: dict[tuple[SpatialNodeId, str], list[float]] = {}
+        allocated: dict[tuple[SpatialNodeId, str], list[float]] = {}
+        for request in self.requests:
+            requested.setdefault((request.operational_node_id, request.service_type), []).append(request.requested_rate)
+        for row in self.allocations:
+            request = request_by_id[row.request_id]
+            allocated.setdefault((request.operational_node_id, request.service_type), []).append(row.allocated_rate)
+        object.__setattr__(self, "_requests_by_id", request_by_id)
+        object.__setattr__(self, "_allocations_by_id", allocation_by_id)
+        object.__setattr__(self, "_allocations_by_owner", {key: tuple(rows) for key, rows in by_owner.items()})
+        object.__setattr__(self, "_totals_by_scope", {
+            key: (sum(rows), sum(allocated.get(key, ()))) for key, rows in requested.items()
+        })
         for key, enabled in self.supply_enabled.items():
             nominal = self.supply_nominal.get(key, 0.0)
             if enabled < -1e-9 or nominal < -1e-9 or enabled > nominal + 1e-7:
                 raise ValueError(f"invalid service capacity supply for {key}")
 
     def request(self, request_id: EntityId) -> ServiceCapacityRequest:
-        for request in self.requests:
-            if request.id == request_id:
-                return request
-        raise KeyError(request_id)
+        return self._requests_by_id[request_id]
 
     def allocation(self, request_id: EntityId) -> ServiceCapacityAllocation:
-        for row in self.allocations:
-            if row.request_id == request_id:
-                return row
-        raise KeyError(request_id)
+        return self._allocations_by_id[request_id]
 
     def allocated(self, request_id: EntityId) -> float:
         return self.allocation(request_id).allocated_rate
 
     def allocations_for_owner(self, owner_kind: str, owner_id: EntityId) -> tuple[ServiceCapacityAllocation, ...]:
-        ids = {
-            request.id
-            for request in self.requests
-            if request.owner_kind == owner_kind and request.owner_id == owner_id
-        }
-        return tuple(row for row in self.allocations if row.request_id in ids)
+        return self._allocations_by_owner.get((owner_kind, owner_id), ())
 
     def summary(self, operational_node_id: SpatialNodeId, service_type: str) -> ServiceCapacitySummary:
         key = (operational_node_id, service_type)
-        related = tuple(
-            request for request in self.requests
-            if request.operational_node_id == operational_node_id and request.service_type == service_type
-        )
-        ids = {request.id for request in related}
-        requested = sum(request.requested_rate for request in related)
-        allocated = sum(row.allocated_rate for row in self.allocations if row.request_id in ids)
+        requested, allocated = self._totals_by_scope.get(key, (0.0, 0.0))
         nominal = max(0.0, self.supply_nominal.get(key, 0.0))
         enabled = max(0.0, self.supply_enabled.get(key, 0.0))
         return ServiceCapacitySummary(

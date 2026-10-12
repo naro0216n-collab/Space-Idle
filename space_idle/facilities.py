@@ -137,21 +137,33 @@ class FacilityBook:
     _compatible_projection: dict[tuple[SpatialNodeId, int], tuple[FacilityState, ...]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    _facilities_by_node_projection: dict[SpatialNodeId, tuple[FacilityState, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @contextmanager
     def compatible_projection_scope(self):
-        """Reuse facility eligibility only within one read-only allocation.
+        """Index read-only Facility state once per physical allocation snapshot.
 
-        Eligibility depends on mutable Facility and Environment state. Keeping
-        this derivation inside an allocation call, not across canonical phases
-        or Commands, avoids stale results and adds no saved domain state.
+        Nested projections reuse the outer snapshot. The index is never saved or
+        retained across Commands, execution or Load; FacilityBook is the owner of
+        both Facility membership and this transient node-based lookup.
         """
-        previous = self._compatible_projection
+        if self._compatible_projection is not None:
+            yield
+            return
         self._compatible_projection = {}
+        by_node: dict[SpatialNodeId, list[FacilityState]] = {}
+        for facility in self.facilities.values():
+            by_node.setdefault(facility.operational_node_id, []).append(facility)
+        self._facilities_by_node_projection = {
+            node_id: tuple(rows) for node_id, rows in by_node.items()
+        }
         try:
             yield
         finally:
-            self._compatible_projection = previous
+            self._facilities_by_node_projection = None
+            self._compatible_projection = None
 
     def copy_for_environment(self, environment: EnvironmentResolver) -> "FacilityBook":
         """Create an isolated mutable facility snapshot bound to another environment.
@@ -319,6 +331,9 @@ class FacilityBook:
         self.facilities[facility_id].maintenance_priority = ActivityPriority(priority)
 
     def all_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:
+        by_node = self._facilities_by_node_projection
+        if by_node is not None:
+            return list(by_node.get(operational_node_id, ()))
         return [f for f in self.facilities.values() if f.operational_node_id == operational_node_id]
 
     def active_at(self, operational_node_id: SpatialNodeId) -> list[FacilityState]:

@@ -611,6 +611,21 @@ class LogisticsFlowMixin:
             sum(1.0 / max(float(edge.capacity_t_per_day), 1.0e-12) for edge in path),
         )
 
+    def _service_adjacency(self, edges: tuple[TransportServiceSupply, ...]) -> dict[SpatialNodeId, tuple[TransportServiceSupply, ...]]:
+        """Index outgoing Service edges once per immutable network projection."""
+        cache = self._projection_service_adjacency_cache
+        if cache is not None:
+            entry = cache.get(id(edges))
+            if entry is not None and entry[0] is edges:
+                return entry[1]
+        by_source: dict[SpatialNodeId, list[TransportServiceSupply]] = {}
+        for edge in sorted(edges, key=lambda row: row.key):
+            by_source.setdefault(edge.source_id, []).append(edge)
+        adjacency = {source: tuple(rows) for source, rows in by_source.items()}
+        if cache is not None:
+            cache[id(edges)] = (edges, adjacency)
+        return adjacency
+
     def _automatic_service_path(
         self,
         source_id: SpatialNodeId,
@@ -632,7 +647,7 @@ class LogisticsFlowMixin:
 
         State = tuple[SpatialNodeId, frozenset[SpatialNodeId], frozenset[EntityId]]
         Edge = tuple[TransportServiceSupply, State]
-        ordered_edges = tuple(sorted(edges, key=lambda edge: edge.key))
+        adjacency = self._service_adjacency(edges)
         start_state: State = (
             source_id,
             frozenset(node_id for node_id in required_via if node_id == source_id),
@@ -642,9 +657,7 @@ class LogisticsFlowMixin:
 
         def outgoing(state: State):
             node_id, visited_via, used_allocations = state
-            for edge in ordered_edges:
-                if edge.source_id != node_id:
-                    continue
+            for edge in adjacency.get(node_id, ()):
                 next_via = visited_via
                 if edge.destination_id in required_via:
                     next_via = frozenset((*visited_via, edge.destination_id))
