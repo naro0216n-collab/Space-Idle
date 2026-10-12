@@ -22,7 +22,7 @@ pytest suite collects `tests/` only; evaluation scenarios run explicitly via
 
 | Owning contract | Test modules / acceptance entrypoint | Boundary verified |
 | --- | --- | --- |
-| State boundaries, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Static import direction, Transport/Logistics state ownership checks, allocation and extension contracts. Not exhaustive enforcement of every Domain's state ownership |
+| State boundaries, registration and dependency order | `tests/test_modularity.py`, `tests/test_execution_requirements.py` | Static layer dependency direction, allocation and extension contracts; Transport/Logistics State ownership is verified through actual inventory/Fleet/Cargo lifecycle tests |
 | Time and normal/offline Simulation | `tests/test_time_progression.py` | Clock control, invalid elapsed time, canonical day transitions |
 | Authoritative state and derived-state restoration | `tests/test_persistence.py` | Whole-snapshot roundtrip, Offline equivalence, validation/atomic save, cache rederivation |
 | Resource accounting and market | `tests/test_inventory_admission.py`, `tests/test_market.py`, `tests/test_maintenance.py` | Pool admission, funds and stock conservation, ongoing operating allocation |

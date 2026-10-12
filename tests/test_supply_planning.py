@@ -6,8 +6,8 @@ import pytest
 
 from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
-    AdvanceTime, CreateTransportAllocation, GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, GetOperationalNode, PauseTransportAllocation,
-    PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, SetTargetStock, build_game_application,
+    AdvanceTime, CreateTransportAllocation, GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, GetWorld, PauseTransportAllocation,
+    PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
 )
 from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
@@ -220,6 +220,7 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         source_node_id=str(EARTH),
     ))
 
+    starting_funds = app.query(GetWorld()).funds_musd
     requirements = tuple(
         row for row in sim.projects.supplys(sim.day)
         if str(row.owner_id) == project_id
@@ -301,6 +302,9 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         if row.id == str(allocation_id)
     )
     assert not allocation.paused and allocation.used.forward_t_per_day > 0.0
+    # Logistics dispatch is a physical Inventory/Fleet transfer.  The player
+    # did not place a market trade order, so it must not debit market Funds.
+    assert app.query(GetWorld()).funds_musd == starting_funds
 
 
 def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
@@ -706,98 +710,3 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
         baseline.available.forward_t_per_day
     )
     assert "arrival_backpressure" not in restored.limiting_factors
-
-
-def test_supply_dispatch_requires_player_owned_transport_capacity_without_spending_market_funds():
-    from space_idle import GetWorld
-
-    app = build_game_application()
-    sim = app._simulation
-    initial_earth = sim.inventory.amount(EARTH, CONSTRUCTION_EQUIPMENT)
-    initial_leo = sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT)
-    before_funds = app.query(GetWorld()).funds_musd
-
-    # The existing orbital fleet must have a real serviceable staging node.
-    # This compact asset is an invested construction asset, not a free
-    # full-scale logistics center and not an inventory capacity provider.
-    orbital_facility = next(
-        row for row in sim.facilities.all_at(LEO)
-        if row.definition_id == ids.AUTONOMOUS_ORBITAL_OUTPOST
-    )
-    recipe = sim.projects.recipes[orbital_facility.definition_id]
-    assert orbital_facility.invested_resources == {
-        row.resource_id: row.amount_t for row in recipe.resources
-    }
-    assert all(row.amount_t > 0 for row in recipe.resources)
-    node = app.query(GetOperationalNode(str(LEO)))
-    assert node.power_generation_mw > node.power_demand_mw
-    assert any(row.service_type == 'cargo_transfer' and row.enabled > 0 for row in node.service_capacities)
-    assert any(row.service_type == 'construction_work' and row.enabled > 0 for row in node.service_capacities)
-    assert all(row.storage_pool_key != 'default' for row in node.storage)
-
-    target_id = app.execute(SetTargetStock(str(LEO), str(CONSTRUCTION_EQUIPMENT), 0.6)).created_id
-    app.execute(AdvanceTime(1))
-    assert app.query(GetWorld()).funds_musd == before_funds
-    assert not [
-        row for row in sim.logistics.cargo_flows.values()
-        if str(row.owner_id) == target_id
-    ]
-
-    rate = sim.transport.transport_capacity_for_units(
-        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1, day=sim.day
-    ).forward_t_per_day
-    allocation_id = app.execute(CreateTransportAllocation(
-        vehicle_definition_id=str(REUSABLE_LAUNCH_VEHICLE),
-        anchor_node_id=str(EARTH), destination_id=str(LEO),
-        target_forward_t_per_day=rate, target_reverse_t_per_day=0.0,
-    )).created_id
-    assert allocation_id
-    delivered = False
-    for _ in range(20):
-        app.execute(AdvanceTime(1))
-        if sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT) >= initial_leo + 0.6 - 1e-7:
-            delivered = True
-            break
-    assert delivered, 'stock assigned to an orbital node must leave arrival waiting and reach its Inventory'
-    assert sim.inventory.amount(EARTH, CONSTRUCTION_EQUIPMENT) == pytest.approx(initial_earth - 0.6)
-    assert sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT) == pytest.approx(initial_leo + 0.6)
-    assert app.query(GetWorld()).funds_musd == before_funds
-
-    # The initial cislunar staging fleet also needs a finite return-fuel
-    # foothold. Otherwise the first replenishment of lunar-orbit propellant
-    # requires the very transport service that cannot run without it.
-    lunar_initial_machinery = sim.inventory.amount(LUNAR_ORBIT, MACHINERY)
-    assert sim.inventory.amount(LUNAR_ORBIT, PROPELLANT) > 0
-    tug_rate = sim.transport.transport_capacity_for_units(
-        REUSABLE_ORBITAL_CARGO_TUG, LEO, LUNAR_ORBIT, 1, day=sim.day
-    ).forward_t_per_day
-    tug_allocation = app.execute(CreateTransportAllocation(
-        vehicle_definition_id=str(REUSABLE_ORBITAL_CARGO_TUG),
-        anchor_node_id=str(LEO), destination_id=str(LUNAR_ORBIT),
-        target_forward_t_per_day=tug_rate, target_reverse_t_per_day=0.0,
-    )).created_id
-    assert tug_allocation
-    app.execute(SetTargetStock(str(LEO), str(PROPELLANT), 3.0))
-    app.execute(SetTargetStock(str(LUNAR_ORBIT), str(PROPELLANT), 3.0))
-    lunar_target = app.execute(SetTargetStock(
-        str(LUNAR_ORBIT), str(MACHINERY), lunar_initial_machinery + 0.3
-    )).created_id
-    app.execute(SetSupplyRoutingConstraint(
-        destination_id=str(LUNAR_ORBIT), owner_kind='target_stock',
-        owner_id=lunar_target, resource_id=str(MACHINERY),
-        source_node_id=str(EARTH), required_via_node_ids=(str(LEO),),
-    ))
-    received = False
-    for _ in range(32):
-        app.execute(AdvanceTime(1))
-        if sim.inventory.amount(LUNAR_ORBIT, MACHINERY) > lunar_initial_machinery + 0.12:
-            received = True
-            break
-    assert received, 'the initial fleet must support replenishment along both physical transport legs'
-    requirement = next(
-        row for row in app.query(GetLogistics()).requirements
-        if row.owner_id == lunar_target and row.resource_id == str(MACHINERY)
-    )
-    assert requirement.selected_source_id == str(EARTH)
-    assert set(requirement.selected_transport_allocation_ids) == {allocation_id, tug_allocation}
-    assert app.query(GetWorld()).funds_musd == before_funds

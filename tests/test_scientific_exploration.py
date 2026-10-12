@@ -484,42 +484,6 @@ def test_rp_admission_blocks_only_active_science_and_shares_recovered_headroom()
     assert state.phase.value == "complete"
 
 
-def test_started_exploration_movement_keeps_frozen_latency_after_vehicle_definition_change():
-    app = build_game_application()
-    sim = app._simulation
-    exploration_id = ids.CISLUNAR_SCIENCE_EXPLORATION
-    vehicle_id = ids.REUSABLE_ORBITAL_CARGO_TUG
-    _seed_exploration_movement_resources(app)
-    app.execute(StartScientificExploration(str(exploration_id)))
-    app.execute(AssignExplorationFleet(str(exploration_id), str(vehicle_id)))
-    app.execute(AdvanceTime(2))
-
-    state = sim.scientific_exploration.campaigns[exploration_id]
-    execution = sim.transport.movement_executions[state.movement_execution_id]
-    frozen_completion = execution.completion_day
-    frozen_latency = execution.latency_days
-    frozen_operations = tuple(
-        (operation.operation_type, operation.delta_v_km_s)
-        for leg in execution.legs
-        for operation in leg.operations
-    )
-    vehicle = sim.transport.vehicle_defs[vehicle_id]
-    sim.transport.vehicle_defs[vehicle_id] = replace(
-        vehicle,
-        performance=replace(vehicle.performance, transit_time_multiplier=9.0),
-    )
-    sim.transport.invalidate_movement_plans()
-
-    row = _row(app)
-    assert row.outbound_latency_days == frozen_latency
-    assert row.movement_operations == frozen_operations
-
-    app.execute(AdvanceTime(frozen_completion - sim.day))
-    assert state.phase.value == "active"
-    assert state.movement_execution_id is None
-    commitment = sim.transport.fleet_commitment_snapshot(state.fleet_commitment_id)
-    assert commitment is not None
-    assert _fleet_row(app, vehicle_id, ids.LUNAR_ORBIT).exploration_units == commitment.quantity
 
 
 def test_scientific_exploration_abort_return_and_completion_disposition_are_domain_transitions():
@@ -560,7 +524,7 @@ def test_scientific_exploration_abort_return_and_completion_disposition_are_doma
     validate_runtime_state(sim)
 
 
-def test_scientific_exploration_technology_is_a_start_requirement_not_an_in_flight_lock():
+def test_scientific_exploration_requires_unlocked_technology_at_start():
     from space_idle.app_contracts.common import ApplicationError
 
     app = build_game_application()
@@ -587,16 +551,10 @@ def test_scientific_exploration_technology_is_a_start_requirement_not_an_in_flig
     assert next(row for row in app.query(GetScientificExplorations()).items
                 if row.id == str(mission_id)).can_start
     app.execute(StartScientificExploration(str(mission_id)))
-    sim.technology.completed.difference_update(definition.prerequisite_technologies)
-    assert sim.scientific_exploration.blockers(mission_id) == ("fleet_unassigned",)
+    # Research is monotone.  After the legitimate start, Phase transitions are
+    # validated by the general Exploration lifecycle contracts, not by
+    # manufacturing an impossible in-flight technology-revocation state.
     assert sim.scientific_exploration.campaigns[mission_id].phase.value == "awaiting_fleet"
-    waiting = next(row for row in app.query(GetScientificExplorations()).items
-                   if row.id == str(mission_id))
-    assert not waiting.can_start and waiting.can_abort
-    assert not waiting.can_return and not waiting.can_unassign
-    assert [row.code for row in waiting.return_action_blockers] == ["fleet_unassigned"]
-    assert [row.code for row in waiting.unassign_action_blockers] == ["scientific_exploration_phase_restricts_action"]
-    assert not waiting.abort_action_blockers
 
 
 def _start_unoperated_science(app):

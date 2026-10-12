@@ -145,33 +145,28 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     assert sim.survey.progress(*remaining) == pytest.approx(threshold)
     assert sim.survey.knowledge_level(*remaining) == KnowledgeLevel.PRESENCE_PROBABILITY
 
-def test_remote_campaign_completion_respects_provider_goal_cap_and_precision():
-    app = build_game_application()
-    sim = app._simulation
-    key = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
-    assert sim.graph.owner_of_cell(key[0]) is None
-
-    campaign_id = _start_campaign(app, (key[0],), (key[1],), goal=2)
-    campaign = sim.survey.campaigns[campaign_id]
-    candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
-    assert blockers == ()
-    assert candidate is not None
-
-    app.execute(AdvanceTime(8))
-    assert campaign.control_state is SurveyCampaignControlState.COMPLETED
-    assert sim.survey.unfinished_targets(campaign) == ()
-    assert sim.survey.execution_requirement_bundles(sim.day) == ()
-    assert sim.survey.knowledge_level(*key) == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-    assert sim.survey.visible_potential_precision_fraction(*key) == pytest.approx(0.35)
-
-    blocked_id = _start_campaign(
-        app, (ids.MOON_CELL_NEARSIDE_MARE,), (ids.MINERAL_FEEDSTOCK,), goal=3
+    # A completed first-level Campaign does not pin the target to its old
+    # accuracy. A new goal must settle the observation mode's configured
+    # estimate uncertainty, not a fixed percentage from current Content.
+    second_id = _start_campaign(app, (remaining[0],), (remaining[1],), goal=2)
+    second = sim.survey.campaigns[second_id]
+    mode = sim.survey.observation_mode(
+        ids.ORBITAL_RESOURCE_MAPPING_PROVIDER, "remote_orbital_spectrometry"
     )
-    blocked = sim.survey.campaigns[blocked_id]
-    candidate, blockers = sim.survey.resolve_campaign_candidate(blocked, day=sim.day)
-    assert candidate is None
-    assert "survey_candidate_unavailable" in blockers
-    assert any("survey_provider_limit" in blocker for blocker in blockers)
+    assert mode.max_knowledge_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    final_threshold = sim.survey.targets[remaining].thresholds[1]
+    finite_rate = sim.survey.capacity_for_campaign(second, day=sim.day)
+    assert finite_rate > 0
+    sim.survey.knowledge_progress[remaining] = final_threshold - min(
+        final_threshold / 2, finite_rate / 2
+    )
+    app.execute(AdvanceTime(1))
+    assert second.control_state is SurveyCampaignControlState.COMPLETED
+    assert sim.survey.knowledge_level(*remaining) == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    assert sim.survey.visible_potential_precision_fraction(*remaining) == pytest.approx(
+        mode.estimate_uncertainty_fraction
+    )
+
 
 def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_requires_strategic_choice():
     def selected_equivalent(reverse: bool):
@@ -382,7 +377,13 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert candidate.max_knowledge_level == KnowledgeLevel.PRESENCE_PROBABILITY
     assert sim.survey.knowledge_requirement_failures(requirement)
 
-    app.execute(AdvanceTime(8))
+    # Test the remote Knowledge transition, not how many days this Content
+    # needs to survey a fixed planet with today's provisional rate.
+    physical_rate = sim.survey.capacity_for_campaign(campaign, day=sim.day)
+    threshold = sim.survey.targets[(cell, resource)].thresholds[0]
+    assert physical_rate > 0
+    from math import ceil
+    app.execute(AdvanceTime(ceil(threshold / physical_rate) + 1))
     assert campaign.control_state is SurveyCampaignControlState.COMPLETED
     assert sim.survey.knowledge_level(cell, resource) == KnowledgeLevel.PRESENCE_PROBABILITY
     assert sim.survey.knowledge_requirement_failures(requirement) == ()

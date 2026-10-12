@@ -37,11 +37,14 @@ def test_solar_system_contains_physical_planets_and_satellites_without_owned_ass
     for body in bodies:
         entry = catalog_by_id[str(body.id)]
         assert entry.parent_body_id == (str(body.parent_body_id) if body.parent_body_id else None)
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            assert entry.surface_cell_count == 0
+    for physical_surface in {body.physical_surface for body in bodies}:
+        representative = next(body for body in bodies if body.physical_surface is physical_surface)
+        entry = catalog_by_id[str(representative.id)]
         surface_map = app.query(GetSurfaceMap(entry.id))
         assert surface_map.physical_surface == entry.physical_surface
         assert len(surface_map.cells) == entry.surface_cell_count
-        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
-            assert entry.surface_cell_count == 0
 
     world = app.query(GetWorld())
     assert {row.id for row in world.operational_nodes} == {str(id_) for id_ in graph.operational_node_ids()}

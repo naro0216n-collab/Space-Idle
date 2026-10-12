@@ -161,7 +161,8 @@ def test_http_decision_views_scope_and_projection_boundary(tmp_path):
         assert status == 200
         assert orbit_selected["data"]["contexts"][0]["foundation_options"]
         status, _, invalid = _request(
-            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id=base.cell.venus.highland",
+            port, "GET",
+            f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id=base.cell.venus.highland",
         )
         assert status in (400, 422)
 
