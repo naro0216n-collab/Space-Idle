@@ -24,6 +24,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.BREATHABLE_SURFACE_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
         ScenarioFacility(ids.GENERAL_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
+        ScenarioFacility(ids.AUTONOMOUS_ORBITAL_OUTPOST, ids.LEO, invested_resources=((S, 3.4), (M, 1.9))),
         ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT, invested_resources=((S, 3.0), (M, 2.0), (E, 1.0))),
         ScenarioFacility(ids.GRID_POWER_SUPPLY, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 8.0), (M, 6.0))),
         ScenarioFacility(ids.SURFACE_LAUNCH_SUPPORT, ids.EARTH, ids.EARTH_CELL_INDUSTRIAL, ((S, 10.0), (M, 8.0), (E, 2.0))),

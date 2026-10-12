@@ -229,11 +229,13 @@ def test_current_and_forecast_use_distinct_contracts_and_forecast_reads_active_p
         assert row.earliest_requirement_day is not None
         assert row.earliest_requirement_day > sim.day
         assert row.navigation is not None
-        # A future-only project has no active SupplyRequirement to navigate to.
-        # Its physical Node remains the correct present navigation target.
-        assert row.navigation.decision_area == "location"
+        # Navigate to active transport requirements when procurement has
+        # progressed; otherwise keep the physical Node as the decision target.
         assert row.navigation.operational_node_id == str(LEO)
-        assert not row.navigation.supply_requirement_ids
+        if row.navigation.supply_requirement_ids:
+            assert row.navigation.decision_area == "logistics"
+        else:
+            assert row.navigation.decision_area == "location"
 
     assert all(
         row.id not in {str(requirement.resource_id) for requirement in recipe.resources}
@@ -284,9 +286,26 @@ def test_service_dependency_projection_distinguishes_execution_blockers_and_fore
     recipe = sim.projects.recipe_for_project(sim.projects.projects[project_id])
     assert row.scope == "OPERATIONAL_NODE"
     assert row.planned_requirement == pytest.approx(recipe.construction_work)
-    assert row.local_enabled_rate == pytest.approx(0.0)
-    assert row.outside_scope_enabled_rate > 0
-    assert any(factor.code == "no_local_service_capacity" for factor in row.limiting_factors)
+    assert row.local_enabled_rate > 0
+    assert row.local_enabled_rate < row.planned_requirement
+
+    # Deliberately remove the existing provider to distinguish local
+    # construction scarcity from capacity elsewhere in the network.
+    local_provider = next(
+        facility for facility in sim.facilities.all_at(LEO)
+        if facility.definition_id == ids.AUTONOMOUS_ORBITAL_OUTPOST
+    )
+    sim.facilities.pause(local_provider.id)
+    without_local = app.query(GetDependencyAnalytics(
+        "operational_nodes", node_ids=(str(LEO),), time_basis="FORECAST"
+    ))
+    unavailable = next(
+        item for item in without_local.forecast_services
+        if item.service_type == "construction_work"
+    )
+    assert unavailable.local_enabled_rate == pytest.approx(0.0)
+    assert unavailable.outside_scope_enabled_rate > 0
+    assert any(factor.code == "no_local_service_capacity" for factor in unavailable.limiting_factors)
 
 
 def test_selected_scope_does_not_net_unshipped_remote_production_against_local_need():

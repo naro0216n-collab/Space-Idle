@@ -6,9 +6,10 @@ import pytest
 
 from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
-    GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, PauseTransportAllocation,
-    PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
+    AdvanceTime, CreateTransportAllocation, GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, GetOperationalNode, PauseTransportAllocation,
+    PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, SetTargetStock, build_game_application,
 )
+from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
     EARTH,
@@ -708,23 +709,52 @@ def test_supply_dispatch_requires_player_owned_transport_capacity_without_spendi
 
     app = build_game_application()
     sim = app._simulation
-    sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
-    sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
-    target_id = sim.logistics.set_target_stock(LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5)
-    sim.transport.transport_allocations.clear()
+    initial_earth = sim.inventory.amount(EARTH, CONSTRUCTION_EQUIPMENT)
+    initial_leo = sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT)
     before_funds = app.query(GetWorld()).funds_musd
 
-    sim.advance_days(1)
+    # The existing orbital fleet must have a real serviceable staging node.
+    # This compact asset is an invested construction asset, not a free
+    # full-scale logistics center and not an inventory capacity provider.
+    orbital_facility = next(
+        row for row in sim.facilities.all_at(LEO)
+        if row.definition_id == ids.AUTONOMOUS_ORBITAL_OUTPOST
+    )
+    recipe = sim.projects.recipes[orbital_facility.definition_id]
+    assert orbital_facility.invested_resources == {
+        row.resource_id: row.amount_t for row in recipe.resources
+    }
+    assert all(row.amount_t > 0 for row in recipe.resources)
+    node = app.query(GetOperationalNode(str(LEO)))
+    assert node.power_generation_mw > node.power_demand_mw
+    assert any(row.service_type == 'cargo_transfer' and row.enabled > 0 for row in node.service_capacities)
+    assert any(row.service_type == 'construction_work' and row.enabled > 0 for row in node.service_capacities)
+    assert all(row.storage_pool_key != 'default' for row in node.storage)
+
+    target_id = app.execute(SetTargetStock(str(LEO), str(CONSTRUCTION_EQUIPMENT), 0.6)).created_id
+    app.execute(AdvanceTime(1))
     assert app.query(GetWorld()).funds_musd == before_funds
     assert not [
         row for row in sim.logistics.cargo_flows.values()
-        if row.owner_id == target_id
+        if str(row.owner_id) == target_id
     ]
 
-    _owned_earth_leo_capacity(sim)
-    sim.advance_days(1)
+    rate = sim.transport.transport_capacity_for_units(
+        REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1, day=sim.day
+    ).forward_t_per_day
+    allocation_id = app.execute(CreateTransportAllocation(
+        vehicle_definition_id=str(REUSABLE_LAUNCH_VEHICLE),
+        anchor_node_id=str(EARTH), destination_id=str(LEO),
+        target_forward_t_per_day=rate, target_reverse_t_per_day=0.0,
+    )).created_id
+    assert allocation_id
+    delivered = False
+    for _ in range(20):
+        app.execute(AdvanceTime(1))
+        if sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT) >= initial_leo + 0.6 - 1e-7:
+            delivered = True
+            break
+    assert delivered, 'stock assigned to an orbital node must leave arrival waiting and reach its Inventory'
+    assert sim.inventory.amount(EARTH, CONSTRUCTION_EQUIPMENT) == pytest.approx(initial_earth - 0.6)
+    assert sim.inventory.amount(LEO, CONSTRUCTION_EQUIPMENT) == pytest.approx(initial_leo + 0.6)
     assert app.query(GetWorld()).funds_musd == before_funds
-    assert any(
-        row.owner_id == target_id
-        for row in sim.logistics.cargo_flows.values()
-    )

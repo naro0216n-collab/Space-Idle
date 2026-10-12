@@ -224,7 +224,7 @@ def test_exploration_assignment_owns_fleet_and_partial_inputs_until_unassigned()
             (CapabilityRequirement("spacecraft_servicing", CapabilityRequirementState.ACTIVE),),
         ),
     )
-    servicing_id = sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
+    sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.refresh_storage()
 
     machinery = ids.MACHINERY
@@ -266,14 +266,19 @@ def test_exploration_assignment_owns_fleet_and_partial_inputs_until_unassigned()
     ]
     assert len(reservations) == 1
     owner_id, reserved = reservations[0]
-    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(0.05)
-    assert reserved == pytest.approx(0.05)
+    # Existing facilities may consume recurring maintenance from the same
+    # stock. The common allocator must grant only the remaining quantity to
+    # Exploration, keeping reservation <= physical Inventory.
+    physical_stock = sim.inventory.amount(definition.origin_id, machinery)
+    assert 0.0 < reserved <= 0.05
+    assert physical_stock == pytest.approx(reserved)
     assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(0.0)
     state = sim.scientific_exploration.campaigns[exploration_id]
     assert state.inputs_consumed is False
     assert state.progress_days == pytest.approx(0.0)
 
-    app.execute(PauseFacility(str(servicing_id)))
+    for provider in tuple(sim.facilities.all_at(definition.origin_id)):
+        app.execute(PauseFacility(str(provider.id)))
     assert any(
         blocker == "origin:capability:active:spacecraft_servicing"
         for blocker in sim.scientific_exploration.blockers(exploration_id, day=sim.day)
@@ -284,12 +289,13 @@ def test_exploration_assignment_owns_fleet_and_partial_inputs_until_unassigned()
     still_committed = _fleet_row(app, ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO)
     assert still_committed.exploration_units == required_units
 
+    stock_before_release = sim.inventory.amount(definition.origin_id, machinery)
     app.execute(UnassignExplorationFleet(str(exploration_id)))
-    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(0.05)
+    assert sim.inventory.amount(definition.origin_id, machinery) == pytest.approx(stock_before_release)
     assert sim.inventory.reserved_for(
         owner_id, definition.origin_id, machinery
     ) == pytest.approx(0.0)
-    assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(0.05)
+    assert sim.inventory.available(definition.origin_id, machinery) == pytest.approx(stock_before_release)
     allocation = next(
         row for row in app.query(GetTransportAllocations()).items
         if row.id == allocation_id

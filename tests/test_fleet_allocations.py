@@ -438,6 +438,10 @@ def test_transport_pause_preserves_capacity_target_and_safely_releases_then_repr
 def test_relocation_plan_is_the_execution_contract_for_eligibility_allocation_time_and_resources():
     sim = _fleet_sim(1)
     lg = sim.transport
+    # An absent refueling provider is the exceptional condition, not the
+    # standard opening Scenario (which has a compact orbital service asset).
+    for facility in sim.facilities.all_at(ids.LEO):
+        sim.facilities.pause(facility.id)
     with pytest.raises(ValueError, match="refueling|resource"):
         lg.relocate_fleet(
             ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, ids.LUNAR_ORBIT, day=0
