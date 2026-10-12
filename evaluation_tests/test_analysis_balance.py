@@ -1113,3 +1113,101 @@ def test_new_node_scoped_research_requirement_shares_node_service_ledger():
                and row["rate_per_day"] == pytest.approx(expected)
                for row in report["service_contributions"])
     assert not any(row["node"] == f"node:{node}" for row in report["service_constraints"])
+
+
+def test_registered_solar_power_uses_owner_world_context_without_settling_operation(definitions):
+    """World-site generation is Power Domain physics, not authored factor or Game output."""
+    from space_idle.power import SolarGeneration
+    from space_idle.shared import DefinitionId, SurfaceCellId
+
+    sim = definitions._simulation
+    before = deepcopy(capture_state(sim))
+    cells = tuple(sim.power.environment.graph.surface_cells)
+    solar = [definition for definition, spec in sim.power.specs.items()
+             if isinstance(spec.generation, SolarGeneration)]
+    assert solar and len(cells) > 1
+    node, day = "conditional.solar", 0
+    for facility in solar:
+        for cell in cells[:2]:
+            asset = {"node": node, "facility": str(facility), "units": 3, "duty": .6}
+            plan = {"initial_facilities": [asset],
+                    "solar_sites": [{"node": node, "facility": str(facility),
+                                     "context": str(cell), "day": day}],
+                    "phases": [{"name": "assumption", "days": 3, "facilities": [asset]}]}
+            report = evaluate(plan, app=definitions)["phases"][0]
+            expected, _ = sim.power.nominal_for_definition_at_context(
+                DefinitionId(facility), SurfaceCellId(cell), day,
+            )
+            assert report["constraints"][0]["power_generation_nominal_mw"] == pytest.approx(expected * 3 * .6)
+            assert report["power_world_context"][0]["world_context"] == str(cell)
+            assert "world_solar_site_placement_and_ongoing_conditions_unassessed" in report["unassessed_constraints"]
+    assert capture_state(sim) == before
+
+
+def test_lunar_world_solar_and_extraction_composition_keeps_resource_power_investment_distinct(definitions):
+    """Actual registered geology/power creates different conditional bottlenecks, not a winning plan."""
+    import json
+    from pathlib import Path
+    from scripts.analysis_balance import summarize
+
+    payload = json.loads((Path(__file__).resolve().parents[1] /
+                          "evaluation_plans/lunar_site_industry_power.json").read_text())
+    baseline_input = deepcopy(payload)
+    before = deepcopy(capture_state(definitions._simulation))
+    comparison = compare_cases(payload, app=definitions)
+    summaries = summarize(comparison)
+    assert payload == baseline_input
+    assert capture_state(definitions._simulation) == before
+    cases = {c["name"]: c["projection"]["phases"][0] for c in comparison["cases"]}
+    assert len(cases) == 4
+    # No pre-founded lunar Node receives a historical Facility endowment.
+    assert not payload["base_plan"].get("initial_facilities")
+    ridge, cold = cases["lit_ridge_site"], cases["cold_trap_site"]
+    assert ridge["investment_constraints"][0]["required_work"] > 0
+    assert "new_facilities_operate_before_construction_completion" in ridge["unassessed_constraints"]
+    solar, extraction = cases["cold_trap_solar_expansion"], cases["cold_trap_extraction_expansion"]
+    assert ridge["constraints"][0]["power_generation_nominal_mw"] > cold["constraints"][0]["power_generation_nominal_mw"]
+    assert cold["extraction_world_context"][0]["diminishing_output_t_per_day"] > ridge["extraction_world_context"][0]["diminishing_output_t_per_day"]
+    assert solar["constraints"][0]["power_generation_nominal_mw"] > cold["constraints"][0]["power_generation_nominal_mw"]
+    assert extraction["extraction_world_context"][0]["diminishing_output_t_per_day"] > cold["extraction_world_context"][0]["diminishing_output_t_per_day"]
+    assert extraction["extraction_world_context"][0]["diminishing_output_t_per_day"] < 4 * cold["extraction_world_context"][0]["diminishing_output_t_per_day"]
+    for expanded in (solar, extraction):
+        assert expanded["investment_constraints"][0]["required_work"] > 0
+        assert expanded["investment_constraints"][0]["pre_investment_work_lower_bound_days"] is None
+        assert "new_facilities_operate_before_construction_completion" in expanded["unassessed_constraints"]
+    assert {"constraints", "power_world_context", "extraction_world_context", "resources", "resource_contributions"} <= {
+        row["section"] for row in comparison["differences"]
+    }
+    assert all(c["summary"]["phases"][0]["power_world_context"] for c in summaries["cases"])
+
+
+def test_solar_world_site_configuration_rejects_ambiguity(definitions):
+    from space_idle.power import SolarGeneration
+
+    sim = definitions._simulation
+    solar = next(id for id, spec in sim.power.specs.items() if isinstance(spec.generation, SolarGeneration))
+    cell = next(iter(sim.power.environment.graph.surface_cells))
+    asset = {"node": "site", "facility": str(solar), "units": 1}
+    base = {"initial_facilities": [asset], "phases": [{"name": "solar", "days": 1, "facilities": [asset]}]}
+    site = {"node": "site", "facility": str(solar), "context": str(cell)}
+    with pytest.raises(ValueError, match="solar_yield or solar_sites"):
+        evaluate(base, app=definitions)
+    with pytest.raises(ValueError, match="conflicts"):
+        evaluate({**base, "solar_sites": [site], "solar_yield": {"site": 1.0}}, app=definitions)
+    with pytest.raises(ValueError, match="duplicate solar World site"):
+        evaluate({**base, "solar_sites": [site, site]}, app=definitions)
+    with pytest.raises(ValueError, match="unknown World solar context"):
+        evaluate({**base, "solar_sites": [{**site, "context": "not.a.world.site"}]}, app=definitions)
+    # Two unrelated bodies may not be reported as one local Power/ore pool.
+    graph = sim.power.environment.graph
+    moon_cell = next(cell for cell in graph.surface_cells if str(graph.surface_cells[cell].body_id) == "base.body.moon")
+    other_cell = next(cell for cell in graph.surface_cells if graph.surface_cells[cell].body_id != graph.surface_cells[moon_cell].body_id)
+    with pytest.raises(ValueError, match="different bodies"):
+        evaluate({**base, "solar_sites": [{**site, "context": str(other_cell)}],
+                  "phases": [{**base["phases"][0], "extraction_sites": [
+                      {"node": "site", "developed_cells": [str(moon_cell)]}]}]}, app=definitions)
+    with pytest.raises(ValueError, match="exactly one existing target"):
+        compare_cases({"base_plan": {**base, "solar_sites": [site]},
+                       "cases": [{"name": "before"}, {"name": "changed", "updates": [
+                           {"collection": "solar_sites", "node": "site", "id": "unknown.facility", "day": 1},
+                       ]}]}, app=definitions)

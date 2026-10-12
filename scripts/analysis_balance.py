@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
+from space_idle.spatial import IlluminationField
 from space_idle.shared import DefinitionId, SurfaceCellId, SpatialNodeId
 from space_idle.exploration_models import KnowledgeLevel
 from space_idle.analysis_graph import DependencyNode
@@ -203,10 +204,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
 
     No finite allocation, location eligibility or automatic scheduling is solved.
-    Scenario authors must explicitly provide solar yield and all outside inflows.
+    Unresolved solar factors and all outside inflows require explicit assumptions.
+    A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites"}, {"phases"}, "plan")
     if app is None:
         app = build_game_application_for_load()
     sim, catalog = app._simulation, app._catalog
@@ -247,7 +249,28 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         stocks[key] = _number(row["amount_t"], "initial stock")
     solar_yield = {}
     for node, factor in plan.get("solar_yield", {}).items():
-        solar_yield[node] = _number(factor, "solar yield")
+        solar_yield[_identifier(node, nodes, "solar factor Node")] = _number(factor, "solar yield")
+    # A World site is an authored prospective placement, not an actually
+    # founded Node or installed Facility. The Power Domain owns the mapping
+    # from actual Illumination at that World context to rated generation.
+    solar_sites = {}
+    available_contexts = ({str(cell) for cell in sim.power.environment.graph.surface_cells}
+                          | {str(node) for node in sim.power.environment.graph.nodes})
+    for row in plan.get("solar_sites", ()):
+        _keys(row, {"node", "facility", "context", "day"},
+              {"node", "facility", "context"}, "solar site")
+        node = _identifier(row["node"], nodes, "solar site Node")
+        facility_id = _identifier(row["facility"], sim.facilities.definitions, "solar site Facility")
+        if not isinstance(getattr(sim.power.specs.get(DefinitionId(facility_id)), "generation", None),
+                          SolarGeneration):
+            raise ValueError("solar World site requires a solar generating Facility")
+        context = _identifier(row["context"], available_contexts, "World solar context")
+        if node in solar_yield:
+            raise ValueError("World solar site conflicts with authored node solar yield")
+        key = (node, facility_id)
+        if key in solar_sites:
+            raise ValueError(f"duplicate solar World site: {key}")
+        solar_sites[key] = context, _integer(row.get("day", 0), "solar World reference day")
 
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
     previous = defaultdict(int)
@@ -332,6 +355,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         transport_supply_by_od = defaultdict(float)
         extraction_groups = defaultdict(list)
         extraction_context_report = []
+        power_world_context_report = []
         # Everything here is a request or nominal nameplate, never settled flow.
         for node, name, units, process_id, extraction_id, duty, yield_factor, people in assets:
             current[(node, name)] += units
@@ -402,9 +426,39 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 if isinstance(spec.generation, FixedGeneration):
                     power_supply[node] += spec.generation.mw * mult
                 elif isinstance(spec.generation, SolarGeneration):
-                    if node not in solar_yield:
-                        raise ValueError(f"solar_yield for {node} required to compare {name}")
-                    power_supply[node] += spec.generation.rated_mw_at_reference_flux * solar_yield[node] * mult
+                    selected_site = solar_sites.get((node, name))
+                    if selected_site is not None:
+                        context, reference_day = selected_site
+                        # A missing environmental field is unknown, not zero
+                        # generation. The Power owner calculates the quantity;
+                        # the evaluator only guards scenario interpretation.
+                        if sim.power.environment.get(context, IlluminationField, reference_day) is None:
+                            raise ValueError(f"World solar illumination unassessed for {context}")
+                        extraction_context = extraction_contexts.get(node)
+                        if extraction_context is not None:
+                            graph = sim.power.environment.graph
+                            solar_body = graph.context_body_id(context)
+                            if str(solar_body) != extraction_context["body"]:
+                                raise ValueError("solar World site and extraction context refer to different bodies at one node")
+                            if context not in extraction_context["cells"]:
+                                unassessed.add("intra_location_power_distribution_between_cells_unassessed")
+                        per_unit_mw, _load = sim.power.nominal_for_definition_at_context(
+                            DefinitionId(name), context, reference_day,
+                        )
+                        power_supply[node] += per_unit_mw * mult
+                        power_world_context_report.append({
+                            "node": node, "facility": name, "world_context": context,
+                            "world_reference_day": reference_day,
+                            "nominal_unallocated_generation_mw": per_unit_mw * mult,
+                            "basis": "power_domain_world_environment_x_selected_facility_and_duty",
+                            "status": "prospective_site_placement_and_operation_unassessed",
+                        })
+                        unassessed.add("world_solar_site_placement_and_ongoing_conditions_unassessed")
+                    else:
+                        if node not in solar_yield:
+                            raise ValueError(f"solar_yield or solar_sites for {node}/{name} required")
+                        power_supply[node] += spec.generation.rated_mw_at_reference_flux * solar_yield[node] * mult
+                        unassessed.add("solar_yield_is_authored_not_world_derived")
             storage_spec = sim.storage.providers.get(facility.id)
             if storage_spec:
                 for pool, amount in storage_spec.capacity_t_by_pool.items():
@@ -1278,6 +1332,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "transport_services": transport_services,
                        "od_transport_constraints": od_transport_constraints,
                        "extraction_world_context": extraction_context_report,
+                       "power_world_context": power_world_context_report,
                        "resources": breakdown,
                        "resource_contributions": [
                            {"node": node, "resource": resource, "dimension": dimension,
@@ -1362,6 +1417,15 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             candidates = [plan["solar_yield"]]
             edits = {change["node"]: change["factor"]}
             identity = (collection, change["node"])
+        elif collection == "solar_sites":
+            _keys(change, {"collection", "node", "id", "context", "day"},
+                  {"collection", "node", "id"}, "case update")
+            edits = {key: change[key] for key in ("context", "day") if key in change}
+            candidates = [row for row in plan.get("solar_sites", ())
+                          if row["node"] == change["node"] and row["facility"] == change["id"]]
+            identity = (collection, change["node"], change["id"])
+            if not edits:
+                raise ValueError("empty World solar site sensitivity")
         elif collection == "initial_stock":
             _keys(change, {"collection", "node", "id", "amount_t"},
                   {"collection", "node", "id", "amount_t"}, "case update")
@@ -1489,6 +1553,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                 ("extraction_world_context", ("node", "resource", "output_resource"),
                  ("effective_opportunity", "adjusted_installed_capacity_t_per_day",
                   "diminishing_output_t_per_day", "marginal_efficiency")),
+                ("power_world_context", ("node", "facility"),
+                 ("nominal_unallocated_generation_mw",)),
                 ("investment_constraints", ("node",),
                  ("required_work", "pre_investment_work_per_day", "pre_investment_work_lower_bound_days")),
                 ("spatial_projects", ("node", "recipe"), ("units", "required_construction_work")),
@@ -1586,6 +1652,7 @@ def summarize_projection(projection: dict) -> dict:
             "investment_constraints": phase["investment_constraints"],
             "od_transport_constraints": phase["od_transport_constraints"],
             "extraction_world_context": phase["extraction_world_context"],
+            "power_world_context": phase["power_world_context"],
             "science_activity_bounds": [
                 {k: item[k] for k in ("campaign", "origin", "duration_days", "conditional_rp_reward", "status")}
                 for item in phase["science_campaigns"]],
@@ -1605,7 +1672,7 @@ def summarize_projection(projection: dict) -> dict:
             "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
             "detail_sections": [
-                "activity_sources", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints",
+                "activity_sources", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
