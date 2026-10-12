@@ -40,6 +40,24 @@ def test_unrestricted_ordinary_inventory_and_shared_finite_special_storage():
     assert inventory.admit(node, special, 2.0).rejected_t == pytest.approx(2.0)
     assert inventory.admit(node, b, 2500.0).fully_admitted
 
+    # Opening stock is a physical initial condition, not an artificial day-0
+    # receipt that needs already running power/maintenance. Shared physical
+    # space is still enforced atomically across special resources.
+    opening = InventoryBook({
+        a: ResourceDef(a, "A"), b: ResourceDef(b, "B"),
+        special: ResourceDef(special, "Special", storage_pool_key="cryogenic"),
+    })
+    opening.set_capacity_snapshot({(node, "cryogenic"): 10.0}, {(node, "cryogenic"): 0.0})
+    with pytest.raises(ValueError, match="physical special storage"):
+        opening.initialize_stock({(node, special): 11.0, (node, a): 300.0})
+    assert opening.stock == {}
+    opening.initialize_stock({(node, special): 8.0, (node, a): 300.0})
+    assert opening.amount(node, special) == pytest.approx(8.0)
+    assert opening.amount(node, a) == pytest.approx(300.0)
+    assert opening.admission_state(node, special).over_capacity_t == pytest.approx(8.0)
+    with pytest.raises(ValueError, match="empty Inventory owner"):
+        opening.initialize_stock({(node, a): 1.0})
+
 
 def test_application_exposes_special_capacity_but_not_fictitious_ordinary_headroom():
     app = build_game_application()
@@ -99,7 +117,7 @@ def test_special_storage_power_fulfillment_and_pause_preserve_only_physically_av
         if row.definition_id == ids.ORBITAL_LOGISTICS_NODE
     )
     pool = sim.inventory.storage_pool_for_resource(ids.PROPELLANT)
-    base_infrastructure = sim.storage.infrastructure_capacity_t[(node, pool)]
+    base_infrastructure = sim.storage.infrastructure_capacity_t.get((node, pool), 0.0)
     capacity = sim.storage.providers[facility.definition_id].capacity_t_by_pool[pool]
     assert pool in sim.storage.providers[facility.definition_id].power_sensitive_pools
     assert sim.inventory.admission_state(node, ids.PROPELLANT).usable_capacity_t == pytest.approx(

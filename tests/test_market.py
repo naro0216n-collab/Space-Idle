@@ -307,3 +307,51 @@ def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
     loaded._simulation.advance_days(3)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
     assert loaded.query(GetMarket()) == app.query(GetMarket())
+
+
+def test_physical_cold_stock_and_matured_market_receipt_share_actual_powered_admission(tmp_path):
+    """Cold stocks survive outage; new purchases settle only when power returns."""
+    from space_idle import AdvanceTime, PauseFacility, ResumeFacility, GetOperationalNode
+
+    app = build_game_application()
+    sim = app._simulation
+    node = ids.EARTH
+    cold = "cryogenic"
+    stock_before = sim.inventory.amount(node, ids.PROPELLANT)
+    funds_before = sim.market.funds.balance
+    physical = sim.inventory.physical_storage_capacity_t[(node, cold)]
+    assert physical > sim.inventory.stored_in_pool(node, cold)
+    assert not sim.storage.infrastructure_capacity_t
+    assert any(f.definition_id == ids.CRYOGENIC_STORAGE for f in sim.facilities.all_at(node))
+
+    grid = next(f for f in sim.facilities.all_at(node) if f.definition_id == ids.GRID_POWER_SUPPLY)
+    app.execute(PauseFacility(str(grid.id)))
+    assert sim.inventory.usable_storage_capacity_t[(node, cold)] == pytest.approx(0.0)
+    assert sim.inventory.stored_in_pool(node, cold) > 0
+
+    app.execute(CreateTradeOrder(
+        direction="buy", resource_id=str(ids.PROPELLANT),
+        market_interface_id=str(EARTH_MARKET_INTERFACE), priority=5,
+        control_mode="quantity", quantity_target_t=2.0,
+    ))
+    for _ in range(4):
+        app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(node, ids.PROPELLANT) == pytest.approx(stock_before)
+    assert sim.market.funds.balance == pytest.approx(funds_before)
+    assert sim.market.reserved_funds_musd > 0
+    row = next(r for r in app.query(GetOperationalNode(str(node))).storage if r.storage_pool_key == cold)
+    assert row.unusable_occupied_t > 0
+
+    fixed = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / "powered_cold_stock.json"
+    save_game(app, path, saved_at=fixed)
+    restored, _ = load_game(path, build_game_application_for_load, now=fixed)
+    assert capture_state(restored._simulation) == capture_state(sim)
+
+    for game in (app, restored):
+        game.execute(ResumeFacility(str(grid.id)))
+        game.execute(AdvanceTime(3))
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert sim.inventory.amount(node, ids.PROPELLANT) == pytest.approx(stock_before + 2.0)
+    assert sim.market.funds.balance < funds_before
+    assert sim.market.reserved_funds_musd == pytest.approx(0.0)

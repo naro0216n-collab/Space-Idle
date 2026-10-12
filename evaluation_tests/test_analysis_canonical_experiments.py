@@ -20,6 +20,7 @@ from space_idle.analysis_execution import ActivityFlow, observe_canonical_day
 from space_idle.analysis_graph import DependencyNode
 from space_idle.analysis_observation import observe_state
 from space_idle.bootstrap import build_game_application_for_scenario
+from space_idle.scenario import ScenarioFacility
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.content import base_ids as ids
 from scripts.analysis_variants import apply_content_variant, scenario_variant
@@ -1208,6 +1209,14 @@ def test_independent_science_founding_and_market_content_reuses_application_cont
         'fleet': [{'operational_node_id': str(ids.LUNAR_ORBIT),
                    'vehicle_definition_id': str(ids.REUSABLE_SURFACE_CARGO_LANDER), 'units': 1}],
     })
+    # An installed, paid-for depot holds the extra founding propellant; the
+    # standard opening scenario does not grant free large cold capacity.
+    stocked = replace(stocked, facilities=stocked.facilities + (
+        ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LUNAR_ORBIT,
+                         invested_resources=((ids.STRUCTURAL_COMPONENTS, 7.0),
+                                             (ids.MACHINERY, 5.0),
+                                             (ids.PRECISION_ELECTRONICS, 2.0))),
+    ))
     founded = factory(input_scenario=stocked)
     project = founded.execute(PlanOperationalNodeFounding(
         str(ids.LUNAR_ORBIT), 'Independent lunar site',

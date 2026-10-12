@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import add_preexisting_stock
+
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -69,10 +71,9 @@ def _seed_exploration_movement_resources(app, *, returning: bool = False) -> Non
         plans,
         payload_t_per_unit=definition.minimum_payload_t,
     ):
-        sim.inventory.add(
-            requirement.operational_node_id,
-            requirement.resource_id,
-            requirement.required_t,
+        add_preexisting_stock(
+            sim, requirement.operational_node_id,
+            requirement.resource_id, requirement.required_t,
         )
 
 
@@ -614,7 +615,7 @@ def _start_unoperated_science(app):
     state = sim.scientific_exploration.campaigns[mission_id]
     needs = sim.scientific_exploration._preparation_requirements(definition, state, sim.day)
     for node, resource, amount, _ in needs:
-        sim.inventory.add(node, resource, amount + 1.0)
+        add_preexisting_stock(sim, node, resource, amount + 1.0)
     start_balances = {(node, resource): sim.inventory.amount(node, resource)
                       for node, resource, _amount, _ in needs}
     app.execute(AdvanceTime(2))
@@ -809,9 +810,9 @@ def test_crewed_exploration_keeps_population_and_onboard_resources_until_physica
     sim.refresh_storage()
     sim.population.initialize(ids.LEO, 2)
     for resource in (ids.FOOD, ids.WATER, ids.OXYGEN, ids.PROPELLANT):
-        sim.inventory.add(ids.LEO, resource, 50.0)
+        add_preexisting_stock(sim, ids.LEO, resource, 50.0)
         if resource != ids.PROPELLANT:
-            sim.inventory.add(ids.LUNAR_ORBIT, resource, 50.0)
+            add_preexisting_stock(sim, ids.LUNAR_ORBIT, resource, 50.0)
 
     initial_people = sum(group.count for group in sim.population.groups.values())
     app.execute(StartScientificExploration(str(mission)))

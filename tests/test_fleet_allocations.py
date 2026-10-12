@@ -1,3 +1,5 @@
+from stock_support import add_preexisting_stock
+
 import math
 
 import pytest
@@ -542,8 +544,8 @@ def test_resource_support_uses_definition_capability_instead_of_magic_refueling_
     )
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 10.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
 
     allocation_id = _create_transport_for_units(
         lg, vehicle_id, ids.LEO, ids.LUNAR_ORBIT, 1, day=sim.day
@@ -610,7 +612,7 @@ def test_relocation_keeps_units_exclusive_until_arrival():
     sim = _fleet_sim(3)
     lg = sim.transport
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 10.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 10.0)
     source_before = lg.fleet_pool(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO
     ).total_units
@@ -686,8 +688,8 @@ def test_fleet_query_exposes_and_scopes_transitional_state():
     lg.fleet_pool(vehicle_id, ids.LEO).total_units = 3
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
     allocation_id = _create_transport_for_units(
         lg, vehicle_id, ids.LEO, ids.LUNAR_ORBIT, 2, day=0
@@ -825,8 +827,8 @@ def test_available_transport_capacity_reflects_execution_constraints_without_cha
     blocked_transport = blocked_sim.transport
     blocked_sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     blocked_sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    blocked_sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    blocked_sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(blocked_sim, ids.LEO, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(blocked_sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
     blocked_transport.spaceflight_movement_rules = tuple(
         replace(
             row,

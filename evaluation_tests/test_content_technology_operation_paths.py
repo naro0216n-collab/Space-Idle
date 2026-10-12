@@ -756,7 +756,10 @@ def test_orbital_materials_and_bulk_freight_form_a_single_owned_supply_chain(tmp
             ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
             ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
             ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LEO),
             ScenarioFacility(ids.ORBITAL_ASSEMBLY_YARD, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LUNAR_ORBIT),
         ),
         inventory_stock=base.inventory_stock + (
             ScenarioInventoryStock(ids.LEO, ids.BULK_STRUCTURE, 25.0),
@@ -999,6 +1002,7 @@ def test_reclaimed_water_food_habitation_links_processes_population_construction
             ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
             ScenarioFacility(ids.ORBITAL_SOLAR_ARRAY, ids.LEO),
             ScenarioFacility(ids.ORBITAL_LOGISTICS_NODE, ids.LEO),
+            ScenarioFacility(ids.ORBITAL_PROPELLANT_DEPOT, ids.LEO),
         ),
         inventory_stock=base.inventory_stock + (
             ScenarioInventoryStock(ids.LEO, ids.WATER, 40.0),
@@ -1103,7 +1107,9 @@ def test_reclaimed_water_food_habitation_links_processes_population_construction
     before_leo_water = modern._simulation.inventory.amount(ids.LEO, ids.WATER)
     before_earth_fuel = modern._simulation.inventory.amount(ids.EARTH, ids.PROPELLANT)
     assert modern.execute(SetTargetStock(str(ids.LEO), str(ids.WATER), 70.0)).created_id
-    modern.execute(AdvanceTime(35))
+    # Observe finite replenishment without assuming an effectively unlimited
+    # opening propellant stock for prolonged transport operations.
+    modern.execute(AdvanceTime(8))
     assert modern._simulation.inventory.amount(ids.LEO, ids.WATER) > before_leo_water
     assert modern._simulation.inventory.amount(ids.EARTH, ids.PROPELLANT) < before_earth_fuel
     assert modern.query(GetOperationalNode(str(ids.LEO))).population.deprivation_person_days == 0

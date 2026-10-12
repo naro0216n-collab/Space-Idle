@@ -17,6 +17,9 @@ def build_market_provider_definitions() -> dict[DefinitionId, MarketProviderDef]
             (ids.MACHINERY, 0.24),
             (ids.PRECISION_ELECTRONICS, 0.55),
             (ids.CONSTRUCTION_EQUIPMENT, 0.32),
+            (ids.OXYGEN, 0.08),
+            (ids.HYDROGEN, 0.15),
+            (ids.PROPELLANT, 0.38),
         ),
         sell_offers_musd_per_t=(
             (ids.STRUCTURAL_COMPONENTS, 0.12),
@@ -31,6 +34,9 @@ def build_market_provider_definitions() -> dict[DefinitionId, MarketProviderDef]
             MarketAvailabilityDef(ids.MACHINERY, 400.0, 600.0, 40.0),
             MarketAvailabilityDef(ids.PRECISION_ELECTRONICS, 160.0, 240.0, 16.0),
             MarketAvailabilityDef(ids.CONSTRUCTION_EQUIPMENT, 240.0, 360.0, 24.0),
+            MarketAvailabilityDef(ids.OXYGEN, 30.0, 45.0, 3.0),
+            MarketAvailabilityDef(ids.HYDROGEN, 15.0, 25.0, 1.5),
+            MarketAvailabilityDef(ids.PROPELLANT, 90.0, 120.0, 9.0),
         ),
         demand=(
             MarketAvailabilityDef(ids.STRUCTURAL_COMPONENTS, 500.0, 800.0, 50.0),

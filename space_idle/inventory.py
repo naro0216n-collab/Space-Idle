@@ -230,6 +230,35 @@ class InventoryBook:
         after = self.admission_state(operational_node_id, resource_id)
         return InventoryAdmissionResult(requested, accepted, max(0.0, requested - accepted), before, after)
 
+    def initialize_stock(
+        self, initial: Mapping[tuple[SpatialNodeId, DefinitionId], float],
+    ) -> None:
+        """Install authored opening stock, without treating it as a new admission.
+
+        Existing physical inventory need not be operationally receivable on the
+        first boundary: cooling power and maintenance may depend on materials
+        in that very inventory. Opening stock must nevertheless fit *physical*
+        special-pool capacity. No operation may use this initialization path
+        after ownership, reservation, or cargo occupancy has been established.
+        """
+        if self.stock or self.reserved or self.external_occupancy:
+            raise ValueError("opening inventory requires an empty Inventory owner")
+        by_pool: dict[tuple[SpatialNodeId, StoragePoolKey], float] = {}
+        for (node_id, resource_id), amount in initial.items():
+            if resource_id not in self.resource_definitions:
+                raise ValueError(f"unknown opening inventory resource: {resource_id}")
+            if not isfinite(amount) or amount < 0:
+                raise ValueError("opening inventory stock must be finite and nonnegative")
+            pool = self.storage_pool_for_resource(resource_id)
+            if self.is_finite_storage_pool(pool):
+                key = (node_id, pool)
+                by_pool[key] = by_pool.get(key, 0.0) + amount
+        for key, occupied in by_pool.items():
+            if not isfinite(occupied) or occupied > self.physical_storage_capacity_t.get(key, 0.0) + _EPS:
+                raise ValueError(f"opening inventory exceeds physical special storage: {key}")
+        # Validate every row and shared pool before mutating any owner State.
+        self.stock.update({key: amount for key, amount in initial.items() if amount > 0})
+
     def add(self, operational_node_id: SpatialNodeId, resource_id: DefinitionId, amount: float) -> None:
         result = self.admit(operational_node_id, resource_id, amount)
         if not result.fully_admitted:

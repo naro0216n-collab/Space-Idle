@@ -86,6 +86,10 @@ def _owned_multistage_capacity(sim):
         for facility in sim.facilities.facilities.values()
     ):
         sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    # This pre-provisioned network fixture needs actual cryogenic hardware
+    # for its 10 t opening propellant, rather than an implicit free pool.
+    sim.facilities.install(ids.ORBITAL_PROPELLANT_DEPOT, LEO)
+    sim.facilities.install(ids.ORBITAL_PROPELLANT_DEPOT, LUNAR_ORBIT)
     sim.refresh_storage()
     sim.inventory.add(LEO, PROPELLANT, 10.0)
     sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)

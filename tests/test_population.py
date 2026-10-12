@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import add_preexisting_stock
+
 from datetime import datetime, timezone
 
 import pytest
@@ -21,7 +23,7 @@ def _prepare_leo_passenger_service(sim, *, supplies=2.0, with_service=True):
     """Construct the shared physical destination and optional player-owned service."""
     sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
     for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, supplies)
+        add_preexisting_stock(sim, ids.LEO, resource, supplies)
     if not with_service:
         return None
     capacity = sim.transport.transport_capacity_for_units(
@@ -162,7 +164,7 @@ def test_one_shot_passengers_conserve_people_fleet_and_onboard_resource_through_
     sim = app._simulation
     sim.facilities.install(ids.CREWED_ORBITAL_LABORATORY, ids.LEO)
     for resource in (ids.FOOD, ids.WATER, ids.OXYGEN):
-        sim.inventory.add(ids.LEO, resource, 1.0)
+        add_preexisting_stock(sim, ids.LEO, resource, 1.0)
     origin = str(ids.EARTH)
     destination = str(ids.LEO)
     preview = app.query(GetPassengerTransferPreview(origin, destination, 3))

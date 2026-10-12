@@ -138,8 +138,13 @@ class ScenarioDefinition:
             )
             initial_facility_ids.append(facility_id)
         sim.refresh_storage()
+        opening_stock = {}
         for row in self.inventory_stock:
-            sim.inventory.add(row.operational_node_id, row.resource_id, row.amount_t)
+            key = (row.operational_node_id, row.resource_id)
+            # Authored Scenario variants may add to an existing opening lot.
+            # The Inventory owner validates the aggregate before any mutation.
+            opening_stock[key] = opening_stock.get(key, 0.0) + row.amount_t
+        sim.inventory.initialize_stock(opening_stock)
         for row in self.fleet:
             sim.transport.add_fleet_units(
                 row.vehicle_definition_id,

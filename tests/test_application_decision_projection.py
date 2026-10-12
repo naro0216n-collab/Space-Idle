@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import add_preexisting_stock
+
 import pytest
 from unittest.mock import patch
 
@@ -440,8 +442,8 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     sim.transport.fleet_pool(vehicle_id, ids.LEO).total_units = 1
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
     auto_preview = app.query(GetFleetRelocationPreview(
         str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import add_preexisting_stock
+
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -80,8 +82,8 @@ def _advance_founding_to_completion(app, project):
 def _stage_founding_resources(sim):
     recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     for req in recipe.payload_resources:
-        sim.inventory.add(ids.LUNAR_ORBIT, req.resource_id, req.amount_t + 1.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+        add_preexisting_stock(sim, ids.LUNAR_ORBIT, req.resource_id, req.amount_t + 1.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
     return recipe
 
 
@@ -214,7 +216,7 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
     sim.founding.deployment_recipes[recipe_id] = DeploymentRecipe(
         recipe_id, "Test orbital deployment", (), 0.0, "construction"
     )
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 2.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 2.0)
     sim.transport.add_fleet_units(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day)
 
     result = app.execute(PlanOperationalNodeFounding(
@@ -473,7 +475,7 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
     # before any target-side State is materialized.
     sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
     target_id = orbital_target("test.node.founding_atomic_preflight", 991000.0)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 5.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 5.0)
     project_id = app.execute(PlanOperationalNodeFounding(
         staging_node_id=str(ids.LEO),
         display_name="Atomic preflight outpost",
@@ -596,8 +598,8 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
             expected_payload.get(requirement.resource_id, 0.0) + requirement.amount_t
         )
     for resource_id, amount_t in expected_payload.items():
-        sim.inventory.add(ids.LUNAR_ORBIT, resource_id, amount_t + 1.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+        add_preexisting_stock(sim, ids.LUNAR_ORBIT, resource_id, amount_t + 1.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
 
     project_id = app.execute(PlanOperationalNodeFounding(
         staging_node_id=str(ids.LUNAR_ORBIT),
