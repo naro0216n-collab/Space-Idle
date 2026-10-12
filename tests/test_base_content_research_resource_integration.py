@@ -10,7 +10,7 @@ def test_base_content_limits_resource_families_per_recipe():
     not inherit this Content design constraint by accidental test coverage.
     Generic Core continues to support arbitrary typed Resource requirements.
     """
-    from space_idle.content.base_construction import build_facility_upgrade_recipes
+    from space_idle.content.base_assets import build_base_assets
 
     sim = build_game_application()._simulation
     recipe_inputs = {
@@ -19,7 +19,7 @@ def test_base_content_limits_resource_families_per_recipe():
         **{f"construction:{key}": {row.resource_id for row in recipe.resources}
            for key, recipe in sim.projects.recipes.items()},
         **{f"upgrade:{key}": {row.resource_id for row in recipe.resources}
-           for key, recipe in build_facility_upgrade_recipes().items()},
+           for key, recipe in {(u.facility_def_id, u.target_level): u for row in build_base_assets()[0] for u in row.upgrades}.items()},
         **{f"vehicle:{key}": {resource for resource, _ in vehicle.production.resources}
            for key, vehicle in sim.transport.vehicle_defs.items() if vehicle.production},
         **{f"founding:{key}": set(recipe.investment_totals()) | set(recipe.initial_inventory_totals())

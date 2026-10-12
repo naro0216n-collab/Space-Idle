@@ -420,10 +420,26 @@ def test_shared_scale_cases_only_edit_declared_quantities(definitions):
 def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity_contract():
     """One Content list entry can add a Facility or Vehicle through normal owners."""
     from scripts.analysis_variants import apply_content_variant
+    from space_idle.content.base_assets import build_base_assets
     from space_idle.shared import DefinitionId
 
     base = build_game_application_for_load()
     sim = base._simulation
+    facility_assets, vehicle_assets = build_base_assets()
+    # Standard Content itself uses the same one-row installation that variants
+    # use, rather than reproducing ownership maps in separate source files.
+    assert {row.definition.id for row in facility_assets} == set(sim.facilities.definitions)
+    assert {row.id for row in vehicle_assets} == set(sim.transport.vehicle_defs)
+    for row in facility_assets:
+        identity = row.definition.id
+        assert sim.facilities.definitions[identity] == row.definition
+        assert sim.projects.recipes[identity] == row.construction
+        assert sim.power.specs[identity] == row.power
+        assert sim.projects.decommission_recipes[identity] == row.decommission
+        if row.storage is not None:
+            assert sim.storage.providers[identity] == row.storage
+        if row.construction_provider is not None:
+            assert sim.projects.construction_providers[identity] == row.construction_provider
     source_facility = next(fid for fid in sim.facilities.definitions
                            if fid in sim.projects.recipes and fid in sim.power.specs)
     source_vehicle = next(vid for vid, vehicle in sim.transport.vehicle_defs.items()
@@ -466,3 +482,8 @@ def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity
     assert phase["scale"]["fleet_units_built"] == 50
     with pytest.raises(ValueError, match="new target"):
         apply_content_variant(new_sim, app._catalog, changes)
+    with pytest.raises(ValueError, match="complete asset bundle"):
+        apply_content_variant(new_sim, app._catalog, [{
+            "operation": "add", "kind": "facility", "id": "invalid.partial.asset",
+            "source_id": str(source_facility),
+        }])

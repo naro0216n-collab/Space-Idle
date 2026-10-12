@@ -28,19 +28,15 @@ from ..catalog import GameCatalog
 
 from ..content import base_ids as ids
 from ..content.base_construction import (
-    build_construction_providers,
-    build_construction_recipes,
     build_construction_resource_providers,
-    build_facility_upgrade_recipes,
-    build_facility_decommission_recipes,
     build_spatial_development_recipes,
     procurement_wait_days,
 )
 from ..content.base_contracts import build_contract_templates
-from ..content.base_facilities import build_facility_definitions
+from ..content.base_assets import build_base_assets
+from ..content.asset_content import AssetDefinitions
 from ..content.base_founding import build_deployment_recipes
 from ..content.base_industry import build_process_specs
-from ..content.base_power import build_power_specs
 from ..content.base_market import build_market_provider_definitions
 from ..content.base_progression import (
     build_extraction_specs,
@@ -52,12 +48,10 @@ from ..content.base_research import (
 )
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
 from ..content.base_spatial import BASE_WORLD_DEFINITION_ID, build_world_definition
-from ..content.base_storage import build_storage_provider_specs
 from ..content.base_transport import (
     build_spaceflight_movement_rules,
     build_surface_access_movement_rules,
     build_surface_movement_rules,
-    build_vehicle_definitions,
 )
 
 
@@ -68,7 +62,13 @@ def build_base_simulation(
     """Compose static base-game definitions with empty authoritative runtime State."""
     graph, environment = build_world_definition()
 
-    facility_definitions = build_facility_definitions()
+    authored = AssetDefinitions()
+    facility_rows, vehicle_rows = build_base_assets()
+    for row in facility_rows:
+        authored.add_facility(row)
+    for row in vehicle_rows:
+        authored.add_vehicle(row)
+    facility_definitions = authored.facilities
     facilities = FacilityBook(facility_definitions, environment)
     service_capacity_registry = ServiceCapacityRegistry()
 
@@ -80,7 +80,7 @@ def build_base_simulation(
     for provider in build_market_provider_definitions().values():
         market.register_provider_definition(provider)
     technology = TechnologyState()
-    power = PowerService(build_power_specs(), environment)
+    power = PowerService(authored.power, environment)
 
     transport = TransportService(
         inventory=inventory,
@@ -92,7 +92,7 @@ def build_base_simulation(
         spaceflight_movement_rules=build_spaceflight_movement_rules(),
         technology_state=technology,
     )
-    transport.vehicle_defs.update(build_vehicle_definitions())
+    transport.vehicle_defs.update(authored.vehicles)
 
     logistics = LogisticsService(
         transport=transport,
@@ -107,7 +107,7 @@ def build_base_simulation(
     )
     survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport, technology)
 
-    storage = StorageService(build_storage_provider_specs(), inventory, facilities)
+    storage = StorageService(authored.storage, inventory, facilities)
 
     facility_lifecycle_registry = FacilityLifecycleRegistry()
     facility_lifecycle_registry.register_blocker_provider("transport", transport)
@@ -116,10 +116,10 @@ def build_base_simulation(
     surface_cell_claim_registry = SurfaceCellClaimRegistry()
 
     projects = ProjectService(
-        recipes=build_construction_recipes(),
-        upgrade_recipes=build_facility_upgrade_recipes(),
-        decommission_recipes=build_facility_decommission_recipes(facility_definitions),
-        construction_providers=build_construction_providers(),
+        recipes=authored.construction,
+        upgrade_recipes=authored.upgrades,
+        decommission_recipes=authored.decommission,
+        construction_providers=authored.construction_providers,
         inventory=inventory,
         facilities=facilities,
         power=power,

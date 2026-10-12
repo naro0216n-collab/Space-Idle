@@ -4,7 +4,7 @@ import pytest
 
 from space_idle import GetOperationalNode, GetSurfaceMap, build_game_application
 from space_idle.content import base_ids as ids
-from space_idle.content.base_facilities import build_facility_definitions
+from space_idle.content.base_assets import build_base_assets
 from space_idle.extraction_service import ExtractionService
 from space_idle.facilities import FacilityBook
 from space_idle.power import PowerSnapshot
@@ -103,7 +103,7 @@ def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensi
 
 def test_extraction_throughput_derives_from_installed_capacity_and_operational_fulfillment():
     base = build_game_application()._simulation
-    definitions = build_facility_definitions()
+    definitions = {row.definition.id: row.definition for row in build_base_assets()[0]}
 
     facilities = FacilityBook(definitions, base.facilities.environment)
     facility_id = facilities.install(ids.METAL_ORE_MINE, ids.EARTH)

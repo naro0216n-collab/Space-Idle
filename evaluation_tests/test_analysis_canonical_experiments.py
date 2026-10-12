@@ -693,15 +693,12 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
     new_provider = 'experiment.provider.research'
     new_vehicle = 'experiment.vehicle.production'
     additions = [
-        {'operation': 'add', 'kind': kind, 'source_id': str(source), 'id': target}
-        for kind, source, target in (
-            ('facility', source_facility, new_facility),
-            ('construction', source_facility, new_facility),
-            ('decommission', source_facility, new_facility),
-            ('power', source_facility, new_facility),
-            ('vehicle', source_vehicle.id, new_vehicle),
-            ('research_provider', source_provider.id, new_provider),
-        )
+        {'operation': 'add', 'kind': 'asset_bundle', 'asset_kind': 'facility',
+         'source_id': str(source_facility), 'id': new_facility},
+        {'operation': 'add', 'kind': 'asset_bundle', 'asset_kind': 'vehicle',
+         'source_id': str(source_vehicle.id), 'id': new_vehicle},
+        {'operation': 'add', 'kind': 'research_provider',
+         'source_id': str(source_provider.id), 'id': new_provider},
     ]
     edits = [
         {'kind': 'facility', 'id': new_facility, 'field': 'capability_supplies',
@@ -754,14 +751,15 @@ def test_independent_definition_membership_connects_assets_providers_acquisition
     reordered = factory(list(reversed(additions)))
     assert build_definition_dependency_graph(reordered._simulation, reordered._catalog).to_json_data() == graph.to_json_data()
 
-    # Additions never silently invent acquisition recipes. Missing references
-    # or competing providers are invalid through normal Composition validation.
-    with pytest.raises(ValueError):
+    # Incomplete assets cannot bypass the ordinary installation path. Missing
+    # provider references are rejected by Composition validation.
+    with pytest.raises(ValueError, match='complete asset bundle'):
         build_game_application_for_scenario(
             build_standard_scenario_definition(),
             definition_transform=lambda runtime, catalog: apply_content_variant(
                 runtime, catalog, additions + edits + [
-                    {'operation': 'remove', 'kind': 'facility', 'id': new_facility},
+                    {'operation': 'add', 'kind': 'facility', 'source_id': str(source_facility),
+                     'id': 'experiment.invalid.partial'},
                 ]),
         )
     with pytest.raises(ValueError):

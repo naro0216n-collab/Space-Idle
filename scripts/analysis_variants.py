@@ -10,6 +10,7 @@ from math import isfinite
 from typing import Mapping, Sequence
 
 from space_idle.catalog import GameCatalog
+from space_idle.content.asset_content import AssetDefinitions
 from space_idle.scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility, ScenarioMarketInterface, ScenarioProviderFleetAssignment
 from space_idle.shared import DefinitionId, SpatialNodeId, SurfaceCellId, EntityId
 from space_idle.population import ExternalPopulationSourceDefinition
@@ -350,15 +351,8 @@ def _owned_definition_collections(sim: Simulation) -> dict[str, tuple[dict, str 
     synthetic access to runtime State or an experiment-only Content registry.
     """
     collections = {
-        "facility": (sim.facilities.definitions, "id"),
-        "vehicle": (sim.transport.vehicle_defs, "id"),
-        "construction": (sim.projects.recipes, "facility_def_id"),
-        "decommission": (sim.projects.decommission_recipes, "facility_def_id"),
-        "power": (sim.power.specs, None),
-        "storage_provider": (sim.storage.providers, "facility_def_id"),
         "market_provider": (sim.market.provider_defs, "id"),
         "spatial_development": (sim.projects.spatial_recipes, "id"),
-        "construction_provider": (sim.projects.construction_providers, "facility_def_id"),
         "construction_resource_provider": (sim.projects.construction_resource_providers, "resource_id"),
     }
     if sim.research is not None:
@@ -411,8 +405,6 @@ def _change_owned_definition(sim: Simulation, change: Mapping) -> None:
                                       if identity_field is not None else replace(source))
     else:
         raise ValueError(f"unknown Content variant operation: {action}")
-    if kind == "vehicle":
-        sim.transport.invalidate_movement_plans()
 
 
 def _change_movement_rule_membership(sim: Simulation, change: Mapping) -> None:
@@ -478,29 +470,28 @@ def _add_asset_bundle(sim: Simulation, catalog: GameCatalog, change: Mapping) ->
     source_id, target_id = DefinitionId(str(data["source_id"])), DefinitionId(str(data["id"]))
     if not str(source_id) or not str(target_id):
         raise ValueError("asset bundle requires nonempty identifiers")
-    collections = _owned_definition_collections(sim)
-    owner = collections[asset_kind][0]
+    # Both standard and variant assets pass through the same typed owner map
+    # installer. A variant is not a second Content registration architecture.
+    authored = AssetDefinitions(
+        facilities=sim.facilities.definitions,
+        construction=sim.projects.recipes,
+        power=sim.power.specs,
+        storage=sim.storage.providers,
+        construction_providers=sim.projects.construction_providers,
+        upgrades=sim.projects.upgrade_recipes,
+        decommission=sim.projects.decommission_recipes,
+        vehicles=sim.transport.vehicle_defs,
+    )
+    owner = authored.facilities if asset_kind == "facility" else authored.vehicles
     if source_id not in owner or target_id in owner:
         raise ValueError("asset bundle requires an existing source and new target ID")
+    if asset_kind == "facility":
+        authored.copy_facility(source_id, target_id)
+    else:
+        authored.copy_vehicle(source_id, target_id)
+        sim.transport.invalidate_movement_plans()
     related = ("facility", "construction", "decommission", "power",
                "storage_provider", "construction_provider") if asset_kind == "facility" else ("vehicle",)
-    for kind in related:
-        definitions = collections[kind][0]
-        if source_id not in definitions:
-            continue
-        if target_id in definitions:
-            raise ValueError(f"asset bundle target already registered: {kind}/{target_id}")
-        _change_owned_definition(sim, {"operation": "add", "kind": kind,
-                                       "id": str(target_id), "source_id": str(source_id)})
-    if asset_kind == "facility":
-        # Upgrade recipes are keyed by (Facility, target level), unlike the
-        # ordinary construction and decommission recipes.
-        for (facility_id, level), recipe in tuple(sim.projects.upgrade_recipes.items()):
-            if facility_id == source_id:
-                key = target_id, level
-                if key in sim.projects.upgrade_recipes:
-                    raise ValueError(f"duplicate asset upgrade recipe {key}")
-                sim.projects.upgrade_recipes[key] = replace(recipe, facility_def_id=target_id)
     edits = data.get("edits", [])
     if not isinstance(edits, list):
         raise ValueError("asset bundle edits must be a list")
@@ -529,6 +520,9 @@ def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change:
     if kind == "asset_bundle":
         _add_asset_bundle(sim, catalog, change)
         return
+    if kind in {"facility", "vehicle", "construction", "decommission", "power",
+                "storage_provider", "construction_provider"}:
+        raise ValueError("asset-owned Definitions must be added through one complete asset bundle")
     if kind in ("surface_movement_rule", "surface_access_movement_rule", "spaceflight_movement_rule"):
         _change_movement_rule_membership(sim, change)
         return

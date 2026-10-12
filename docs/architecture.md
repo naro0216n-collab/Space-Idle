@@ -110,6 +110,8 @@ Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lande
 
 外部組織、Contract、Event等はContent / Application側の拡張として追加できるが、FundsをResource売買以外の報酬・一般支払手段として変更しない。Research Point中心の成長ループや通常SimulationのGeneric Core必須Domainにも含めない。
 
+FacilityとVehicleの具体的なContentは、資産ごとに必要な型付きDefinitionをまとまった登録行として記述し、Compositionがそれを各所有DomainのDefinition集合へ展開する。Facilityの建設・改修・解体Recipe、Power、特殊Storage、施工供給等を同じ資産の記述から組み立て、個別ファイルへの同一IDの並列登録を追加条件にしない。新規の施設・機体も標準Contentと数量実験で同じ登録処理を用い、実験専用の第二のDefinition所有経路は作らない。これは可変Game Stateや各Domainの所有権の統合を意味しない。
+
 Content固有名は説明に使ってよいが、Generic Core内の分岐条件にはしない。高能力のFacility世代は必要な物理Capabilityを共有しながらInstalled Capacity、Power、維持・建設投資などで規模差を表現できる。既存Processの再利用を世代別IDの複製で代替しない。Technologyとの接続・整理はContentの工学的発展体系と量的成長を検討したうえで確定し、静的な未接続件数をCoreの成立判定へ持ち込まない。
 
 ### 3.3 Application Layer
