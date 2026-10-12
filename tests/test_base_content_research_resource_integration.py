@@ -136,3 +136,45 @@ def test_survey_method_technology_blocks_progress_without_discarding_campaign():
     assert progress > before
     # Revoking a completed Technology directly is not a supported gameplay
     # transition. Pausing/resuming a Campaign is covered by its owning tests.
+
+
+def test_advanced_electronics_supply_is_technology_gated_and_consumes_real_stock():
+    """New industrial throughput is installed hardware, not an automatic research buff."""
+    from space_idle import ApplicationError, AdvanceTime, GetOperationalNode, SetFacilityProcess
+    from space_idle.content import base_ids as ids
+    import pytest
+
+    app = build_game_application()
+    sim = app._simulation
+    old_facility = sim.facilities.install(ids.MICROELECTRONICS_FAB, ids.EARTH)
+    new_facility = sim.facilities.install(ids.IN_LINE_ELECTRONICS_FAB, ids.EARTH)
+    process = sim.industry.processes[ids.PROCESS_MONITORED_MICROELECTRONICS]
+    old_caps = {cap.id for cap in sim.facilities.definitions[ids.MICROELECTRONICS_FAB].capability_supplies}
+    assert not process.required_capabilities <= old_caps
+
+    def option(facility_id):
+        return next(candidate for asset in app.query(GetOperationalNode(str(ids.EARTH))).industry
+                    if asset.facility_id == str(facility_id)
+                    for candidate in asset.process_options
+                    if candidate.process_id == str(process.id))
+
+    assert not option(new_facility).can_select
+    with pytest.raises(ApplicationError, match="technology"):
+        app.execute(SetFacilityProcess(str(new_facility), str(process.id)))
+    sim.technology.completed.update(process.prerequisite_technologies)
+    assert option(new_facility).can_select
+    app.execute(SetFacilityProcess(str(new_facility), str(process.id)))
+    assert not any(candidate.process_id == str(process.id)
+                   for asset in app.query(GetOperationalNode(str(ids.EARTH))).industry
+                   if asset.facility_id == str(old_facility)
+                   for candidate in asset.process_options)
+
+    # A one-day operation consumes upstream commodities and cannot produce
+    # electronics by a Technology completion alone.
+    for resource, amount in process.inputs_per_day.items():
+        sim.inventory.add(ids.EARTH, resource, amount * 20.0)
+    output_before = sim.inventory.amount(ids.EARTH, ids.PRECISION_ELECTRONICS)
+    input_before = sim.inventory.amount(ids.EARTH, ids.CERAMICS_GLASS)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, ids.PRECISION_ELECTRONICS) > output_before
+    assert sim.inventory.amount(ids.EARTH, ids.CERAMICS_GLASS) < input_before

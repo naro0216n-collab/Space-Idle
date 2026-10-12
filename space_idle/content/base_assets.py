@@ -864,9 +864,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         req._capabilities("metal_ore_extraction"), surface, surface,
                         extraction_capacity_t_per_day=8.0,
                     ),
-            construction=req._surface_recipe(
-                        ids.AUTONOMOUS_ORE_MINE, 22, 26, 6, 150,
-                        technologies=frozenset({ids.research_id("RP-RESOURCE-CHAIN-09")}),
+            construction=ConstructionRecipe(
+                        ids.AUTONOMOUS_ORE_MINE,
+                        (req._structure_resource(22.0), req._machinery_resource(26.0),
+                         BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 3.0)),
+                        150.0, req.SURFACE_SITE,
+                        frozenset({ids.research_id("RP-RESOURCE-CHAIN-09")}),
                     ),
             power=PowerSpec(None, 1.25),
         ),
@@ -877,9 +880,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         req._capabilities("ore_processing"), surface, surface,
                         process_throughput_per_day=3.5,
                     ),
-            construction=req._surface_recipe(
-                        ids.CONTINUOUS_ORE_CONCENTRATOR, 26, 24, 9, 170,
-                        technologies=frozenset({ids.research_id("RP-RESOURCE-CHAIN-10")}),
+            construction=ConstructionRecipe(
+                        ids.CONTINUOUS_ORE_CONCENTRATOR,
+                        (req._structure_resource(26.0), req._machinery_resource(24.0),
+                         BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 4.5)),
+                        170.0, req.SURFACE_SITE,
+                        frozenset({ids.research_id("RP-RESOURCE-CHAIN-10")}),
                     ),
             power=PowerSpec(None, 1.10),
         ),
@@ -903,9 +909,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         req._capabilities("structural_fabrication"), surface, surface,
                         process_throughput_per_day=4.0,
                     ),
-            construction=req._surface_recipe(
-                        ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE, 30, 22, 12, 180,
-                        technologies=frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09")}),
+            construction=ConstructionRecipe(
+                        ids.AUTOMATED_STRUCTURAL_FABRICATION_LINE,
+                        (req._structure_resource(30.0), req._machinery_resource(22.0),
+                         BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 5.0)),
+                        180.0, req.SURFACE_SITE,
+                        frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09")}),
                     ),
             power=PowerSpec(None, 1.45),
         ),
@@ -938,6 +947,41 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         frozenset({ids.research_id("EM-ELECTRONICS-MANUFACTURING-01")}),
                     ),
             power=PowerSpec(None, 1.70),
+        ),
+        # AUTOMATED_PRECISION_MACHINING
+        FacilityAsset(
+            definition=FacilityDef(
+                ids.AUTOMATED_PRECISION_MACHINING, "計測制御型精密工作センター",
+                req._capabilities("basic_machine_shop", "precision_machining"),
+                surface, surface, process_throughput_per_day=3.2,
+                maintenance_fraction_per_year=0.08,
+            ),
+            construction=ConstructionRecipe(
+                ids.AUTOMATED_PRECISION_MACHINING,
+                (req._structure_resource(19.0), req._machinery_resource(21.0),
+                 BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 3.0)),
+                130.0, req.SURFACE_SITE,
+                frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09"),
+                           ids.research_id("AR-AUTONOMY-ROBOTICS-07")}),
+            ),
+            power=PowerSpec(None, 2.30, standby_load_mw=0.16),
+        ),
+        # IN_LINE_ELECTRONICS_FAB
+        FacilityAsset(
+            definition=FacilityDef(
+                ids.IN_LINE_ELECTRONICS_FAB, "インライン欠陥検査型半導体製造工場",
+                req._capabilities("inline_microelectronics_inspection"),
+                surface, surface, process_throughput_per_day=3.6,
+                maintenance_fraction_per_year=0.085,
+            ),
+            construction=ConstructionRecipe(
+                ids.IN_LINE_ELECTRONICS_FAB,
+                (req._structure_resource(22.0), req._machinery_resource(24.0),
+                 BuildResourceRequirement(ids.PRECISION_COMPONENTS, 3.5)),
+                185.0, req.SURFACE_SITE,
+                frozenset({ids.research_id("EM-ELECTRONICS-MANUFACTURING-02")}),
+            ),
+            power=PowerSpec(None, 3.60, standby_load_mw=0.24),
         ),
         # MOLTEN_OXIDE_ELECTROLYZER
         FacilityAsset(
@@ -1189,12 +1233,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     production=VehicleProductionSpec(
                         service_type="vehicle_assembly", days=10.0,
-                        resources=((ids.STRUCTURAL_COMPONENTS, 20.0), (ids.MACHINERY, 8.0), (ids.PRECISION_ELECTRONICS, 2.0)),
+                        resources=((ids.STRUCTURAL_COMPONENTS, 64.0), (ids.MACHINERY, 13.0), (ids.PRECISION_ELECTRONICS, 3.5)),
                         prerequisite_technologies=frozenset({ids.research_id("CH-COMBUSTION-01"), ids.research_id("GN-NAVIGATION-01")}),
                     ),
                     retirement=VehicleRetirementSpec(
                         service_type="vehicle_assembly", work_days_per_unit=5.0,
-                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 10.0), (ids.MACHINERY, 4.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 32.0), (ids.MACHINERY, 6.5), (ids.PRECISION_ELECTRONICS, 1.75)),
                     ),
                     maintenance=VehicleMaintenanceSpec(service_type="launch_vehicle_servicing", turnaround_days=5.0),
                     passengers=PassengerAccommodation(
@@ -1226,8 +1270,8 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     production=VehicleProductionSpec(
                         service_type="vehicle_assembly", days=24.0,
-                        resources=((ids.STRUCTURAL_COMPONENTS, 42.0),
-                                   (ids.MACHINERY, 18.0), (ids.PRECISION_ELECTRONICS, 6.0)),
+                        resources=((ids.STRUCTURAL_COMPONENTS, 124.0),
+                                   (ids.MACHINERY, 26.0), (ids.PRECISION_ELECTRONICS, 10.0)),
                         prerequisite_technologies=frozenset({
                             ids.research_id("CH-COMBUSTION-09"),
                             ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09"),
@@ -1236,9 +1280,9 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     retirement=VehicleRetirementSpec(
                         service_type="vehicle_assembly", work_days_per_unit=12.0,
-                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 21.0),
-                                                     (ids.MACHINERY, 9.0),
-                                                     (ids.PRECISION_ELECTRONICS, 3.0)),
+                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 62.0),
+                                                     (ids.MACHINERY, 13.0),
+                                                     (ids.PRECISION_ELECTRONICS, 5.0)),
                     ),
                     maintenance=VehicleMaintenanceSpec(
                         service_type="launch_vehicle_servicing", turnaround_days=8.0,
@@ -1259,12 +1303,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     production=VehicleProductionSpec(
                         service_type="vehicle_assembly", days=4.0,
-                        resources=((ids.STRUCTURAL_COMPONENTS, 4.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
+                        resources=((ids.STRUCTURAL_COMPONENTS, 5.0), (ids.MACHINERY, 2.0), (ids.PRECISION_ELECTRONICS, 1.0)),
                         prerequisite_technologies=frozenset({ids.research_id("CH-COMBUSTION-06"), ids.research_id("GN-NAVIGATION-04")}),
                     ),
                     retirement=VehicleRetirementSpec(
                         service_type="vehicle_assembly", work_days_per_unit=2.0,
-                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.0), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
+                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.5)),
                     ),
                     maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
                     passengers=PassengerAccommodation(
@@ -1609,12 +1653,12 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     production=VehicleProductionSpec(
                         service_type="vehicle_assembly", days=2.0,
-                        resources=((ids.STRUCTURAL_COMPONENTS, 1.5), (ids.MACHINERY, 1.0), (ids.PRECISION_ELECTRONICS, 0.25)),
+                        resources=((ids.STRUCTURAL_COMPONENTS, 2.75), (ids.CONSTRUCTION_EQUIPMENT, 1.25), (ids.PRECISION_ELECTRONICS, 0.25)),
                         prerequisite_technologies=frozenset({ids.research_id("SM-SURFACE-MOBILITY-01")}),
                     ),
                     retirement=VehicleRetirementSpec(
                         service_type="vehicle_assembly", work_days_per_unit=1.0,
-                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 0.75), (ids.MACHINERY, 0.5), (ids.PRECISION_ELECTRONICS, 0.125)),
+                        recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 1.375), (ids.CONSTRUCTION_EQUIPMENT, 0.625), (ids.PRECISION_ELECTRONICS, 0.125)),
                     ),
                     maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
                 ),

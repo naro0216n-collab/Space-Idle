@@ -42,7 +42,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioInventoryStock(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 120.0),
         ScenarioInventoryStock(ids.EARTH, ids.MACHINERY, 100.0),
         ScenarioInventoryStock(ids.EARTH, ids.PRECISION_ELECTRONICS, 70.0),
-        ScenarioInventoryStock(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 120.0),
+        ScenarioInventoryStock(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 60.0),
         ScenarioInventoryStock(ids.EARTH, ids.FOOD, 500.0),
         ScenarioInventoryStock(ids.EARTH, ids.WATER, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.OXYGEN, 5.0),
@@ -90,7 +90,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
             ExternalPopulationSourceDefinition('base.population.earth_recruitment', ids.EARTH, 5000, 8),
         ),
         population_rules=PopulationRules(0.25, 0.05, 2.0, 3.0),
-        funds_balance_musd=1800.0,
+        funds_balance_musd=360.0,
         market_provider_ids=(EARTH_MARKET_PROVIDER,),
         market_interfaces=(
             ScenarioMarketInterface(

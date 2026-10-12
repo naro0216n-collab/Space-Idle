@@ -89,6 +89,7 @@ RESEARCH_DAG_ROWS = (
     ('MS-MATERIALS-11', 4, 'materials_structures', 'materials', '分散ひずみ計測による損傷位置推定', ('MS-MATERIALS-09', 'SS-SENSING-09'), 3000.0),
     ('MS-MATERIALS-12', 4, 'materials_structures', 'materials', '再製造材の機械特性ばらつき評価', ('MS-MATERIALS-05', 'MS-MATERIALS-06'), 3000.0),
     ('EM-ELECTRONICS-MANUFACTURING-01', 3, 'electronics_manufacturing', 'microelectronics', '薄膜回路形成・微細パターン転写工程', ('MS-MATERIALS-04', 'TH-THERMAL-TRANSPORT-04'), 1200.0),
+    ('EM-ELECTRONICS-MANUFACTURING-02', 4, 'electronics_manufacturing', 'microelectronics', 'インライン欠陥検出・歩留まり制御工程', ('EM-ELECTRONICS-MANUFACTURING-01', 'CP-COMPUTING-RELIABILITY-06', 'MC-MANUFACTURING-CONSTRUCTION-03'), 3000.0),
     ('MC-MANUFACTURING-CONSTRUCTION-01', 1, 'manufacturing_construction', 'manufacturing_construction', '真空環境機械式接合・締結荷重管理', (), 180.0),
     ('MC-MANUFACTURING-CONSTRUCTION-02', 2, 'manufacturing_construction', 'manufacturing_construction', '真空金属接合・接合部熱影響評価', ('MC-MANUFACTURING-CONSTRUCTION-01', 'MS-MATERIALS-01'), 480.0),
     ('MC-MANUFACTURING-CONSTRUCTION-03', 2, 'manufacturing_construction', 'manufacturing_construction', '非破壊検査による接合欠陥検出', ('MC-MANUFACTURING-CONSTRUCTION-02', 'SS-SENSING-03'), 480.0),

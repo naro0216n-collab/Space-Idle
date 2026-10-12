@@ -118,6 +118,17 @@ def build_process_specs() -> dict:
             {ids.CERAMICS_GLASS: 0.60, ids.METAL_FEEDSTOCK: 0.25, ids.WATER: 0.15},
             {ids.PRECISION_ELECTRONICS: 0.20},
         ),
+        # Higher-throughput semiconductor fabrication requires a dedicated
+        # in-line metrology and defect-rejection interface. Completing its
+        # Research does not boost an existing unmodified fabrication plant.
+        ids.PROCESS_MONITORED_MICROELECTRONICS: ProcessSpec(
+            ids.PROCESS_MONITORED_MICROELECTRONICS, "インライン計測・歩留まり管理型電子モジュール製造",
+            frozenset({"inline_microelectronics_inspection"}),
+            {ids.CERAMICS_GLASS: 0.52, ids.METAL_FEEDSTOCK: 0.27,
+             ids.WATER: 0.12},
+            {ids.PRECISION_ELECTRONICS: 0.24},
+            frozenset({ids.research_id("EM-ELECTRONICS-MANUFACTURING-02")}),
+        ),
         # Molten-oxide electrolysis is a distinct high-power enclosed process for
         # oxygen and metallurgical feedstock from common mineral feedstock.
         # Neither Water nor a planet-specific Resource identity is invented.

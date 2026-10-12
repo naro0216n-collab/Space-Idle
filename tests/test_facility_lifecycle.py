@@ -47,6 +47,14 @@ SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 def _build_decommission_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    # The fixture tests decommission ownership and settlement, not the
+    # Scenario's current construction throughput. Provision enough genuine
+    # reusable Construction Equipment for deterministic short work phases.
+    if not for_load:
+        equipment = ids.CONSTRUCTION_EQUIPMENT
+        sim.inventory.add(ids.EARTH, equipment, max(
+            0.0, 120.0 - sim.inventory.amount(ids.EARTH, equipment)
+        ))
     app._catalog.resources[SALVAGE_RESOURCE] = ResourceDef(SALVAGE_RESOURCE, "Recoverable components")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
