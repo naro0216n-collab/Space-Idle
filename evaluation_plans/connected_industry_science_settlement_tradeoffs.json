@@ -1081,6 +1081,236 @@
           ]
         }
       ]
+    },
+    {
+      "name": "tier2_orbital_experimental_research",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.microgravity_experiment_platform",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "provider": "base.facility.microgravity_experiment_platform",
+            "source_facility": "base.facility.microgravity_experiment_platform",
+            "units": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier3_crewed_orbital_research",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "facility": "base.facility.crewed_orbital_laboratory",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.node.low_earth_orbit",
+            "provider": "base.facility.crewed_orbital_laboratory",
+            "source_facility": "base.facility.crewed_orbital_laboratory",
+            "units": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier3_earth_sample_analysis",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.sample_analysis_laboratory",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.sample_analysis_laboratory",
+            "source_facility": "base.facility.sample_analysis_laboratory",
+            "units": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier4_lunar_regolith_research",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "conditional.moon.south_pole",
+            "facility": "base.facility.vacuum_regolith_process_laboratory",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "conditional.moon.south_pole",
+            "provider": "base.facility.vacuum_regolith_process_laboratory",
+            "source_facility": "base.facility.vacuum_regolith_process_laboratory",
+            "units": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier4_earth_materials_research",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.materials_fatigue_beamline",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.materials_fatigue_beamline",
+            "source_facility": "base.facility.materials_fatigue_beamline",
+            "units": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier4_materials_research_1_with_explicit_component_processes",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.materials_fatigue_beamline",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.materials_fatigue_beamline",
+            "source_facility": "base.facility.materials_fatigue_beamline",
+            "units": 1
+          }
+        },
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.shielding_panel_fabrication",
+            "units": 1,
+            "duty": 0.010256410256410256,
+            "process": "base.process.graded_shielding_laminate"
+          }
+        },
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.optical_instrument_integration",
+            "units": 1,
+            "duty": 0.010256410256410256,
+            "process": "base.process.optical_sensor_alignment"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tier4_materials_research_10_with_explicit_component_processes",
+      "updates": [
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.materials_fatigue_beamline",
+            "units": 10
+          }
+        },
+        {
+          "action": "add",
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.materials_fatigue_beamline",
+            "source_facility": "base.facility.materials_fatigue_beamline",
+            "units": 10
+          }
+        },
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.shielding_panel_fabrication",
+            "units": 1,
+            "duty": 0.10256410256410256,
+            "process": "base.process.graded_shielding_laminate"
+          }
+        },
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.optical_instrument_integration",
+            "units": 1,
+            "duty": 0.10256410256410256,
+            "process": "base.process.optical_sensor_alignment"
+          }
+        }
+      ]
     }
   ]
 }

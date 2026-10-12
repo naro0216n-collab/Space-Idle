@@ -309,12 +309,12 @@ def build_research_providers() -> dict:
         ids.PROPULSION_TEST_RESEARCH_PROVIDER: ResearchProviderSpec(
             ids.PROPULSION_TEST_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
             frozenset({"propulsion_test_equipment"}), tier=2,
-            levels=(ResearchProviderLevelSpec(1, 8.0, 500.0, 0.8),),
+            levels=(ResearchProviderLevelSpec(1, 8.0, 500.0, 1.6),),
         ),
         ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER: ResearchProviderSpec(
             ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
             frozenset({"deep_space_tracking_equipment"}), tier=2,
-            levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 0.8),),
+            levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 1.4),),
         ),
         ids.MATERIALS_FATIGUE_BEAMLINE: ResearchProviderSpec(
             ids.MATERIALS_FATIGUE_BEAMLINE,
@@ -369,14 +369,14 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"microgravity_experiment_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 9.0, 650.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 9.0, 650.0, 2.5),),
         ),
         ids.CREWED_ORBITAL_LABORATORY: ResearchProviderSpec(
             ids.CREWED_ORBITAL_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
             frozenset({"crewed_orbital_research_equipment"}),
             tier=3,
-            levels=(ResearchProviderLevelSpec(1, 22.0, 1600.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 22.0, 1600.0, 5.0),),
             crew_person_days_per_research_point=0.18,
         ),
         ids.ROBOTIC_GEOLOGY_STATION: ResearchProviderSpec(
@@ -384,20 +384,20 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"robotic_geology_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 14.0, 1400.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 14.0, 1400.0, 2.5),),
         ),
         ids.SAMPLE_ANALYSIS_LABORATORY: ResearchProviderSpec(
             ids.SAMPLE_ANALYSIS_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
             frozenset({"sample_analysis_equipment"}),
             tier=3,
-            levels=(ResearchProviderLevelSpec(1, 36.0, 3500.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 36.0, 3500.0, 6.0),),
         ),
         ids.VACUUM_REGOLITH_PROCESS_LABORATORY: ResearchProviderSpec(
             ids.VACUUM_REGOLITH_PROCESS_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
             frozenset({"vacuum_regolith_research_equipment"}),
             tier=4,
-            levels=(ResearchProviderLevelSpec(1, 90.0, 9000.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 90.0, 9000.0, 12.0),),
         ),
     }

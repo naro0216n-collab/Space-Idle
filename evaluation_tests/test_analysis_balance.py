@@ -1401,3 +1401,49 @@ def test_cross_domain_portfolio_preserves_demand_capacity_and_unknowns_across_st
     assert "differences" not in overview
     assert len(json.dumps(overview)) < len(json.dumps([
         summarize_projection(case["projection"]) for case in projection["cases"]]))
+
+
+def test_sensitivity_can_add_new_registered_asset_and_provider_without_duplicate_ownership(definitions):
+    """Alternative generations change source composition, not the shared baseline or Game State."""
+    from space_idle.power import SolarGeneration
+    sim = definitions._simulation
+    candidate = next((facility, provider) for facility in sim.facilities.definitions.values()
+                     for provider in sim.research.providers.values()
+                     if provider.source_kind.value == "facility"
+                     and provider.levels[0].generation_points_per_day > 0
+                     and provider.accepts_source(x.id for x in facility.capability_supplies)
+                     and not isinstance(sim.power.specs[facility.id].generation, SolarGeneration)
+                     and facility.id in sim.projects.recipes)
+    facility, provider = candidate
+    node = "comparison.research"
+    asset = {"node": node, "facility": str(facility.id), "units": 1}
+    allocation = {"node": node, "provider": str(provider.id),
+                  "source_facility": str(facility.id), "units": 1}
+    base = {"phases": [{"name": "investment", "days": 30, "facilities": []}]}
+    base_copy = deepcopy(base)
+    additions = [
+        {"action": "add", "collection": "facilities", "phase": "investment", "row": asset},
+        {"action": "add", "collection": "research_provider_allocations",
+         "phase": "investment", "row": allocation},
+    ]
+    original_state = deepcopy(capture_state(sim))
+    result = compare_cases({"base_plan": base, "cases": [
+        {"name": "without facility"}, {"name": "with facility", "updates": additions},
+    ]}, app=definitions)
+    before, after = (case["projection"]["phases"][0] for case in result["cases"])
+    assert base == base_copy
+    assert capture_state(sim) == original_state
+    assert before["scale"]["facility_units"] == 0
+    assert after["scale"]["facility_units"] == 1
+    assert after["scale"]["facility_units_added"] == 1
+    assert after["research_point_balance"]["nominal_generation_points"] > 0
+    recipe = sim.projects.recipes[facility.id]
+    assert sum(row["construction_demand_t"] for row in after["resources"]) == pytest.approx(
+        sum(resource.amount_t for resource in recipe.resources))
+    with pytest.raises(ValueError, match="duplicate"):
+        compare_cases({"base_plan": base, "cases": [{"name": "bad", "updates":
+            additions + [additions[0]]}]}, app=definitions)
+    with pytest.raises(ValueError, match="cannot duplicate"):
+        compare_cases({"base_plan": {"phases": [{"name": "investment", "days": 30,
+            "facilities": [asset]}]}, "cases": [{"name": "bad", "updates":
+            [additions[0]]}]}, app=definitions)

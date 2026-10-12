@@ -1431,8 +1431,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
 def _apply_case_updates(base: dict, updates: list) -> dict:
     """Apply bounded, identity-addressed sensitivity changes to one shared case.
 
-    Only existing rows/fields can be changed; this never chooses a facility,
-    research programme, site, purchase, or logistics plan on the user's behalf.
+    Existing entries can be changed, and new explicitly selected asset/source
+    rows can be added; neither operation selects a programme, routes Cargo,
+    acquires assets nor settles an action on the user's behalf.
     """
     if not isinstance(updates, list):
         raise ValueError("case updates must be a list")
@@ -1442,6 +1443,35 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
         if not isinstance(change, dict):
             raise ValueError("case update must be an object")
         collection = change.get("collection")
+        if change.get("action") == "add":
+            # Cases can select *additional* real assets and source allocations,
+            # rather than copying every phase to compare a new capability.
+            # This changes only the comparison composition. No acquisition,
+            # provider eligibility or actual Game State is inferred here.
+            _keys(change, {"collection", "phase", "action", "row"},
+                  {"collection", "phase", "action", "row"}, "case addition")
+            if collection not in {"facilities", "fleet", "research_provider_allocations"}:
+                raise ValueError("case addition requires an asset or Research Provider collection")
+            row = change["row"]
+            if not isinstance(row, dict):
+                raise ValueError("case addition row must be an object")
+            key = ("facility" if collection == "facilities" else
+                   "vehicle" if collection == "fleet" else "provider")
+            if not isinstance(row.get("node"), str) or not isinstance(row.get(key), str):
+                raise ValueError("case addition requires an explicit node and Definition ID")
+            phases = [phase for phase in plan["phases"] if phase["name"] == change["phase"]]
+            if len(phases) != 1:
+                raise ValueError("case addition requires exactly one existing phase")
+            rows = phases[0].setdefault(collection, [])
+            if any(existing.get("node") == row["node"] and existing.get(key) == row[key]
+                   for existing in rows):
+                raise ValueError("case addition cannot duplicate a selected source")
+            identity = (collection, change["phase"], row["node"], row[key])
+            if identity in seen:
+                raise ValueError(f"duplicate case update: {identity}")
+            seen.add(identity)
+            rows.append(deepcopy(row))
+            continue
         if collection == "phase":
             _keys(change, {"collection", "phase", "days"}, {"collection", "phase", "days"}, "case update")
             candidates = [row for row in plan["phases"] if row["name"] == change["phase"]]
