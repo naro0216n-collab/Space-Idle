@@ -93,6 +93,8 @@ AUTONOMOUS_ORBITAL_OUTPOST = DefinitionId("base.facility.autonomous_orbital_outp
 SURFACE_POWER_GRID = DefinitionId("base.facility.surface_solar_power_grid")
 INDUSTRIAL_POWER_BLOCK = DefinitionId("base.facility.fission_power_unit")
 CONSTRUCTION_YARD = DefinitionId("base.facility.construction_yard")
+AUTOMATED_CONSTRUCTION_YARD = DefinitionId("base.facility.automated_construction_yard")
+AUTOMATED_VEHICLE_ASSEMBLY = DefinitionId("base.facility.automated_vehicle_assembly")
 VOLATILE_EXTRACTOR = DefinitionId("base.facility.volatile_extractor")
 VOLATILE_PROCESSING = DefinitionId("base.facility.volatile_processing")
 VACUUM_MINERAL_HARVESTER = DefinitionId("base.facility.vacuum_mineral_harvester")
@@ -236,6 +238,7 @@ REUSABLE_SURFACE_CARGO_LANDER = DefinitionId("base.vehicle.reusable_surface_carg
 LOW_GRAVITY_CARGO_FERRY = DefinitionId("base.vehicle.low_gravity_cargo_ferry")
 THROTTLEABLE_CARGO_LANDER = DefinitionId("base.vehicle.throttleable_cargo_lander")
 SURFACE_CARGO_HAULER = DefinitionId("base.vehicle.surface_cargo_hauler")
+MODULAR_SURFACE_FREIGHTER = DefinitionId("base.vehicle.modular_surface_freighter")
 
 
 CREW_TRANSFER_SPACECRAFT = DefinitionId("base.vehicle.crew_transfer_spacecraft")

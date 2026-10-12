@@ -1817,6 +1817,21 @@
                 "facility": "base.facility.fission_power_unit",
                 "units": 5,
                 "duty": 1
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.automated_construction_yard",
+                "units": 2
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.automated_vehicle_assembly",
+                "units": 2
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.surface_rover_service_depot",
+                "units": 2
               }
             ],
             "fleet": [
@@ -1844,6 +1859,12 @@
                 "node": "base.node.low_earth_orbit",
                 "vehicle": "base.vehicle.heavy_orbital_freighter",
                 "units": 6
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "vehicle": "base.vehicle.modular_surface_freighter",
+                "units": 6,
+                "turnarounds_per_unit_per_day": 0.12
               }
             ],
             "transfers": [
@@ -2131,6 +2152,21 @@
                 "facility": "base.facility.fission_power_unit",
                 "units": 5,
                 "duty": 1
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.automated_construction_yard",
+                "units": 4
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.automated_vehicle_assembly",
+                "units": 3
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "facility": "base.facility.surface_rover_service_depot",
+                "units": 3
               }
             ],
             "fleet": [
@@ -2158,6 +2194,12 @@
                 "node": "base.node.low_earth_orbit",
                 "vehicle": "base.vehicle.heavy_orbital_freighter",
                 "units": 9
+              },
+              {
+                "node": "base.location.earth_industrial",
+                "vehicle": "base.vehicle.modular_surface_freighter",
+                "units": 12,
+                "turnarounds_per_unit_per_day": 0.12
               }
             ],
             "transfers": [

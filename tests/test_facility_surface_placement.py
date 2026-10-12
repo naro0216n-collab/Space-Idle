@@ -13,6 +13,7 @@ from space_idle import (
 )
 from space_idle.content import base_ids as ids
 from space_idle.facilities import FacilityPlacementScope
+from space_idle.construction.models import CONSTRUCTION_SERVICE_TYPE
 from space_idle.industry import ProcessSpec
 from space_idle.shared import DefinitionId
 
@@ -66,9 +67,14 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         if str(row.id) == candidate.facility_definition_id
     )
     assert candidate.capabilities == tuple(sorted(supply.id for supply in definition.capability_supplies))
-    assert candidate.service_capacity_supplies == tuple(
-        sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
-    )
+    expected_services = [
+        (supply.service_type, supply.nominal_rate)
+        for supply in definition.service_capacity_supplies
+    ]
+    construction_provider = sim.projects.construction_providers.get(definition.id)
+    if construction_provider is not None:
+        expected_services.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
+    assert candidate.service_capacity_supplies == tuple(sorted(expected_services))
     assert candidate.placement_scope == definition.placement_scope.value
     assert tuple((option.process_id, option.display_name) for option in candidate.process_options) == tuple(
         (str(process.id), process.display_name)

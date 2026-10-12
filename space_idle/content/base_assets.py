@@ -567,6 +567,26 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
             power=PowerSpec(None, 0.18),
         ),
+        # Automated dimensional inspection and flexible fixtures allow the same
+        # assembly Service to support materially larger mixed Vehicle batches.
+        # It is a purchased, power-hungry surface asset, not an RP multiplier.
+        FacilityAsset(
+            definition=FacilityDef(
+                ids.AUTOMATED_VEHICLE_ASSEMBLY, "自動計測・モジュール宇宙機組立工場",
+                req._capabilities("vehicle_assembly"), surface, surface,
+                service_capacity_supplies=req._services(vehicle_assembly=3.0),
+                maintenance_fraction_per_year=0.08,
+            ),
+            construction=ConstructionRecipe(
+                ids.AUTOMATED_VEHICLE_ASSEMBLY,
+                (req._structure_resource(35.0), req._machinery_resource(27.0),
+                 BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 5.0)),
+                175.0, req.SURFACE_SITE,
+                frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-09"),
+                           ids.research_id("LM-LOGISTICS-MAINTENANCE-09")}),
+            ),
+            power=PowerSpec(None, 1.65, standby_load_mw=0.16),
+        ),
         # AUTONOMOUS_SURFACE_OUTPOST
         FacilityAsset(
             definition=FacilityDef(
@@ -652,6 +672,25 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
             construction=req._surface_recipe(ids.CONSTRUCTION_YARD, 10, 6, 2, 50),
             power=PowerSpec(None, 0.15),
             construction_provider=ConstructionProviderSpec(ids.CONSTRUCTION_YARD, 0.8),
+        ),
+        # Coordinated mobile work cells supply construction work beyond
+        # independent manual yards; the controls require genuine research,
+        # construction equipment and continuing power/maintenance.
+        FacilityAsset(
+            definition=FacilityDef(
+                ids.AUTOMATED_CONSTRUCTION_YARD, "協調ロボット施工・プレハブ建設センター",
+                req._capabilities("construction_yard"), surface, surface,
+                maintenance_fraction_per_year=0.08,
+            ),
+            construction=ConstructionRecipe(
+                ids.AUTOMATED_CONSTRUCTION_YARD,
+                (req._structure_resource(28.0), req._machinery_resource(24.0),
+                 BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 6.0)),
+                145.0, req.SURFACE_SITE,
+                frozenset({ids.research_id("MC-MANUFACTURING-CONSTRUCTION-12")}),
+            ),
+            power=PowerSpec(None, 1.40, standby_load_mw=0.12),
+            construction_provider=ConstructionProviderSpec(ids.AUTOMATED_CONSTRUCTION_YARD, 3.2),
         ),
         # VOLATILE_EXTRACTOR
         FacilityAsset(
@@ -1662,6 +1701,39 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     maintenance=VehicleMaintenanceSpec(turnaround_days=0.25),
                 ),
+        # Articulated high-load chassis extends Surface Transport reach and
+        # shipment size, in exchange for finite maintenance-bay occupancy and
+        # actual spare parts each turnaround. The lightweight hauler remains
+        # preferable for small cargo flows without a servicing depot.
+        VehicleDef(
+            id=ids.MODULAR_SURFACE_FREIGHTER,
+            display_name="連接式重量貨物地表輸送車",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=16.0, payload_t=32.0,
+                operation_capabilities=(SurfaceTransportCapability(210.0),),
+                endurance_days=180.0,
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=8.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 10.5),
+                           (ids.MACHINERY, 5.0),
+                           (ids.CONSTRUCTION_EQUIPMENT, 0.8)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("SM-SURFACE-MOBILITY-08"),
+                    ids.research_id("LM-LOGISTICS-MAINTENANCE-09"),
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=3.0,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 5.25),
+                                             (ids.MACHINERY, 2.5),
+                                             (ids.CONSTRUCTION_EQUIPMENT, 0.4)),
+            ),
+            maintenance=VehicleMaintenanceSpec(
+                service_type="surface_vehicle_servicing", turnaround_days=1.0,
+                resources=((ids.BASIC_MACHINE_PARTS, 0.04),),
+            ),
+        ),
         # REUSABLE_SURFACE_CARGO_LANDER
         VehicleDef(
                     id=ids.REUSABLE_SURFACE_CARGO_LANDER,
