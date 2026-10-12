@@ -667,3 +667,192 @@ def test_world_and_od_composition_sensitivity_changes_only_selected_conditions(d
             original["extraction_world_context"][0]["diminishing_output_t_per_day"])
     assert base["phases"][0]["extraction_sites"][0].get("knowledge") is None
     assert any(row["section"] == "resources" for row in result["differences"])
+
+
+def test_graph_provenance_is_attached_without_reinterpreting_relations_as_flow(definitions):
+    sim = definitions._simulation
+    facility, process = next((facility, process) for facility, process in _compatible_processes(sim)
+                             if process.inputs_per_day)
+    node = "graph.comparison"
+    asset = {"node": node, "facility": str(facility.id), "units": 1,
+             "process": str(process.id)}
+    phase = evaluate({"initial_facilities": [asset], "phases": [
+        {"name": "registered", "days": 1, "facilities": [asset]}]}, app=definitions)["phases"][0]
+    evidence = phase["activity_sources"][0]["graph_evidence"]
+    assert {root["kind"] for root in evidence["roots"]} == {"facility", "process"}
+    assert any(r["kind"] == "consumes_resource" and r["provenance"] and r["unit"]
+               for r in evidence["relations"])
+    assert evidence["status"] == "typed_definition_dependencies_not_executed"
+    assert "resources" in phase and "process_demand_t" in phase["resources"][0]
+
+
+def test_registered_location_development_science_and_survey_keep_separate_capacities(definitions):
+    """Registered project and scientific costs participate without fake completed State."""
+    from space_idle.exploration_models import SurveyProviderSourceKind
+    from space_idle.shared import DefinitionId
+
+    sim = definitions._simulation
+    recipe = next(iter(sim.projects.spatial_recipes.values()))
+    campaign = next(iter(sim.scientific_exploration.definitions.values()))
+    surveyed = next((provider, mode, source) for provider in sim.survey.providers.values()
+                    if provider.source_kind is SurveyProviderSourceKind.FACILITY
+                    for mode in provider.observation_modes
+                    for source in sim.survey.compatible_source_definition_ids(provider)
+                    if sim.survey.source_supports_mode(provider, mode, source))
+    provider, mode, source = surveyed
+    cell, resource = next(iter(sim.survey.targets))
+    node = "hypothetical.survey"
+    asset = {"node": node, "facility": str(source), "units": mode.minimum_source_units}
+    phase = {"name": "activities", "days": 15, "facilities": [asset],
+             "spatial_projects": [{"node": node, "recipe": str(recipe.id), "units": 2}],
+             "science_campaigns": [{"campaign": str(campaign.id)}],
+             "survey_activities": [{"node": node, "provider": str(provider.id),
+                                    "source": str(source), "units": mode.minimum_source_units,
+                                    "mode": mode.id, "cell": str(cell), "resource": str(resource)}]}
+    plan = {"initial_facilities": [asset], "phases": [phase]}
+    before = deepcopy(capture_state(sim))
+    report = evaluate(plan, app=definitions)["phases"][0]
+    spatial = report["spatial_projects"][0]
+    assert spatial["required_construction_work"] == pytest.approx(recipe.construction_work * 2)
+    assert spatial["status"] == "project_and_cell_eligibility_unassessed"
+    assert {"spatial_development_method"} == {root["kind"] for root in spatial["graph_evidence"]["roots"]}
+    site_constraint = next(row for row in report["investment_constraints"] if row["node"] == node)
+    assert site_constraint["required_work"] == pytest.approx(recipe.construction_work * 2)
+    science = report["science_campaigns"][0]
+    assert science["conditional_rp_reward"] == pytest.approx(campaign.research_points_total)
+    assert report["research_point_balance"]["conditional_scientific_exploration_reward_points_not_awarded"] == pytest.approx(
+        campaign.research_points_total)
+    assert report["research_point_balance"]["nominal_generation_points"] == 0
+    survey = report["survey_activities"][0]
+    assert survey["conditional_minimum_days"] is None
+    assert survey["nominal_progress_per_day"] == pytest.approx(
+        mode.minimum_source_units * provider.capacity_units_per_source_per_day * mode.survey_rate)
+    assert report["unassessed_constraints"]
+    for resource_id, amount in campaign.consumable_resources:
+        assert _rows(report)[str(campaign.origin_id), str(resource_id)]["science_material_demand_t"] == pytest.approx(amount)
+    assert capture_state(sim) == before
+    variant = deepcopy(plan)
+    variant["phases"][0]["survey_activities"][0]["starting_progress"] = 0
+    surveyed = evaluate(variant, app=definitions)["phases"][0]["survey_activities"][0]
+    assert surveyed["conditional_minimum_days"] == pytest.approx(
+        surveyed["target_progress_threshold"] / surveyed["nominal_progress_per_day"])
+    with pytest.raises(ValueError, match="duplicate Scientific Exploration"):
+        evaluate({"phases": [phase, {**phase, "name": "later"}]}, app=definitions)
+
+
+def test_founding_is_one_time_payload_and_preparation_without_created_inventory(definitions):
+    sim = definitions._simulation
+    recipe = next(iter(sim.founding.deployment_recipes.values()))
+    cell = next(iter(sim.extraction.graph.surface_cells))
+    source = "founding.staging"
+    phase = {"name": "found", "days": 8, "facilities": [],
+             "founding_projects": [{"staging_node": source, "recipe": str(recipe.id),
+                                    "target_cell": str(cell)}]}
+    before = deepcopy(capture_state(sim))
+    result = evaluate({"phases": [phase]}, app=definitions)["phases"][0]
+    founding = result["founding_projects"][0]
+    assert founding["payload_t"] == pytest.approx(recipe.payload_t)
+    assert founding["required_vehicle_units"] == recipe.required_units
+    assert founding["initial_inventory_t"] == {
+        str(r): amount for r, amount in recipe.initial_inventory_totals().items()}
+    assert founding["status"] == "target_site_preparation_fleet_movement_and_arrival_unassessed"
+    assert {root["kind"] for root in founding["graph_evidence"]["roots"]} == {"founding_method"}
+    for r in recipe.payload_resources:
+        row = _rows(result)[source, str(r.resource_id)]
+        assert row["founding_payload_demand_t"] == pytest.approx(r.amount_t)
+        assert row["received_t"] == 0
+    preparation = next(r for r in result["service_constraints"]
+                       if r["node"] == source and r["service"] == recipe.preparation_service_type)
+    assert preparation["required_per_day"] == pytest.approx(recipe.preparation_work / 8)
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="one explicit target"):
+        evaluate({"phases": [{**phase, "founding_projects": [
+            {"staging_node": source, "recipe": str(recipe.id),
+             "target_cell": str(cell), "target_node": "anything"}]}]}, app=definitions)
+
+
+def test_market_comparison_keeps_provider_supply_shared_and_does_not_credit_stock(definitions):
+    market = definitions._simulation.market
+    provider = next(p for p in market.provider_defs.values() if p.supply)
+    supply = provider.supply[0]
+    request = supply.initial_t + supply.replenishment_t_per_day * 10 + 1
+    rows = [{"node": node, "provider": str(provider.id), "resource": str(supply.resource_id),
+             "requested_t": request / 2} for node in ("market.a", "market.b")]
+    report = evaluate({"phases": [{"name": "market", "days": 10, "facilities": [],
+                                   "assumed_funds_musd": 0, "market_buys": rows}]},
+                      app=definitions)["phases"][0]
+    provider_row = report["market_provider_constraints"][0]
+    assert provider_row["total_requested_t"] == pytest.approx(request)
+    assert provider_row["conditional_total_supply_upper_bound_t"] == pytest.approx(request - 1)
+    assert provider_row["theoretical_shortfall_t"] >= 1
+    assert provider_row["nominal_cost_musd"] == pytest.approx(
+        request * provider.buy_price(supply.resource_id))
+    assert report["market_funds_condition"]["conditional_funds_gap_musd"] == pytest.approx(
+        provider_row["nominal_cost_musd"])
+    assert report["resources"] == []
+    assert all(item["graph_evidence"]["roots"] for item in report["market_buys"])
+
+
+def test_facility_upgrade_investment_uses_registered_recipe_without_free_level_effect(definitions):
+    sim = definitions._simulation
+    (facility_id, level), recipe = next(iter(sim.projects.upgrade_recipes.items()))
+    node = "hypothetical.upgrade"
+    asset = {"node": node, "facility": str(facility_id), "units": 2}
+    plain = {"name": "invest", "days": 10, "facilities": [asset]}
+    selected = {**plain, "upgrade_projects": [{"node": node, "facility": str(facility_id),
+                                               "target_level": level, "units": 1}]}
+    before = deepcopy(capture_state(sim))
+    base = evaluate({"initial_facilities": [asset], "phases": [plain]}, app=definitions)["phases"][0]
+    report = evaluate({"initial_facilities": [asset], "phases": [selected]}, app=definitions)["phases"][0]
+    assert report["upgrade_projects"][0]["required_construction_work"] == pytest.approx(recipe.construction_work)
+    assert report["investment_constraints"][0]["required_work"] == pytest.approx(recipe.construction_work)
+    for requirement in recipe.resources:
+        assert _rows(report)[(node, str(requirement.resource_id))]["construction_demand_t"] == pytest.approx(requirement.amount_t)
+    assert report["scale"] == base["scale"]
+    assert report["research_point_balance"] == base["research_point_balance"]
+    assert "facility_upgrade_level_eligibility_and_sequencing" in report["unassessed_constraints"]
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="exceed selected installed"):
+        evaluate({"initial_facilities": [asset], "phases": [{**selected, "upgrade_projects": [
+            {"node": node, "facility": str(facility_id), "target_level": level, "units": 3}]}]}, app=definitions)
+
+
+def test_case_differences_trace_new_definition_activities_and_missing_time_bases(definitions):
+    sim = definitions._simulation
+    recipe = next(iter(sim.projects.spatial_recipes.values()))
+    campaign = next(iter(sim.scientific_exploration.definitions.values()))
+    (facility_id, target_level), upgrade = next(iter(sim.projects.upgrade_recipes.items()))
+    node = "sensitivity.node"
+    asset = {"node": node, "facility": str(facility_id), "units": 1}
+    base = {"initial_facilities": [asset], "phases": [
+        {"name": "compare", "days": 12, "facilities": [asset]}]}
+    expanded = deepcopy(base)
+    expanded["phases"][0].update({
+        "spatial_projects": [{"node": node, "recipe": str(recipe.id), "units": 2}],
+        "upgrade_projects": [{"node": node, "facility": str(facility_id),
+                              "target_level": target_level, "units": 1}],
+        "science_campaigns": [{"campaign": str(campaign.id)}],
+    })
+    compared = compare_cases({"cases": [{"name": "original", "plan": base},
+                                       {"name": "different activities", "plan": expanded}]}, app=definitions)
+    changes = {item["section"]: item for item in compared["differences"]}
+    assert changes["spatial_projects"]["delta_from_baseline"]["required_construction_work"] == pytest.approx(
+        2 * recipe.construction_work)
+    assert changes["upgrade_projects"]["delta_from_baseline"]["required_construction_work"] == pytest.approx(
+        upgrade.construction_work)
+    assert changes["science_campaigns"]["delta_from_baseline"]["conditional_rp_reward"] == pytest.approx(
+        campaign.research_points_total)
+    assert changes["research_point_balance"]["delta_from_baseline"][
+        "conditional_scientific_exploration_reward_points_not_awarded"] == pytest.approx(campaign.research_points_total)
+    assert "pre_investment_work_lower_bound_days" in changes["investment_constraints"][
+        "incomparable_unassessed_metrics"]
+    # A missing trailing phase is always marked as a missing time basis.
+    longer = deepcopy(base)
+    longer["phases"].append({"name": "later", "days": 12, "facilities": [asset]})
+    result = compare_cases({"cases": [{"name": "first", "plan": base},
+                                      {"name": "longer", "plan": longer}]}, app=definitions)
+    assert any(row["section"] == "incomparable_phase_basis" and
+               row["reason"] == "missing_baseline_phase" for row in result["differences"])
+    summary = __import__("scripts.analysis_balance", fromlist=["summarize"]).summarize(compared)
+    assert "upgrade_projects" in summary["difference_sections"]
+    assert summary["cases"][1]["summary"]["phases"][0]["science_activity_bounds"]

@@ -25,6 +25,8 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.shared import DefinitionId, SurfaceCellId, SpatialNodeId
 from space_idle.exploration_models import KnowledgeLevel
+from space_idle.analysis_graph import DependencyNode
+from space_idle.composition.analysis_graph import build_definition_dependency_graph
 from space_idle.execution_requirements import (
     ServiceCapacityRequirement, ResourceRequirement, PoolRequirement,
     PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
@@ -178,7 +180,30 @@ def _extraction_contexts(rows, sim, nodes, known_resource):
     return contexts
 
 
-def evaluate(plan: dict, *, app=None) -> dict:
+def _graph_evidence(graph_nodes, relation_index, roots) -> dict:
+    """Expose the existing typed Graph's conditions and provenance, not extra quantities.
+
+    This lookup is explanatory: a relation is never converted to consumed or
+    delivered Resource by the existence of an edge alone.
+    """
+    nodes = frozenset(DependencyNode(kind, identifier) for kind, identifier in roots)
+    included = [root for root in sorted(nodes) if root in graph_nodes]
+    relevant = sorted({relation for node in nodes for relation in relation_index.get(node, ())},
+                      key=lambda rel: (rel.kind, rel.provenance, rel.source, rel.target))
+    return {
+        "roots": [{"kind": node.kind, "id": node.id} for node in included],
+        "relations": [{"kind": relation.kind,
+                       "source": f"{relation.source.kind}:{relation.source.id}",
+                       "target": f"{relation.target.kind}:{relation.target.id}",
+                       "provenance": relation.provenance, "quantity": relation.quantity,
+                       "unit": relation.unit, "time_basis": relation.time_basis,
+                       "condition": relation.condition}
+                      for relation in relevant],
+        "status": "typed_definition_dependencies_not_executed",
+    }
+
+
+def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
 
     No finite allocation, location eligibility or automatic scheduling is solved.
@@ -189,6 +214,14 @@ def evaluate(plan: dict, *, app=None) -> dict:
     if app is None:
         app = build_game_application_for_load()
     sim, catalog = app._simulation, app._catalog
+    graph = (_definition_graph if _definition_graph is not None else
+             build_definition_dependency_graph(sim, catalog))
+    graph_nodes = frozenset(graph.nodes)
+    relation_index = defaultdict(list)
+    for relation in graph.relations:
+        relation_index[relation.source].append(relation)
+        if relation.target != relation.source:
+            relation_index[relation.target].append(relation)
     nodes = {str(node) for node in sim.spatial.graph.operational_nodes} if hasattr(sim, "spatial") else set()
     # Non-surface nodes and future planned sites may be compared as authored
     # contexts: balance rows are not an eligibility or founding validation.
@@ -201,6 +234,11 @@ def evaluate(plan: dict, *, app=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("external_rates", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("extraction_sites", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("research_provider_allocations", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("spatial_projects", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("upgrade_projects", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("survey_activities", ()))
+    nodes.update(str(row["staging_node"]) for phase in plan["phases"] for row in phase.get("founding_projects", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("market_buys", ()))
     nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
     nodes.update(str(row["destination"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
     known_resource = {str(r) for r in catalog.resources}
@@ -227,10 +265,15 @@ def evaluate(plan: dict, *, app=None) -> dict:
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     report = []
     seen_research_stages = set()
+    seen_science_campaigns = set()
+    seen_phase_names = set()
     previous_assets = initial
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "market_buys", "assumed_funds_musd"},
               {"name", "days", "facilities"}, "phase")
+        if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
+            raise ValueError("phase names must be unique and nonempty")
+        seen_phase_names.add(phase["name"])
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
@@ -247,6 +290,15 @@ def evaluate(plan: dict, *, app=None) -> dict:
         transport_service_inputs = defaultdict(float)
         fleet_report = []
         research_inputs = defaultdict(float)
+        science_inputs = defaultdict(float)
+        founding_inputs = defaultdict(float)
+        founding_activity_details = []
+        market_activity_details = []
+        science_reward_conditional = 0.0
+        science_activity_details = []
+        survey_activity_details = []
+        spatial_activity_details = []
+        upgrade_activity_details = []
         life_support_inputs = defaultdict(float)
         life_support_supplied = defaultdict(float)
         life_support_committed = defaultdict(float)
@@ -277,6 +329,11 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "kind": "facility", "node": node, "definition": name,
                 "units": units, "duty": duty, "process": process_id, "extraction": extraction_id,
                 "quantity_source": "definition_x_selected_composition",
+                "graph_evidence": _graph_evidence(
+                    graph_nodes, relation_index, (("facility", name),)
+                    + ((("process", process_id),) if process_id else ())
+                    + ((("extraction_method", extraction_id),) if extraction_id else ()),
+                ),
             })
             if (process_id or extraction_id) and duty > 0:
                 unassessed.add("shared_power_service_and_resource_allocation")
@@ -391,6 +448,60 @@ def evaluate(plan: dict, *, app=None) -> dict:
             for req in recipe.resources:
                 construction[(key[0], str(req.resource_id))] += req.amount_t * delta
             work[key[0]] += recipe.construction_work * delta
+        # Explicit Spatial Development demand is a registered one-time
+        # project recipe; it never constructs Cells or awards territory.
+        for row in phase.get("spatial_projects", ()):
+            _keys(row, {"node", "recipe", "units"}, {"node", "recipe", "units"}, "spatial project")
+            node = _identifier(row["node"], nodes, "node")
+            rid = _identifier(row["recipe"], sim.projects.spatial_recipes, "Spatial Development recipe")
+            units = _integer(row["units"], "Spatial Development projects", positive=True)
+            recipe = sim.projects.spatial_recipes[DefinitionId(rid)]
+            for req in recipe.resources:
+                construction[(node, str(req.resource_id))] += req.amount_t * units
+            work[node] += recipe.construction_work * units
+            spatial_activity_details.append({
+                "node": node, "recipe": rid, "units": units,
+                "required_construction_work": recipe.construction_work * units,
+                "resources_t": {str(req.resource_id): req.amount_t * units for req in recipe.resources},
+                "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
+                "knowledge_requirements": [{"resource": str(req.subject_resource_id),
+                                            "minimum_level": int(req.minimum_level)}
+                                           for req in recipe.knowledge_requirements],
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("spatial_development_method", rid),)),
+                "status": "project_and_cell_eligibility_unassessed",
+            })
+            unassessed.add("spatial_target_site_cell_knowledge_and_finite_construction_allocation")
+        # Upgrade recipes represent a separately acquired Level transition.
+        # Requested upgrades do not alter installed Levels or production here:
+        # their completion/order must still be checked by the owning Domain.
+        upgraded = defaultdict(int)
+        for row in phase.get("upgrade_projects", ()):
+            _keys(row, {"node", "facility", "target_level", "units"},
+                  {"node", "facility", "target_level", "units"}, "Facility Upgrade")
+            node = _identifier(row["node"], nodes, "upgrade node")
+            facility_id = _identifier(row["facility"], sim.facilities.definitions, "upgrade Facility")
+            target_level = _integer(row["target_level"], "upgrade target_level", positive=True)
+            units = _integer(row["units"], "upgrade units", positive=True)
+            recipe = sim.projects.upgrade_recipes.get((DefinitionId(facility_id), target_level))
+            if recipe is None:
+                raise ValueError(f"unregistered Facility Upgrade recipe: {facility_id}/{target_level}")
+            upgraded[(node, facility_id)] += units
+            if upgraded[(node, facility_id)] > current[(node, facility_id)]:
+                raise ValueError("upgrade projects exceed selected installed Facility units")
+            for req in recipe.resources:
+                construction[(node, str(req.resource_id))] += req.amount_t * units
+            work[node] += recipe.construction_work * units
+            upgrade_activity_details.append({
+                "node": node, "facility": facility_id, "target_level": target_level,
+                "units": units, "required_construction_work": recipe.construction_work * units,
+                "resources_t": {str(req.resource_id): req.amount_t * units for req in recipe.resources},
+                "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                    (("facility_upgrade_method", f"{facility_id}/level:{target_level}"),)),
+                "status": "level_transition_site_and_construction_completion_unassessed",
+            })
+            unassessed.add("facility_upgrade_level_eligibility_and_sequencing")
         facility_units_added = sum(max(0, current[k] - previous[k]) for k in current)
         previous = current
         # The existing (pre-investment) capacity is the only defensible bound
@@ -444,7 +555,8 @@ def evaluate(plan: dict, *, app=None) -> dict:
             activity_sources.append({"kind": "research_provider", "node": row["node"],
                                      "definition": name, "source_facility": facility_name,
                                      "level": level, "units": units, "duty": duty,
-                                     "quantity_source": "definition_x_selected_allocation"})
+                                     "quantity_source": "definition_x_selected_allocation",
+                                     "graph_evidence": _graph_evidence(graph_nodes, relation_index, (("research_provider", name),))})
             unassessed.add("research_source_power_crew_site_technology_and_finite_allocation")
             if any(n == row["node"] and f == facility_name and (proc or extraction)
                    for n, f, _u, proc, extraction, _d, _y, _people in assets):
@@ -497,7 +609,9 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 )
             activity_sources.append({"kind": "fleet", "node": node, "definition": vehicle_id,
                                      "units": units, "turnarounds_per_unit_per_day": cycles_per_unit,
-                                     "quantity_source": "definition_x_selected_composition"})
+                                     "quantity_source": "definition_x_selected_composition",
+                                     "graph_evidence": _graph_evidence(graph_nodes, relation_index, (("vehicle", vehicle_id),
+                                         ("vehicle_operation_method", vehicle_id)))})
             if cycles_per_unit:
                 unassessed.add("fleet_turnarounds_without_movement_or_route_validation")
             fleet_report.append({"node": node, "vehicle": vehicle_id,
@@ -576,6 +690,145 @@ def evaluate(plan: dict, *, app=None) -> dict:
         if committed_fleet:
             unassessed.add("transport_cycle_capacity_not_settled_cargo")
         previous_fleet = current_fleet
+        # Scientific Exploration is a conditional *activity* with registered
+        # inputs and potential RP outcome. No travel, Crew provisions, RP award,
+        # or Mission state transition is simulated by this comparison.
+        for row in phase.get("science_campaigns", ()):
+            _keys(row, {"campaign", "vehicle"}, {"campaign"}, "scientific exploration")
+            campaign_id = _identifier(row["campaign"], sim.scientific_exploration.definitions,
+                                      "Scientific Exploration campaign")
+            if campaign_id in seen_science_campaigns:
+                raise ValueError(f"duplicate Scientific Exploration across phases: {campaign_id}")
+            seen_science_campaigns.add(campaign_id)
+            campaign = sim.scientific_exploration.definitions[DefinitionId(campaign_id)]
+            origin = str(campaign.origin_id)
+            assigned_vehicle = row.get("vehicle")
+            if assigned_vehicle is not None:
+                vehicle_id = _identifier(assigned_vehicle, vehicles, "Scientific Exploration Vehicle")
+                committed_fleet[(origin, vehicle_id)] += campaign.required_units
+                if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
+                    raise ValueError("Scientific Exploration reuses Fleet holdings committed to other activities")
+            for resource, quantity in campaign.consumable_resources:
+                science_inputs[(origin, str(resource))] += quantity
+            science_reward_conditional += campaign.research_points_total
+            science_activity_details.append({
+                "campaign": campaign_id, "origin": origin,
+                "destination": str(campaign.destination_id),
+                "selected_vehicle": assigned_vehicle,
+                "required_fleet_units": campaign.required_units,
+                "required_crew": campaign.required_crew,
+                "duration_days": campaign.duration_days,
+                "conditional_rp_reward": campaign.research_points_total,
+                "consumable_resources_t": {str(r): q for r, q in campaign.consumable_resources},
+                "prerequisite_technologies": sorted(map(str, campaign.prerequisite_technologies)),
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("scientific_exploration", campaign_id),)),
+                "status": "mission_fleet_eligibility_provisions_and_completion_unassessed",
+            })
+            unassessed.add("scientific_exploration_fleet_path_crew_provision_site_and_execution")
+        # Survey quantities are from registered Provider/Mode/Target Definitions.
+        # Explicit assumed starting progress is required for a time bound;
+        # missing Survey State is never interpreted as unmeasured zero.
+        for row in phase.get("survey_activities", ()):
+            _keys(row, {"node", "provider", "source", "mode", "units", "cell", "resource", "starting_progress"},
+                  {"node", "provider", "source", "mode", "units", "cell", "resource"}, "Survey activity")
+            node = _identifier(row["node"], nodes, "node")
+            provider_id = _identifier(row["provider"], sim.survey.providers, "Survey Provider")
+            provider = sim.survey.providers[DefinitionId(provider_id)]
+            try:
+                mode = provider.observation_mode(row["mode"])
+            except KeyError as exc:
+                raise ValueError(f"unknown Survey observation mode: {provider_id}/{row['mode']}") from exc
+            source_kind = provider.source_kind.value
+            source_pool = sim.facilities.definitions if source_kind == "facility" else vehicles
+            source = _identifier(row["source"], source_pool, "Survey source")
+            if not sim.survey.source_supports_mode(provider, mode, DefinitionId(source)):
+                raise ValueError("Survey Mode incompatible with selected source")
+            units = _integer(row["units"], "Survey units", positive=True)
+            if units < mode.minimum_source_units:
+                raise ValueError("Survey Mode minimum source units not met")
+            if source_kind == "facility":
+                assigned_source_units[(node, source)] += units
+                if assigned_source_units[(node, source)] > current[(node, source)]:
+                    raise ValueError("Survey and Research reuse Facility source units")
+            else:
+                committed_fleet[(node, source)] += units
+                if committed_fleet[(node, source)] > current_fleet.get((node, source), 0):
+                    raise ValueError("Survey reuses Fleet held for transport or science")
+            cell_id = _identifier(row["cell"], sim.extraction.graph.surface_cells, "Survey Cell")
+            resource = _identifier(row["resource"], known_resource, "Survey Resource")
+            target = sim.survey.targets.get((SurfaceCellId(cell_id), DefinitionId(resource)))
+            if target is None:
+                raise ValueError("Survey target is not a registered Cell/Resource pair")
+            threshold = target.thresholds[int(mode.max_knowledge_level) - 1]
+            start = (_number(row["starting_progress"], "authored Survey starting progress")
+                     if "starting_progress" in row else None)
+            remaining = max(0.0, threshold - start) if start is not None else None
+            nominal_rate = units * provider.capacity_units_per_source_per_day * mode.survey_rate
+            survey_activity_details.append({
+                "node": node, "provider": provider_id, "source": source, "source_kind": source_kind,
+                "units": units, "mode": mode.id, "target_cell": cell_id, "target_resource": resource,
+                "max_knowledge_level": int(mode.max_knowledge_level),
+                "assumed_start_progress": start, "target_progress_threshold": threshold,
+                "remaining_progress": remaining, "nominal_progress_per_day": nominal_rate,
+                "conditional_minimum_days": (remaining / nominal_rate if remaining is not None and nominal_rate > 0 else None),
+                "survey_source_service": sim.survey.service_type_for_provider(DefinitionId(provider_id), DefinitionId(source)),
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("survey_provider", provider_id),)),
+                "status": "survey_reach_technology_site_power_and_allocation_unassessed",
+            })
+            unassessed.add("survey_reach_technology_site_and_finite_allocation")
+            if start is None:
+                unassessed.add("survey_starting_progress_not_assumed")
+            if source_kind == "facility":
+                unassessed.add("survey_and_other_facility_services_compete_for_power_crew")
+        # Founding pays for the registered deployment package and preparation.
+        # The payload is not credited to an unestablished destination Node.
+        # Target and Movement eligibility stay with the owning Domains.
+        for row in phase.get("founding_projects", ()):
+            _keys(row, {"staging_node", "recipe", "target_cell", "target_node", "vehicle"},
+                  {"staging_node", "recipe"}, "founding project")
+            if ("target_cell" in row) == ("target_node" in row):
+                raise ValueError("founding project requires one explicit target Cell or World Node")
+            origin = _identifier(row["staging_node"], nodes, "founding staging node")
+            recipe_id = _identifier(row["recipe"], sim.founding.deployment_recipes, "Founding recipe")
+            recipe = sim.founding.deployment_recipes[DefinitionId(recipe_id)]
+            if "target_cell" in row:
+                destination = _identifier(row["target_cell"], sim.extraction.graph.surface_cells, "founding target Cell")
+                target_kind = "surface_cell"
+            else:
+                destination = _identifier(row["target_node"], sim.extraction.graph.nodes, "founding target World Node")
+                target_kind = "non_surface_node"
+            vehicle_id = None
+            if "vehicle" in row:
+                vehicle_id = _identifier(row["vehicle"], vehicles, "Founding Vehicle")
+                committed_fleet[(origin, vehicle_id)] += recipe.required_units
+                if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
+                    raise ValueError("Founding reuses Fleet holdings committed to other activities")
+            resources = {str(r.resource_id): r.amount_t for r in recipe.payload_resources}
+            for resource, amount in resources.items():
+                founding_inputs[(origin, resource)] += amount
+            services[(origin, f"required:{recipe.preparation_service_type}")] += (
+                recipe.preparation_work / days
+            )
+            founding_activity_details.append({
+                "staging_node": origin, "recipe": recipe_id,
+                "target": destination, "target_kind": target_kind,
+                "vehicle": vehicle_id, "required_vehicle_units": recipe.required_units,
+                "preparation_service": recipe.preparation_service_type,
+                "preparation_work": recipe.preparation_work,
+                "payload_resource_t": resources, "payload_t": recipe.payload_t,
+                "deployed_facilities": [str(deployment.facility_def_id) for deployment in recipe.deployed_facilities],
+                "initial_inventory_t": {str(r): quantity for r, quantity in recipe.initial_inventory_totals().items()},
+                "knowledge_requirements": [
+                    {"resource": str(req.subject_resource_id), "minimum_level": int(req.minimum_level)}
+                    for req in recipe.knowledge_requirements
+                ],
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("founding_method", recipe_id),)),
+                "status": "target_site_preparation_fleet_movement_and_arrival_unassessed",
+            })
+            unassessed.add("founding_target_site_knowledge_movement_payload_and_settlement")
         for row in phase.get("research_stages", ()):
             _keys(row, {"node", "research", "stage"}, {"node", "research", "stage"}, "research stage")
             rid = _identifier(row["research"], sim.research.definitions, "research")
@@ -618,11 +871,72 @@ def evaluate(plan: dict, *, app=None) -> dict:
                                             sorted(getattr(spec, "resources", {}).items(), key=lambda pair: str(pair[0]))},
                 "execution_requirements": requirements,
                 "source": f"research:{rid}/stage:{spec.stage_id}",
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index, (("research_stage", f"{rid}/{spec.stage_id}"),
+                                                        ("technology", rid))),
                 "status": "not_scheduled_or_eligibility_checked",
             })
             unassessed.add("research_stage_order_prerequisites_site_and_execution_allocation")
             if spec.stage_type.value == "operational_experience":
                 unassessed.add("operational_experience_not_generated_by_elapsed_time")
+        # Market Definition supply is an upper bound on a shared provider's
+        # notional window, not a free Resource inflow. Purchases only affect
+        # stock if authored separately as explicit external settlement claims.
+        market_requests = defaultdict(float)
+        market_price = {}
+        for row in phase.get("market_buys", ()):
+            _keys(row, {"node", "provider", "resource", "requested_t"},
+                  {"node", "provider", "resource", "requested_t"}, "market buy")
+            node = _identifier(row["node"], nodes, "market interface node")
+            provider_id = _identifier(row["provider"], sim.market.provider_defs, "Market Provider")
+            resource = _identifier(row["resource"], known_resource, "Market Resource")
+            quantity = _number(row["requested_t"], "Market request")
+            market_requests[(provider_id, resource)] += quantity
+            market_price[(provider_id, resource)] = sim.market.provider_defs[DefinitionId(provider_id)].buy_price(DefinitionId(resource))
+            market_activity_details.append({
+                "node": node, "provider": provider_id, "resource": resource,
+                "requested_t": quantity, "status": "market_interface_and_purchase_not_settled",
+                "graph_evidence": _graph_evidence(graph_nodes, relation_index,
+                                                  (("market_provider", provider_id),)),
+            })
+            unassessed.add("market_interface_provider_state_funds_and_delivery")
+        market_provider_constraints = []
+        for (provider_id, resource), quantity in sorted(market_requests.items()):
+            provider = sim.market.provider_defs[DefinitionId(provider_id)]
+            supply = provider.supply_def(DefinitionId(resource))
+            price = market_price[(provider_id, resource)]
+            # Supply is the provider-wide potential, not repeated per Node.
+            conditional_supply = (supply.initial_t + supply.replenishment_t_per_day * days
+                                  if supply else None)
+            arrival_window = max(0, days - provider.lead_time_days)
+            conditional_deliverable = (None if supply is None else
+                                       supply.initial_t + supply.replenishment_t_per_day * arrival_window
+                                       if arrival_window > 0 else 0.0)
+            market_provider_constraints.append({
+                "provider": provider_id, "resource": resource,
+                "total_requested_t": quantity,
+                "unit_price_musd_per_t": price,
+                "nominal_cost_musd": (price * quantity if price is not None else None),
+                "provider_definition_initial_supply_t": supply.initial_t if supply else None,
+                "provider_definition_stock_capacity_t": supply.capacity_t if supply else None,
+                "provider_definition_replenishment_t_per_day": supply.replenishment_t_per_day if supply else None,
+                "conditional_total_supply_upper_bound_t": conditional_supply,
+                "conditional_arrival_window_upper_bound_t": conditional_deliverable,
+                "theoretical_shortfall_t": (max(0.0, quantity - conditional_deliverable)
+                                            if supply and price is not None else None),
+                "lead_time_days": provider.lead_time_days,
+                "status": "conditional_provider_definition_not_market_state_or_delivery"
+                          if supply and price is not None else "no_registered_buy_offer_or_supply",
+            })
+        assumed_funds = (_number(phase["assumed_funds_musd"], "authored phase funds")
+                         if "assumed_funds_musd" in phase else None)
+        nominal_market_cost = (sum(row["nominal_cost_musd"] for row in market_provider_constraints)
+                               if all(row["nominal_cost_musd"] is not None for row in market_provider_constraints)
+                               else None)
+        market_funds = {"assumed_funds_musd": assumed_funds,
+                        "nominal_request_cost_musd": nominal_market_cost,
+                        "conditional_funds_gap_musd": (max(0.0, nominal_market_cost - assumed_funds)
+                                                       if assumed_funds is not None and nominal_market_cost is not None else None),
+                        "status": "phase_condition_not_actual_market_state"}
         for row in phase.get("external_rates", ()):
             _keys(row, {"node", "resource", "net_t_per_day"}, {"node", "resource", "net_t_per_day"}, "external rate")
             _identifier(row["resource"], known_resource, "Resource")
@@ -680,12 +994,12 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "blockers": sorted({blocker for allocation in matched for blocker in allocation["blockers"]}),
             })
         end = {}
-        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(transport_service_inputs) | set(research_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
+        keys = set(stocks) | set(produced) | set(process_inputs) | set(maintenance) | set(construction) | set(vehicle_inputs) | set(vehicle_turnaround_inputs) | set(transport_service_inputs) | set(research_inputs) | set(science_inputs) | set(founding_inputs) | set(life_support_inputs) | set(external) | set(shipped) | set(received)
         breakdown = []
         for key in sorted(keys):
             start = stocks[key]
             delta = (produced[key] - process_inputs[key] - maintenance[key] - construction[key]
-                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
+                     - vehicle_inputs[key] - vehicle_turnaround_inputs[key] - transport_service_inputs[key] - research_inputs[key] - science_inputs[key] - founding_inputs[key] - life_support_inputs[key] + external[key] - shipped[key] + received[key])
             end[key] = start + delta
             breakdown.append({
                 "node": key[0], "resource": key[1], "start_t": start,
@@ -694,6 +1008,8 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "vehicle_build_demand_t": vehicle_inputs[key], "fleet_turnaround_demand_t": vehicle_turnaround_inputs[key],
                 "transport_service_demand_t": transport_service_inputs[key],
                 "research_material_demand_t": research_inputs[key],
+                "science_material_demand_t": science_inputs[key],
+                "founding_payload_demand_t": founding_inputs[key],
                 "life_support_demand_t": life_support_inputs[key],
                 "external_net_t": external[key],
                 "shipped_t": shipped[key], "received_t": received[key],
@@ -727,6 +1043,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
             "storage_excess_points": max(0.0, stored_research_points - research_storage_nominal),
             "nominal_execution_per_day": research_execution_per_day,
             "crew_requirement_person_days_per_day": research_crew_demand_per_day,
+            "conditional_scientific_exploration_reward_points_not_awarded": science_reward_conditional,
         }
         constraints = []
         for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | {n for n, _ in services}):
@@ -777,7 +1094,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
         system_resources = _aggregate_by_dimension(breakdown, "resource", (
             "production_t", "process_demand_t", "maintenance_demand_t",
             "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-            "transport_service_demand_t", "research_material_demand_t", "life_support_demand_t", "external_net_t",
+            "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "external_net_t",
             "shipped_t", "received_t", "net_t", "notional_end_t", "shortfall_t",
         ))
         system_services = _aggregate_by_dimension(service_constraints, "service", (
@@ -788,6 +1105,14 @@ def evaluate(plan: dict, *, app=None) -> dict:
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
                        "research_stages": stage_details,
+                       "spatial_projects": spatial_activity_details,
+                       "upgrade_projects": upgrade_activity_details,
+                       "science_campaigns": science_activity_details,
+                       "survey_activities": survey_activity_details,
+                       "founding_projects": founding_activity_details,
+                       "market_buys": market_activity_details,
+                       "market_provider_constraints": market_provider_constraints,
+                       "market_funds_condition": market_funds,
                        "transfer_requirements": transfer_details,
                        "transport_services": transport_services,
                        "od_transport_constraints": od_transport_constraints,
@@ -816,6 +1141,12 @@ def evaluate(plan: dict, *, app=None) -> dict:
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
                 "Facility changes take effect at phase start; construction work is a separate nominal demand, not scheduled completion.",
+                "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
+                "Facility Upgrade projects consume registered materials and work, without Level transition, completion sequencing, or updated provider capability.",
+                "Scientific Exploration campaigns include registered resources and potential RP rewards, without dispatch, progression, RP award or Crew consumption simulation.",
+                "Survey is a conditional Provider/Mode/Target capacity comparison; no Survey State, reach, eligibility, or progress is executed.",
+                "Founding projects consume registered deployment payloads and preparation service; they do not found Nodes, transfer cargo, or build Facilities in-place.",
+                "Market provider supply, replenishment, price and lead time bound explicitly requested purchases; they are not settled Market delivery or new Resource Stock.",
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
@@ -826,7 +1157,7 @@ def evaluate(plan: dict, *, app=None) -> dict:
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
-                "Maintenance approximates invested material using base construction recipe; upgrade and salvage are not simulated.",
+                "Maintenance approximates invested material using base construction recipe; Upgrade investment is accounted separately without Level transition, salvage is not simulated.",
             ], "phases": report}
 
 
@@ -922,6 +1253,7 @@ def compare_cases(payload: dict, *, app=None) -> dict:
         raise ValueError("comparison requires cases")
     if app is None:
         app = build_game_application_for_load()
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
     results = []
     names = set()
     for case in cases:
@@ -933,7 +1265,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
         names.add(case["name"])
         case_plan = (case["plan"] if "plan" in case else
                      _apply_case_updates(payload["base_plan"], case.get("updates", [])))
-        results.append({"name": case["name"], "projection": evaluate(case_plan, app=app)})
+        results.append({"name": case["name"], "projection": evaluate(
+            case_plan, app=app, _definition_graph=graph)})
     differences = []
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
@@ -962,7 +1295,7 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                        "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-                       "transport_service_demand_t", "research_material_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
+                       "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
                        "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
                        "life_support_gap_person_days_per_day", "construction_work_required", "construction_work_nominal_capacity",
@@ -972,9 +1305,47 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                 ("fleet", ("node", "vehicle"), ("units", "units_built", "assumed_turnarounds")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),
+                ("extraction_world_context", ("node", "resource", "output_resource"),
+                 ("effective_opportunity", "adjusted_installed_capacity_t_per_day",
+                  "diminishing_output_t_per_day", "marginal_efficiency")),
+                ("investment_constraints", ("node",),
+                 ("required_work", "pre_investment_work_per_day", "pre_investment_work_lower_bound_days")),
+                ("spatial_projects", ("node", "recipe"), ("units", "required_construction_work")),
+                ("upgrade_projects", ("node", "facility", "target_level"),
+                 ("units", "required_construction_work")),
+                ("survey_activities", ("node", "provider", "source", "mode", "target_cell", "target_resource"),
+                 ("units", "nominal_progress_per_day", "conditional_minimum_days")),
+                ("science_campaigns", ("campaign",),
+                 ("conditional_rp_reward", "required_fleet_units", "required_crew", "duration_days")),
+                ("founding_projects", ("staging_node", "recipe", "target"),
+                 ("payload_t", "required_vehicle_units", "preparation_work")),
+                ("market_provider_constraints", ("provider", "resource"),
+                 ("total_requested_t", "nominal_cost_musd", "conditional_arrival_window_upper_bound_t",
+                  "theoretical_shortfall_t")),
+                ("research_stages", ("research", "stage"), ("point_cost", "work")),
+                ("transport_services", ("origin", "destination", "vehicle"),
+                 ("fleet_units", "forward_capacity_t_per_day", "reverse_capacity_t_per_day", "cycle_days")),
             ):
                 def indexed(items):
-                    return {tuple(row[key] for key in key_fields): row for row in items}
+                    # Several explicitly authored activity rows may refer to the
+                    # same Definition/OD. Do not silently lose any quantities.
+                    grouped = {}
+                    for row in items:
+                        key = tuple(row[field] for field in key_fields)
+                        values = {metric: row.get(metric, 0.0) for metric in metrics}
+                        if key in grouped:
+                            for metric in metrics:
+                                old = grouped[key][metric]
+                                value = values[metric]
+                                if metric in {"cycle_days", "duration_days", "conditional_minimum_days",
+                                              "marginal_efficiency", "pre_investment_work_lower_bound_days"}:
+                                    grouped[key][metric] = old if old == value else None
+                                else:
+                                    grouped[key][metric] = (old + value if old is not None and value is not None
+                                                            else None)
+                        else:
+                            grouped[key] = values
+                    return grouped
                 l, r = indexed(left[section]), indexed(right[section])
                 for key in sorted(set(l) | set(r)):
                     delta = {}
@@ -996,6 +1367,14 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                         if incomparable:
                             change["incomparable_unassessed_metrics"] = incomparable
                         differences.append(change)
+        for unmatched in baseline[len(alternative_phases):]:
+            differences.append({"case": alternative["name"], "baseline_phase": unmatched["name"],
+                                "phase": None, "section": "incomparable_phase_basis",
+                                "reason": "missing_case_phase"})
+        for unmatched in alternative_phases[len(baseline):]:
+            differences.append({"case": alternative["name"], "baseline_phase": None,
+                                "phase": unmatched["name"], "section": "incomparable_phase_basis",
+                                "reason": "missing_baseline_phase"})
     return {"model": "definition_quantity_comparison_v1", "baseline_case": results[0]["name"],
             "cases": results, "differences": differences}
 
@@ -1024,10 +1403,28 @@ def summarize_projection(projection: dict) -> dict:
             "investment_constraints": phase["investment_constraints"],
             "od_transport_constraints": phase["od_transport_constraints"],
             "extraction_world_context": phase["extraction_world_context"],
+            "science_activity_bounds": [
+                {k: item[k] for k in ("campaign", "origin", "duration_days", "conditional_rp_reward", "status")}
+                for item in phase["science_campaigns"]],
+            "survey_capacity_bounds": [
+                {k: item[k] for k in ("node", "provider", "target_cell", "target_resource",
+                                     "nominal_progress_per_day", "conditional_minimum_days", "status")}
+                for item in phase["survey_activities"]],
+            "spatial_and_upgrade_investment": [
+                {k: item[k] for k in ("node", "recipe", "units", "required_construction_work", "status")}
+                for item in phase["spatial_projects"]] + [
+                {k: item[k] for k in ("node", "facility", "target_level", "units", "required_construction_work", "status")}
+                for item in phase["upgrade_projects"]],
+            "founding_investment": [
+                {k: item[k] for k in ("staging_node", "recipe", "target", "payload_t", "preparation_work", "status")}
+                for item in phase["founding_projects"]],
+            "market_provider_bounds": phase["market_provider_constraints"],
+            "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
             "detail_sections": [
                 "activity_sources", "resources", "service_constraints", "research_stages",
-                "transport_services", "transfer_requirements", "system_resources", "system_services",
+                "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects",
+                "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
         })
     return {"content_id": projection["content_id"], "world_definition_id": projection["world_definition_id"],

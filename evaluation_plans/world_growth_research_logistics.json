@@ -211,16 +211,23 @@
             "vehicle": "base.vehicle.reusable_launch_vehicle",
             "units": 2
           }
+        ],
+        "spatial_projects": [
+          {
+            "node": "base.location.earth_industrial",
+            "recipe": "base.construction.surface_cell_development",
+            "units": 1
+          }
         ]
       }
     ]
   },
   "cases": [
     {
-      "name": "one_cell_with_expansion"
+      "name": "single_cell_during_investment"
     },
     {
-      "name": "wider_developed_resource_area",
+      "name": "developed_resource_cell_after_investment",
       "updates": [
         {
           "collection": "extraction_sites",
