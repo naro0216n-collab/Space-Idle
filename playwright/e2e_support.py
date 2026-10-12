@@ -25,6 +25,9 @@ def choose_priority(root: Any, holder_selector: str, level: int | str) -> Any:
     return button
 
 
+SUPPORTED_BROWSER_ENGINES = frozenset({"chromium", "webkit"})
+
+
 def browser_launch_kwargs(browser_name: str) -> dict[str, object]:
     """Return the shared browser launch contract for E2E scenarios."""
     launch_kwargs: dict[str, object] = {"headless": True}
@@ -57,7 +60,9 @@ def wait_for_server(origin: str, timeout: float = 10.0) -> None:
 
 @contextmanager
 def managed_browser(browser_name: str) -> Iterator[Any]:
-    """Launch one real browser process and own its Playwright lifecycle."""
+    """Launch one supported browser process and own its Playwright lifecycle."""
+    if browser_name not in SUPPORTED_BROWSER_ENGINES:
+        raise ValueError(f"unsupported browser {browser_name!r}; expected chromium or webkit")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - developer environment guard

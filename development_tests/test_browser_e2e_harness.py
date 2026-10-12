@@ -89,6 +89,13 @@ def test_shared_chromium_launch_contract_prefers_explicit_runner_browser(monkeyp
     assert support.browser_launch_kwargs("webkit") == {"headless": True}
 
 
+def test_unsupported_browser_fails_at_shared_launch_boundary() -> None:
+    support = _load_module("space_idle_e2e_support_launch_test", PLAYWRIGHT_DIR / "e2e_support.py")
+    with pytest.raises(ValueError, match="unsupported browser"):
+        with support.managed_browser("unsupported"):
+            pass
+
+
 def test_browser_context_lifecycle_isolates_each_scenario_and_closes_on_error() -> None:
     support = _load_module("space_idle_e2e_support_context_test", PLAYWRIGHT_DIR / "e2e_support.py")
 

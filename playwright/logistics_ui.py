@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from e2e_support import choose_priority, isolated_browser_context, monitored_page, wait_for_server
 
-import os
 from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, GetOperationalNode, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, GetOperationalNode, GetWorld, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -21,10 +20,6 @@ OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
 def run(browser) -> None:
-    browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
-    if browser_name not in {"chromium", "webkit"}:
-        raise ValueError(f"unsupported browser: {browser_name}")
-
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
         new_game_factory=build_game_application,
@@ -457,21 +452,22 @@ def run(browser) -> None:
 
             # A remote node selected on the shared Map is an inspection scope,
             # not a command to change the location running the simulation.
-            remote_id = page.evaluate("""() => {
-                const state = window.SpaceIdleApp.state;
-                return state.world.operational_nodes.find(node => node.id !== state.operationalNodeId)?.id;
-            }""")
-            assert remote_id
             execution_id = page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId')
+            remote = next(
+                (node for node in runtime.query(GetWorld()).data.operational_nodes
+                 if node.id != execution_id
+                 and runtime.query(GetOperationalNode(node.id)).data.inventory),
+                None,
+            )
+            assert remote is not None, 'an independently queryable remote Node is required'
+            remote_id = remote.id
             page.locator(f'#systemMapNodeIndex [data-system-node-jump="{remote_id}"]').click()
             page.wait_for_function(
                 'id => window.SpaceIdleApp.state.inspectedNode?.id === id', arg=remote_id
             )
             assert page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId') == execution_id
-            remote_resource = page.evaluate(
-                '() => window.SpaceIdleApp.state.inspectedNode.inventory?.[0]?.resource_id || null'
-            )
-            assert remote_resource, 'inspected remote node must expose a selectable Resource'
+            remote_resource = runtime.query(GetOperationalNode(remote_id)).data.inventory[0].resource_id
+            assert remote_resource, 'Application must expose a remote Resource for map inspection'
             page.locator('#systemMapResourceFilter').select_option(remote_resource)
             assert '現在在庫' in page.locator('#movementPlanInspectorContent').inner_text()
             assert '現地生産' in page.locator('#movementPlanInspectorContent').inner_text()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from e2e_support import choose_priority, priority_group, isolated_browser_context, monitored_page, wait_for_server
 
-import os
 from pathlib import Path
 from threading import Thread
 import tempfile
@@ -15,10 +14,6 @@ from space_idle.version import VERSION
 
 
 def run(browser) -> None:
-    browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
-    if browser_name not in {"chromium", "webkit"}:
-        raise ValueError(f"unsupported browser: {browser_name}")
-
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-interaction-")
     runtime = GameRuntime(
         new_game_factory=build_game_application,
