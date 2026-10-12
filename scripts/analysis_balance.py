@@ -56,10 +56,6 @@ def _keys(row, allowed, required, context):
         raise ValueError(f"invalid {context} fields")
 
 
-def _accumulate(mapping, key, amount):
-    mapping[key] += amount
-
-
 def _asset_rows(rows, sim, nodes, *, label):
     """One method per Facility block; sum units by definition for construction."""
     result = []
@@ -318,9 +314,17 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # Definition-derived resource flows and explicitly authored assumptions
         # share this single accounting path; the ledger is only provenance.
         resource_origins = defaultdict(float)
+        service_origins = defaultdict(float)
         def book(mapping, dimension, node, resource, amount, origin_kind, origin_id, basis="definition_x_composition"):
             mapping[(node, str(resource))] += amount
             resource_origins[(node, str(resource), dimension, origin_kind, str(origin_id), basis)] += amount
+        def book_service(node, service, rate, role, origin_kind, origin_id, basis="definition_x_composition"):
+            services[(node, f"required:{service}" if role == "demand" else service)] += rate
+            service_origins[(node, service, role, origin_kind, str(origin_id), basis)] += rate
+        def book_construction_work(node, required_work, origin_kind, origin_id):
+            work[node] += required_work
+            service_origins[(node, "construction_work", "demand", origin_kind, str(origin_id),
+                             "definition_x_selected_investment")] += required_work / days
         unassessed = set()
         stage_details = []
         transfer_details = []
@@ -387,10 +391,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 ):
                     raise ValueError("World extraction context and authored yield cannot both govern one asset")
             for supply in facility.service_capacity_supplies:
-                _accumulate(services, (node, supply.service_type), supply.nominal_rate * mult)
+                book_service(node, supply.service_type, supply.nominal_rate * mult, "nominal_supply", "facility", name)
             if facility.id in sim.projects.construction_providers:
-                _accumulate(services, (node, "construction_work"),
-                            sim.projects.construction_providers[facility.id].work_per_day * mult)
+                book_service(node, "construction_work",
+                             sim.projects.construction_providers[facility.id].work_per_day * mult,
+                             "nominal_supply", "construction_provider", name)
             spec = sim.power.specs.get(facility.id)
             if spec:
                 power_load[node] += (spec.load_mw * duty + spec.standby_load_mw * (1 - duty)) * units
@@ -406,10 +411,16 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     storage[(node, pool)] += amount * units
             recipe = sim.projects.recipes.get(facility.id)
             if recipe:
-                for req in recipe.resources:
-                    book(maintenance, "maintenance_demand_t", node, req.resource_id,
-                         req.amount_t * facility.maintenance_fraction_per_year / 365.0 * units * days,
-                         "facility_maintenance", name)
+                # The Domain owns the invested-resource maintenance contract.
+                # Base recipe investment is an explicit assumption for the
+                # already-installed assets, not an inspected Facility State.
+                base_investment = {req.resource_id: req.amount_t * units for req in recipe.resources}
+                for resource_id, rate in sim.facilities.maintenance_requirements_for_investment(
+                    facility.id, base_investment,
+                ).items():
+                    book(maintenance, "maintenance_demand_t", node, resource_id,
+                         rate * days, "facility_maintenance", name,
+                         "base_construction_recipe_assumed_investment")
         for (node, resource), group in sorted(extraction_groups.items()):
             context = extraction_contexts.get(node)
             if context is None:
@@ -422,30 +433,43 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             opportunity = sim.extraction.opportunity_for_cells(
                 DefinitionId(resource), methods, context["cells"], context["day"], eligible=eligible,
             )
-            adjusted_capacity = 0.0
+            # One geological opportunity is shared by every Method extracting
+            # this raw Resource. Split its single diminishing response across
+            # output Resource kinds rather than crediting the first Method's
+            # output to every selected Method (future Methods may differ).
+            by_output = defaultdict(float)
+            output_methods = defaultdict(set)
             for method, nominal in group:
                 method_opportunity = sim.extraction.opportunity_for_cells(
                     DefinitionId(resource), (method,), context["cells"], context["day"], eligible=eligible,
                 )
-                adjusted_capacity += (nominal * min(1.0, method_opportunity / opportunity)
-                                      if opportunity > 1e-12 else 0.0)
-            output = sim.extraction.diminishing_response(adjusted_capacity, opportunity) * days
-            out_resource = str(group[0][0].output_resource_id)
-            key = node, out_resource
-            extraction_assumed[key] += output
-            book(produced, "production_t", node, out_resource, output,
-                 "extraction_opportunity", resource, "world_definition_x_authored_knowledge")
-            extraction_context_report.append({
-                "node": node, "resource": resource, "output_resource": out_resource,
-                "world_body": context["body"], "world_cells": list(context["cells"]),
-                "knowledge_source": "authored_knowledge_levels_not_survey_state",
-                "world_reference_day": context["day"],
-                "effective_opportunity": opportunity,
-                "adjusted_installed_capacity_t_per_day": adjusted_capacity,
-                "diminishing_output_t_per_day": output / days,
-                "marginal_efficiency": sim.extraction.marginal_response(adjusted_capacity, opportunity),
-                "status": "conditional_world_definition_upper_bound_not_allocated",
-            })
+                adjusted = (nominal * min(1.0, method_opportunity / opportunity)
+                            if opportunity > 1e-12 else 0.0)
+                by_output[str(method.output_resource_id)] += adjusted
+                output_methods[str(method.output_resource_id)].add(str(method.id))
+            adjusted_capacity = sum(by_output.values())
+            total_output = sim.extraction.diminishing_response(adjusted_capacity, opportunity) * days
+            for output_resource, output_capacity in sorted(by_output.items()):
+                output = (total_output * output_capacity / adjusted_capacity
+                          if adjusted_capacity > 1e-12 else 0.0)
+                key = node, output_resource
+                extraction_assumed[key] += output
+                book(produced, "production_t", node, output_resource, output,
+                     "extraction_opportunity", ",".join(sorted(output_methods[output_resource])),
+                     "world_definition_x_authored_knowledge")
+                extraction_context_report.append({
+                    "node": node, "resource": resource, "output_resource": output_resource,
+                    "contributing_methods": sorted(output_methods[output_resource]),
+                    "world_body": context["body"], "world_cells": list(context["cells"]),
+                    "knowledge_source": "authored_knowledge_levels_not_survey_state",
+                    "world_reference_day": context["day"],
+                    "effective_opportunity": opportunity,
+                    "shared_adjusted_installed_capacity_t_per_day": adjusted_capacity,
+                    "adjusted_installed_capacity_t_per_day": output_capacity,
+                    "diminishing_output_t_per_day": output / days,
+                    "marginal_efficiency": sim.extraction.marginal_response(adjusted_capacity, opportunity),
+                    "status": "conditional_world_definition_upper_bound_not_allocated",
+                })
             unassessed.add("extraction_site_technology_service_and_stock_allocation")
             if any(method.minimum_knowledge_level is not None for method, _ in group):
                 unassessed.add("survey_knowledge_levels_are_authored_assumptions")
@@ -464,7 +488,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             for req in recipe.resources:
                 book(construction, "construction_demand_t", key[0], req.resource_id,
                      req.amount_t * delta, "facility_construction", key[1])
-            work[key[0]] += recipe.construction_work * delta
+            book_construction_work(key[0], recipe.construction_work * delta,
+                                   "facility_construction", key[1])
         # Explicit Spatial Development demand is a registered one-time
         # project recipe; it never constructs Cells or awards territory.
         for row in phase.get("spatial_projects", ()):
@@ -476,7 +501,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             for req in recipe.resources:
                 book(construction, "construction_demand_t", node, req.resource_id,
                      req.amount_t * units, "spatial_development", rid)
-            work[node] += recipe.construction_work * units
+            book_construction_work(node, recipe.construction_work * units,
+                                   "spatial_development", rid)
             spatial_activity_details.append({
                 "node": node, "recipe": rid, "units": units,
                 "required_construction_work": recipe.construction_work * units,
@@ -510,11 +536,49 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             for req in recipe.resources:
                 book(construction, "construction_demand_t", node, req.resource_id,
                      req.amount_t * units, "facility_upgrade", f"{facility_id}/level:{target_level}")
-            work[node] += recipe.construction_work * units
+            book_construction_work(node, recipe.construction_work * units,
+                                   "facility_upgrade", f"{facility_id}/level:{target_level}")
+            # Upgrade completion is not simulated: this is *potential* later
+            # maintenance on the increment of invested materials, not demand
+            # booked into the investment phase before construction succeeds.
+            upgrade_investment = {req.resource_id: req.amount_t * units for req in recipe.resources}
+            post_upgrade_maintenance = sim.facilities.maintenance_requirements_for_investment(
+                DefinitionId(facility_id), upgrade_investment,
+            )
+            # Registered Provider levels are capabilities *after* a valid
+            # upgrade, not free capacity in the investment phase. Report
+            # their differences alongside material/work/maintenance burdens.
+            facility_def = sim.facilities.definitions[DefinitionId(facility_id)]
+            compatible_provider_changes = []
+            for provider in sim.research.providers.values():
+                if provider.source_kind.value != "facility" or not provider.accepts_source(
+                    cap.id for cap in facility_def.capability_supplies
+                ):
+                    continue
+                previous_level = next((level for level in provider.levels
+                                       if level.level == target_level - 1), None)
+                next_level = next((level for level in provider.levels
+                                   if level.level == target_level), None)
+                if previous_level is None or next_level is None:
+                    continue
+                compatible_provider_changes.append({
+                    "provider": str(provider.id), "assumed_current_level": target_level - 1,
+                    "generation_points_per_day_before": previous_level.generation_points_per_day * units,
+                    "generation_points_per_day_after": next_level.generation_points_per_day * units,
+                    "research_execution_per_day_before": previous_level.research_execution_per_day * units,
+                    "research_execution_per_day_after": next_level.research_execution_per_day * units,
+                    "storage_capacity_points_before": previous_level.storage_capacity_points * units,
+                    "storage_capacity_points_after": next_level.storage_capacity_points * units,
+                    "status": "conditional_post_upgrade_provider_capacity_not_allocated",
+                })
             upgrade_activity_details.append({
                 "node": node, "facility": facility_id, "target_level": target_level,
+                "conditional_research_provider_changes": compatible_provider_changes,
                 "units": units, "required_construction_work": recipe.construction_work * units,
                 "resources_t": {str(req.resource_id): req.amount_t * units for req in recipe.resources},
+                "conditional_additional_maintenance_t_per_day": {
+                    str(resource): rate for resource, rate in sorted(post_upgrade_maintenance.items())
+                },
                 "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
                 "graph_evidence": _graph_evidence(graph_nodes, relation_index,
                     (("facility_upgrade_method", f"{facility_id}/level:{target_level}"),)),
@@ -569,7 +633,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 book(vehicle_inputs, "vehicle_build_demand_t", node, res,
                      amount * added, "vehicle_manufacture", vehicle_id)
             if vehicle.production.service_type:
-                services[(node, f"required:{vehicle.production.service_type}")] += added * vehicle.production.days / days
+                book_service(node, vehicle.production.service_type, added * vehicle.production.days / days,
+                             "demand", "vehicle_manufacture", vehicle_id)
         for (node, vehicle_id), units in sorted(current_fleet.items()):
             if units == 0:
                 continue
@@ -580,9 +645,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 book(vehicle_turnaround_inputs, "fleet_turnaround_demand_t", node, resource,
                      amount * cycles, "fleet_turnaround", vehicle_id, "definition_x_authored_turnarounds")
             if vehicle.maintenance.service_type:
-                services[(node, f"required:{vehicle.maintenance.service_type}")] += (
-                    cycles * vehicle.maintenance.turnaround_days / days
-                )
+                book_service(node, vehicle.maintenance.service_type,
+                             cycles * vehicle.maintenance.turnaround_days / days,
+                             "demand", "fleet_turnaround", vehicle_id, "definition_x_authored_turnarounds")
             activity_sources.append({"kind": "fleet", "node": node, "definition": vehicle_id,
                                      "units": units, "turnarounds_per_unit_per_day": cycles_per_unit,
                                      "quantity_source": "definition_x_selected_composition",
@@ -636,6 +701,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             level_spec = next((candidate for candidate in provider.levels if candidate.level == level), None)
             if level_spec is None:
                 raise ValueError(f"unknown research provider level: {name}/{level}")
+            if provider.source_kind.value == "fleet" and level != 1:
+                raise ValueError("Fleet-backed research source has no Facility-style Level upgrade")
+            if provider.source_kind.value == "facility" and level > 1:
+                unassessed.add("research_source_facility_level_and_upgrade_investment_unassessed")
             duty = _number(row.get("duty", 1), "research provider duty")
             if duty > 1:
                 raise ValueError("research provider duty cannot exceed 1")
@@ -705,9 +774,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                          "transport_domain_plan_x_selected_fleet")
                 maintenance_spec = vehicles[vehicle_id].maintenance
                 if maintenance_spec.service_type:
-                    services[(origin, f"required:{maintenance_spec.service_type}")] += (
-                        units * duty * plan_preview.turnaround_days / plan_preview.cycle_days
-                    )
+                    book_service(origin, maintenance_spec.service_type,
+                                 units * duty * plan_preview.turnaround_days / plan_preview.cycle_days,
+                                 "demand", "transport_service", vehicle_id,
+                                 "transport_domain_plan_x_selected_fleet")
             transport_services.append({
                 "origin": origin, "destination": destination, "vehicle": vehicle_id,
                 "fleet_units": units, "duty": duty, "world_reference_day": day,
@@ -849,9 +919,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             for resource, amount in resources.items():
                 book(founding_inputs, "founding_payload_demand_t", origin, resource,
                      amount, "founding_method", recipe_id)
-            services[(origin, f"required:{recipe.preparation_service_type}")] += (
-                recipe.preparation_work / days
-            )
+            book_service(origin, recipe.preparation_service_type, recipe.preparation_work / days,
+                         "demand", "founding_method", recipe_id)
             founding_activity_details.append({
                 "staging_node": origin, "recipe": recipe_id,
                 "target": destination, "target_kind": target_kind,
@@ -903,8 +972,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     research_service_work[(scope, requirement.service_type)] += (
                         requirement.amount_per_execution * progress_amount)
                     if requirement.scope.value != "ORGANIZATION":
-                        services[(scope, f"required:{requirement.service_type}")] += (
-                            requirement.amount_per_execution * progress_amount / days)
+                        # Ledger and physical Service Capacity are keyed by
+                        # the actual Node, not the human-readable scope label.
+                        book_service(str(requirement.constraint_node(row["node"])), requirement.service_type,
+                                     requirement.amount_per_execution * progress_amount / days,
+                                     "demand", "research_stage", f"{rid}/{spec.stage_id}")
                     requirements.append({"kind": "service", "name": requirement.service_type,
                                          "amount_per_execution": requirement.amount_per_execution,
                                          "scope": requirement.scope.value,
@@ -1022,8 +1094,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             amount = _number(row["t_per_day"], "transfer rate") * days
             book(shipped, "shipped_t", origin, res, amount, "authored_transfer", f"{origin}->{dest}", "authored_delivery_assumption")
             book(received, "received_t", dest, res, amount, "authored_transfer", f"{origin}->{dest}", "authored_delivery_assumption")
-            services[(origin, "required:cargo_transfer")] += amount / days
-            services[(dest, "required:cargo_transfer")] += amount / days
+            book_service(origin, "cargo_transfer", amount / days, "demand", "authored_transfer",
+                         f"{origin}->{dest}", "authored_delivery_assumption")
+            book_service(dest, "cargo_transfer", amount / days, "demand", "authored_transfer",
+                         f"{origin}->{dest}", "authored_delivery_assumption")
             # A physical OD capacity is shared across all Resource demands.
             # The per-resource row never claims that entire capacity as its own.
             transfer_details.append({"origin": origin, "destination": dest,
@@ -1212,6 +1286,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                            for (node, resource, dimension, kind, source, basis), amount
                            in sorted(resource_origins.items()) if abs(amount) > 1e-12
                        ],
+                       "service_contributions": [
+                           {"node": node, "service": service, "role": role,
+                            "origin_kind": kind, "origin_definition": source,
+                            "quantity_basis": basis, "rate_per_day": rate}
+                           for (node, service, role, kind, source, basis), rate
+                           in sorted(service_origins.items()) if abs(rate) > 1e-12
+                       ],
                        "system_resources": system_resources, "system_services": system_services,
                        "fleet": fleet_report,
                        "scale": {"facility_units": sum(current.values()),
@@ -1382,6 +1463,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
             for section, key_fields, metrics in (
                 ("research_service_constraints", ("scope", "service"),
                  ("total_required", "nominal_capacity_per_day", "conditional_lower_bound_days")),
+                ("service_contributions", ("node", "service", "role", "origin_kind", "origin_definition", "quantity_basis"),
+                 ("rate_per_day",)),
                 ("resource_contributions", ("node", "resource", "dimension", "origin_kind", "origin_definition", "quantity_basis"),
                  ("amount_t",)),
                 ("service_constraints", ("node", "service"),
@@ -1522,7 +1605,7 @@ def summarize_projection(projection: dict) -> dict:
             "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
             "detail_sections": [
-                "activity_sources", "resources", "resource_contributions", "service_constraints", "research_stages", "research_service_constraints",
+                "activity_sources", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],

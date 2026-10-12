@@ -805,9 +805,33 @@ def test_facility_upgrade_investment_uses_registered_recipe_without_free_level_e
     base = evaluate({"initial_facilities": [asset], "phases": [plain]}, app=definitions)["phases"][0]
     report = evaluate({"initial_facilities": [asset], "phases": [selected]}, app=definitions)["phases"][0]
     assert report["upgrade_projects"][0]["required_construction_work"] == pytest.approx(recipe.construction_work)
+    expected_added_upkeep = sim.facilities.maintenance_requirements_for_investment(
+        facility_id, {req.resource_id: req.amount_t for req in recipe.resources},
+    )
+    assert report["upgrade_projects"][0]["conditional_additional_maintenance_t_per_day"] == pytest.approx(
+        {str(resource): rate for resource, rate in expected_added_upkeep.items()}
+    )
+    if level == 2:
+        provider = sim.research.providers[facility_id]
+        previous_spec = provider.level_spec(1)
+        next_spec = provider.level_spec(2)
+        change = report["upgrade_projects"][0]["conditional_research_provider_changes"][0]
+        assert change["provider"] == str(provider.id)
+        assert change["generation_points_per_day_before"] == pytest.approx(
+            previous_spec.generation_points_per_day
+        )
+        assert change["generation_points_per_day_after"] == pytest.approx(
+            next_spec.generation_points_per_day
+        )
+        assert change["research_execution_per_day_after"] == pytest.approx(
+            next_spec.research_execution_per_day
+        )
     assert report["investment_constraints"][0]["required_work"] == pytest.approx(recipe.construction_work)
     for requirement in recipe.resources:
         assert _rows(report)[(node, str(requirement.resource_id))]["construction_demand_t"] == pytest.approx(requirement.amount_t)
+    assert {row["resource"]: row["maintenance_demand_t"] for row in report["resources"]} == pytest.approx(
+        {row["resource"]: row["maintenance_demand_t"] for row in base["resources"]}
+    )
     assert report["scale"] == base["scale"]
     assert report["research_point_balance"] == base["research_point_balance"]
     assert "facility_upgrade_level_eligibility_and_sequencing" in report["unassessed_constraints"]
@@ -925,6 +949,16 @@ def test_resource_contributions_reconcile_by_source_with_all_projected_dimension
                     for dimension in dimensions:
                         assert attributed[(row["node"], row["resource"], dimension)] == pytest.approx(
                             row[dimension], abs=1e-9), (name, phase["name"], row["node"], row["resource"], dimension)
+                service_attributed = defaultdict(float)
+                for item in phase["service_contributions"]:
+                    assert item["quantity_basis"] and item["origin_definition"]
+                    service_attributed[(item["node"], item["service"], item["role"])] += item["rate_per_day"]
+                for row in phase["service_constraints"]:
+                    identity = (row["node"], row["service"])
+                    assert service_attributed[(*identity, "demand")] == pytest.approx(
+                        row["required_per_day"], abs=1e-9)
+                    assert service_attributed[(*identity, "nominal_supply")] == pytest.approx(
+                        row["nominal_capacity_per_day"], abs=1e-9)
     assert capture_state(definitions._simulation) == before
 
 
@@ -968,3 +1002,114 @@ def test_typed_research_stages_include_shared_execution_demand_beyond_theory(def
         "conditional_lower_bound_days": pytest.approx(expected_work / rate),
         "status": "conditional_shared_organization_capacity",
     }]
+
+
+def test_world_opportunity_shared_across_distinct_method_outputs():
+    """New registered Method outputs must not each acquire the full shared raw opportunity."""
+    from dataclasses import replace
+    from space_idle.shared import DefinitionId
+
+    app = build_game_application_for_load()
+    sim = app._simulation
+    raw = next(m for m in sim.extraction.specs.values() if str(m.id).endswith("crust_mineral"))
+    other_resource = next(r for r in app._catalog.resources if r != raw.output_resource_id)
+    new_id = DefinitionId("test.extraction.alternate_output")
+    sim.extraction.specs[new_id] = replace(raw, id=new_id, output_resource_id=other_resource)
+    facility = next(f for f in sim.facilities.definitions.values() if f.extraction_capacity_t_per_day > 0
+                    and raw.required_capabilities <= {c.id for c in f.capability_supplies})
+    node = "base.location.earth_industrial"
+    cell = next(c for c, spec in sim.extraction.graph.surface_cells.items()
+                if str(c).endswith("earth.industrial_core"))
+    facilities = [{"node": node, "facility": str(facility.id), "units": 1,
+                   "extraction": str(mid)} for mid in (raw.id, new_id)]
+    data = {"initial_facilities": facilities, "phases": [{
+        "name": "two distinct outputs from one raw opportunity", "days": 7,
+        "facilities": facilities,
+        "extraction_sites": [{"node": node, "developed_cells": [str(cell)],
+                              "knowledge": [{"cell": str(cell), "resource": str(raw.resource_id),
+                                             "level": 3}]}],
+    }]}
+    result = evaluate(data, app=app)["phases"][0]
+    outputs = {row["resource"]: row["production_t"] for row in result["resources"]
+               if row["production_t"] > 0}
+    contexts = result["extraction_world_context"]
+    assert set(outputs) == {str(raw.output_resource_id), str(other_resource)}
+    assert len(contexts) == 2
+    assert all(c["effective_opportunity"] == pytest.approx(contexts[0]["effective_opportunity"]) for c in contexts)
+    assert sum(outputs.values()) == pytest.approx(sum(c["diminishing_output_t_per_day"] * 7 for c in contexts))
+    assert outputs[str(raw.output_resource_id)] > 0 and outputs[str(other_resource)] > 0
+    assert outputs[str(raw.output_resource_id)] == pytest.approx(outputs[str(other_resource)])
+
+
+def test_research_investment_comparison_preserves_distinct_capital_and_capacity_dimensions(definitions):
+    """Check the comparison contract, not which registered option is 'optimal'."""
+    import json
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent.parent / "evaluation_plans" /
+                       "research_capacity_investment.json").read_text())
+    before = deepcopy(capture_state(definitions._simulation))
+    results = compare_cases(data, app=definitions)["cases"]
+    assert len(results) == 3
+    sim = definitions._simulation
+    lab_id = next(p.id for p in sim.research.providers.values()
+                  if len(p.levels) > 1 and p.source_kind.value == "facility")
+    provider = sim.research.providers[lab_id]
+    upgrade = sim.projects.upgrade_recipes[(lab_id, 2)]
+    initial, upgraded, expanded = (row["projection"]["phases"] for row in results)
+    for phases in (initial, upgraded, expanded):
+        first, second = phases
+        assert not first["research_stages"]
+        assert second["research_point_balance"]["research_stage_demand_points"] > 0
+        assert second["research_point_balance"]["execution_capacity_lower_bound_days"] is not None
+    assert upgraded[0]["upgrade_projects"][0]["required_construction_work"] == pytest.approx(
+        upgrade.construction_work
+    )
+    assert expanded[0]["scale"]["facility_units_added"] == 1
+    assert upgraded[0]["scale"]["facility_units_added"] == 0
+    assert initial[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
+        provider.level_spec(1).research_execution_per_day
+    )
+    assert upgraded[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
+        provider.level_spec(2).research_execution_per_day
+    )
+    assert expanded[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
+        2 * provider.level_spec(1).research_execution_per_day
+    )
+    assert "research_source_facility_level_and_upgrade_investment_unassessed" in upgraded[1][
+        "unassessed_constraints"
+    ]
+    assert capture_state(definitions._simulation) == before
+
+
+def test_new_node_scoped_research_requirement_shares_node_service_ledger():
+    """A future registered Stage with a local Service uses that actual node."""
+    from dataclasses import replace
+    from space_idle.execution_requirements import ServiceCapacityRequirement
+    from space_idle.service_capacity import ServiceCapacityScope
+
+    app = build_game_application_for_load()
+    sim = app._simulation
+    research = next(iter(sim.research.definitions.values()))
+    stage = research.stage_specs[0]
+    execution = ServiceCapacityRequirement(
+        "cargo_transfer", .5, scope=ServiceCapacityScope.OPERATIONAL_NODE
+    )
+    sim.research.definitions[research.id] = replace(research, stage_specs=(
+        replace(stage, execution_requirements=stage.execution_requirements + (execution,)),
+        *research.stage_specs[1:]
+    ))
+    node, days = "selected.research.node", 5
+    report = evaluate({"phases": [{"name": "research service", "days": days,
+                                    "facilities": [], "research_stages": [
+                                        {"node": node, "research": str(research.id),
+                                         "stage": stage.stage_id}]}]}, app=app)["phases"][0]
+    progress = getattr(stage, "research_point_cost", 0) or getattr(stage, "required_work", 0)
+    expected = .5 * progress / days
+    local_service = next(row for row in report["service_constraints"]
+                         if row["node"] == node and row["service"] == "cargo_transfer")
+    assert local_service["required_per_day"] == pytest.approx(expected)
+    assert any(row["node"] == node and row["service"] == "cargo_transfer"
+               and row["rate_per_day"] == pytest.approx(expected)
+               for row in report["service_contributions"])
+    assert not any(row["node"] == f"node:{node}" for row in report["service_constraints"])
