@@ -148,7 +148,8 @@ def test_surface_access_rules_follow_body_identity_and_physical_surface():
     # Solid surfaces can be inaccessible; merely being a solid body does not
     # require authored descent/launch operations for every possible target.
     eligible = [rule.body_id for rule in resolver.surface_access_rules]
-    assert len(eligible) == len(set(eligible))
+    # A body may admit multiple authored access methods with different operating
+    # requirements; the physical-surface rule applies to each method independently.
     assert all(graph.bodies[body_id].physical_surface is PhysicalSurface.SOLID
                for body_id in eligible)
 

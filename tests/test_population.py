@@ -470,13 +470,13 @@ def test_arrived_passengers_disembark_before_leftover_stock_is_admitted(tmp_path
 
 def test_passenger_intermediate_service_handoff_waits_in_real_cabin_and_preserves_people(monkeypatch):
     from types import SimpleNamespace
-    from space_idle.population import ExternalPopulationSourceDefinition
     from space_idle.transport.models import PassengerAccommodation, PassengerServiceLeg, PassengerServiceTransit
-    from space_idle.shared import EntityId, DefinitionId
+    from space_idle.shared import EntityId
 
     app = build_game_application()
     sim = app._simulation
     pop = sim.population
+    initial_people = pop.count_at(ids.EARTH)
     source = pop.groups_at(ids.EARTH)[0]
     passenger = pop._split_group(source, 1)
     transit_id = EntityId('test.passenger.legchain')
@@ -504,7 +504,7 @@ def test_passenger_intermediate_service_handoff_waits_in_real_cabin_and_preserve
     assert transit.active_leg(sim.day + 3) == second
     pop.settle_transit_arrivals(sim.day + 3)
     assert transit_id not in sim.transport.passenger_service_transits
-    assert pop.count_at(ids.EARTH) == 30
+    assert pop.count_at(ids.EARTH) == initial_people
     assert pop.groups[passenger.id].position.ref == str(ids.EARTH)
     assert pop.inventory.amount(ids.EARTH, ids.WATER) > 0
 
