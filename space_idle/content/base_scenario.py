@@ -56,6 +56,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.STRUCTURAL_COMPONENTS, 1.0),
         ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.MACHINERY, 1.0),
         ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.PRECISION_ELECTRONICS, 1.0),
+        ScenarioInventoryStock(ids.LUNAR_ORBIT, ids.PROPELLANT, 2.0),
     )
     known = tuple(
         (cell_id, resource_id)
