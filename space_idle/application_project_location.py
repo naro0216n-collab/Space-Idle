@@ -349,6 +349,14 @@ class LocationProjectorMixin:
                     ),
                     not decommission_failures,
                     None if active_decommission is None else str(active_decommission.id),
+                    power_active_load_mw=(
+                        sim.power.specs[facility.definition_id].load_mw
+                        if facility.definition_id in sim.power.specs else 0.0
+                    ),
+                    power_standby_load_mw=(
+                        sim.power.specs[facility.definition_id].standby_load_mw
+                        if facility.definition_id in sim.power.specs else 0.0
+                    ),
                 )
             )
 

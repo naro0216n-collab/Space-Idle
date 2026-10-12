@@ -677,6 +677,10 @@ class ProjectProjectorMixin:
             process_options=process_options,
             power_nominal_generation_mw=nominal_generation,
             power_nominal_load_mw=nominal_load,
+            power_nominal_standby_load_mw=(
+                sim.power.specs[recipe.facility_def_id].standby_load_mw
+                if recipe.facility_def_id in sim.power.specs else 0.0
+            ),
             process_nominal_throughput_per_day=(
                 definition.process_throughput_per_day if compatible else None
             ),

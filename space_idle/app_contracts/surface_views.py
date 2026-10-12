@@ -37,6 +37,7 @@ class SurfaceFacilityPlacementOption:
     process_options: tuple[BuildProcessOptionRow, ...] = ()
     power_nominal_generation_mw: float = 0.0
     power_nominal_load_mw: float = 0.0
+    power_nominal_standby_load_mw: float = 0.0
     process_nominal_throughput_per_day: float | None = None
     extraction_nominal_capacity_t_per_day: float | None = None
     maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
@@ -57,6 +58,7 @@ class FoundingDeployedFacilityRow:
     service_capacity_per_day: tuple[tuple[str, float], ...]
     construction_work_per_day: float
     maintenance_fraction_per_year: float
+    nominal_power_standby_load_mw: float = 0.0
 
 
 @dataclass(frozen=True)

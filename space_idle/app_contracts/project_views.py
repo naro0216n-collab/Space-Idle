@@ -76,6 +76,7 @@ class BuildOptionRow:
     projected_material_readiness_day: int | None = None
     power_nominal_generation_mw: float = 0.0
     power_nominal_load_mw: float = 0.0
+    power_nominal_standby_load_mw: float = 0.0
     process_nominal_throughput_per_day: float | None = None
     extraction_nominal_capacity_t_per_day: float | None = None
     # Recurring material demand at Level 1 from this construction investment;

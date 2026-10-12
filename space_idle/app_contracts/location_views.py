@@ -87,6 +87,8 @@ class FacilityRow:
     projected_salvage: tuple[tuple[str, float], ...] = ()
     can_decommission: bool = False
     active_decommission_project_id: str | None = None
+    power_active_load_mw: float = 0.0
+    power_standby_load_mw: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetOperationalNode, build_game_application
+from space_idle import GetBuildOptions, GetOperationalNode, build_game_application
 from space_idle.catalog import ResourceDef
 from space_idle.content import base_ids as ids
 from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
@@ -112,6 +112,12 @@ def test_special_storage_power_fulfillment_and_pause_preserve_only_physically_av
     special = next(row for row in paused.storage if row.storage_pool_key == pool)
     assert special.physical_capacity_t == pytest.approx(base_infrastructure + capacity)
     assert special.usable_capacity_t == pytest.approx(base_infrastructure)
+    facility_row = next(row for row in paused.facilities if row.id == str(facility.id))
+    assert facility_row.power_active_load_mw == pytest.approx(sim.power.specs[facility.definition_id].load_mw)
+    assert facility_row.power_standby_load_mw == pytest.approx(sim.power.specs[facility.definition_id].standby_load_mw)
+    option = next(row for row in app.query(GetBuildOptions(str(node))).items
+                  if row.facility_definition_id == str(facility.definition_id))
+    assert option.power_nominal_standby_load_mw == pytest.approx(facility_row.power_standby_load_mw)
     assert next(row for row in paused.inventory if row.resource_id == str(ids.WATER)).admission_capacity is None
 
     # Pausing ordinary output does not withdraw cryogenic preservation when

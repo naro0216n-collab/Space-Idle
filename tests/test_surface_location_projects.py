@@ -125,6 +125,9 @@ def test_paid_compact_foundings_require_real_expansion_and_expose_capacity_befor
             )
             assert row.nominal_power_generation_mw == pytest.approx(generation)
             assert row.nominal_power_load_mw == pytest.approx(load)
+            assert row.nominal_power_standby_load_mw == pytest.approx(
+                sim.power.specs[facility_id].standby_load_mw
+            )
             assert dict(row.storage_capacity_t) == sim.storage.providers[facility_id].capacity_t_by_pool
             assert row.construction_work_per_day == pytest.approx(
                 sim.projects.construction_providers[facility_id].work_per_day

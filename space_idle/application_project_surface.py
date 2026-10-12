@@ -39,6 +39,10 @@ class SurfaceProjectorMixin:
                              for row in definition.service_capacity_supplies)),
                 0.0 if provider is None else provider.work_per_day,
                 definition.maintenance_fraction_per_year,
+                nominal_power_standby_load_mw=(
+                    sim.power.specs[facility_id].standby_load_mw
+                    if facility_id in sim.power.specs else 0.0
+                ),
             ))
         return tuple(rows)
 
