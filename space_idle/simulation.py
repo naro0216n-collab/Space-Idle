@@ -24,7 +24,7 @@ from .projects import ProjectService
 from .research import ResearchService
 from .allocation_projection import ResourceAllocationProjection, ResourceAllocationProjectionRow
 from .execution_requirements import (
-    AllocationConstraintKey, AllocationIntent, ExecutionAllocation, ExecutionAllocationPlan,
+    AllocationConstraintKey, ExecutionAllocationGraph, AllocationIntent, ExecutionAllocation, ExecutionAllocationPlan,
     ExecutionRequirementBundle, PoolRequirement, ReservationAcquisitionRequirement,
     ResourceRequirement, ServiceCapacityRequirement, PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
     admission_constraint, allocate_execution_requirements, pool_constraint, resource_constraint,
@@ -135,6 +135,7 @@ class ServiceAllocationInputs:
     locations: tuple[SpatialNodeId, ...]
     providers: dict[str, ServiceCapacityProvider]
     surface_dependent: frozenset[str]
+    requests_by_type: dict[str, tuple[ServiceCapacityRequest, ...]]
 
 
 @dataclass(frozen=True)
@@ -525,7 +526,13 @@ class Simulation:
                 if edge.upstream_service_type == self.surface_infrastructure.service_type
             )
         )
-        return ServiceAllocationInputs(order, locations, providers, surface_dependent)
+        grouped: dict[str, list[ServiceCapacityRequest]] = {}
+        for request in requests:
+            grouped.setdefault(request.service_type, []).append(request)
+        return ServiceAllocationInputs(
+            order, locations, providers, surface_dependent,
+            {service_type: tuple(rows) for service_type, rows in grouped.items()},
+        )
 
     def _allocate_tick_services(
         self,
@@ -535,11 +542,14 @@ class Simulation:
         prepared_inputs: ServiceAllocationInputs | None = None,
     ) -> ServiceCapacityAllocationPlan:
         """Standalone Service projection; normal ticks use the full DAG."""
-        requests = self._complete_service_requests(() if requests is None else requests)
-        inputs = prepared_inputs or self._prepare_service_allocation_inputs(requests)
-        requests_by_type: dict[str, list[ServiceCapacityRequest]] = {}
-        for request in requests:
-            requests_by_type.setdefault(request.service_type, []).append(request)
+        # A fixed-point iteration changes provider supply, not these requests.
+        # Reuse the same completed request grouping across all iterations.
+        if prepared_inputs is not None and requests is None:
+            inputs = prepared_inputs
+        else:
+            completed = self._complete_service_requests(() if requests is None else requests)
+            inputs = self._prepare_service_allocation_inputs(completed)
+        requests_by_type = inputs.requests_by_type
         plans: list[ServiceCapacityAllocationPlan] = []
         # Only surface-dependent stages inspect upstream allocations. Merging
         # every prefix for every stage costs quadratic work in service types.
@@ -795,6 +805,7 @@ class Simulation:
         service_supply: ServiceCapacityAllocationPlan | None = None,
         pool_capacity_overrides: dict[AllocationConstraintKey, float] | None = None,
         base_pool_capacities: dict[AllocationConstraintKey, float] | None = None,
+        physical_capacity_cache: dict[AllocationConstraintKey, float] | None = None,
     ) -> dict[AllocationConstraintKey, float]:
         bundles = tuple(self._as_execution_bundle(row) for row in intents)
         resource_used = resource_used or {}
@@ -849,18 +860,25 @@ class Simulation:
                     continue
                 if isinstance(requirement, ResourceRequirement):
                     node_id = requirement.constraint_node(bundle.operational_node_id)
-                    capacities[key] = max(
-                        0.0,
-                        self.inventory.available(node_id, requirement.resource_id)
-                        - resource_used.get(key, 0.0),
-                    )
+                    if physical_capacity_cache is not None and key in physical_capacity_cache:
+                        available = physical_capacity_cache[key]
+                    else:
+                        available = self.inventory.available(node_id, requirement.resource_id)
+                        if physical_capacity_cache is not None:
+                            physical_capacity_cache[key] = available
+                    capacities[key] = max(0.0, available - resource_used.get(key, 0.0))
                 elif isinstance(requirement, StockOrPoolAdmissionRequirement):
                     if bundle.operational_node_id is None:
                         raise ValueError("stock/admission requirement requires an Operational Node")
-                    state = self.inventory.admission_state_for_pool(
-                        bundle.operational_node_id, requirement.pool_id
-                    )
-                    capacities[key] = state.admission_capacity_t or 0.0
+                    if physical_capacity_cache is not None and key in physical_capacity_cache:
+                        capacities[key] = physical_capacity_cache[key]
+                    else:
+                        state = self.inventory.admission_state_for_pool(
+                            bundle.operational_node_id, requirement.pool_id
+                        )
+                        capacities[key] = state.admission_capacity_t or 0.0
+                        if physical_capacity_cache is not None:
+                            physical_capacity_cache[key] = capacities[key]
                 elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement)):
                     if key not in pool_capacities:
                         raise KeyError(f"no allocation pool owner for {key}")
@@ -996,10 +1014,11 @@ class Simulation:
         self,
         day: int,
         logistics_plan: LogisticsResourcePlan,
-        static_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...],
+        static_graph: ExecutionAllocationGraph,
         provider_plan: ServiceCapacityAllocationPlan,
         all_service_requests: tuple[ServiceCapacityRequest, ...],
         research_pool_overrides: dict[AllocationConstraintKey, float] | None = None,
+        physical_capacity_cache: dict[AllocationConstraintKey, float] | None = None,
     ) -> tuple[
         ExecutionAllocationPlan,
         dict[EntityId, DirectionalCapacity],
@@ -1027,7 +1046,7 @@ class Simulation:
                 () if self.population is None else
                 self.population.passenger_service_bundles(day, reference)
             )
-            allocation_intents = static_intents + dispatch_intents + passenger_intents
+            graph = static_graph.extend(dispatch_intents + passenger_intents)
             pool_overrides = dict(
                 self.logistics.allocation_pool_capacities(day, surface)
             )
@@ -1041,12 +1060,13 @@ class Simulation:
                     raise RuntimeError(f"duplicate allocation pool override: {key}")
                 pool_overrides[key] = value
             capacities = self._constraint_capacities(
-                allocation_intents,
+                graph.bundles,
                 service_supply=provider_plan,
                 pool_capacity_overrides=pool_overrides,
                 base_pool_capacities=base_pool_capacities,
+                physical_capacity_cache=physical_capacity_cache,
             )
-            execution = allocate_execution_requirements(allocation_intents, capacities)
+            execution = graph.allocate(capacities)
             provisional_services = self._service_plan_from_execution(
                 all_service_requests, execution, provider_plan
             )
@@ -1096,6 +1116,14 @@ class Simulation:
                 default=0.0,
             )
             if max(usage_delta, surface_delta) <= tolerance:
+                # No second allocation is needed when the next inputs are
+                # *exactly* the inputs just evaluated.  Near-equal values
+                # still follow the original numerical verification contract.
+                if reference_usage == actual_usage and surface_factors == next_surface:
+                    return (
+                        execution, actual_usage, dict(actual_usage),
+                        next_surface, surface_limits,
+                    )
                 verified_reference = dict(actual_usage)
                 verified_surface = dict(next_surface)
                 verified_execution, verified_usage, verified_next_surface, verified_limits = (
@@ -1230,9 +1258,10 @@ class Simulation:
         service_inputs = self._prepare_service_allocation_inputs(
             self._complete_service_requests(())
         )
-        base_intents: tuple[AllocationIntent | ExecutionRequirementBundle, ...] = tuple(
-            intents.execution_requirements
-        )
+        base_graph = ExecutionAllocationGraph.compile(intents.execution_requirements)
+        # Resource and admission availability are fixed until Domain execution.
+        # Never cache the Service/Pool capacities that feedback can change.
+        physical_capacity_cache: dict[AllocationConstraintKey, float] = {}
 
         def resolve_for_maintenance(maintenance_factors):
             power_by_location = {
@@ -1246,14 +1275,14 @@ class Simulation:
             # fulfillment estimate. Consumer Service requirements join the same
             # root Execution Bundles as their Resource/Transport requirements.
             provider_plan = self._allocate_tick_services(
-                power_by_location, requests=(), prepared_inputs=service_inputs
+                power_by_location, prepared_inputs=service_inputs
             )
             research_generation = (
                 ()
                 if self.research is None
                 else self.research.generation_execution_bundles(power_by_location, self.day)
             )
-            static_intents = base_intents + research_generation
+            static_graph = base_graph.extend(research_generation)
 
             (
                 execution,
@@ -1264,7 +1293,7 @@ class Simulation:
             ) = self._resolve_transport_execution_fixed_point(
                 self.day,
                 authorized_logistics,
-                static_intents,
+                static_graph,
                 provider_plan,
                 all_service_requests,
                 (
@@ -1274,6 +1303,7 @@ class Simulation:
                         power_by_location, self.day
                     )
                 ),
+                physical_capacity_cache,
             )
 
             next_maintenance_factors = (
@@ -1359,6 +1389,12 @@ class Simulation:
                 <= convergence_tolerance
             )
             if delta <= convergence_tolerance:
+                # Exact feedback means reevaluating the identical immutable
+                # physical input cannot change any result.  Retain verification
+                # for near convergence, which can still affect execution.
+                if maintenance_factors == next_maintenance_factors:
+                    converged = True
+                    break
                 # Preserve the original convergence path: once the damped state
                 # is already at the projected fulfillment, verify that exact
                 # state and continue from the verified projection if feedback

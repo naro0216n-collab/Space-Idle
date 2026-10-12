@@ -463,3 +463,46 @@ def test_shared_recovery_settlement_applies_allocated_fraction_independent_of_re
     }
     assert inventory.amount(NODE, default_salvage) == pytest.approx(6.0)
     assert inventory.amount(NODE, cryogenic_salvage) == pytest.approx(3.6)
+
+
+def test_execution_graph_compilation_preserves_priority_shared_pools_and_domain_independence():
+    """Constraint keys, not Domain or Location names, define competing activities."""
+    from space_idle.execution_requirements import ExecutionAllocationGraph
+
+    other_node = SpatialNodeId("remote")
+    first = bundle("first", 10, ResourceRequirement(ORE, 1), priority=5)
+    local = bundle("local", 10, ResourceRequirement(ORE, 1))
+    remote = ExecutionRequirementBundle(
+        EntityId("remote"), "test", EntityId("remote"), "run", other_node,
+        20, ActivityPriority(3), (ResourceRequirement(ORE, 1),),
+    )
+    shared = ExecutionRequirementBundle(
+        EntityId("shared"), "research", EntityId("shared"), "run", other_node,
+        10, ActivityPriority(3), (PoolRequirement("shared", 1),),
+    )
+    cross_node = bundle("cross", 10, PoolRequirement("shared", 1), priority=3)
+    atomic = ExecutionRequirementBundle(
+        EntityId("atomic"), "market", EntityId("atomic"), "run", other_node,
+        4, ActivityPriority(3), (ResourceRequirement(ORE, 2),),
+        atomic=True, wait_started_day=1,
+    )
+    capacities = {
+        resource_constraint(NODE, ORE): 12,
+        resource_constraint(other_node, ORE): 16,
+        pool_constraint("shared"): 8,
+    }
+    rows = (first, local, remote, shared, cross_node, atomic)
+    expected = allocate_execution_requirements(rows, capacities)
+    compiled = ExecutionAllocationGraph.compile(rows[:3]).extend(rows[3:]).allocate(capacities)
+    reordered = allocate_execution_requirements(tuple(reversed(rows)), capacities)
+    assert compiled.allocations == expected.allocations == reordered.allocations
+    assert compiled.used_by_constraint == expected.used_by_constraint == reordered.used_by_constraint
+    assert expected.allocated(first.id) == 10
+    assert expected.allocated(local.id) == 2
+    assert expected.allocated(atomic.id) == 4
+    assert expected.allocated(remote.id) == 8
+    assert expected.allocated(shared.id) == expected.allocated(cross_node.id) == 4
+    assert expected.used_by_constraint[pool_constraint("shared")] == 8
+    assert expected.used_by_constraint[resource_constraint(other_node, ORE)] == 16
+    for key, used in expected.used_by_constraint.items():
+        assert 0 <= used <= capacities[key] + 1e-9
