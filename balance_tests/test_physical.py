@@ -87,3 +87,20 @@ def test_window_power_coefficients_sample_owner_per_day_without_running_game():
     assert result['power']['generation_mw_per_facility'] == values[0]
     assert sim.graph.locations == {}
     assert sim.facilities.facilities == {}
+
+
+def test_physical_site_reports_operating_and_method_conditions_from_definitions():
+    sim = _assembled()
+    context = next(iter(sim.graph.surface_cells))
+    method = next(iter(sim.extraction.specs.values()))
+    fid = next(fid for fid in sim.facilities.definitions
+               if method in sim.extraction.compatible_methods(fid))
+    result = site_evidence(sim, context, fid, method_id=method.id)
+    from content_balance.catalog import describe_site_requirements
+    owned = sim.facilities.definitions[fid].operating_requirements
+    assert result['operation']['site'] == describe_site_requirements(owned)
+    assert 'physical_environment_failures' in result['operation']
+    assert result['extraction']['output_resource_id'] == str(method.output_resource_id)
+    assert result['extraction']['opportunity_site'] is not None
+    assert isinstance(result['extraction']['opportunity_environment_failures'], list)
+    assert sim.facilities.facilities == {}

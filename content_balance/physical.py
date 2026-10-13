@@ -25,6 +25,22 @@ def _physical_failures(sim: Simulation, requirements, context_id, day: int) -> l
     ]
 
 
+def physical_site_conditions(sim: Simulation, context_id: SpatialContextId, requirements, *, day: int = 0) -> dict[str, Any]:
+    """Authoritative physical Site coefficient, without installed Capabilities.
+
+    Capability prerequisites are retained in the typed definition description.
+    They cannot be declared fulfilled at an unestablished World context.
+    """
+    if type(day) is not int or day < 0:
+        raise ValueError('day must be a non-negative integer')
+    if context_id not in sim.graph.nodes and context_id not in sim.graph.surface_cells:
+        raise KeyError(f'unknown World context: {context_id}')
+    return {
+        'site': describe_site_requirements(requirements),
+        'physical_environment_failures': _physical_failures(sim, requirements, context_id, day),
+    }
+
+
 def site_evidence(
     sim: Simulation, context_id: SpatialContextId, facility_id: DefinitionId,
     *, method_id: DefinitionId | None = None, level: int = 1, day: int = 0,
@@ -57,6 +73,8 @@ def site_evidence(
     samples = [(sim.power.nominal_for_definition_at_context(facility_id, context_id, day + offset)[0],
                 min(1.0, window_days - offset)) for offset in range(ceil(window_days))]
     average_generation = sum(value * weight for value, weight in samples) / window_days
+    research_provider = sim.research.facility_provider_for_definition(facility_id)
+    method = None if method_id is None else sim.extraction.specs[method_id]
     result: dict[str, Any] = {
         "context_id": str(context_id), "day": day, "facility_id": str(facility_id), "level": level,
         "assumptions": "physical context only; neither Location nor Facility is installed; no Knowledge or Allocation",
@@ -81,6 +99,14 @@ def site_evidence(
                          "physical_environment_failures": _physical_failures(
                              sim, definition.installation_requirements, context_id, day
                          )},
+        "operation": {"site": describe_site_requirements(definition.operating_requirements),
+                      "physical_environment_failures": _physical_failures(
+                          sim, definition.operating_requirements, context_id, day
+                      )},
+        "research_provider": None if research_provider is None else {
+            "id": str(research_provider.id),
+            **physical_site_conditions(sim, context_id, research_provider.site_requirements, day=day),
+        },
         "nominal_process_executions_per_day_per_facility": definition.process_throughput_per_day,
         "extraction": None,
     }
@@ -99,6 +125,11 @@ def site_evidence(
         )
         result["extraction"] = {
             "method_id": str(method.id), "resource_id": str(method.resource_id),
+            "output_resource_id": str(method.output_resource_id),
+            "opportunity_site": describe_site_requirements(method.opportunity_requirements),
+            "opportunity_environment_failures": _physical_failures(
+                sim, method.opportunity_requirements, context_id, day
+            ),
             "prerequisite_technologies": sorted(map(str, method.prerequisite_technologies)),
             "nominal_capacity_t_per_day": nominal,
             "physical_opportunity_before_knowledge": opportunity,

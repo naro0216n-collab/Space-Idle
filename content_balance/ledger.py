@@ -12,7 +12,7 @@ from typing import Any
 
 from .catalog import describe_execution_requirement
 from space_idle.research_models import ResearchProviderSourceKind
-from .physical import site_evidence
+from .physical import physical_site_conditions, site_evidence
 from space_idle.research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec,
 )
@@ -35,8 +35,9 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
     by_resource: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
     by_service: dict[tuple[str, str, str], dict[str, float]] = defaultdict(lambda: defaultdict(float))
     power: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    funds: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    funds: dict[str, float] = defaultdict(float)
     research: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    habitation: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
     def number(item, key, *, whole=False):
         x = item[key]
@@ -44,6 +45,18 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 or not isfinite(x) or x < 0 or (whole and (not isinstance(x, int)))):
             raise ValueError(f'{key} must be a non-negative {"integer" if whole else "number"}')
         return x
+
+    def level_of(item):
+        level = item.get('level', 1)
+        if type(level) is not int or level < 1:
+            raise ValueError('level must be a positive integer')
+        return level
+
+    def day_of(item):
+        day = item.get('day', 0)
+        if type(day) is not int or day < 0:
+            raise ValueError('day must be a non-negative integer')
+        return day
 
     for index, item in enumerate(activities):
         kind, node = item['kind'], str(item['node'])
@@ -78,7 +91,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
         def funds_flow(amount, direction, basis):
             if amount <= 0:
                 return
-            funds[node][direction] += amount / period_days
+            funds[direction] += amount / period_days
             measurements.append({'measure': 'funds', 'node': node, 'direction': direction,
                                  'amount_musd': amount, 'mean_musd_per_day': amount / period_days,
                                  'basis': basis})
@@ -128,10 +141,10 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             rate = number(item, 'rate_t_per_day')
             units = number(item, 'facility_units', whole=True)
             physical = site_evidence(sim, item['context_id'], fid, method_id=method_id,
-                                     level=int(item.get('level', 1)), day=int(item.get('day', 0)))
+                                     level=level_of(item), day=day_of(item))
             info = physical['extraction']
-            resource(info['resource_id'], rate * period_days, 'supply',
-                     'assumed Extraction rate; compare physical opportunity separately')
+            resource(info['output_resource_id'], rate * period_days, 'supply',
+                     'assumed Extraction output rate; physical opportunity refers to deposit Resource')
             nominal = info['nominal_capacity_t_per_day'] * units
             service(sim.extraction.service_type(sim.extraction.specs[method_id].resource_id),
                     nominal * period_days, 'demand')
@@ -185,12 +198,14 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             definition = sim.facilities.definitions[fid]
             context = item['context_id']
             site = site_evidence(sim, context, fid,
-                level=int(item.get('level', 1)), day=int(item.get('day', 0)),
+                level=level_of(item), day=day_of(item),
                 window_days=period_days)
             gen = site['power']['mean_generation_mw_per_facility']
             load = site['power']['active_load_mw_per_facility']
             measurements.append({'measure': 'site_environment',
-                'installation': site['installation'], 'construction': site['construction'],
+                'installation': site['installation'], 'operation': site['operation'],
+                'research_provider': site['research_provider'],
+                'construction': site['construction'],
                 'power_window': site['power'],
                 'interpretation': 'not an installed Facility or a legality preflight'})
             power[node]['nominal_generation_mw'] += gen * count
@@ -198,6 +213,15 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             measurements.append({'measure': 'power', 'generation_mw': gen * count,
                                  'active_load_mw': load * count, 'context_id': str(context),
                                  'basis': 'PowerService.nominal_for_definition_at_context; window mean, no fulfillment'})
+            level = level_of(item)
+            if definition.housing_at_level(level):
+                habitation[node]['nominal_housing_people'] += definition.housing_at_level(level) * count
+            if definition.life_support is not None:
+                service('life_support', definition.life_support.capacity_at_level(level) * count
+                        * period_days, 'supply')
+                habitation[node]['nominal_life_support_person_days_per_day'] += (
+                    definition.life_support.capacity_at_level(level) * count
+                )
             for cap in definition.service_capacity_supplies:
                 service(cap.service_type, cap.nominal_rate * count * period_days,
                         'supply', scope=cap.scope.value)
@@ -214,10 +238,15 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             if item.get('selected_extraction_method_id') is not None:
                 physical = site_evidence(sim, context, fid,
                     method_id=item['selected_extraction_method_id'],
-                    level=int(item.get('level', 1)), day=int(item.get('day', 0)))
+                    level=level, day=day_of(item))
+                method = sim.extraction.specs[item['selected_extraction_method_id']]
+                installed = sim.extraction.nominal_capacity_for_level(fid, level) * count
+                service(sim.extraction.service_type(method.resource_id), installed * period_days, 'supply')
                 measurements.append({'measure': 'site_extraction_physics',
                                      'per_facility': physical['extraction'], 'units': count,
-                                     'interpretation': 'capacity conditional on geology and assumed Knowledge, not Resource supply'})
+                                     'nominal_installed_service_t_per_day': installed,
+                                     'interpretation': 'selected method exposes its single nominal Extraction Service; '
+                                                       'geology and Knowledge remain separate from actual Resource supply'})
             # Process capacity is shared over compatible Process choices; it is
             # not generated separately for every compatible Process.
             if definition.process_throughput_per_day:
@@ -234,7 +263,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                     invested[req.resource_id] += req.amount_t * count
                 # A hypothetical level > 1 includes actual registered transitions.
                 # Missing transitions cannot be treated as free equipment.
-                level = number(item, 'level', whole=True) if 'level' in item else 1
+                level = level_of(item)
                 for next_level in range(2, level + 1):
                     upgrade = sim.projects.upgrade_recipes[(fid, next_level)]
                     for req in upgrade.resources:
@@ -247,8 +276,9 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                                      'interpretation': 'assumed assets acquired; investment is not counted again as new construction'})
             provider = sim.research.facility_provider_for_definition(fid)
             if provider is not None:
-                lev = provider.level_spec(int(item.get('level', 1)))
+                lev = provider.level_spec(level)
                 research['organization']['rp_nominal_per_day'] += count * lev.generation_points_per_day
+                research['organization']['rp_pool_capacity_nominal_points'] += count * lev.storage_capacity_points
                 research['organization']['execution_nominal_per_day'] += count * lev.research_execution_per_day
                 service('research_execution', lev.research_execution_per_day * count * period_days, 'supply', scope='ORGANIZATION')
                 service('crew', provider.crew_person_days_per_research_point * count * lev.generation_points_per_day * period_days, 'demand')
@@ -265,6 +295,11 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             nominal = provider.capacity_units_per_source_per_day * units
             service(sim.survey.service_type_for_provider(provider_id, source_id),
                     nominal * period_days, 'supply')
+            if 'context_id' in item:
+                measurements.append({'measure': 'survey_observation_mode_site',
+                    **physical_site_conditions(sim, item['context_id'], mode.site_requirements,
+                                               day=day_of(item)),
+                    'interpretation': 'physical constraints only; source availability and reach not certified'})
             measurements.append({'measure': 'survey_provider_nominal',
                                  'source_kind': provider.source_kind.value,
                                  'units_assumed': units,
@@ -276,6 +311,26 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                                  'prerequisite_technologies': sorted(map(str, mode.prerequisite_technologies)),
                                  'interpretation': 'not surveyed targets, feasible reach, '
                                                    'Power, eligibility, Fleet assignment or execution'})
+        elif kind == 'survey_observation':
+            # The author chooses an observation amount, not a Campaign or
+            # Knowledge transition. The owner gives the capacity-to-progress
+            # factor and the per-provider/source finite Service identity.
+            provider_id, source_id = item['id'], item['source_id']
+            mode_id = item['mode_id']
+            assumed_progress = number(item, 'progress_units_per_day')
+            provider = sim.survey.provider(provider_id)
+            mode = provider.observation_mode(mode_id)
+            if not sim.survey.source_supports_mode(provider, mode, source_id):
+                raise ValueError(f'Survey source {source_id} incompatible with {provider_id}:{mode_id}')
+            needed = assumed_progress / mode.survey_rate
+            service(sim.survey.service_type_for_provider(provider_id, source_id),
+                    needed * period_days, 'demand')
+            measurements.append({'measure': 'assumed_survey_observation',
+                'progress_units_per_day': assumed_progress,
+                'service_units_per_day': needed,
+                'mode_survey_rate': mode.survey_rate,
+                'basis': 'SurveyService execution requirement / ObservationModeSpec.survey_rate',
+                'interpretation': 'no target Knowledge progress, reachable target or completed Campaign'})
         elif kind == 'research_fleet_provider':
             provider_id, units = item['id'], number(item, 'units', whole=True)
             provider = sim.research.providers[provider_id]
@@ -284,11 +339,19 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             vehicle_id = item['vehicle_id']
             if vehicle_id not in {v.id for v in sim.research.compatible_vehicle_definitions(provider_id)}:
                 raise ValueError(f'Vehicle {vehicle_id} is not an eligible Research Provider source')
-            spec = provider.level_spec(int(item.get('level', 1)))
+            if level_of(item) != 1:
+                raise ValueError('Fleet-backed Research Provider uses level 1 per unit')
+            spec = provider.level_spec(1)
             research['organization']['rp_nominal_per_day'] += units * spec.generation_points_per_day
+            research['organization']['rp_pool_capacity_nominal_points'] += units * spec.storage_capacity_points
             research['organization']['execution_nominal_per_day'] += units * spec.research_execution_per_day
             service('research_execution', spec.research_execution_per_day * units * period_days, 'supply', scope='ORGANIZATION')
             service('crew', provider.crew_person_days_per_research_point * units * spec.generation_points_per_day * period_days, 'demand')
+            if 'context_id' in item:
+                measurements.append({'measure': 'research_fleet_provider_site',
+                    **physical_site_conditions(sim, item['context_id'], provider.site_requirements,
+                                               day=day_of(item)),
+                    'interpretation': 'physical constraints only; capability supply and Fleet assignment not certified'})
             measurements.append({'measure': 'fleet_research_provider',
                 'fleet_units_assumed_committed': units,
                 'rp_per_day': units * spec.generation_points_per_day,
@@ -334,6 +397,19 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 raise ValueError('origin-returning Movement cannot also have a physical reverse')
             cycle = sim.transport.physical_cycle_coefficients(vehicle_id, tuple(forward), tuple(reverse),
                 anchor_context_id=origin)
+            from .physical import movement_evidence
+            physics = movement_evidence(sim, origin, destination, vehicle_id)
+            selected_forward = next(row for row in physics['forward']
+                                    if row['movement_plan_id'] == str(forward[0].id))
+            selected_reverse = (None if not reverse else next(row for row in physics['reverse']
+                                    if row['movement_plan_id'] == str(reverse[0].id)))
+            measurements.append({'measure': 'transport_cycle_physical_requirements',
+                'forward': selected_forward, 'reverse': selected_reverse,
+                'operation_support_requirements': physics['operation_support_requirements'],
+                'resource_support_requirements': physics['resource_support_requirements'],
+                'endurance_failures': list(definition.endurance_failures(cycle.forward_days + cycle.reverse_days)),
+                'interpretation': 'selected Movement physics only; installed capabilities, actual refueling, '
+                                  'Knowledge, Allocation, and Fleet exclusivity are not certified'})
             target_forward = number(item, 'target_forward_t_per_day') if 'target_forward_t_per_day' in item else None
             target_reverse = number(item, 'target_reverse_t_per_day') if 'target_reverse_t_per_day' in item else None
             if target_forward is not None or target_reverse is not None:
@@ -371,7 +447,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             cargo = number(item, 'cargo_t')
             origin, destination, vehicle_id = item['origin_context_id'], item['destination_context_id'], item['id']
             evidence = movement_evidence(sim, origin, destination, vehicle_id, cargo_t=cargo,
-                                         day=int(item.get('day', 0)))
+                                         day=day_of(item))
             matches = [row for row in evidence['forward'] if row['movement_plan_id'] == item['movement_plan_id']]
             if not matches:
                 raise ValueError(f'unknown physical Movement choice: {item["movement_plan_id"]}')
@@ -399,6 +475,8 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 raise ValueError(f'Facility {fid} is not a Life Support provider')
             for rid, rate in spec.net_resources:
                 resource(rid, rate * people * period_days, 'demand', 'Person-day Life Support use')
+            habitation[node]['assumed_population_people'] += people
+            service('life_support', people * period_days, 'demand')
             measurements.append({'measure': 'life_support_person_days_per_day_needed', 'quantity': people,
                                  'provider_person_days_per_day': spec.person_days_per_day})
         elif kind == 'research_stage':
@@ -411,6 +489,13 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 requirements = stage.execution_requirements
             elif isinstance(stage, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
                 units = stage.required_work * count
+                from .catalog import describe_site_requirements
+                site = {'site': describe_site_requirements(stage.site_requirements)}
+                if 'context_id' in item:
+                    site = physical_site_conditions(sim, item['context_id'], stage.site_requirements,
+                                                    day=day_of(item))
+                measurements.append({'measure': 'research_stage_site', **site,
+                    'interpretation': 'specified context only; active Capabilities and Research Stage eligibility not certified'})
                 if isinstance(stage, ResearchPrototypeStageSpec):
                     for rid, amount in stage.resources.items():
                         resource(rid, amount * count, 'demand', 'Prototype investment once')
@@ -453,9 +538,12 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
         ],
         'power_by_node': [{'node': node, **values} for node, values in sorted(power.items())],
         'research_by_scope': [{'scope': scope, **values} for scope, values in sorted(research.items())],
-        'funds_by_node': [{'node': node, 'quoted_receipts_musd_per_day': values['supply'],
-                           'quoted_spending_musd_per_day': values['demand']}
-                          for node, values in sorted(funds.items())],
+        'funds_by_scope': ([] if not funds else [{
+            'scope': 'ORGANIZATION',
+            'quoted_receipts_musd_per_day': funds['supply'],
+            'quoted_spending_musd_per_day': funds['demand'],
+        }]),
+        'habitation_by_node': [{'node': node, **values} for node, values in sorted(habitation.items())],
         'activity_evidence': rows,
         'limits': ('One-period stated activity loads only. Differences are conditional arithmetic, not feasible supply, '
                    'inventory forecasts, transport settlement, service allocation, construction progress or research completion. '

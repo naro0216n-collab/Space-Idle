@@ -185,6 +185,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
             },
             "research_provider": None if p is None else str(p.id),
             "site": describe_site_requirements(definition.installation_requirements),
+            "operating_site": describe_site_requirements(definition.operating_requirements),
         })
         if definition.life_support is not None:
             for rid, rate in definition.life_support.net_resources:

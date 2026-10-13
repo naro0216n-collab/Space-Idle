@@ -173,7 +173,7 @@ def test_market_quote_exposes_funds_and_arrival_without_free_delivery():
          'provider_id': provider.id, 'direction': 'buy', 'quantity_t': 4},
     ])
     assert result['resource_by_node'] == []
-    assert result['funds_by_node'][0]['quoted_spending_musd_per_day'] == price * 4 / 8
+    assert result['funds_by_scope'][0]['quoted_spending_musd_per_day'] == price * 4 / 8
     assert result['activity_evidence'][0]['evidence'][-1]['delivery_lead_days'] == provider.lead_time_days
     assert sim.market.orders == {}
 
@@ -260,3 +260,140 @@ def test_transport_demand_couples_owner_required_fleet_to_explicit_od_without_ca
     assert measurement['origin_node'] == 'one' and measurement['destination_node'] == 'two'
     assert all(row['supply_t_per_day'] == 0 for row in result['resource_by_node'])
     assert sim.transport.transport_allocations == {}
+
+
+def test_extraction_equipment_and_activity_share_one_owned_service_not_free_output():
+    sim = _sim()
+    cell = next(cell for cell in sim.graph.surface_cells.values() if cell.resource_potential_by_resource)
+    method = next(m for m in sim.extraction.specs.values()
+        if cell.resource_potential_by_resource.get(m.resource_id, 0) > 0
+        and any(m in sim.extraction.compatible_methods(fid) for fid in sim.facilities.definitions))
+    fid = next(fid for fid in sim.facilities.definitions if method in sim.extraction.compatible_methods(fid))
+    result = quantity_ledger(sim, period_days=21, activities=[
+        {'kind': 'facility_operation', 'node': 'mine', 'id': fid, 'context_id': cell.id,
+         'count': 3, 'selected_extraction_method_id': method.id},
+        {'kind': 'extraction', 'node': 'mine', 'id': method.id, 'facility_id': fid,
+         'facility_units': 3, 'context_id': cell.id, 'rate_t_per_day': 0.15},
+    ])
+    nominal = 3 * sim.extraction.nominal_capacity_for_level(fid, 1)
+    row = next(row for row in result['service_by_scope']
+               if row['service_type'] == sim.extraction.service_type(method.resource_id))
+    assert row['scope'] == 'OPERATIONAL_NODE' and row['node_or_scope'] == 'mine'
+    assert math.isclose(row['nominal_supply_per_day'], nominal)
+    assert math.isclose(row['demand_per_day'], nominal)
+    produced = next(row for row in result['resource_by_node']
+                    if row['node'] == 'mine' and row['resource_id'] == str(method.resource_id))
+    assert produced['supply_t_per_day'] == 0.15
+    assert sim.facilities.facilities == {}
+    assert sim.graph.locations == {}
+
+
+def test_research_pool_storage_capacity_is_visible_alongside_rp_and_execution():
+    sim = _sim()
+    facility_id = next(fid for fid in sim.facilities.definitions
+        if sim.research.facility_provider_for_definition(fid) is not None)
+    provider = sim.research.facility_provider_for_definition(facility_id)
+    physical_context = next(iter(sim.graph.surface_cells))
+    level = provider.levels[0].level
+    result = quantity_ledger(sim, period_days=16, activities=[
+        {'kind': 'facility_operation', 'node': 'lab', 'id': facility_id, 'count': 3,
+         'context_id': physical_context, 'level': level},
+    ])
+    fields = result['research_by_scope'][0]
+    spec = provider.level_spec(level)
+    assert fields['rp_pool_capacity_nominal_points'] == 3 * spec.storage_capacity_points
+    assert fields['rp_nominal_per_day'] == 3 * spec.generation_points_per_day
+    assert fields['execution_nominal_per_day'] == 3 * spec.research_execution_per_day
+    assert sim.research.active == {}
+
+
+def test_transport_cycle_reports_selected_leg_physics_not_a_free_operational_service():
+    sim = _sim()
+    origin, dest = tuple(sim.graph.nodes)[:2]
+    fwd = sim.transport.movement_resolver().physical_context_plans(origin, dest)[0]
+    back = sim.transport.movement_resolver().physical_context_plans(dest, origin)[0]
+    from space_idle.transport.models import OperationAssetDisposition
+    vehicle_id = next(vid for vid, v in sim.transport.vehicle_defs.items()
+                      if v.movement_asset_disposition(fwd) is OperationAssetDisposition.DESTINATION)
+    result = quantity_ledger(sim, period_days=9, activities=[
+        {'kind': 'transport_cycle', 'node': 'departure', 'destination_node': 'arrival',
+         'id': vehicle_id, 'units': 1, 'origin_context_id': origin,
+         'destination_context_id': dest, 'forward_plan_id': str(fwd.id), 'reverse_plan_id': str(back.id)},
+    ])
+    conditions = next(row for row in result['activity_evidence'][0]['evidence']
+                      if row['measure'] == 'transport_cycle_physical_requirements')
+    assert conditions['forward']['movement_plan_id'] == str(fwd.id)
+    assert conditions['forward']['vehicle_physical_failures'] == list(
+        sim.transport.performance_movement_failures(fwd, sim.transport.vehicle_defs[vehicle_id].performance,
+                                                     include_operation_support=False))
+    assert conditions['reverse']['movement_plan_id'] == str(back.id)
+    assert sim.transport.transport_allocations == {}
+
+
+def test_one_period_demands_keep_owned_resource_service_habitation_and_organization_scopes():
+    """Concurrent hypotheses may share rates, but not free stock or allocation."""
+    from dataclasses import replace
+
+    sim = _sim()
+    cell = next(cell for cell in sim.graph.surface_cells.values() if cell.resource_potential_by_resource)
+    method = next(m for m in sim.extraction.specs.values()
+                  if cell.resource_potential_by_resource.get(m.resource_id, 0) > 0
+                  and any(m in sim.extraction.compatible_methods(fid) for fid in sim.facilities.definitions))
+    source_facility = next(fid for fid in sim.facilities.definitions
+                           if method in sim.extraction.compatible_methods(fid))
+    # A future Extraction Process need not yield the same Resource as its
+    # surveyed deposit. Both identifiers must follow the owned Definition.
+    refined = next(r for r in sim.inventory.resource_definitions if r != method.resource_id)
+    sim.extraction.specs[method.id] = replace(method, output_resource_id=refined)
+    sim.extraction.refresh_definition_compatibility()
+
+    housing_facility = next(fid for fid, d in sim.facilities.definitions.items()
+                            if d.life_support is not None and d.housing_capacity)
+    life = sim.facilities.definitions[housing_facility].life_support
+    market = next(p for p in sim.market.provider_defs.values() if p.buy_offers_musd_per_t)
+    market_resource, market_price = market.buy_offers_musd_per_t[0]
+    survey = next(iter(sim.survey.providers.values()))
+    mode = survey.observation_modes[0]
+    survey_source = next(iter(sim.survey.compatible_mode_source_definition_ids(survey, mode)))
+
+    result = quantity_ledger(sim, period_days=30, activities=[
+        {'kind': 'facility_operation', 'node': 'mine', 'id': source_facility,
+         'count': 2, 'context_id': cell.id, 'selected_extraction_method_id': method.id},
+        {'kind': 'extraction', 'node': 'mine', 'id': method.id,
+         'facility_id': source_facility, 'facility_units': 2,
+         'context_id': cell.id, 'rate_t_per_day': 0.25},
+        {'kind': 'facility_operation', 'node': 'colony', 'id': housing_facility,
+         'count': 2, 'level': 1, 'context_id': cell.id},
+        {'kind': 'life_support', 'node': 'colony', 'id': housing_facility, 'people': 4},
+        {'kind': 'survey_provider', 'node': 'colony', 'id': survey.id, 'units': 2,
+         'source_id': survey_source, 'mode_id': mode.id},
+        {'kind': 'survey_observation', 'node': 'colony', 'id': survey.id,
+         'source_id': survey_source, 'mode_id': mode.id,
+         'progress_units_per_day': 0.25 * mode.survey_rate},
+        {'kind': 'market_trade', 'node': 'mine', 'id': market_resource,
+         'provider_id': market.id, 'direction': 'buy', 'quantity_t': 3},
+        {'kind': 'market_trade', 'node': 'colony', 'id': market_resource,
+         'provider_id': market.id, 'direction': 'buy', 'quantity_t': 2},
+    ])
+    mine = [row for row in result['resource_by_node'] if row['node'] == 'mine']
+    assert next(r for r in mine if r['resource_id'] == str(refined))['supply_t_per_day'] == 0.25
+    assert all(r['resource_id'] != str(method.resource_id) or r['supply_t_per_day'] == 0
+               for r in mine)
+    housing = result['habitation_by_node'][0]
+    assert housing['node'] == 'colony' and housing['assumed_population_people'] == 4
+    assert housing['nominal_housing_people'] == 2 * sim.facilities.definitions[housing_facility].housing_capacity
+    life_row = next(r for r in result['service_by_scope'] if r['service_type'] == 'life_support')
+    assert life_row['node_or_scope'] == 'colony'
+    assert math.isclose(life_row['nominal_supply_per_day'], life.capacity_at_level(1) * 2)
+    assert life_row['demand_per_day'] == 4
+    survey_row = next(r for r in result['service_by_scope'] if r['service_type'] ==
+                      sim.survey.service_type_for_provider(survey.id, survey_source))
+    assert survey_row['demand_per_day'] == 0.25
+    assert survey_row['nominal_supply_per_day'] == 2 * survey.capacity_units_per_source_per_day
+    assert len(result['funds_by_scope']) == 1
+    funding = result['funds_by_scope'][0]
+    assert funding['scope'] == 'ORGANIZATION' and funding['quoted_receipts_musd_per_day'] == 0
+    assert math.isclose(funding['quoted_spending_musd_per_day'], (3 + 2) * market_price / 30)
+    assert sim.facilities.facilities == {}
+    assert sim.survey.campaigns == {}
+    assert sim.market.orders == {}

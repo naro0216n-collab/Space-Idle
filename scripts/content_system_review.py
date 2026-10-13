@@ -13,9 +13,11 @@ All rows require `node` (explicit accounting label) and `kind`. Other kinds and 
   extraction: id (method), facility_id, facility_units, context_id, rate_t_per_day
   facility_construction / vehicle_production / founding / spatial_development: id, count
   facility_upgrade: id (facility), target_level, count
-  research_stage: id (technology), stage_id, count
-  research_fleet_provider: id (provider), vehicle_id, units
-  survey_provider: id (provider), source_id (facility/vehicle), mode_id, units
+  research_stage: id (technology), stage_id, count; optional context_id (Stage physical site)
+  research_fleet_provider: id (provider), vehicle_id, units; optional context_id
+  survey_provider: id (provider), source_id (facility/vehicle), mode_id, units; optional context_id
+  survey_observation: id (provider), source_id (facility/vehicle), mode_id,
+    progress_units_per_day (explicit intended knowledge-progress units/day)
   construction_resource: id (resource), available_stock_t
   life_support: id (facility), people
   movement: id (vehicle), origin_context_id, destination_context_id,
