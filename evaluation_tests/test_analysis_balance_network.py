@@ -27,7 +27,8 @@ def test_network_preserves_node_boundary_and_ledger_quantities(source):
     nodes = ("isolated.one", "isolated.two")
     phase = evaluate({"initial_stock": [{"node": nodes[1], "resource": str(resource),
                                            "amount_t": 1_000_000}],
-                      "phases": [{"name": "two_nodes", "days": 3, "facilities": [
+                      "phases": [{"name": "two_nodes", "days": 3, "facilities": [],
+                                  "facility_investments": [
                           {"node": nodes[0], "facility": str(fac.id), "units": 1}]}]},
                      app=source)["phases"][0]
     actual = {(row["node"], row["resource"]): row for row in phase["resources"]}
@@ -100,7 +101,8 @@ def test_inter_node_resource_options_keep_physical_boundaries_and_nonarrival_acc
     origin, destination = "physical.supplier", "physical.consumer"
     candidate = {"initial_stock": [{"node": origin, "resource": resource, "amount_t": 10000}],
                  "phases": [{"name": "resource_distribution", "days": 10,
-                             "facilities": [{"node": destination, "facility": facility, "units": 1}]}]}
+                             "facilities": [],
+                             "facility_investments": [{"node": destination, "facility": facility, "units": 1}]}]}
     phase = evaluate(candidate, app=source)["phases"][0]
     option = next(r for r in phase["system_network"]["inter_node_resource_options"]
                   if (r["origin"], r["destination"], r["resource"]) ==
@@ -136,7 +138,8 @@ def test_inter_node_shared_freight_bounds_are_independent_and_require_handling(s
     plan = {"initial_stock": [{"node": origin, "resource": str(item.resource_id),
                                "amount_t": 10000} for item in inputs],
             "phases": [{"name": "investment", "days": 10,
-                        "facilities": [{"node": destination, "facility": str(facility.id),
+                        "facilities": [],
+                        "facility_investments": [{"node": destination, "facility": str(facility.id),
                                         "units": 1}]}]}
     phase = evaluate(plan, app=source)["phases"][0]
     # A transport capacity preview is an input to this generic diagnostics

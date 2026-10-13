@@ -232,6 +232,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     # Non-surface nodes and future planned sites may be compared as authored
     # contexts: balance rows are not an eligibility or founding validation.
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("facilities", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("facility_investments", ()))
     nodes.update(str(row["node"]) for row in plan.get("initial_facilities", ()))
     nodes.update(str(row["node"]) for row in plan.get("initial_stock", ()))
     nodes.update(str(row["node"]) for row in plan.get("initial_fleet", ()))
@@ -304,14 +305,26 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_science_campaigns = set()
     seen_phase_names = set()
     previous_assets = initial
+    pending_facility_investments = defaultdict(int)
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
+        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
               {"name", "days", "facilities"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
         seen_phase_names.add(phase["name"])
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
+        # Facility rows are the available opening composition. Investments
+        # from the preceding Phase may be assumed commissioned at this
+        # boundary, but an investment in this Phase has no operating supply.
+        installed = defaultdict(int)
+        for node, facility, units, *_ in assets:
+            installed[(node, facility)] += units
+        for key in set(installed) | set(previous) | set(pending_facility_investments):
+            expected = previous[key] + pending_facility_investments[key]
+            if installed[key] != expected:
+                raise ValueError(f"Facility opening holdings at {key} must equal prior installed units plus explicitly invested units from preceding Phase: {expected}")
+        pending_facility_investments = defaultdict(int)
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
                                                     sim, nodes, known_resource)
         current = defaultdict(int)
@@ -550,23 +563,35 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             unassessed.add("extraction_site_technology_service_and_stock_allocation")
             if any(method.minimum_knowledge_level is not None for method, _ in group):
                 unassessed.add("survey_knowledge_levels_are_authored_assumptions")
-        for key in set(current) | set(previous):
-            units = current[key]
-            if units < previous[key]:
-                raise ValueError(f"Facility removal at {key} requires an explicit retirement model")
-            delta = units - previous[key]
-            if delta > 0:
-                unassessed.add("new_facilities_operate_before_construction_completion")
-            if not delta:
-                continue
-            recipe = sim.projects.recipes.get(DefinitionId(key[1]))
+        # A declared Facility acquisition only books one-time work and
+        # Resource. It cannot supply Power, Service, Process, Extraction,
+        # maintenance or Research in this Phase. The next Phase may include
+        # its commissioned units, explicitly conditioned on construction.
+        facility_investment_details = []
+        for row in phase.get("facility_investments", ()):
+            _keys(row, {"node", "facility", "units"},
+                  {"node", "facility", "units"}, "facility investment")
+            node = _identifier(row["node"], nodes, "facility investment node")
+            facility_id = _identifier(row["facility"], sim.facilities.definitions,
+                                      "facility investment definition")
+            units = _integer(row["units"], "facility investment units", positive=True)
+            pending_facility_investments[(node, facility_id)] += units
+            recipe = sim.projects.recipes.get(DefinitionId(facility_id))
             if recipe is None:
-                raise ValueError(f"no construction recipe for {key[1]}")
-            for req in recipe.resources:
-                book(construction, "construction_demand_t", key[0], req.resource_id,
-                     req.amount_t * delta, "facility_construction", key[1])
-            book_construction_work(key[0], recipe.construction_work * delta,
-                                   "facility_construction", key[1])
+                raise ValueError(f"no construction recipe for {facility_id}")
+            for requirement in recipe.resources:
+                book(construction, "construction_demand_t", node,
+                     requirement.resource_id, requirement.amount_t * units,
+                     "facility_construction", facility_id)
+            book_construction_work(node, recipe.construction_work * units,
+                                   "facility_construction", facility_id)
+            facility_investment_details.append({
+                "node": node, "facility": facility_id, "units": units,
+                "construction_work": recipe.construction_work * units,
+                "resource_t": {str(r.resource_id): r.amount_t * units for r in recipe.resources},
+                "status": "investment_only_not_operating_in_current_phase",
+            })
+            unassessed.add("facility_investment_technology_site_resource_and_completion_not_settled")
         # Explicit Spatial Development demand is a registered one-time
         # project recipe; it never constructs Cells or awards territory.
         for row in phase.get("spatial_projects", ()):
@@ -662,7 +687,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "level_transition_site_and_construction_completion_unassessed",
             })
             unassessed.add("facility_upgrade_level_eligibility_and_sequencing")
-        facility_units_added = sum(max(0, current[k] - previous[k]) for k in current)
+        facility_units_added = sum(pending_facility_investments.values())
         previous = current
         # The existing (pre-investment) capacity is the only defensible bound
         # for the investment work: new providers cannot construct themselves.
@@ -1519,6 +1544,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "activity_sources": activity_sources,
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
+                       "facility_investments": facility_investment_details,
                        "research_stages": stage_details,
                        "research_goal": goal_details,
                        "research_service_constraints": research_services,
@@ -1646,8 +1672,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
                 "Selected upstream Process chains are conditional additions for unfilled local demand, not automatically booked production; each Process capacity option is independent of competing choices.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
+                "Facility investments are acquired during their selected Phase and have no operating capacity until explicitly included in a subsequent Phase; assumed commissioning is conditional on unexecuted construction and Site eligibility.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
+                "Facility acquisitions are explicit facility_investments; their Resource/work demand is booked during investment and no new Facility capability is available until a subsequent conditional Phase. Opening holdings must match previous holdings plus prior-phase investments.",
                 "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
@@ -1678,12 +1706,12 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
+            if collection not in {"facility_investments", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
                 raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
                 raise ValueError("case addition row must be an object")
-            identity_fields = ({"facilities": ("node", "facility"),
+            identity_fields = ({"facility_investments": ("node", "facility"),
                                 "fleet": ("node", "vehicle"),
                                 "research_provider_allocations": ("node", "provider"),
                                 "passenger_transfers": ("origin", "destination", "vehicle"),
@@ -1890,6 +1918,7 @@ def compare_projection_results(results: list[dict]) -> dict:
                  ("nominal_unallocated_generation_mw",)),
                 ("investment_constraints", ("node",),
                  ("required_work", "pre_investment_work_per_day", "pre_investment_work_lower_bound_days")),
+                ("facility_investments", ("node", "facility"), ("units", "construction_work")),
                 ("spatial_projects", ("node", "recipe"), ("units", "required_construction_work")),
                 ("upgrade_projects", ("node", "facility", "target_level"),
                  ("units", "required_construction_work")),
@@ -2182,6 +2211,7 @@ def summarize_projection(projection: dict) -> dict:
             "upstream_supply_comparisons": phase["upstream_supply_comparisons"],
             "research_service_constraints": phase["research_service_constraints"],
             "investment_constraints": phase["investment_constraints"],
+            "facility_investments": phase["facility_investments"],
             "od_transport_constraints": phase["od_transport_constraints"],
             "extraction_world_context": phase["extraction_world_context"],
             "power_world_context": phase["power_world_context"],
@@ -2214,7 +2244,7 @@ def summarize_projection(projection: dict) -> dict:
             "unassessed_constraints": phase["unassessed_constraints"],
             "system_coupling": network_overview(phase["system_network"]),
             "detail_sections": [
-                "activity_sources", "system_network", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
+                "activity_sources", "system_network", "facility_investments", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],

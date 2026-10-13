@@ -47,6 +47,7 @@ def test_multiphase_resource_balance_and_transfer_do_not_perform_hidden_settleme
                               for resource in resources],
             "phases": [
                 {"name": "existing", "days": 2, "facilities": [asset],
+                 "facility_investments": [{"node": a, "facility": str(facility.id), "units": 1}],
                  "transfers": [{"origin": a, "destination": b, "resource": resource, "t_per_day": 4}
                                for resource in resources]},
                 {"name": "expansion", "days": 5,
@@ -83,9 +84,10 @@ def test_multiphase_resource_balance_and_transfer_do_not_perform_hidden_settleme
             received[key[1]] += row["received_t"]
         assert shipped == pytest.approx(received)
         prior_stock = defaultdict(float, {key: row["notional_end_t"] for key, row in current.items()})
-    # Added facilities require investment independently of elapsed operation.
-    assert any(row["construction_demand_t"] > 0 for row in result["phases"][1]["resources"])
-    assert all(row["construction_demand_t"] == 0 for row in result["phases"][0]["resources"])
+    # Investment is debited in the earlier Phase; its Facility starts
+    # contributing only after that Phase boundary.
+    assert any(row["construction_demand_t"] > 0 for row in result["phases"][0]["resources"])
+    assert all(row["construction_demand_t"] == 0 for row in result["phases"][1]["resources"])
 
 
 
@@ -645,3 +647,60 @@ def test_selected_upstream_process_traces_unmet_local_demand_without_creating_su
         str(x) for x in definitions._catalog.resources if x not in process.outputs_per_day)
     with pytest.raises(ValueError, match="does not produce"):
         evaluate(invalid, app=definitions)
+
+
+def test_facility_investment_and_next_phase_operation_do_not_overlap(definitions):
+    """Construction creates future *conditional* capacity, not current-Phase flow."""
+    sim = definitions._simulation
+    facility, process = next((f, p) for f, p in _compatible_processes(sim)
+                             if sim.projects.recipes.get(f.id)
+                             and f.process_throughput_per_day > 0 and p.outputs_per_day)
+    site = "prospective.installation"
+    installed = {"node": site, "facility": str(facility.id),
+                 "units": 1, "process": str(process.id)}
+    investment = {"node": site, "facility": str(facility.id), "units": 1}
+    plan = {"phases": [
+        {"name": "investment", "days": 12, "facilities": [],
+         "facility_investments": [investment]},
+        {"name": "operation", "days": 20, "facilities": [installed]}]}
+    original = deepcopy(capture_state(sim))
+    first, second = evaluate(plan, app=definitions)["phases"]
+    assert first["facility_investments"][0]["status"] == "investment_only_not_operating_in_current_phase"
+    assert first["scale"]["facility_units_added"] == 1
+    assert sum(row["production_t"] for row in first["resources"]) == 0
+    assert sum(row["construction_demand_t"] for row in first["resources"]) > 0
+    assert second["scale"]["facility_units_added"] == 0
+    assert sum(row["construction_demand_t"] for row in second["resources"]) == 0
+    for resource, per_day in process.outputs_per_day.items():
+        assert _rows(second)[site, str(resource)]["production_t"] == pytest.approx(
+            per_day * facility.process_throughput_per_day * 20)
+    assert capture_state(sim) == original
+    forbidden = deepcopy(plan)
+    forbidden["phases"][0]["facilities"] = [installed]
+    with pytest.raises(ValueError, match="opening holdings"):
+        evaluate(forbidden, app=definitions)
+    unsupported = deepcopy(plan)
+    unsupported["phases"][0]["facility_investments"] = []
+    with pytest.raises(ValueError, match="opening holdings"):
+        evaluate(unsupported, app=definitions)
+
+
+def test_sensitivity_adds_future_facility_investment_not_instant_production(definitions):
+    """A new investment scenario never silently creates operating capacity."""
+    sim = definitions._simulation
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if sim.projects.recipes.get(f.id) and sim.projects.recipes[f.id].resources)
+    comparison = compare_cases({
+        "base_plan": {"phases": [{"name": "invest", "days": 11, "facilities": []}]},
+        "cases": [{"name": "base"}, {"name": "chosen_investment", "updates": [{
+            "collection": "facility_investments", "phase": "invest", "action": "add",
+            "row": {"node": "hypothetical.construction", "facility": str(facility.id), "units": 1},
+        }]}],
+    }, app=definitions)
+    base, chosen = (item["projection"]["phases"][0] for item in comparison["cases"])
+    assert not base["facility_investments"]
+    assert chosen["facility_investments"]
+    assert sum(r["production_t"] for r in chosen["resources"]) == 0
+    assert any(row["section"] == "facility_investments"
+               and row["delta_from_baseline"]["units"] == 1
+               for row in comparison["differences"])
