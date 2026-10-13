@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.analysis_balance_network import registered_material_links, registered_activity_coefficients, trace_material_system, network_overview
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.transport import MovementEndpoint
@@ -216,6 +217,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     graph = (_definition_graph if _definition_graph is not None else
              build_definition_dependency_graph(sim, catalog))
     graph_nodes = frozenset(graph.nodes)
+    registered_links = registered_material_links(graph)
     relation_index = defaultdict(list)
     for relation in graph.relations:
         relation_index[relation.source].append(relation)
@@ -1503,6 +1505,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "nominal_services_per_day": [dict(node=n, service=s, capacity=q)
                                                      for (n, s), q in sorted(services.items())
                                                      if not s.startswith("required:")]})
+        report[-1]["system_network"] = trace_material_system(report[-1], registered_links)
         previous_assets = assets
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
@@ -1665,7 +1668,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
     return plan
 
 
-def compare_cases(payload: dict, *, app=None) -> dict:
+def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
     """Compute several explicitly authored asset compositions with one Content set.
 
     Comparison never selects a best plan, and reports physical dimensions
@@ -1677,7 +1680,8 @@ def compare_cases(payload: dict, *, app=None) -> dict:
         raise ValueError("comparison requires cases")
     if app is None:
         app = build_game_application_for_load()
-    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    graph = (_definition_graph if _definition_graph is not None else
+             build_definition_dependency_graph(app._simulation, app._catalog))
     results = []
     names = set()
     for case in cases:
@@ -1809,6 +1813,48 @@ def compare_cases(payload: dict, *, app=None) -> dict:
                         if incomparable:
                             change["incomparable_unassessed_metrics"] = incomparable
                         differences.append(change)
+            # A nonnumeric change can be the only meaningful result: a new
+            # World Cell, route blocker or Infrastructure condition may leave
+            # nominal capacity unknown on *both* sides. Do not reinterpret
+            # it as a zero change merely because every quantity is None.
+            condition_sections = {
+                "od_transport_constraints": (("origin", "destination"), ("status", "blockers")),
+                "transport_services": (("origin", "destination", "vehicle"),
+                                       ("status", "blockers", "infrastructure_requirements",
+                                        "forward_path", "reverse_path")),
+                "extraction_world_context": (("node", "resource", "output_resource"),
+                                             ("world_body", "world_cells", "knowledge_source")),
+                "power_world_context": (("node", "facility"), ("world_context", "status")),
+                "spatial_projects": (("node", "recipe"),
+                                     ("prerequisite_technologies", "knowledge_requirements", "status")),
+            }
+            for section, (key_fields, condition_fields) in condition_sections.items():
+                def condition_index(rows):
+                    indexed = defaultdict(list)
+                    for row in rows:
+                        key = tuple(row[field] for field in key_fields)
+                        indexed[key].append({field: row[field] for field in condition_fields if field in row})
+                    # A shared identity can have multiple explicit activities;
+                    # their authored conditions must not silently overwrite.
+                    return {key: sorted(values, key=lambda value: json.dumps(value, sort_keys=True))
+                            for key, values in indexed.items()}
+
+                prior, selected = condition_index(left[section]), condition_index(right[section])
+                for key in sorted(set(prior) | set(selected)):
+                    if prior.get(key) == selected.get(key):
+                        continue
+                    identity = dict(zip(key_fields, key))
+                    existing = next((change for change in differences
+                                     if change.get("case") == alternative["name"]
+                                     and change.get("phase") == left["name"]
+                                     and change.get("section") == section
+                                     and change.get("identity") == identity), None)
+                    if existing is None:
+                        existing = {"case": alternative["name"], "phase": left["name"],
+                                    "section": section, "identity": identity}
+                        differences.append(existing)
+                    existing["condition_change"] = {"baseline": prior.get(key, []),
+                                                    "case": selected.get(key, [])}
         for unmatched in baseline[len(alternative_phases):]:
             differences.append({"case": alternative["name"], "baseline_phase": unmatched["name"],
                                 "phase": None, "section": "incomparable_phase_basis",
@@ -1935,8 +1981,9 @@ def summarize_projection(projection: dict) -> dict:
             "market_provider_bounds": phase["market_provider_constraints"],
             "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
+            "system_coupling": network_overview(phase["system_network"]),
             "detail_sections": [
-                "activity_sources", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
+                "activity_sources", "system_network", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
@@ -1947,6 +1994,9 @@ def summarize_projection(projection: dict) -> dict:
 
 _SUMMARY_ROW_IDENTITY = {
     "resource_shortfalls_by_node": ("node", "resource"),
+    "resource_pressures": ("node", "resource"),
+    "service_gaps": ("node", "service"),
+    "power_gaps": ("node",),
     "recurring_resource_pressures_by_node": ("node", "resource"),
     "conditional_incoming_cargo_risks_by_node": ("node", "resource"),
     "service_shortfalls_by_node": ("node", "service"),
@@ -2042,14 +2092,197 @@ def summarize(result: dict) -> dict:
                 for case in result["cases"][1:]],
             "full_differences_detail_section": "differences"}
 
+def _portfolio_phase_view(phase):
+    """Keep numerical vectors and their coupling without per-case Graph copies.
+
+    Activity coefficient provenance remains accessible in the single-plan
+    report and in the once-per-portfolio registered coefficient matrix.
+    """
+    fields = (
+        "name", "days", "scale", "resources", "service_constraints", "constraints",
+        "research_point_balance", "research_service_constraints", "investment_constraints",
+        "transport_services", "od_transport_constraints", "extraction_world_context",
+        "power_world_context", "market_provider_constraints", "market_funds_condition",
+        "unassessed_constraints", "system_network", "spatial_projects", "upgrade_projects",
+    )
+    # Long typed per-activity Graph evidence is not repeated in a portfolio.
+    # The original plan remains the reference for the exhaustive projection.
+    def strip_graph(value):
+        if isinstance(value, list):
+            return [strip_graph(item) for item in value]
+        if isinstance(value, dict):
+            return {key: strip_graph(item) for key, item in value.items()
+                    if key != "graph_evidence"}
+        return value
+    return strip_graph({field: phase[field] for field in fields})
+
+
+def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
+    """Evaluate selected activity configurations against *one* registered World.
+
+    Different plans are independent conditions, NOT one cumulative schedule.
+    They are never added together or compared as equivalent time bases. A
+    typed registered material map accompanies selected, quantity-bearing paths.
+    """
+    if not plans:
+        raise ValueError("portfolio requires at least one explicit comparison plan")
+    if app is None:
+        app = build_game_application_for_load()
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    registered = registered_material_links(graph)
+    results = []
+    observed = defaultdict(list)
+    for name, payload in sorted(plans.items()):
+        if not isinstance(name, str) or not name:
+            raise ValueError("portfolio plan names must be nonempty")
+        comparison = (compare_cases(payload, app=app, _definition_graph=graph)
+                      if "cases" in payload else evaluate(payload, app=app, _definition_graph=graph))
+        cases = (comparison["cases"] if "cases" in comparison else
+                 [{"name": "selected_composition", "projection": comparison}])
+        results.append({"plan": name, "cases": [
+            {"name": case["name"], "phases": [
+                _portfolio_phase_view(phase) for phase in case["projection"]["phases"]]}
+            for case in cases],
+            "case_differences": comparison.get("differences", []),
+            "full_definition_evidence": "run_analysis_balance_on_original_plan_for_complete_activity_graph"})
+        for case in cases:
+            for phase in case["projection"]["phases"]:
+                for exposure in phase["system_network"]["pressure_exposures"]:
+                    observed[exposure["resource"]].append({
+                        "plan": name, "case": case["name"], "phase": phase["name"],
+                        "days": phase["days"], "node": exposure["node"],
+                        "condition": exposure["condition"],
+                        "direct_activity_kinds": sorted({v["activity_kind"] for v in exposure["direct_demand_activities"]}),
+                        "downstream_processes": exposure["active_downstream_processes"],
+                        "potentially_affected_outputs": exposure["potentially_affected_outputs"],
+                        "status": exposure["status"],
+                    })
+    return {
+        "model": "definition_quantity_portfolio_v1",
+        "content_id": app.content_id, "world_definition_id": app.world_definition_id,
+        "portfolio_conditions": "independent_explicit_compositions_not_gameplay_or_optimal_builds",
+        "registered_material_relations": registered,
+        "registered_activity_coefficients": registered_activity_coefficients(graph),
+        "pressure_exposure_index": [
+            {"resource": resource, "conditions": records,
+             "registered_definition_links": registered.get(resource, {
+                 "potential_producers": [], "registered_consumers": []})}
+            for resource, records in sorted(observed.items())
+        ],
+        "evaluations": results,
+    }
+
+
+def summarize_portfolio(portfolio: dict) -> dict:
+    """System overview: keep dimensions and uncertainty, not repeated full ledgers."""
+    scenarios = []
+    for record in portfolio["evaluations"]:
+        unresolved = set()
+        per_case = []
+        for case in record["cases"]:
+            phases = []
+            for phase in case["phases"]:
+                network = phase["system_network"]
+                unresolved.update(phase["unassessed_constraints"])
+                phases.append({
+                    "name": phase["name"], "days": phase["days"], "scale": phase["scale"],
+                    "resource_pressures": [
+                        {"node": e["node"], "resource": e["resource"],
+                         "condition": e["condition"]}
+                        for e in network["pressure_exposures"]],
+                    "service_gaps": [
+                        {"node": e["node"], "service": e["service"],
+                         "nominal_gap_per_day": e["nominal_gap_per_day"]}
+                        for e in network["service_pressures"]],
+                    "power_gaps": [
+                        {"node": c["node"], "nominal_gap_mw": c["power_gap_mw"]}
+                        for c in phase["constraints"] if c["power_gap_mw"] > 1e-9],
+                    "unresolved_od_count": len(network["unresolved_transport_od"]),
+                    "research": {k: phase["research_point_balance"][k] for k in (
+                        "nominal_generation_points", "research_stage_demand_points", "point_shortfall",
+                        "nominal_storage_capacity_points", "nominal_execution_per_day",
+                        "total_execution_capacity_lower_bound_days")},
+                    "full_detail_section": "system_network",
+                })
+            if not per_case:
+                per_case.append({"case": case["name"], "phases": phases})
+            else:
+                baseline = per_case[0]["phases"]
+                if len(baseline) != len(phases) or any(
+                    left["name"] != right["name"] or left["days"] != right["days"]
+                    for left, right in zip(baseline, phases)
+                ):
+                    per_case.append({"case": case["name"], "phases": phases,
+                                     "incomparable_phase_basis": True})
+                else:
+                    per_case.append({"case": case["name"], "relative_to_baseline": per_case[0]["case"],
+                                     "unchanged_quantities_omitted": True,
+                                     "changed_phases": [_relative_phase_overview(left, right)
+                                                        for left, right in zip(baseline, phases)
+                                                        if left != right]})
+        scenarios.append({"plan": record["plan"], "cases": per_case,
+                          "unassessed_condition_types": sorted(unresolved)})
+    return {
+        "model": "definition_quantity_portfolio_summary_v1",
+        "content_id": portfolio["content_id"],
+        "world_definition_id": portfolio["world_definition_id"],
+        "portfolio_conditions": portfolio["portfolio_conditions"],
+        "registered_material_context": {
+            "resources": len(portfolio["registered_material_relations"]),
+            "note": "registered methods are potential relations, not satisfied demands or usable supply",
+            "full_detail_section": "registered_material_relations",
+        },
+        "registered_activity_coefficients": {
+            "methods_with_typed_numeric_coefficients": len(portfolio["registered_activity_coefficients"]),
+            "note": "direct Definition coefficients including research and investment, without invented activity volumes",
+            "full_detail_section": "registered_activity_coefficients",
+        },
+        "pressure_exposure_index": [
+            {"resource": row["resource"], "number_of_explicit_conditions": len(row["conditions"]),
+             "plans_with_observed_pressure": sorted({e["plan"] for e in row["conditions"]}),
+             "downstream_output_resources_seen": sorted({output for entry in row["conditions"]
+                                                        for output in entry["potentially_affected_outputs"]}),
+             "full_detail_section": "pressure_exposure_index"}
+            for row in portfolio["pressure_exposure_index"]
+        ],
+        "scenarios": scenarios,
+        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index"],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plan", type=Path, help="JSON phases specifying activities, assets and demands")
+    parser.add_argument("plan", nargs="?", type=Path, help="JSON phases specifying activities, assets and demands")
+    parser.add_argument("--portfolio", nargs="+", type=Path, metavar="PATH",
+                        help="compare independent selected activity plans from files or directories as one system")
     parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
     args = parser.parse_args()
-    payload = json.loads(args.plan.read_text(encoding="utf-8"))
-    result = compare_cases(payload) if "cases" in payload else evaluate(payload)
-    json.dump(summarize(result) if args.summary else result, sys.stdout,
+    if args.portfolio:
+        if args.plan is not None:
+            parser.error("a positional plan cannot be combined with --portfolio")
+        paths = []
+        for path in args.portfolio:
+            if path.is_dir():
+                paths.extend(sorted(path.glob("*.json")))
+            elif path.is_file():
+                paths.append(path)
+            else:
+                parser.error(f"no portfolio plans at {path}")
+        if not paths or len(paths) != len({str(p.resolve()) for p in paths}):
+            parser.error("portfolio needs distinct JSON plans")
+        # Relative paths preserve distinct filenames even across directories.
+        names = [str(p) for p in paths]
+        payloads = {name: json.loads(path.read_text(encoding="utf-8"))
+                    for name, path in zip(names, paths)}
+        result = evaluate_portfolio(payloads)
+        output = summarize_portfolio(result) if args.summary else result
+    else:
+        if args.plan is None:
+            parser.error("a plan or --portfolio is required")
+        payload = json.loads(args.plan.read_text(encoding="utf-8"))
+        result = compare_cases(payload) if "cases" in payload else evaluate(payload)
+        output = summarize(result) if args.summary else result
+    json.dump(output, sys.stdout,
               ensure_ascii=False, indent=2, allow_nan=False)
     print()
 

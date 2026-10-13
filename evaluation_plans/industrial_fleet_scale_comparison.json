@@ -27,11 +27,6 @@
         "amount_t": 200
       }
     ],
-    "solar_yield": {
-      "base.location.earth_industrial": 0.8,
-      "base.node.low_earth_orbit": 0.85,
-      "base.node.lunar_orbit": 0.7
-    },
     "phases": [
       {
         "name": "deployment",
@@ -413,6 +408,20 @@
             "units": 2
           }
         ]
+      }
+    ],
+    "solar_sites": [
+      {
+        "node": "base.node.low_earth_orbit",
+        "facility": "base.facility.orbital_solar_array",
+        "context": "base.node.low_earth_orbit",
+        "day": 0
+      },
+      {
+        "node": "base.node.lunar_orbit",
+        "facility": "base.facility.orbital_solar_array",
+        "context": "base.node.lunar_orbit",
+        "day": 0
       }
     ]
   },

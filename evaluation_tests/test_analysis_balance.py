@@ -1653,12 +1653,22 @@ def test_operating_industrial_scale_portfolio_compares_shared_opportunity_and_di
         assert a[key]["diminishing_output_t_per_day"] >= b[key]["diminishing_output_t_per_day"]
         assert c[key]["diminishing_output_t_per_day"] >= g[key]["diminishing_output_t_per_day"]
     assert any(row["required_construction_work"] > 0 for row in area["spatial_projects"])
+    assert any(change["case"] == "developed_cell_instead_of_additional_extraction_machinery"
+               and change["section"] == "extraction_world_context"
+               and change.get("condition_change") for change in result["differences"])
     assert not base["spatial_projects"]
     # Actual activities, not construction count alone, drive the Resource and
     # Service ledger, and the stage uses the already assigned research equipment.
     kinds = {row["origin_kind"] for row in base["resource_contributions"]}
     assert {"process", "extraction_opportunity", "facility_construction", "vehicle_manufacture"} <= (
         kinds | {row["origin_kind"] for row in result["cases"][0]["projection"]["phases"][0]["resource_contributions"]})
+    assert base["power_world_context"]
+    assert all(row["basis"] == "power_domain_world_environment_x_selected_facility_and_duty"
+               and "unassessed" in row["status"] for row in base["power_world_context"])
+    assert {row["world_context"] for row in base["power_world_context"]} == {
+        row["node"] for row in base["power_world_context"]}
+    assert growth["power_world_context"][0]["nominal_unallocated_generation_mw"] > (
+        base["power_world_context"][0]["nominal_unallocated_generation_mw"])
     assert base["research_point_balance"]["nominal_execution_per_day"] > 0
     assert growth["research_point_balance"]["nominal_execution_per_day"] > (
         base["research_point_balance"]["nominal_execution_per_day"])
