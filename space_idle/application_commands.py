@@ -40,7 +40,7 @@ from .app_contracts.economy import (
 from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
-    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions,
+    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext,
     GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
 )
 
@@ -68,7 +68,7 @@ Query: TypeAlias = (
     GetPassengerTransferPreview | GetPassengerTransfers |
     GetCatalog | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
-    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockOptions |
+    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockContext |
     GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket
 )
 

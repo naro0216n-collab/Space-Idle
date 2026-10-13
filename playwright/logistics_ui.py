@@ -187,11 +187,11 @@ def run(browser) -> None:
                 assert label in movement_text, f"Movement candidate must expose {label} before hard-constraint selection"
             movement_control = movement_card.locator("[data-allocation-movement]")
             assert movement_control.get_attribute("aria-pressed") == "false"
-            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
-            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
-            assert float(page.locator("#allocationForward").input_value()) > 0
-            assert page.locator("#allocationForward").evaluate("input => input.checkValidity()"), (
-                "Application-derived capacity presets must remain valid precision inputs"
+            page.locator('#allocationCapacityContext').get_by_text('1機あたりの公称能力', exact=False).wait_for(timeout=10000)
+            page.locator('#allocationForward').fill('1')
+            assert float(page.locator('#allocationForward').input_value()) > 0
+            assert page.locator('#allocationForward').evaluate('input => input.checkValidity()'), (
+                'Direction-specific capacity target must accept a physical numeric value'
             )
             page.locator("#allocationPreview .kv-grid dt").first.wait_for(timeout=10000)
             assert page.locator("#allocationPreview .kv-grid dd").count() >= 4
@@ -350,15 +350,15 @@ def run(browser) -> None:
             page.locator("#targetStockResource").select_option(PROPELLANT)
             page.wait_for_function(
                 """() => ['current','inbound','demand'].every(
-                  key => document.querySelector(`#targetStockOptionSummary [data-stock-summary="${key}"]`)
+                  key => document.querySelector(`#targetStockContextSummary [data-stock-summary="${key}"]`)
                 )""",
                 timeout=10000,
             )
-            summary = page.locator("#targetStockOptionSummary")
+            summary = page.locator("#targetStockContextSummary")
             assert summary.locator('[data-stock-summary="current"]').count() == 1
             assert summary.locator('[data-stock-summary="inbound"]').count() == 1
             assert summary.locator('[data-stock-summary="demand"]').count() == 1
-            page.locator("#targetStockQuantityRange").fill("1")
+            page.locator("#targetStockQuantity").fill("1")
             page.locator('[data-target-stock-priority="4"]').click()
             page.get_by_role("button", name="追加備蓄を保存").click()
             page.locator("#targetStockDialog").wait_for(state="hidden", timeout=10000)

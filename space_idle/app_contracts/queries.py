@@ -84,7 +84,7 @@ class GetTransportAllocationPreview:
     movement_hard_constraint: tuple[str, ...] | None = None
     allocation_id: str | None = None
 @dataclass(frozen=True)
-class GetTargetStockOptions:
+class GetTargetStockContext:
     destination_id: str
     resource_id: str
 @dataclass(frozen=True)

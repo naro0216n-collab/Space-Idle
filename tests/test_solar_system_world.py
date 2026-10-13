@@ -114,10 +114,9 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     # availability resolved from each Cell; no second AU attenuation is applied.
     candidate_by_body = {}
     for cell_id, cell in graph.surface_cells.items():
-        if graph.owner_of_cell(cell_id) is None:
-            candidate_by_body.setdefault(cell.body_id, cell_id)
+        candidate_by_body.setdefault(cell.body_id, cell_id)
     candidate_cells = tuple(candidate_by_body.values())
-    assert candidate_cells
+    assert candidate_cells  # A present surface Cell, not an arbitrary unowned one.
     # Use a purpose-built solar Definition rather than requiring any named
     # Content Facility to remain in the catalogue.
     generator_id = DefinitionId("test.facility.solar_probe")
@@ -127,8 +126,10 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         generator_id, "Solar probe", placement_scope=FacilityPlacementScope.SURFACE_CELL,
     )}, env)
     for cell_id in candidate_cells:
-        node_id = SpatialNodeId(f"test.power.{cell_id}")
-        graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
+        node_id = graph.owner_of_cell(cell_id)
+        if node_id is None:
+            node_id = SpatialNodeId(f"test.power.{cell_id}")
+            graph.found_location(node_id, "Power test", graph.surface_cells[cell_id].body_id, cell_id)
         facility_id = facilities.install(generator_id, node_id, site_cell_id=cell_id)
         generation = sim.power.physical_snapshot(node_id, facilities, sim.day).generation_mw_by_facility[facility_id]
         illum = env.require(cell_id, IlluminationField)

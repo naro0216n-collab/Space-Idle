@@ -29,7 +29,7 @@ from space_idle import (
     GetTransportAllocations,
     GetTransportAllocationOptions,
     GetTransportAllocationPreview,
-    GetTargetStockOptions,
+    GetTargetStockContext,
     GetWorld,
     PlanBuild,
     SetProjectPriority,
@@ -291,12 +291,12 @@ def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_conte
     ]
 
 
-def test_target_stock_options_project_current_state_and_application_owned_presets():
+def test_target_stock_context_exposes_physical_quantities_without_picking_a_reserve_strategy():
     app = build_game_application()
     destination_id = str(ids.EARTH)
     resource_id = str(ids.STRUCTURAL_COMPONENTS)
 
-    view = app.query(GetTargetStockOptions(destination_id, resource_id))
+    view = app.query(GetTargetStockContext(destination_id, resource_id))
 
     assert view.destination_id == destination_id
     assert view.resource_id == resource_id
@@ -304,22 +304,21 @@ def test_target_stock_options_project_current_state_and_application_owned_preset
         app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     )
     assert view.normal_demand_t_per_day > 0
-    # Application owns the preset choices; a transient UI assortment is not a
-    # gameplay contract. Every offered quantity must match its time basis.
-    assert view.presets
-    assert len({preset.key for preset in view.presets}) == len(view.presets)
-    for preset in view.presets:
-        assert preset.display_name
-        assert preset.days_of_supply is not None and preset.days_of_supply > 0
-        assert preset.target_quantity_t == pytest.approx(
-            view.normal_demand_t_per_day * preset.days_of_supply
-        )
-    assert view.suggested_max_t >= view.current_stock_t
+    assert view.current_target_quantity_t == 0.0
+    stock_before = app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    normal_demand_before = view.normal_demand_t_per_day
+    inbound_before = view.inbound_t
 
     app.execute(SetTargetStock(destination_id, resource_id, 5.0, priority=4))
-    updated = app.query(GetTargetStockOptions(destination_id, resource_id))
+    updated = app.query(GetTargetStockContext(destination_id, resource_id))
     assert updated.current_target_quantity_t == pytest.approx(5.0)
     assert int(updated.priority) == 4
+    assert updated.current_stock_t == pytest.approx(stock_before)
+    assert updated.normal_demand_t_per_day == pytest.approx(normal_demand_before)
+    assert updated.inbound_t == pytest.approx(inbound_before)
+    # Additional reserve is a planning intent, not a stock reservation or a
+    # second source of ordinary recurring demand.
+    assert app._simulation.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(stock_before)
 
 
 def test_transport_allocation_projection_exposes_capacity_target_and_canonical_plan_requirements():
@@ -343,10 +342,9 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
         in option.operational_supply_at_full_unit
     )
 
-    assert option.suggested_capacity_max.forward_t_per_day >= option.nominal_capacity.forward_t_per_day
-    assert option.capacity_presets
-    assert any(preset.units == 1 for preset in option.capacity_presets)
-    assert all(preset.capacity.forward_t_per_day >= 0 for preset in option.capacity_presets)
+    assert option.nominal_capacity.forward_t_per_day > 0
+    assert option.fleet_free_units <= option.fleet_total_units
+    assert option.fleet_total_units >= 0
 
     two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
@@ -675,15 +673,21 @@ def test_survey_service_catalog_uses_physical_source_names_for_new_content():
         ),
     )
     expanded = {row.id: row.display_name for row in app.query(GetCatalog()).service_capacities}
-    assert len(expanded) == len(projected) + 1
-    provider = next(row for row in sim.survey.providers.values()
-                    if row.source_kind.value == "fleet"
-                    and row.required_source_capabilities <= {"survey_sensor"})
-    service_id = sim.survey.service_type_for_provider(provider.id, source_id)
-    assert sim.transport.vehicle_defs[source_id].display_name in expanded[service_id]
+    compatible_providers = (
+        provider for provider in sim.survey.providers.values()
+        if provider.source_kind.value == "fleet"
+        and provider.required_source_capabilities <= {"survey_sensor"}
+    )
+    service_ids = {
+        sim.survey.service_type_for_provider(provider.id, source_id)
+        for provider in compatible_providers
+    }
+    assert service_ids
+    assert set(expanded) - set(projected) == service_ids
+    assert all(sim.transport.vehicle_defs[source_id].display_name in expanded[service_id]
+               for service_id in service_ids)
     assert all(expanded[key] == name for key, name in projected.items())
-    assert service_id in sim.survey.service_capacity_types()
+    assert service_ids <= set(sim.survey.service_capacity_types())
 
     payload = to_jsonable(app.query(GetCatalog()))
-    assert any(row == {"id": service_id, "display_name": expanded[service_id]}
-               for row in payload["service_capacities"])
+    assert service_ids <= {row["id"] for row in payload["service_capacities"]}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .priority import ActivityPriority
 from .application_constraints import constraints_from_codes
-from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockPresetRow, TargetStockOptionsView
+from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockContextView
 
 
 class SupplyPlanningProjectorMixin:
@@ -177,7 +177,7 @@ class SupplyPlanningProjectorMixin:
         return result
 
 
-    def _target_stock_options_view(self, destination_id, resource_id) -> TargetStockOptionsView:
+    def _target_stock_context_view(self, destination_id, resource_id) -> TargetStockContextView:
         sim = self._simulation
         decision = self._tick_decision_projection()
         normal_demand = 0.0
@@ -209,24 +209,8 @@ class SupplyPlanningProjectorMixin:
         )
         current_target = 0.0 if current is None else current.target_quantity_t
         priority = ActivityPriority(3) if current is None else current.priority
-        presets = tuple(
-            TargetStockPresetRow(
-                key=f"days_{days}",
-                display_name=f"{days}日分",
-                target_quantity_t=normal_demand * days,
-                days_of_supply=float(days),
-            )
-            for days in (1, 3, 7)
-            if normal_demand > 1e-12
-        )
         current_stock = sim.inventory.amount(destination_id, resource_id)
-        suggested_max = max(
-            1.0,
-            current_stock + inbound,
-            current_target * 1.5,
-            normal_demand * 7.0,
-        )
-        return TargetStockOptionsView(
+        return TargetStockContextView(
             destination_id=str(destination_id),
             resource_id=str(resource_id),
             current_stock_t=current_stock,
@@ -234,8 +218,6 @@ class SupplyPlanningProjectorMixin:
             normal_demand_t_per_day=normal_demand,
             current_target_quantity_t=current_target,
             priority=priority,
-            suggested_max_t=suggested_max,
-            presets=presets,
         )
 
     def _routing_constraint_rows(self) -> tuple[SupplyRoutingConstraintRow, ...]:

@@ -168,20 +168,17 @@ def test_http_decision_views_scope_and_projection_boundary(tmp_path):
 
         status, _, payload = _request(
             port, "GET",
-            f"/api/v1/target-stock-options?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
+            f"/api/v1/target-stock-context?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
         )
         assert status == 200
-        target_stock_options = payload["data"]
-        assert target_stock_options["destination_id"] == str(ids.EARTH)
-        assert target_stock_options["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
-        assert target_stock_options["normal_demand_t_per_day"] > 0
-        # HTTP carries the Application's offered quantities, without making
-        # transient preset copy or count part of the wire protocol.
-        presets = target_stock_options["presets"]
-        assert presets
-        assert all(row["key"] and row["display_name"] for row in presets)
-        assert all(row["days_of_supply"] > 0 for row in presets)
-        assert all(row["target_quantity_t"] > 0 for row in presets)
+        target_stock_context = payload["data"]
+        assert target_stock_context["destination_id"] == str(ids.EARTH)
+        assert target_stock_context["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
+        assert target_stock_context["normal_demand_t_per_day"] > 0
+        assert target_stock_context["current_target_quantity_t"] == 0.0
+        assert target_stock_context["current_stock_t"] >= 0.0
+        assert target_stock_context["inbound_t"] >= 0.0
+        assert target_stock_context["priority"] == 3
 
         allocation_options_status, _, allocation_options_payload = _request(
             port, "GET",
@@ -192,14 +189,14 @@ def test_http_decision_views_scope_and_projection_boundary(tmp_path):
             row for row in allocation_options_payload["data"]["options"]
             if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE)
         )
-        one_unit = next(row for row in allocation_option["capacity_presets"] if row["units"] == 1)
+        nominal = allocation_option["nominal_capacity"]
         preview_status, _, preview_payload = _request(
             port, "GET",
             "/api/v1/transport-allocation-preview"
             f"?vehicle_definition_id={ids.REUSABLE_LAUNCH_VEHICLE}"
             f"&source_id={ids.EARTH}&destination_id={ids.LEO}"
-            f"&target_forward_t_per_day={one_unit['capacity']['forward_t_per_day']}"
-            f"&target_reverse_t_per_day={one_unit['capacity']['reverse_t_per_day']}",
+            f"&target_forward_t_per_day={nominal['forward_t_per_day']}"
+            f"&target_reverse_t_per_day={nominal['reverse_t_per_day']}",
         )
         assert preview_status == 200
         assert preview_payload["data"]["required_units"] == 1

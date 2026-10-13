@@ -15,7 +15,7 @@ from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
     GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
     GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from ..persistence import SaveFormatError
@@ -376,8 +376,8 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 allocation_id=_one(params, "allocation_id"),
             ))
             return
-        if path == "/api/v1/target-stock-options":
-            self._query_result(GetTargetStockOptions(
+        if path == "/api/v1/target-stock-context":
+            self._query_result(GetTargetStockContext(
                 destination_id=_required(params, "destination_id"),
                 resource_id=_required(params, "resource_id"),
             ))

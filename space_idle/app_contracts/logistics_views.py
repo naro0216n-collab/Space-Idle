@@ -312,15 +312,7 @@ class TargetStockRow:
 
 
 @dataclass(frozen=True)
-class TargetStockPresetRow:
-    key: str
-    display_name: str
-    target_quantity_t: float
-    days_of_supply: float | None = None
-
-
-@dataclass(frozen=True)
-class TargetStockOptionsView:
+class TargetStockContextView:
     destination_id: str
     resource_id: str
     current_stock_t: float
@@ -328,8 +320,6 @@ class TargetStockOptionsView:
     normal_demand_t_per_day: float
     current_target_quantity_t: float
     priority: ActivityPriority
-    suggested_max_t: float
-    presets: tuple[TargetStockPresetRow, ...]
 
 
 @dataclass(frozen=True)
@@ -348,14 +338,6 @@ class LogisticsView:
 
 
 @dataclass(frozen=True)
-class TransportCapacityPresetRow:
-    key: str
-    display_name: str
-    capacity: DirectionalCapacityRow
-    units: int
-
-
-@dataclass(frozen=True)
 class TransportAllocationOptionRow:
     vehicle_definition_id: str
     display_name: str
@@ -367,8 +349,6 @@ class TransportAllocationOptionRow:
     forward_latency_days: int
     reverse_latency_days: int | None
     nominal_capacity: DirectionalCapacityRow
-    suggested_capacity_max: DirectionalCapacityRow
-    capacity_presets: tuple[TransportCapacityPresetRow, ...]
     fleet_total_units: int
     fleet_free_units: int
     operational_supply_at_full_unit: tuple[tuple[str, str, float], ...]
@@ -390,8 +370,6 @@ class TransportAllocationPreviewView:
     destination_id: str
     target_capacity: DirectionalCapacityRow
     nominal_capacity_per_unit: DirectionalCapacityRow
-    suggested_capacity_max: DirectionalCapacityRow
-    capacity_presets: tuple[TransportCapacityPresetRow, ...]
     achievable_capacity: DirectionalCapacityRow
     required_units: int | None
     available_units: int

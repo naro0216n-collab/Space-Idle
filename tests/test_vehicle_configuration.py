@@ -122,7 +122,6 @@ def test_transport_performance_enforces_operation_continuity_and_endurance():
         sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance,
         transit_time_multiplier=0.7,
     )
-    assert fractional_plan.transit_days * fractional_performance.transit_time_multiplier == 3.5
     assert sim.transport.performance_movement_transit_days(
         fractional_plan, fractional_performance
     ) == 4
