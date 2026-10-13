@@ -2145,6 +2145,21 @@ def _portfolio_phase_view(phase):
     return strip_graph({field: phase[field] for field in fields})
 
 
+def _selected_composition_projections(plans: dict[str, dict], *, app, graph):
+    """Sole analysis dispatch for explicit economic compositions.
+
+    Research goals and catalog-wide aggregate views consume the same
+    Definition/World-backed evaluations. No strategy-specific calculator.
+    """
+    if not plans:
+        raise ValueError("at least one explicit composition is required")
+    for name, payload in sorted(plans.items()):
+        if not isinstance(name, str) or not name:
+            raise ValueError("composition names must be nonempty")
+        yield name, (compare_cases(payload, app=app, _definition_graph=graph)
+                     if "cases" in payload else evaluate(payload, app=app, _definition_graph=graph))
+
+
 def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
     """Evaluate selected activity configurations against *one* registered World.
 
@@ -2152,19 +2167,13 @@ def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
     They are never added together or compared as equivalent time bases. A
     typed registered material map accompanies selected, quantity-bearing paths.
     """
-    if not plans:
-        raise ValueError("portfolio requires at least one explicit comparison plan")
     if app is None:
         app = build_game_application_for_load()
     graph = build_definition_dependency_graph(app._simulation, app._catalog)
     registered = registered_material_links(graph)
     results = []
     observed = defaultdict(list)
-    for name, payload in sorted(plans.items()):
-        if not isinstance(name, str) or not name:
-            raise ValueError("portfolio plan names must be nonempty")
-        comparison = (compare_cases(payload, app=app, _definition_graph=graph)
-                      if "cases" in payload else evaluate(payload, app=app, _definition_graph=graph))
+    for name, comparison in _selected_composition_projections(plans, app=app, graph=graph):
         cases = (comparison["cases"] if "cases" in comparison else
                  [{"name": "selected_composition", "projection": comparison}])
         results.append({"plan": name, "cases": [
@@ -2296,6 +2305,47 @@ def summarize_portfolio(portfolio: dict) -> dict:
     }
 
 
+def evaluate_research_with_economies(goal_report: dict, plans: dict[str, dict], *,
+                                     app=None, summary=False) -> list[dict]:
+    """Join a selected Technology goal to authored economic alternatives once.
+
+    The inventory/Service/OD ledger is the *same* evaluator used for standalone
+    compositional comparisons. Plans are optional sensitivities, never built-in
+    phase or Facility targets. Each independently selected composition retains
+    its own time basis and local Resource ownership.
+    """
+    if app is None:
+        app = build_game_application_for_load()
+    graph = build_definition_dependency_graph(app._simulation, app._catalog)
+    joined = []
+    for name, comparison in _selected_composition_projections(plans, app=app, graph=graph):
+        economy = relate_research_goal_to_economy(goal_report, comparison)
+        joined.append({"name": name,
+                       "research_and_economy": (summarize_research_economy_context(economy)
+                                                if summary else economy),
+                       "system_balance": (summarize(comparison) if summary else comparison)})
+    return joined
+
+
+def _selected_plan_files(plan, portfolio, parser) -> dict[str, dict]:
+    """One explicit composition input contract for research-led and other views."""
+    if plan is not None and portfolio:
+        parser.error("select either one plan or a portfolio of plans")
+    if plan is not None and plan.is_dir():
+        parser.error("a plan must be one JSON file; use --portfolio for multiple files")
+    paths = []
+    for path in ([plan] if plan is not None else portfolio or []):
+        if path.is_dir():
+            paths.extend(sorted(path.glob("*.json")))
+        elif path.is_file():
+            paths.append(path)
+        else:
+            parser.error(f"no comparison plans at {path}")
+    if len(paths) != len({str(p.resolve()) for p in paths}):
+        parser.error("comparison requires distinct JSON plans")
+    return {str(path): json.loads(path.read_text(encoding="utf-8")) for path in paths}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan", nargs="?", type=Path, help="JSON phases specifying activities, assets and demands")
@@ -2313,8 +2363,6 @@ def main():
                         help="selected independent research-source count for comparison, not a target fleet or facility count")
     parser.add_argument("--research-compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"),
                         help="diff two registered-generation summary reports after Content adjustment")
-    parser.add_argument("--research-context", type=Path, metavar="PLAN",
-                        help="compare research time and upstream obligations with each selected economic composition in a balance plan")
     parser.add_argument("--research-production-methods", type=Path, metavar="JSON",
                         help="optional mapping from Resource ID to selected Process ID for conditional upstream bill")
     parser.add_argument("--research-include-prerequisites", action="store_true", help="expand actual Technology DAG prerequisites for selected Research IDs")
@@ -2324,18 +2372,21 @@ def main():
         parser.error("--research-compare cannot be combined with a Content analysis operation")
     if sum([bool(args.research_generations), args.research_stage is not None, bool(args.research_ids)]) > 1:
         parser.error("select one research-goal mode")
-    if research_mode and (args.portfolio or args.plan):
-        parser.error("research goal and explicit activity plan are alternative entrypoints")
-    if not research_mode and not args.research_compare and (args.research_science or args.research_horizons or args.research_production_methods or args.research_include_prerequisites or args.research_provider_units != 1 or args.research_context):
+    if not research_mode and not args.research_compare and (args.research_science or args.research_horizons or args.research_production_methods or args.research_include_prerequisites or args.research_provider_units != 1):
         parser.error("research sensitivity arguments require a research goal")
     selected_methods = (json.loads(args.research_production_methods.read_text(encoding='utf-8'))
                         if args.research_production_methods else {})
+    selected_plans = _selected_plan_files(args.plan, args.portfolio, parser)
+    if args.research_generations and selected_plans:
+        parser.error("all-generation catalog summary cannot imply a selected economy; select Technology goals")
+    if args.research_compare and selected_plans:
+        parser.error("--research-compare compares two completed reports, not new economic conditions")
+    if args.portfolio and not selected_plans:
+        parser.error("a portfolio needs at least one explicit composition")
     if args.research_compare:
         before, after = [json.loads(path.read_text(encoding='utf-8')) for path in args.research_compare]
         output = compare_research_generation_reports(before, after)
     elif research_mode:
-        if args.research_generations and args.research_context:
-            parser.error("--research-context requires one selected Research goal, not all generations")
         if args.research_generations:
             result = evaluate_research_generations(horizon_days=args.research_horizons,
                                                     production_methods=selected_methods)
@@ -2349,33 +2400,16 @@ def main():
                                            selected_science_campaigns=args.research_science,
                                            production_methods=selected_methods)
             output = summarize_research_goal(result) if args.summary else result
-            if args.research_context:
-                payload = json.loads(args.research_context.read_text(encoding='utf-8'))
-                context = compare_cases(payload) if 'cases' in payload else evaluate(payload)
-                output = {**output, 'selected_economy': (summarize_research_economy_context(relate_research_goal_to_economy(result, context)) if args.summary else relate_research_goal_to_economy(result, context))}
+            if selected_plans:
+                output = {**output, 'selected_economies': evaluate_research_with_economies(
+                    result, selected_plans, summary=args.summary)}
     elif args.portfolio:
-        if args.plan is not None:
-            parser.error("a positional plan cannot be combined with --portfolio")
-        paths = []
-        for path in args.portfolio:
-            if path.is_dir():
-                paths.extend(sorted(path.glob("*.json")))
-            elif path.is_file():
-                paths.append(path)
-            else:
-                parser.error(f"no portfolio plans at {path}")
-        if not paths or len(paths) != len({str(p.resolve()) for p in paths}):
-            parser.error("portfolio needs distinct JSON plans")
-        # Relative paths preserve distinct filenames even across directories.
-        names = [str(p) for p in paths]
-        payloads = {name: json.loads(path.read_text(encoding="utf-8"))
-                    for name, path in zip(names, paths)}
-        result = evaluate_portfolio(payloads)
+        result = evaluate_portfolio(selected_plans)
         output = summarize_portfolio(result) if args.summary else result
     else:
-        if args.plan is None:
-            parser.error("a plan or --portfolio is required")
-        payload = json.loads(args.plan.read_text(encoding="utf-8"))
+        if not selected_plans:
+            parser.error("select registered research goals or explicit economic compositions")
+        payload = next(iter(selected_plans.values()))
         result = compare_cases(payload) if "cases" in payload else evaluate(payload)
         output = summarize(result) if args.summary else result
     json.dump(output, sys.stdout,

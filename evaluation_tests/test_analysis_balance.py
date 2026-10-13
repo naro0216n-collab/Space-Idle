@@ -958,47 +958,66 @@ def test_fleet_research_provider_competes_for_held_units_and_uses_registered_lev
                 evaluate(conflicting, app=definitions)
 
 
-def test_resource_contributions_reconcile_by_source_with_all_projected_dimensions(definitions):
-    """The origin ledger is a view of the same accounting, not a competing calculator."""
-    import json
-    from pathlib import Path
-    from scripts.analysis_balance import compare_cases
 
-    named = ("industrial_fleet_scale_comparison",
-             "connected_industry_science_settlement_tradeoffs", "world_growth_research_logistics")
+
+def test_registered_cross_domain_activity_provenance_and_comparison_is_content_driven(definitions):
+    """The same ledger follows active Process, research, Vehicle investment and upkeep.
+
+    This contract does not depend on a checked-in Facility composition or a
+    prescribed scale. New registered coefficients must change the same ledger.
+    """
+    from scripts.analysis_balance import evaluate_research_with_economies
+    from scripts.analysis_balance_research import analyze_research_goal
+    sim = definitions._simulation
+    facility, process = next((f, p) for f, p in _compatible_processes(sim)
+                             if p.inputs_per_day and p.outputs_per_day)
+    vehicle = next(v for v in sim.transport.vehicle_definitions() if v.production)
+    tech = next(iter(sim.research.definitions.values()))
+    node = "generic.production"
+    asset = {"node": node, "facility": str(facility.id), "units": 1,
+             "process": str(process.id), "duty": .5}
+    plan = {"initial_facilities": [asset], "phases": [{
+        "name": "selected_activity", "days": 7, "facilities": [asset],
+        "vehicle_builds": [{"node": node, "vehicle": str(vehicle.id), "units": 1}],
+        "research_stages": [{"node": node, "research": str(tech.id),
+                             "stage": tech.stage_specs[0].stage_id}],
+    }]}
+    before = deepcopy(capture_state(sim))
+    projection = evaluate(plan, app=definitions)["phases"][0]
+    contributed = defaultdict(float)
     dimensions = ("production_t", "process_demand_t", "maintenance_demand_t",
                   "construction_demand_t", "vehicle_build_demand_t",
                   "fleet_turnaround_demand_t", "transport_service_demand_t",
                   "research_material_demand_t", "science_material_demand_t",
-                  "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t",
-                  "external_net_t", "shipped_t", "received_t")
-    before = deepcopy(capture_state(definitions._simulation))
-    for name in named:
-        data = json.loads((Path(__file__).resolve().parent.parent / "evaluation_plans" / f"{name}.json").read_text())
-        result = compare_cases(data, app=definitions) if "cases" in data else evaluate(data, app=definitions)
-        projections = [case["projection"] for case in result["cases"]] if "cases" in result else [result]
-        for projection in projections:
-            for phase in projection["phases"]:
-                attributed = defaultdict(float)
-                for item in phase["resource_contributions"]:
-                    assert item["quantity_basis"] and item["origin_definition"]
-                    assert item["dimension"] in dimensions
-                    attributed[(item["node"], item["resource"], item["dimension"])] += item["amount_t"]
-                for row in phase["resources"]:
-                    for dimension in dimensions:
-                        assert attributed[(row["node"], row["resource"], dimension)] == pytest.approx(
-                            row[dimension], abs=1e-9), (name, phase["name"], row["node"], row["resource"], dimension)
-                service_attributed = defaultdict(float)
-                for item in phase["service_contributions"]:
-                    assert item["quantity_basis"] and item["origin_definition"]
-                    service_attributed[(item["node"], item["service"], item["role"])] += item["rate_per_day"]
-                for row in phase["service_constraints"]:
-                    identity = (row["node"], row["service"])
-                    assert service_attributed[(*identity, "demand")] == pytest.approx(
-                        row["required_per_day"], abs=1e-9)
-                    assert service_attributed[(*identity, "nominal_supply")] == pytest.approx(
-                        row["nominal_capacity_per_day"], abs=1e-9)
-    assert capture_state(definitions._simulation) == before
+                  "founding_payload_demand_t", "passenger_provisions_demand_t",
+                  "life_support_demand_t", "external_net_t", "shipped_t", "received_t")
+    for item in projection["resource_contributions"]:
+        assert item["origin_definition"] and item["quantity_basis"]
+        assert item["dimension"] in dimensions
+        contributed[item["node"], item["resource"], item["dimension"]] += item["amount_t"]
+    for row in projection["resources"]:
+        for dimension in dimensions:
+            assert contributed[(row["node"], row["resource"], dimension)] == pytest.approx(
+                row[dimension], abs=1e-9)
+    service_contributed = defaultdict(float)
+    for item in projection["service_contributions"]:
+        assert item["origin_definition"] and item["quantity_basis"]
+        service_contributed[item["node"], item["service"], item["role"]] += item["rate_per_day"]
+    for row in projection["service_constraints"]:
+        assert service_contributed[row["node"], row["service"], "demand"] == pytest.approx(row["required_per_day"])
+        assert service_contributed[row["node"], row["service"], "nominal_supply"] == pytest.approx(row["nominal_capacity_per_day"])
+    # The selected Technology goal and the economic alternatives use one
+    # public quantity evaluator, with no constant fixture or additional State.
+    goal = analyze_research_goal(research_ids=(str(tech.id),), app=definitions)
+    second = deepcopy(plan)
+    second["phases"][0]["facilities"][0]["duty"] = .75
+    joined = evaluate_research_with_economies(goal, {"first": plan, "second": second},
+                                              app=definitions, summary=True)
+    assert len(joined) == 2
+    assert all(row["research_and_economy"]["contexts"] and row["system_balance"]["phases"]
+               for row in joined)
+    assert joined[0]["system_balance"]["phases"] != joined[1]["system_balance"]["phases"]
+    assert capture_state(sim) == before
 
 
 def test_typed_research_stages_include_shared_execution_demand_beyond_theory(definitions):
@@ -1080,34 +1099,6 @@ def test_world_opportunity_shared_across_distinct_method_outputs():
     assert outputs[str(raw.output_resource_id)] == pytest.approx(outputs[str(other_resource)])
 
 
-def test_integrated_research_upgrade_compares_partial_levels_and_new_labs(definitions):
-    """Upgrade/expansion use the same industrial, logistic and research base."""
-    import json
-    from pathlib import Path
-
-    data = json.loads((Path(__file__).parent.parent / "evaluation_plans" /
-                       "connected_industry_science_settlement_tradeoffs.json").read_text())
-    selected = [data["cases"][0]] + [case for case in data["cases"]
-                 if case["name"] in ("partial_lab_upgrade_in_industrial_economy",
-                                     "new_lab_instead_of_level_upgrade")]
-    before = deepcopy(capture_state(definitions._simulation))
-    results = compare_cases({"base_plan": data["base_plan"], "cases": selected},
-                            app=definitions)["cases"]
-    assert len(results) == 3
-    baseline = results[0]["projection"]["phases"]
-    upgraded = next(row["projection"]["phases"] for row in results
-                    if row["name"] == "partial_lab_upgrade_in_industrial_economy")
-    expanded = next(row["projection"]["phases"] for row in results
-                    if row["name"] == "new_lab_instead_of_level_upgrade")
-    assert upgraded[0]["upgrade_projects"] and upgraded[0]["scale"] == baseline[0]["scale"]
-    assert upgraded[1]["scale"] == baseline[1]["scale"]
-    assert expanded[1]["scale"]["facility_units"] == baseline[1]["scale"]["facility_units"] + 1
-    def research_capacity(phase):
-        return phase["research_point_balance"]["nominal_execution_per_day"]
-    assert research_capacity(upgraded[1]) > research_capacity(baseline[1])
-    assert research_capacity(expanded[1]) > research_capacity(baseline[1])
-    assert upgraded[0]["resources"] != expanded[0]["resources"]
-    assert capture_state(definitions._simulation) == before
 
 
 def test_new_node_scoped_research_requirement_shares_node_service_ledger():
@@ -1178,44 +1169,6 @@ def test_registered_solar_power_uses_owner_world_context_without_settling_operat
     assert capture_state(sim) == before
 
 
-def test_lunar_world_solar_and_extraction_composition_keeps_resource_power_investment_distinct(definitions):
-    """Actual registered geology/power creates different conditional bottlenecks, not a winning plan."""
-    import json
-    from pathlib import Path
-    from scripts.analysis_balance import summarize
-
-    payload = json.loads((Path(__file__).resolve().parents[1] /
-                          "evaluation_plans/lunar_site_industry_power.json").read_text())
-    baseline_input = deepcopy(payload)
-    before = deepcopy(capture_state(definitions._simulation))
-    comparison = compare_cases(payload, app=definitions)
-    summaries = summarize(comparison)
-    assert payload == baseline_input
-    assert capture_state(definitions._simulation) == before
-    cases = {c["name"]: c["projection"]["phases"][0] for c in comparison["cases"]}
-    assert len(cases) == 4
-    # No pre-founded lunar Node receives a historical Facility endowment.
-    assert not payload["base_plan"].get("initial_facilities")
-    ridge, cold = cases["lit_ridge_site"], cases["cold_trap_site"]
-    assert ridge["investment_constraints"][0]["required_work"] > 0
-    assert "new_facilities_operate_before_construction_completion" in ridge["unassessed_constraints"]
-    solar, extraction = cases["cold_trap_solar_expansion"], cases["cold_trap_extraction_expansion"]
-    assert ridge["constraints"][0]["power_generation_nominal_mw"] > cold["constraints"][0]["power_generation_nominal_mw"]
-    assert cold["extraction_world_context"][0]["diminishing_output_t_per_day"] > ridge["extraction_world_context"][0]["diminishing_output_t_per_day"]
-    assert solar["constraints"][0]["power_generation_nominal_mw"] > cold["constraints"][0]["power_generation_nominal_mw"]
-    assert extraction["extraction_world_context"][0]["diminishing_output_t_per_day"] > cold["extraction_world_context"][0]["diminishing_output_t_per_day"]
-    assert extraction["extraction_world_context"][0]["diminishing_output_t_per_day"] < 4 * cold["extraction_world_context"][0]["diminishing_output_t_per_day"]
-    for expanded in (solar, extraction):
-        assert expanded["investment_constraints"][0]["required_work"] > 0
-        assert expanded["investment_constraints"][0]["pre_investment_work_lower_bound_days"] is None
-        assert "new_facilities_operate_before_construction_completion" in expanded["unassessed_constraints"]
-    assert {"constraints", "power_world_context", "extraction_world_context", "resources", "resource_contributions"} <= {
-        row["section"] for row in comparison["differences"]
-    }
-    assert summaries["cases"][0]["summary"]["phases"][0]["power_world_context"]
-    assert summaries["cases"][1]["relative_to_baseline"] == summaries["baseline_case"]
-    assert any("power_world_context" in phase["changed_sections"]
-               for phase in summaries["cases"][1]["changed_phases"])
 
 
 def test_solar_world_site_configuration_rejects_ambiguity(definitions):
@@ -1321,81 +1274,6 @@ def test_process_method_sensitivity_compares_registered_operating_chemistry_not_
              "id": str(facility.id), "extraction": "unrelated"}]}]}, app=definitions)
 
 
-def test_cross_domain_portfolio_preserves_demand_capacity_and_unknowns_across_strategies(definitions):
-    """An explicit portfolio exercises multiple Domains without making its build counts normative."""
-    import json
-    from pathlib import Path
-    from scripts.analysis_balance import summarize
-
-    plan = json.loads((Path(__file__).parents[1] / "evaluation_plans" /
-                       "connected_industry_science_settlement_tradeoffs.json").read_text())
-    projection = compare_cases(plan, app=definitions)
-    assert len(projection["cases"]) == len(plan["cases"])
-    assert {row["section"] for row in projection["differences"]} >= {
-        "resources", "research_point_balance", "constraints", "extraction_world_context",
-        "resource_contributions", "transport_services"}
-    base = projection["cases"][0]["projection"]["phases"]
-    early, late = base
-    assert early["survey_activities"] and early["science_campaigns"] and early["founding_projects"]
-    assert early["market_provider_constraints"]
-    assert late["transport_services"] and late["od_transport_constraints"]
-    assert any(row["notional_end_without_assumed_arrivals_t"] < row["notional_end_t"]
-               for row in late["resources"] if row["received_t"] > 0)
-    assert late["extraction_world_context"] and late["power_world_context"]
-    assert all(not row["status"].startswith("successful") for row in late["transport_services"])
-    for case in projection["cases"]:
-        for phase in case["projection"]["phases"]:
-            for row in phase["resources"]:
-                assert row["one_time_investment_and_activity_demand_t"] >= 0
-                assert row["net_t"] == pytest.approx(
-                    row["nominal_recurring_net_t_per_day"] * phase["days"] -
-                    row["one_time_investment_and_activity_demand_t"])
-            constraints = {(row["node"], row["service"]): row for row in phase["service_constraints"]}
-            for node, service in constraints:
-                contributions = [s for s in phase["service_contributions"]
-                                 if (s["node"], s["service"]) == (node, service)]
-                assert sum(c["rate_per_day"] for c in contributions if c["role"] == "nominal_supply") == pytest.approx(
-                    constraints[(node, service)]["nominal_capacity_per_day"])
-            for row in phase["constraints"]:
-                assert row["conditional_housing_gap_people"] == pytest.approx(max(
-                    0, row["conditional_supported_residents_people"] - row["housing_nominal_people"]))
-    from scripts.analysis_balance import _SUMMARY_ROW_IDENTITY, summarize_projection
-
-    overview = summarize(projection)
-    assert len(overview["cases"]) == len(projection["cases"])
-    baseline_phases = overview["cases"][0]["summary"]["phases"]
-    for phase in baseline_phases:
-        assert "power_and_population_by_node" in phase
-        assert "recurring_resource_pressures_by_node" in phase
-        for collection in ("resource_shortfalls_by_node", "service_shortfalls_by_node"):
-            assert all(len(row["drivers"]) <= 3 and
-                       row["total_driver_count"] >= len(row["drivers"]) and
-                       row["driver_detail_section"] in ("resource_contributions", "service_contributions")
-                       for row in phase[collection])
-    for case, summarized in zip(projection["cases"][1:], overview["cases"][1:]):
-        assert summarized["relative_to_baseline"] == overview["baseline_case"]
-        assert summarized["unchanged_quantities_omitted"] is True
-        by_name = {phase["name"]: phase for phase in summarize_projection(case["projection"])["phases"]}
-        baseline_by_name = {phase["name"]: phase for phase in baseline_phases}
-        for phase in summarized["changed_phases"]:
-            base, target = baseline_by_name[phase["name"]], by_name[phase["name"]]
-            assert set(phase["changed_sections"]) == {
-                key for key in target if key not in {"name", "days", "detail_sections"}
-                and target[key] != base[key]}
-            for section, change in phase["changed_sections"].items():
-                if section not in _SUMMARY_ROW_IDENTITY:
-                    continue
-                fields = _SUMMARY_ROW_IDENTITY[section]
-                identity = lambda row: tuple(row[key] for key in fields)
-                before = {identity(row): row for row in base[section]}
-                after = {identity(row): row for row in target[section]}
-                assert {identity(row) for row in change["changed_or_added"]} == {
-                    key for key in after if before.get(key) != after[key]}
-                assert {identity(row) for row in change["no_longer_listed"]} == set(before) - set(after)
-    # The default overview omits full unchanged case ledgers and detailed deltas.
-    assert "differences" not in overview
-    assert len(json.dumps(overview)) < len(json.dumps([
-        summarize_projection(case["projection"]) for case in projection["cases"]]))
 
 
 def test_sensitivity_can_add_new_registered_asset_and_provider_without_duplicate_ownership(definitions):
@@ -1603,75 +1481,31 @@ def test_spatial_investment_sensitivity_is_definition_derived_and_does_not_devel
     assert capture_state(sim) == before
 
 
-def test_operating_industrial_scale_portfolio_compares_shared_opportunity_and_distinct_obligations(definitions):
-    """The scaling portfolio exercises operating Definitions, not passive asset counts.
+def test_research_and_economy_cli_share_one_composition_contract(definitions, tmp_path, monkeypatch, capsys):
+    """Technology goals can be evaluated with one or many authored economies.
 
-    Comparisons are conditional nameplate projections, not preferred Facility
-    counts, a decided Cargo route, or a canonical-day progression.
+    Neither a repository Fixture nor an alternative research-only quantity
+    engine is involved; the CLI reports the same node-local ledger as evaluate.
     """
     import json
-    from pathlib import Path
-    from scripts.analysis_balance import compare_cases
+    import sys
+    from scripts.analysis_balance import main
 
-    data = json.loads((Path(__file__).resolve().parent.parent / "evaluation_plans" /
-                       "industrial_fleet_scale_comparison.json").read_text())
-    before = deepcopy(capture_state(definitions._simulation))
-    result = compare_cases(data, app=definitions)
-    by_name = {case["name"]: case["projection"]["phases"][-1]
-               for case in result["cases"]}
-    base = by_name["installed_asset_group"]
-    growth = by_name["expanded_industrial_and_fleet_group"]
-    area = by_name["developed_cell_instead_of_additional_extraction_machinery"]
-    industrial = by_name["industrial_capacity_growth_without_fleet_growth"]
-    fleet = by_name["fleet_growth_without_industrial_capacity_growth"]
-    utilization = by_name["reduced_industrial_utilization_same_assets"]
-    combined = by_name["expanded_industry_with_developed_resource_area"]
-    # Both asset families expand, while independent sensitivities isolate their costs.
-    assert growth["scale"]["facility_units"] > base["scale"]["facility_units"]
-    assert growth["scale"]["fleet_units"] > base["scale"]["fleet_units"]
-    assert industrial["scale"]["fleet_units"] == base["scale"]["fleet_units"]
-    assert fleet["scale"]["facility_units"] == base["scale"]["facility_units"]
-    assert utilization["scale"] == base["scale"]
-    assert area["scale"] == base["scale"]
-    # Same World opportunity saturates as installed mine capacity grows. Area
-    # development changes the available geology without duplicating the mine.
-    def world(phase):
-        return {(row["node"], row["resource"]): row for row in phase["extraction_world_context"]}
-    b, g, a, c = map(world, (base, growth, area, combined))
-    assert b.keys() == g.keys() == a.keys() == c.keys()
-    for key in b:
-        assert g[key]["diminishing_output_t_per_day"] >= b[key]["diminishing_output_t_per_day"]
-        assert g[key]["diminishing_output_t_per_day"] <= (
-            b[key]["diminishing_output_t_per_day"] *
-            g[key]["adjusted_installed_capacity_t_per_day"] /
-            b[key]["adjusted_installed_capacity_t_per_day"] + 1e-9)
-        assert a[key]["diminishing_output_t_per_day"] >= b[key]["diminishing_output_t_per_day"]
-        assert c[key]["diminishing_output_t_per_day"] >= g[key]["diminishing_output_t_per_day"]
-    assert any(row["required_construction_work"] > 0 for row in area["spatial_projects"])
-    assert any(change["case"] == "developed_cell_instead_of_additional_extraction_machinery"
-               and change["section"] == "extraction_world_context"
-               and change.get("condition_change") for change in result["differences"])
-    assert not base["spatial_projects"]
-    # Actual activities, not construction count alone, drive the Resource and
-    # Service ledger, and the stage uses the already assigned research equipment.
-    kinds = {row["origin_kind"] for row in base["resource_contributions"]}
-    assert {"process", "extraction_opportunity", "facility_construction", "vehicle_manufacture"} <= (
-        kinds | {row["origin_kind"] for row in result["cases"][0]["projection"]["phases"][0]["resource_contributions"]})
-    assert base["power_world_context"]
-    assert all(row["basis"] == "power_domain_world_environment_x_selected_facility_and_duty"
-               and "unassessed" in row["status"] for row in base["power_world_context"])
-    assert {row["world_context"] for row in base["power_world_context"]} == {
-        row["node"] for row in base["power_world_context"]}
-    assert growth["power_world_context"][0]["nominal_unallocated_generation_mw"] > (
-        base["power_world_context"][0]["nominal_unallocated_generation_mw"])
-    assert base["research_point_balance"]["nominal_execution_per_day"] > 0
-    assert growth["research_point_balance"]["nominal_execution_per_day"] > (
-        base["research_point_balance"]["nominal_execution_per_day"])
-    assert any(row["production_t"] > 0 and row["process_demand_t"] > 0
-               for row in base["system_resources"])
-    assert all(row["status"] in {"fleet_route_unassessed", "blocked_nominal_capacity_only",
-                                      "conditional_capacity_not_cargo_settlement"}
-               for row in growth["od_transport_constraints"])
-    assert any(row["shortfall_without_assumed_arrivals_t"] >= row["shortfall_t"]
-               for row in growth["resources"])
-    assert capture_state(definitions._simulation) == before
+    research_id = str(next(iter(definitions._simulation.research.definitions)))
+    inputs = []
+    for name, days in (("first", 3), ("second", 15)):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"phases": [{"name": "activity", "days": days,
+                                               "facilities": []}]}), encoding="utf-8")
+        inputs.append(path)
+    for args, expected in (([str(inputs[0])], [str(inputs[0])]),
+                           (["--portfolio", *(str(p) for p in inputs)], sorted(map(str, inputs)))):
+        monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *args,
+                                          "--research-id", research_id, "--summary"])
+        main()
+        report = json.loads(capsys.readouterr().out)
+        assert any(item["research"] == research_id for item in report["goal"]["research_items"])
+        assert [row["name"] for row in report["selected_economies"]] == expected
+        for record in report["selected_economies"]:
+            assert record["system_balance"]["phases"]
+            assert record["research_and_economy"]["contexts"]

@@ -32,6 +32,7 @@
 | Application / UI | §18、`ui.md` | §3.3, §13, §16 |
 | Save / Load / Validation / Test | §19 | §14–15 |
 | World / Scenario / Initial Content / gameplay evaluation | §20, §22 | §3.2, §4, §14–15 |
+| 研究・産業・物流の全体系バランスと時間調整 | §22 | §17.1 |
 
 一つの概念が複数節から参照される場合も、詳細規則を重複定義しない。ゲーム上の意味は `design.md`、State ownership・処理順・Application契約は `architecture.md`、iPad上のPresentation・操作・情報配置は `ui.md` の対応節を正本とする。
 

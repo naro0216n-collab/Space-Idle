@@ -177,7 +177,9 @@ Maintenanceのpacket実行・照合に失敗した場合は、同じtransaction�
 - **Fast CI**：`develop`へのpublish後、Unit / architecture、clean package install、Chromium direct HTTP smoke、次回復元用`source-snapshot`を検証する。run結果は次のpublish判断に必要な時点で確認する。
 - **Full Validation**：`main`反映候補、ユーザー要求、Persistence schema変更、Simulation Orchestrator処理順変更、package / server / launcher変更、Fast CIの範囲外となるOS・ブラウザ検証に使用する。Gameplay、Windows、WebKitは該当変更の検証時に実行する。
 
-バランス調整は通常pytest/Fast CIの合否に結び付けず、`python scripts/analysis_balance.py <plan.json>`を明示実行して数量Definitionに基づく設備構成・段階別収支を比較する。出力は計画需要・名目容量・未充足の推計であり、Game Stateでも実配分でもない。計算モデル固有の検証は`evaluation_tests/`に置く。攻略Commandを自動選択してバランスを評価しない。短い実Application検証は計算係数や機能契約の照合に限定する。
+バランス調整は通常pytest/Fast CIの合否判定ではなく、`docs/design.md` §22と`docs/architecture.md` §17.1の全体系評価として行う。入口は`python scripts/analysis_balance.py --research-id <Technology-ID> --research-include-prerequisites --research-horizons 60 180 360 --summary`等で実登録の技術的到達目標を選ぶ。明示的な設備・稼働・立地・輸送構成も合わせる場合は`python scripts/analysis_balance.py <plan.json> --research-id <Technology-ID> --research-include-prerequisites --summary`、複数構成は`--portfolio <plan.json> ...`を用いる。同じ数量台帳から研究・維持・施工・上流・物流の競合を調べ、調整前後を再比較する。入力Planは任意の感度条件であり、固定の施設数・理想日数・攻略順を目標にしない。Planを伴わない研究全体の目録評価は`--research-generations --summary`で行い、全件完了を必要経路としない。旧来の固定Fixtureプランを正準のバランス指標として維持しない。詳細値は同じコマンドの`--summary`なしの出力に含める。
+
+数量評価はGame State/実Allocationではない。`evaluation_tests/`は台帳の保存則、Definition反映、研究前提、未充足・非二重計上等の汎用契約を検証する。機能上の疑義に対する短い実Application実験は別の検証であり、バランスを定める攻略自動化に転用しない。
 
 Browser E2Eは`playwright/run_suite.py <scenario...>`へ対象Scenarioを明示して実行する。各Scenarioは独立したBrowserContext、GameRuntime、保存用一時ディレクトリ、HTTP serverを使用し、状態を共有しない。
 
