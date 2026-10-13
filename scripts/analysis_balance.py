@@ -23,10 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.analysis_balance_research import research_goal_closure, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
-from scripts.analysis_balance_network import (
-    producer_catalog, conditional_material_paths,
-    shared_upstream_capacity_bounds,
-)
 from space_idle.bootstrap import (build_game_application_for_load, build_game_application,
                                   build_game_application_for_scenario)
 from space_idle.content.base_scenario import build_standard_scenario_definition
@@ -132,16 +128,6 @@ def _fleet_rows(rows, vehicles, nodes, *, label, allow_turnarounds):
     return result
 
 
-def _aggregate_by_dimension(rows, dimension, fields):
-    """Combine like quantities without netting away shortages at different nodes."""
-    grouped = defaultdict(lambda: defaultdict(float))
-    for row in rows:
-        for field in fields:
-            grouped[row[dimension]][field] += row[field]
-    return [dict({dimension: name}, **{field: values[field] for field in fields})
-            for name, values in sorted(grouped.items())]
-
-
 def _extraction_contexts(rows, sim, nodes, known_resource, reference_day):
     """Read selected World cells without adding hypothetical Game State.
 
@@ -215,8 +201,8 @@ def _graph_evidence(graph_nodes, relation_index, roots) -> dict:
 
 def _movement_reference(plan):
     reference = plan.get("movement_reference", "definitions_only")
-    if reference not in ("definitions_only", "standard_scenario"):
-        raise ValueError("movement_reference must be definitions_only or standard_scenario")
+    if reference not in ("definitions_only", "applied_scenario"):
+        raise ValueError("movement_reference must be definitions_only or applied_scenario")
     return reference
 
 
@@ -232,11 +218,39 @@ def _requested_reference(payload):
 
 
 def _new_reference_application(reference, definition_transform=None):
-    if reference == "standard_scenario":
+    if reference == "applied_scenario":
         return (build_game_application() if definition_transform is None else
                 build_game_application_for_scenario(build_standard_scenario_definition(),
                                                     definition_transform=definition_transform))
     return build_game_application_for_load(definition_transform=definition_transform)
+
+def _selected_reference_opening(sim) -> dict:
+    """Read the applied Scenario opening from its Domain owners without settling flow.
+
+    Installed assets are holding ceilings for later authored Phases, not an
+    instruction to operate all Scenario equipment. Current physical Stock is
+    not additional production or free transport from another Node.
+    """
+    facility_units = defaultdict(int)
+    for facility in sim.facilities.facilities.values():
+        facility_units[(str(facility.operational_node_id), str(facility.definition_id),
+                        facility.level)] += 1
+    fleet = []
+    for vehicle, node in sim.transport.fleet_pool_keys():
+        total = sim.transport.fleet_pool_snapshot(vehicle, node).total_units
+        if total:
+            fleet.append({"node": str(node), "vehicle": str(vehicle), "units": total})
+    return {
+        "initial_stock": [{"node": str(node), "resource": str(resource), "amount_t": amount}
+                          for (node, resource), amount in sorted(sim.inventory.stock.items())
+                          if amount > 0],
+        "initial_facilities": [{"node": node, "facility": facility, "units": units,
+                                "level": level}
+                               for (node, facility, level), units in sorted(facility_units.items())],
+        "initial_fleet": fleet,
+        "initial_research_points": sim.research.stored_points,
+    }
+
 
 def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
@@ -246,13 +260,37 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day", "opening_from_reference"}, {"phases"}, "plan")
     reference = _movement_reference(plan)
     if app is None:
         app = _new_reference_application(reference)
     sim, catalog = app._simulation, app._catalog
-    if reference == "standard_scenario" and not any(sim.graph.operational_nodes()):
-        raise ValueError("standard_scenario Movement reference needs an applied Scenario, "
+    from_reference = plan.get("opening_from_reference", False)
+    if type(from_reference) is not bool:
+        raise ValueError("opening_from_reference must be a boolean")
+    opening_fleet_commitments = []
+    opening_fleet_free = {}
+    if from_reference:
+        if reference != "applied_scenario":
+            raise ValueError("opening_from_reference requires movement_reference=applied_scenario")
+        if any(key in plan for key in ("initial_stock", "initial_facilities", "initial_fleet",
+                                      "initial_research_points")):
+            raise ValueError("Scenario opening and authored initial holdings cannot be mixed")
+        if not any(sim.graph.operational_nodes()):
+            raise ValueError("opening_from_reference requires an applied Scenario")
+        plan = {**_selected_reference_opening(sim), **plan}
+        for vehicle, node in sim.transport.fleet_pool_keys():
+            held = sim.transport.fleet_pool_snapshot(vehicle, node)
+            opening_fleet_free[(str(node), str(vehicle))] = held.free_units
+            if held.total_units > held.free_units:
+                opening_fleet_commitments.append({
+                    "node": str(node), "vehicle": str(vehicle),
+                    "owned_units": held.total_units, "free_units": held.free_units,
+                    "precommitted_units": held.total_units - held.free_units,
+                    "status": "scenario_commitment_requires_explicit_reallocation_for_other_use",
+                })
+    if reference == "applied_scenario" and not any(sim.graph.operational_nodes()):
+        raise ValueError("applied_scenario Movement reference needs an applied Scenario, "
                          "not a definitions-only supplied Application")
     graph = (_definition_graph if _definition_graph is not None else
              build_definition_dependency_graph(sim, catalog))
@@ -277,8 +315,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("research_provider_allocations", ()))
     nodes.update(str(phase["research_goal"]["node"]) for phase in plan["phases"]
                  if isinstance(phase.get("research_goal"), dict) and "node" in phase["research_goal"])
-    nodes.update(str(row["node"]) for phase in plan["phases"]
-                 for row in phase.get("upstream_supply_choices", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("spatial_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("upgrade_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("survey_activities", ()))
@@ -347,7 +383,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     opening_reference_day = _integer(plan.get("start_day", 0), "initial World reference day")
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "reference_day"},
+        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "reference_day"},
               {"name", "days"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
@@ -1703,18 +1739,38 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             storage_constraints.append({"node": node, "pool": pool, "physical_capacity_t": cap,
                                         "notional_occupied_t": occupied,
                                         "capacity_excess_t": max(0.0, occupied - cap)})
-        system_resources = _aggregate_by_dimension(breakdown, "resource", (
-            "one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day",
-            "production_t", "process_demand_t", "maintenance_demand_t",
-            "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
-            "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t", "external_net_t",
-            "shipped_t", "received_t", "cumulative_unverified_incoming_cargo_t",
-            "notional_end_without_assumed_arrivals_t", "shortfall_without_assumed_arrivals_t",
-            "net_t", "notional_end_t", "shortfall_t",
-        ))
-        system_services = _aggregate_by_dimension(service_constraints, "service", (
-            "required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day",
-        ))
+        # Existing Scenario commitments are not free Fleet units. Compare
+        # every newly authored use with physically free opening units plus
+        # explicitly ordered vehicles from prior Phases. We still report the
+        # nameplate capacity: any reallocation remains an unfulfilled
+        # condition, not a secretly executed Release/Provisioning Command.
+        fleet_availability_constraints = []
+        selected_fleet_duties = dict(committed_fleet)
+        if fleet_spec is not None:
+            for key, (units, cycles_per_unit) in fleet_spec.items():
+                if cycles_per_unit > 0:
+                    selected_fleet_duties[key] = units
+        for (node, vehicle), required in sorted(selected_fleet_duties.items()):
+            if required == 0:
+                continue
+            owned = current_fleet.get((node, vehicle), 0)
+            free = (min(owned, opening_fleet_free.get((node, vehicle), 0)
+                        + cumulative_vehicle_builds[(node, vehicle)] - builds[(node, vehicle)])
+                    if from_reference else owned)
+            gap = max(0, required - free)
+            fleet_availability_constraints.append({
+                "node": node, "vehicle": vehicle,
+                "selected_duty_units": required,
+                "conditional_held_units": owned,
+                "opening_precommitted_units": (initial_fleet_units.get((node, vehicle), 0)
+                    - opening_fleet_free.get((node, vehicle), 0) if from_reference else 0),
+                "conditional_available_uncommitted_units": free,
+                "units_requiring_reallocation": gap,
+                "status": ("requires_reallocation_or_other_explicit_source" if gap
+                           else "within_conditional_free_holdings"),
+            })
+            if gap:
+                unassessed.add("existing_scenario_fleet_commitment_or_acquisition_condition")
         report.append({"name": phase["name"], "days": days,
                        "world_reference_day": reference_day,
                        "activity_sources": activity_sources,
@@ -1759,8 +1815,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                            for (node, service, role, kind, source, basis), rate
                            in sorted(service_origins.items()) if abs(rate) > 1e-12
                        ],
-                       "system_resources": system_resources, "system_services": system_services,
-                       "fleet": fleet_report,
+                       "fleet": fleet_report, "fleet_availability_constraints": fleet_availability_constraints,
                        "scale": {"facility_units": sum(current.values()),
                                  "facility_units_added": facility_units_added,
                                  "fleet_units": sum(current_fleet.values()),
@@ -1776,102 +1831,16 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "nominal_services_per_day": [dict(node=n, service=s, capacity=q)
                                                      for (n, s), q in sorted(services.items())
                                                      if not s.startswith("required:")]})
-        # Supply strategy is an analyst choice, not a solver-selected recipe.
-        # Expand *unmet* demands at their own Node without booking imaginary
-        # production or combining the same Facility throughput across methods.
-        selections = defaultdict(dict)
-        for row in phase.get("upstream_supply_choices", ()):
-            _keys(row, {"node", "resource", "process"},
-                  {"node", "resource", "process"}, "upstream supply choice")
-            node = _identifier(row["node"], nodes, "upstream supply Node")
-            resource = _identifier(row["resource"], known_resource, "upstream Resource")
-            process = _identifier(row["process"], sim.industry.processes, "upstream Process")
-            if resource in selections[node]:
-                raise ValueError(f"duplicate upstream supply choice: {node}/{resource}")
-            selections[node][resource] = process
-        if selections:
-            production_catalog, extraction_catalog = producer_catalog(sim)
-        upstream = []
-        for node, methods in sorted(selections.items()):
-            outstanding = {row["resource"]: row["shortfall_without_assumed_arrivals_t"]
-                           for row in breakdown if row["node"] == node
-                           and row["shortfall_without_assumed_arrivals_t"] > 1e-12}
-            # Every local shortfall is included in the chain; only the
-            # analyst-selected methods are expanded, never arbitrary catalog
-            # alternatives or incoming Cargo expected but not received.
-            dependencies = conditional_material_paths(outstanding, sim, production_catalog,
-                                           extraction_catalog, methods)
-            capacity_context = []
-            selected_capacity_work = []
-            idle_facility_rates = {
-                facility: max(0.0, current[(node, facility)]
-                    - facility_activity_duty[(node, facility)]
-                    - facility_research_duty[(node, facility)]
-                    - facility_survey_duty[(node, facility)])
-                    * sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
-                for site, facility, *_ in assets if site == node
-            }
-            for process in dependencies["selected_processes"]:
-                process_id = process["process"]
-                definition = sim.industry.processes[DefinitionId(process_id)]
-                compatible = [
-                    (facility, units, duty, active_proc)
-                    for site, facility, units, active_proc, _extraction, duty, _yield, _people, _level in assets
-                    if site == node and definition.required_capabilities <=
-                        {cap.id for cap in sim.facilities.definitions[DefinitionId(facility)].capability_supplies}
-                ]
-                # This is an *individual* candidate Process bound. Idle
-                # portions of one Facility are not additive across proposed
-                # Processes, and current production has already been booked.
-                compatible_assets_by_facility = {facility for facility, *_ in compatible}
-                available_rate = sum(max(0.0, current[(node, facility)]
-                    - facility_activity_duty[(node, facility)]
-                    - facility_research_duty[(node, facility)]
-                    - facility_survey_duty[(node, facility)]) *
-                    sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
-                    for facility in compatible_assets_by_facility)
-                required_runs = process.get("process_run_days_at_unit_throughput")
-                selected_capacity_work.append({
-                    "process": process_id,
-                    "process_run_days_at_unit_throughput": required_runs,
-                    "compatible_installed_facilities": sorted(compatible_assets_by_facility),
-                })
-                capacity_context.append({
-                    "process": process_id,
-                    "separately_available_selected_facility_process_runs_per_day": available_rate,
-                    "shared_industry_research_and_survey_source_duty_included": True,
-                    "required_incremental_process_runs": required_runs,
-                    "independent_capacity_only_lower_bound_days": (
-                        required_runs / available_rate if required_runs is not None and available_rate > 0
-                        else 0.0 if required_runs == 0 else None),
-                    "currently_assigned_other_processes": sorted({active_proc for _f, _u, _d, active_proc in compatible
-                                                                     if active_proc and active_proc != process_id}),
-                    "status": "independent_candidate_existing_idle_throughput_not_a_shared_allocation",
-                })
-            shared_capacity = shared_upstream_capacity_bounds(
-                selected_capacity_work, idle_facility_rates, days)
-            for bound in shared_capacity["constraints"]:
-                report[-1]["time_constraints"].append({
-                    "kind": "upstream_selected_process_workload", "node": node,
-                    "subject": f'{node}/{",".join(bound["compatible_facilities"])}',
-                    "unit": "process_runs", "required_quantity": bound["required_process_runs"],
-                    "available_rate_per_day": bound["available_process_runs_per_day"],
-                    "conditional_lower_bound_days": bound["conditional_shared_capacity_lower_bound_days"],
-                    "status": bound["status"],
-                })
-            upstream.append({"node": node, "selected_methods": methods,
-                             "unmet_local_resource_demand_t": outstanding,
-                             "conditional_material_paths": dependencies,
-                             "existing_capacity_options": capacity_context,
-                             "shared_idle_throughput_constraints": shared_capacity["constraints"],
-                             "unquantified_shared_process_work": shared_capacity["unquantified_processes"],
-                             "status": "unmet_demand_conditional_supply_strategy_not_booked_or_delivered"})
-        report[-1]["upstream_supply_comparisons"] = upstream
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
             "movement_reference": reference,
+            "opening_conditions_source": ("applied_scenario_domain_state" if from_reference else
+                                          "analyst_selected_initial_holdings"),
+            "scenario_id": sim.scenario_id,
+            "opening_fleet_precommitments": opening_fleet_commitments,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
+                "A referenced Scenario opening provides only physical Stock and holding ceilings; installed assets require explicit Phase selection and Fleet commitments remain conditional.",
                 "Opening Facility compositions are explicitly authored and their prior investment only bounds conditional availability; construction never operates in the investment phase.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
                 "Facility upgrades consume materials and work; a higher Level contributes only in a later Phase whose opening holdings explicitly select that Level, bounded by prior investments.",
@@ -1883,7 +1852,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
-                "Selected upstream Process chains are conditional additions for unfilled local demand, not automatically booked production; each Process capacity option is independent of competing choices.",
+                "Selected registered Process activity consumes and produces at its authored Facility and Node; no parallel hypothetical upstream supply is credited.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
                 "Facility investment requests book Resource/work in their Phase but do not acquire or commission assets; later explicitly selected installed holdings remain conditional on construction and Site eligibility.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
@@ -1891,7 +1860,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Selected Facility holdings cannot exceed initial holdings plus earlier investment quantities. Investments are cumulative evidence for a hypothetical opening composition, not an automatic Project completion or a required next-Phase transition.",
                 "Vehicle build orders debit Resource/Service without modifying Fleet holdings. Only explicitly authored later Fleet compositions may include earlier ordered units, conditionally on manufacturing completion; no Fleet is auto-commissioned.",
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
-                "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
+                "Resource stock, shortfall and Service capacity remain Node-scoped; no remote capability or stock is aggregated into local availability.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
                 "Facility upkeep uses registered base and Level investment recipes for explicitly held equipment; completion, salvage and commissioning are not simulated.",
             ], "phases": report}
@@ -2039,20 +2008,20 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
     return compare_projection_results(results)
 
 
-# A World location is a parameter of a selected composition, not a new
-# construction/Movement rule or a special-cased Celestial Body.  Bind only
-# fields whose owning Domains define them as Surface Cell references.
-_SURFACE_CELL_PARAMETER = "$surface_cell"
+# A World physical context is a parameter of the analyst-selected activity.
+# Surface-only operations remain Surface-only; binding a non-surface context
+# does not establish a Surface Cell, Operational Node or invented transport.
+_WORLD_CONTEXT_PARAMETER = "$world_context"
 
 
-def _bind_surface_cell(plan: dict, cell_id: str) -> dict:
+def _bind_world_context(plan: dict, context_id: str) -> dict:
     result = deepcopy(plan)
     bound = 0
 
     def replace(row, field):
         nonlocal bound
-        if row.get(field) == _SURFACE_CELL_PARAMETER:
-            row[field] = cell_id
+        if row.get(field) == _WORLD_CONTEXT_PARAMETER:
+            row[field] = context_id
             bound += 1
 
     for row in result.get("solar_sites", ()):
@@ -2061,8 +2030,8 @@ def _bind_surface_cell(plan: dict, cell_id: str) -> dict:
         for row in phase.get("extraction_sites", ()):
             cells = row.get("developed_cells", ())
             for index, value in enumerate(cells):
-                if value == _SURFACE_CELL_PARAMETER:
-                    cells[index] = cell_id
+                if value == _WORLD_CONTEXT_PARAMETER:
+                    cells[index] = context_id
                     bound += 1
             for knowledge in row.get("knowledge", ()):
                 replace(knowledge, "cell")
@@ -2071,56 +2040,84 @@ def _bind_surface_cell(plan: dict, cell_id: str) -> dict:
         for row in phase.get("founding_projects", ()):
             replace(row, "target_cell")
     if not bound:
-        raise ValueError("surface site sweep requires a selected World Cell-dependent activity")
+        raise ValueError("World context sweep requires a context-dependent selected activity")
     return result
 
 
-def evaluate_surface_site_sweep(payload: dict, *, app=None, _definition_graph=None) -> dict:
-    """Evaluate one authored composition across registered World Surface Cells.
+def evaluate_world_context_sweep(payload: dict, *, app=None, _definition_graph=None) -> dict:
+    """Apply one selected Plan at independently registered physical World contexts.
 
-    The analyst selects Facilities, Methods, Survey/Fleet use, investments,
-    initial Stock and timing once.  The World supplies *only* the physical
-    context: nothing is founded, shipped, surveyed, researched or commissioned.
-    Each site is an independent projection, never a connected supply network.
+    Context selection does not imply founded Nodes, suitable geology, cargo
+    movement, power availability or completed research. Surface-only activity
+    inputs are validated against the ordinary Domain-backed Plan contract.
     """
-    _keys(payload, {"surface_site_sweep"}, {"surface_site_sweep"}, "surface site sweep")
-    request = payload["surface_site_sweep"]
-    _keys(request, {"plan", "cells"}, {"plan", "cells"}, "surface site selection")
+    _keys(payload, {"world_context_sweep"}, {"world_context_sweep"}, "World context sweep")
+    request = payload["world_context_sweep"]
+    _keys(request, {"plan", "contexts", "reference_context"}, {"plan", "contexts"}, "World context selection")
     plan = request["plan"]
     if not isinstance(plan, dict) or not isinstance(plan.get("phases"), list):
-        raise ValueError("surface site sweep requires one selected multi-phase plan")
-    cells = request["cells"]
+        raise ValueError("World context sweep requires one selected multi-phase plan")
     if app is None:
         app = _new_reference_application(_movement_reference(plan))
-    sim = app._simulation
-    world = sim.graph.surface_cells
-    if cells == "all":
-        selected = sorted(map(str, world))
-    elif isinstance(cells, list) and cells and len(set(cells)) == len(cells):
-        selected = sorted(_identifier(c, world, "Surface Cell") for c in cells)
+    graph = app._simulation.power.environment.graph
+    context_defs = {str(k): ("surface", str(v.body_id)) for k, v in graph.surface_cells.items()}
+    context_defs.update({str(k): ("non_surface", str(v.body_id) if v.body_id else None)
+                         for k, v in graph.nodes.items()})
+    contexts = request["contexts"]
+    if contexts == "all":
+        selected = sorted(context_defs)
+    elif contexts == "all_surface":
+        selected = sorted(k for k, (kind, _) in context_defs.items() if kind == "surface")
+    elif isinstance(contexts, list) and contexts and len(set(contexts)) == len(contexts):
+        selected = sorted(_identifier(c, context_defs, "World context") for c in contexts)
     else:
-        raise ValueError("surface site sweep cells must be 'all' or distinct registered Surface Cell IDs")
+        raise ValueError("World contexts must be 'all', 'all_surface', or distinct registered context IDs")
     if not selected:
-        raise ValueError("surface site sweep has no registered Surface Cells")
-    graph = _definition_graph if _definition_graph is not None else build_definition_dependency_graph(sim, app._catalog)
+        raise ValueError("World context sweep has no registered contexts")
+    reference_context = request.get("reference_context")
+    if reference_context is not None and reference_context not in selected:
+        raise ValueError("comparison reference_context must be one of the selected World contexts")
+    dependencies = (_definition_graph if _definition_graph is not None else
+                    build_definition_dependency_graph(app._simulation, app._catalog))
     results = []
-    for cell in selected:
-        # Validation and all quantity calculations stay in the ordinary
-        # evaluate() path; a location cannot activate an unstated Method.
-        projection = evaluate(_bind_surface_cell(plan, cell), app=app, _definition_graph=graph)
-        results.append({"cell": cell, "body": str(world[SurfaceCellId(cell)].body_id),
-                        "projection": projection})
+    for context in selected:
+        physical_kind, body = context_defs[context]
+        if physical_kind != "surface" and any(
+            _WORLD_CONTEXT_PARAMETER in row.get("developed_cells", ()) or
+            any(k.get("cell") == _WORLD_CONTEXT_PARAMETER for k in row.get("knowledge", ()))
+            for phase in plan["phases"] for row in phase.get("extraction_sites", ())
+        ):
+            raise ValueError(f"Surface-only extraction cannot use World context: {context}")
+        projection = evaluate(_bind_world_context(plan, context), app=app,
+                              _definition_graph=dependencies)
+        results.append({"context": context, "context_kind": physical_kind,
+                        "body": body, "projection": projection})
+    if reference_context is not None:
+        anchor = next(row["projection"] for row in results if row["context"] == reference_context)
+        for row in results:
+            if row["context"] != reference_context:
+                # Site sensitivity uses the ordinary comparison projection:
+                # differences are in physical World conditions, not settled
+                # Cargo or a site-ranking score.
+                row["relative_to_reference"] = compare_projection_results([
+                    {"name": reference_context, "projection": anchor},
+                    {"name": row["context"], "projection": row["projection"]},
+                ])["differences"]
     return {"model": "definition_world_context_sweep_v1",
             "content_id": app.content_id, "world_definition_id": app.world_definition_id,
             "movement_reference": _movement_reference(plan),
-            "conditions": "same_authored_composition_each_site_no_survey_founding_or_transport_settlement",
+            "conditions": "independent_physical_contexts_same_selected_activities_no_settlement",
+            **({"reference_context": reference_context} if reference_context is not None else {}),
             "sites": results}
 
 
-def summarize_surface_site_sweep(result: dict) -> dict:
+def summarize_world_context_sweep(result: dict) -> dict:
     return {key: value for key, value in result.items() if key != "sites"} | {
-        "sites": [{"cell": site["cell"], "body": site["body"],
-                   "phases": summarize_projection(site["projection"])["phases"]}
+        "sites": [{"context": site["context"], "context_kind": site["context_kind"],
+                   "body": site["body"],
+                   "phases": summarize_projection(site["projection"])["phases"],
+                   **({"relative_to_reference": site["relative_to_reference"]}
+                      if "relative_to_reference" in site else {})}
                   for site in result["sites"]],
     }
 
@@ -2192,6 +2189,13 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
     if len({item["projection"]["movement_reference"] for item in results}) != 1:
         raise ValueError("comparison cannot mix different Movement reference conditions")
     differences = []
+    baseline_source = results[0]["projection"]["opening_conditions_source"]
+    for alternative in results[1:]:
+        source = alternative["projection"]["opening_conditions_source"]
+        if source != baseline_source:
+            differences.append({"case": alternative["name"], "phase": None,
+                                "section": "opening_reference_conditions",
+                                "baseline_source": baseline_source, "case_source": source})
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
         alternative_phases = alternative["projection"]["phases"]
@@ -2275,11 +2279,6 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                 ("shared_service_workloads", ("node", "service"),
                  ("required_work", "nominal_capacity_per_day",
                   "conditional_shared_workload_lower_bound_days")),
-                ("system_resources", ("resource",), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "production_t", "process_demand_t",
-                      "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
-                      "fleet_turnaround_demand_t", "transport_service_demand_t", "passenger_provisions_demand_t", "notional_end_t", "shortfall_t")),
-                ("system_services", ("service",), ("required_per_day", "nominal_capacity_per_day",
-                       "nominal_gap_per_day")),
                 ("resources", ("node", "resource"), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "opening_investment_stock_shortfall_t", "conditional_stock_exhaustion_days_after_investment", "production_t", "process_demand_t",
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
                        "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t", "cumulative_unverified_incoming_cargo_t", "shortfall_without_assumed_arrivals_t")),
@@ -2292,6 +2291,9 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                 ("od_transport_constraints", ("origin", "destination"),
                  ("demand_t_per_day", "nominal_capacity_t_per_day", "nominal_gap_t_per_day")),
                 ("fleet", ("node", "vehicle"), ("units", "assumed_turnarounds")),
+                ("fleet_availability_constraints", ("node", "vehicle"),
+                 ("selected_duty_units", "conditional_held_units",
+                  "conditional_available_uncommitted_units", "units_requiring_reallocation")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),
                 ("extraction_world_context", ("node", "resource", "output_resource"),
@@ -2381,45 +2383,6 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                         if incomparable:
                             change["incomparable_unassessed_metrics"] = incomparable
                         differences.append(change)
-            # Conditional upstream routes also participate in the same
-            # comparison. They do not increase ledger stock or compete for
-            # reserved throughput, so report their own resource/process
-            # requirements separately from actually authored production.
-            def upstream_requirements(phase):
-                records = {}
-                for choice in phase["upstream_supply_comparisons"]:
-                    node = choice["node"]
-                    paths = choice["conditional_material_paths"]
-                    for resource, amount in paths["gross_resource_requirements_t"].items():
-                        records[(node, "resource", resource)] = amount
-                    for process in paths["selected_processes"]:
-                        if process.get("process_run_days_at_unit_throughput") is not None:
-                            records[(node, "process", process["process"])] = process["process_run_days_at_unit_throughput"]
-                return records
-            before_upstream, after_upstream = upstream_requirements(left), upstream_requirements(right)
-            for identity in sorted(set(before_upstream) | set(after_upstream)):
-                before, after = before_upstream.get(identity, 0.0), after_upstream.get(identity, 0.0)
-                if abs(after - before) > 1e-12:
-                    node, kind, identifier = identity
-                    differences.append({"case": alternative["name"], "phase": left["name"],
-                                        "section": "conditional_upstream_material_requirements",
-                                        "identity": {"node": node, "kind": kind, "id": identifier},
-                                        "delta_from_baseline": {"required_t" if kind == "resource" else "process_run_days_at_unit_throughput": after - before}})
-            before_upstream_conditions = {row["node"]: row["conditional_material_paths"]
-                                         for row in left["upstream_supply_comparisons"]}
-            after_upstream_conditions = {row["node"]: row["conditional_material_paths"]
-                                        for row in right["upstream_supply_comparisons"]}
-            for node in sorted(set(before_upstream_conditions) | set(after_upstream_conditions)):
-                before = before_upstream_conditions.get(node, {})
-                after = after_upstream_conditions.get(node, {})
-                # Cyclic routes are symbolic; a numeric delta would wrongly
-                # imply that unchosen external supply was already solved.
-                if before.get("status") != after.get("status") or before.get("conditional_simultaneous_resource_constraints") != after.get("conditional_simultaneous_resource_constraints"):
-                    differences.append({"case": alternative["name"], "phase": left["name"],
-                                        "section": "conditional_upstream_constraints", "identity": {"node": node},
-                                        "baseline_status": before.get("status"), "case_status": after.get("status"),
-                                        "baseline_equations": before.get("conditional_simultaneous_resource_constraints", []),
-                                        "case_equations": after.get("conditional_simultaneous_resource_constraints", [])})
             if left["research_goal"] != right["research_goal"]:
                 differences.append({"case": alternative["name"], "phase": left["name"],
                                     "section": "research_goal_conditions",
@@ -2485,24 +2448,35 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
     """
     if not isinstance(changes, list) or not changes or any(not isinstance(e, dict) for e in changes):
         raise ValueError("Content hypothesis requires a nonempty list of typed edits")
-    if "surface_site_sweep" in plan:
+    if "world_context_sweep" in plan:
         # The same authored activities and site identities are evaluated under
         # each independently composed set of World *and* economic Definitions.
         # World coefficients themselves are not treated as fixed reference data.
-        selection = plan["surface_site_sweep"]["plan"]
+        selection = plan["world_context_sweep"]["plan"]
         reference = _movement_reference(selection)
-        baseline = evaluate_surface_site_sweep(plan, app=_new_reference_application(reference))
-        variant = evaluate_surface_site_sweep(plan, app=_new_reference_application(
+        baseline = evaluate_world_context_sweep(plan, app=_new_reference_application(reference))
+        variant = evaluate_world_context_sweep(plan, app=_new_reference_application(
             reference, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes)))
         pairs = []
-        for before, after in zip(baseline["sites"], variant["sites"], strict=True):
-            if (before["cell"], before["body"]) != (after["cell"], after["body"]):
-                raise ValueError("Content variant changed World site identity")
+        previous = {row["context"]: row for row in baseline["sites"]}
+        edited = {row["context"]: row for row in variant["sites"]}
+        for context in sorted(previous.keys() | edited.keys()):
+            before, after = previous.get(context), edited.get(context)
+            if before is None or after is None:
+                # Newly registered/removed physical contexts are not a free or
+                # zero-capacity comparison; they need a shared development goal.
+                pairs.append({"context": context,
+                              "status": "not_comparable_new_or_removed_world_context",
+                              "baseline_registered": before is not None,
+                              "edited_registered": after is not None})
+                continue
             difference = compare_projection_results([
                 {"name": "baseline", "projection": before["projection"]},
                 {"name": "edited_content", "projection": after["projection"]},
             ])
-            pairs.append({"cell": before["cell"], "body": before["body"],
+            pairs.append({"context": context,
+                          "baseline_context": {"kind": before["context_kind"], "body": before["body"]},
+                          "edited_context": {"kind": after["context_kind"], "body": after["body"]},
                           "comparison": (summarize(difference) if summary else difference)})
         return {"model": "definition_world_context_content_impact_v1",
                 "source_world_definition_id": baseline["world_definition_id"],
@@ -2529,7 +2503,8 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
         if _movement_reference(before_plan) != _movement_reference(after_plan):
             raise ValueError("different Movement reference conditions")
         initial_defaults = {"initial_stock": (), "initial_facilities": (), "initial_fleet": (),
-                            "initial_research_points": 0, "solar_yield": {}, "solar_sites": (), "start_day": 0}
+                            "initial_research_points": 0, "solar_yield": {}, "solar_sites": (),
+                            "start_day": 0, "opening_from_reference": False}
         for key, default in initial_defaults.items():
             if before_plan.get(key, default) != after_plan.get(key, default):
                 raise ValueError(f"development comparison needs identical initial conditions: {key}")
@@ -2667,7 +2642,6 @@ def summarize_projection(projection: dict) -> dict:
                  "conditional_service_lower_bound_days": stage_bounds[(stage["research"], stage["stage"])]["serial_service_lower_bound_days"],
                  "unresolved_stage_gate": stage_bounds[(stage["research"], stage["stage"])]["unresolved_stage_gate"]}
                 for stage in phase["research_stages"]],
-            "upstream_supply_comparisons": phase["upstream_supply_comparisons"],
             "research_service_constraints": phase["research_service_constraints"],
             "research_time_structure": {key: value for key, value in phase["research_time_structure"].items()
                                         if key != "selected_stage_service_bounds"},
@@ -2680,6 +2654,7 @@ def summarize_projection(projection: dict) -> dict:
                 or sum(row[key] > 1e-12 for key in (
                     "selected_industry_unit_duty_per_day", "selected_research_unit_duty_per_day",
                     "selected_survey_unit_duty_per_day")) > 1],
+            "fleet_availability_constraints": phase["fleet_availability_constraints"],
             "investment_constraints": phase["investment_constraints"],
             "facility_investments": phase["facility_investments"],
             "vehicle_builds": phase["vehicle_builds"],
@@ -2723,6 +2698,9 @@ def summarize_projection(projection: dict) -> dict:
                       }
     return {"content_id": projection["content_id"], "world_definition_id": projection["world_definition_id"],
             "movement_reference": projection["movement_reference"],
+            "opening_conditions_source": projection["opening_conditions_source"],
+            "scenario_id": projection["scenario_id"],
+            "opening_fleet_precommitments": projection["opening_fleet_precommitments"],
             "model": "definition_quantity_summary_v1", "phases": phases}
 
 
@@ -2895,14 +2873,14 @@ def main():
             changes = json.loads(args.content_variant.read_text(encoding="utf-8"))
             if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
                 parser.error("--content-variant must contain a nonempty JSON list of typed Definition edits")
-            reference = (_movement_reference(payload["surface_site_sweep"]["plan"])
-                         if "surface_site_sweep" in payload else _requested_reference(payload))
+            reference = (_movement_reference(payload["world_context_sweep"]["plan"])
+                         if "world_context_sweep" in payload else _requested_reference(payload))
             app = _new_reference_application(
                 reference,
                 definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
-        if "surface_site_sweep" in payload:
-            result = evaluate_surface_site_sweep(payload, app=app)
-            output = result if args.details else summarize_surface_site_sweep(result)
+        if "world_context_sweep" in payload:
+            result = evaluate_world_context_sweep(payload, app=app)
+            output = result if args.details else summarize_world_context_sweep(result)
         else:
             result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
             output = result if args.details else summarize(result)

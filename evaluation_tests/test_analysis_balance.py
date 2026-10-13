@@ -10,8 +10,8 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.analysis_balance import (compare_cases, evaluate, evaluate_surface_site_sweep,
-                                      _bind_surface_cell, summarize_surface_site_sweep)
+from scripts.analysis_balance import (compare_cases, evaluate, evaluate_world_context_sweep,
+                                      _bind_world_context, summarize_world_context_sweep)
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.persistence import capture_state
 from space_idle.shared import SurfaceCellId
@@ -723,55 +723,6 @@ def test_content_impact_handles_independent_alternative_cases(definitions):
                for c in report["comparisons"][1]["differences"])
 
 
-def test_selected_upstream_process_traces_unmet_local_demand_without_creating_supply(definitions):
-    """A chosen registered conversion has a bounded conditional bill, not arrivals."""
-    sim = definitions._simulation
-    facility, process = next((f, p) for f, p in _compatible_processes(sim)
-                             if f.process_throughput_per_day > 0 and p.outputs_per_day
-                             and p.inputs_per_day)
-    resource, amount = next((r, a) for r, a in process.outputs_per_day.items() if a > 0)
-    node = "upstream.selected"
-    available = {"node": node, "facility": str(facility.id), "units": 1, "duty": 0}
-    phase = {"name": "supply", "days": 4, "facilities": [available],
-             "external_rates": [{"node": node, "resource": str(resource),
-                                 "net_t_per_day": -amount}],
-             "upstream_supply_choices": [{"node": node, "resource": str(resource),
-                                           "process": str(process.id)}]}
-    plan = {"initial_facilities": [available], "phases": [phase]}
-    before = deepcopy(capture_state(sim))
-    selected = evaluate(plan, app=definitions)["phases"][0]
-    plain = evaluate({**plan, "phases": [{key: value for key, value in phase.items()
-                                        if key != "upstream_supply_choices"}]},
-                     app=definitions)["phases"][0]
-    assert selected["resources"] == plain["resources"]
-    option = selected["upstream_supply_comparisons"][0]
-    assert option["unmet_local_resource_demand_t"][str(resource)] == pytest.approx(4 * amount)
-    chain = option["conditional_material_paths"]
-    choice = next(r for r in chain["selected_processes"] if r["process"] == str(process.id))
-    assert choice["process_run_days_at_unit_throughput"] == pytest.approx(4)
-    capacity = next(r for r in option["existing_capacity_options"] if r["process"] == str(process.id))
-    assert capacity["separately_available_selected_facility_process_runs_per_day"] == pytest.approx(
-        facility.process_throughput_per_day)
-    assert capacity["independent_capacity_only_lower_bound_days"] == pytest.approx(
-        4 / facility.process_throughput_per_day)
-    # Differentiating an explicit demand produces corresponding upstream
-    # demand and process-run deltas, never an automatic supply credit.
-    more = deepcopy(plan)
-    more["phases"][0]["external_rates"][0]["net_t_per_day"] *= 2
-    comparison = compare_cases({"cases": [{"name": "base", "plan": plan},
-                                           {"name": "more", "plan": more}]}, app=definitions)
-    assert any(row["section"] == "conditional_upstream_material_requirements"
-               and row["identity"] == {"node": node, "kind": "process", "id": str(process.id)}
-               and row["delta_from_baseline"]["process_run_days_at_unit_throughput"] == pytest.approx(4)
-               for row in comparison["differences"])
-    assert capture_state(sim) == before
-    invalid = deepcopy(plan)
-    invalid["phases"][0]["upstream_supply_choices"][0]["resource"] = next(
-        str(x) for x in definitions._catalog.resources if x not in process.outputs_per_day)
-    with pytest.raises(ValueError, match="does not produce"):
-        evaluate(invalid, app=definitions)
-
-
 def test_facility_investment_and_next_phase_operation_do_not_overlap(definitions):
     """Construction creates future *conditional* capacity, not current-Phase flow."""
     sim = definitions._simulation
@@ -918,8 +869,6 @@ def test_shared_facility_use_and_upstream_supply_expose_one_operating_budget(def
                 'source_facility': str(facility.id), 'units': 1, 'duty': research_duty}],
             'external_rates': [{'node': node, 'resource': str(output),
                                 'net_t_per_day': -(quantity * facility.process_throughput_per_day + 3)}],
-            'upstream_supply_choices': [{'node': node, 'resource': str(output),
-                                         'process': str(process.id)}],
         }]}
     within = evaluate(plan(.25, .5), app=app)['phases'][0]
     overloaded = evaluate(plan(1, 1), app=app)['phases'][0]
@@ -928,11 +877,6 @@ def test_shared_facility_use_and_upstream_supply_expose_one_operating_budget(def
     assert within_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(0)
     assert overloaded_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(1)
     assert 'selected_activities_exceed_shared_facility_operating_duty' in overloaded['unassessed_constraints']
-    candidate, = within['upstream_supply_comparisons'][0]['existing_capacity_options']
-    assert candidate['separately_available_selected_facility_process_runs_per_day'] == pytest.approx(
-        .25 * facility.process_throughput_per_day)
-    overloaded_candidate, = overloaded['upstream_supply_comparisons'][0]['existing_capacity_options']
-    assert overloaded_candidate['separately_available_selected_facility_process_runs_per_day'] == 0
     compared = compare_cases({'cases': [{'name': 'within', 'plan': plan(.25, .5)},
                                         {'name': 'overload', 'plan': plan(1, 1)}]}, app=app)
     assert any(item['section'] == 'facility_use_constraints'
@@ -1097,70 +1041,6 @@ def test_phase_time_structure_respects_stage_order_and_investment_commissioning(
                for item in comparison['differences'])
 
 
-def test_selected_upstream_processes_compete_for_one_idle_facility_pool(definitions):
-    """Several valid independent conversion paths must not reuse the same idle throughput."""
-    sim = definitions._simulation
-    facility, first, second, output_one, output_two = next(
-        (facility, first, second, resource_one, resource_two)
-        for facility in sim.facilities.definitions.values()
-        if facility.process_throughput_per_day > 0
-        for first in sim.industry.processes.values()
-        if first.required_capabilities <= {cap.id for cap in facility.capability_supplies}
-        for second in sim.industry.processes.values()
-        if second.id != first.id and second.required_capabilities <=
-           {cap.id for cap in facility.capability_supplies}
-        for resource_one in first.outputs_per_day
-        for resource_two in second.outputs_per_day
-        if resource_one != resource_two
-    )
-    quantity_one, quantity_two = first.outputs_per_day[output_one], second.outputs_per_day[output_two]
-    node = 'compare.process.pool'
-    duration = 2
-    requested_runs_each = facility.process_throughput_per_day * duration * 0.6
-
-    def selected_plan(units):
-        asset = {'node': node, 'facility': str(facility.id), 'units': units, 'duty': 0}
-        return {'initial_facilities': [asset], 'phases': [{
-            'name': 'competing_supply', 'days': duration, 'facilities': [asset],
-            'external_rates': [
-                {'node': node, 'resource': str(output_one),
-                 'net_t_per_day': -quantity_one * requested_runs_each / duration},
-                {'node': node, 'resource': str(output_two),
-                 'net_t_per_day': -quantity_two * requested_runs_each / duration},
-            ],
-            'upstream_supply_choices': [
-                {'node': node, 'resource': str(output_one), 'process': str(first.id)},
-                {'node': node, 'resource': str(output_two), 'process': str(second.id)},
-            ],
-        }]}
-
-    comparison = compare_cases({'cases': [
-        {'name': 'one_workshop', 'plan': selected_plan(1)},
-        {'name': 'two_workshops', 'plan': selected_plan(2)},
-    ]}, app=definitions)
-    initial, expanded = (item['projection']['phases'][0] for item in comparison['cases'])
-    single = initial['upstream_supply_comparisons'][0]
-    doubled = expanded['upstream_supply_comparisons'][0]
-    # Each candidate appears individually within the available Phase time,
-    # but their aggregate work exceeds the one shared idle equipment budget.
-    assert all(item['independent_capacity_only_lower_bound_days'] <= duration
-               for item in single['existing_capacity_options'])
-    constrained, = single['shared_idle_throughput_constraints']
-    available, = doubled['shared_idle_throughput_constraints']
-    assert set(constrained['competing_processes']) == {str(first.id), str(second.id)}
-    assert constrained['nominal_process_run_gap_in_phase'] > 0
-    assert available['nominal_process_run_gap_in_phase'] == pytest.approx(0)
-    assert constrained['conditional_shared_capacity_lower_bound_days'] > duration
-    assert available['conditional_shared_capacity_lower_bound_days'] <= duration
-    assert any(row['section'] == 'time_constraints'
-               and row['identity']['kind'] == 'upstream_selected_process_workload'
-               and row['delta_from_baseline']['conditional_lower_bound_days'] < 0
-               for row in comparison['differences'])
-    # These are counterfactual demands, never physically booked output.
-    assert initial['resources'] != []
-    assert all(item['production_t'] == 0 for item in initial['resources'])
-
-
 def test_transport_capacity_can_use_explicit_scenario_network_without_replaying_state():
     """A selected real initial Movement network yields physical bounds via Transport."""
     from space_idle.bootstrap import build_game_application
@@ -1187,13 +1067,13 @@ def test_transport_capacity_can_use_explicit_scenario_network_without_replaying_
                         'transfers': [{'origin': str(origin), 'destination': str(destination),
                                        'resource': resource, 't_per_day': 0.2}]}]}
     before = deepcopy(capture_state(sim))
-    registered = evaluate({**base, 'movement_reference': 'standard_scenario'})['phases'][0]
+    registered = evaluate({**base, 'movement_reference': 'applied_scenario'})['phases'][0]
     without_network = evaluate(base)['phases'][0]
     trip, = registered['transport_services']
     assert trip['forward_capacity_t_per_day'] > 0
     assert trip['cycle_days'] > 0
     assert trip['forward_latency_days'] is not None
-    assert trip['movement_reference'] == 'standard_scenario'
+    assert trip['movement_reference'] == 'applied_scenario'
     assert without_network['od_transport_constraints'][0]['nominal_capacity_t_per_day'] is None
     assert registered['time_constraints'][0]['kind'] == 'transport_volume'
     assert registered['time_constraints'][0]['one_way_latency_lower_bound_days'] is not None
@@ -1201,16 +1081,16 @@ def test_transport_capacity_can_use_explicit_scenario_network_without_replaying_
     assert capture_state(sim) == before
     with pytest.raises(ValueError, match='different Movement reference'):
         compare_cases({'cases': [{'name': 'known', 'plan': {
-            **base, 'movement_reference': 'standard_scenario'}},
+            **base, 'movement_reference': 'applied_scenario'}},
             {'name': 'unknown', 'plan': base}]})
     from space_idle.bootstrap import build_game_application_for_load
     with pytest.raises(ValueError, match='applied Scenario'):
-        evaluate({**base, 'movement_reference': 'standard_scenario'},
+        evaluate({**base, 'movement_reference': 'applied_scenario'},
                  app=build_game_application_for_load())
     from scripts.analysis_balance import compare_projection_results
     with pytest.raises(ValueError, match='different Movement reference'):
         compare_projection_results([
-            {'name': 'known', 'projection': evaluate({**base, 'movement_reference': 'standard_scenario'})},
+            {'name': 'known', 'projection': evaluate({**base, 'movement_reference': 'applied_scenario'})},
             {'name': 'unregistered', 'projection': evaluate(base)},
         ])
 
@@ -1281,7 +1161,7 @@ def test_different_horizons_compare_rates_and_burdens_without_subtracting_total_
         assert first[key]['nominal_recurring_net_t_per_day'] == pytest.approx(
             longer[key]['nominal_recurring_net_t_per_day'])
         assert first[key]['production_t_per_day'] == pytest.approx(longer[key]['production_t_per_day'])
-    assert all(row['section'] not in {'resources', 'system_resources'} for row in result['differences'])
+    assert all(row['section'] != 'resources' for row in result['differences'])
     report = summarize(result)
     assert report['cases'][1]['incomparable_phase_basis']
     assert report['cases'][1]['time_basis_comparisons']
@@ -1387,36 +1267,36 @@ def test_world_site_comparison_reuses_one_authored_composition_without_founding_
     plan = {"phases": [
         {"name": "acquire", "days": 10, "facility_investments": [installation]},
         {"name": "operate", "days": 20, "facilities": [operating],
-         "extraction_sites": [{"node": node, "developed_cells": ["$surface_cell"],
-                               "knowledge": [{"cell": "$surface_cell",
+         "extraction_sites": [{"node": node, "developed_cells": ["$world_context"],
+                               "knowledge": [{"cell": "$world_context",
                                               "resource": str(method.resource_id), "level": 3}]}]},
     ]}
     source = deepcopy(plan)
     state_before = deepcopy(capture_state(sim))
-    sweep = evaluate_surface_site_sweep({"surface_site_sweep": {
-        "plan": plan, "cells": sites[:2]}}, app=definitions)
+    sweep = evaluate_world_context_sweep({"world_context_sweep": {
+        "plan": plan, "contexts": sites[:2]}}, app=definitions)
     assert plan == source
     assert capture_state(sim) == state_before
-    assert [row["cell"] for row in sweep["sites"]] == sites[:2]
+    assert [row["context"] for row in sweep["sites"]] == sites[:2]
     assert {row["body"] for row in sweep["sites"]} == {
         str(sim.graph.surface_cells[SurfaceCellId(site)].body_id) for site in sites[:2]
     }
     for item in sweep["sites"]:
-        expected = evaluate(_bind_surface_cell(plan, item["cell"]), app=definitions)
+        expected = evaluate(_bind_world_context(plan, item["context"]), app=definitions)
         assert item["projection"]["phases"] == expected["phases"]
         activity = item["projection"]["phases"][1]["extraction_world_context"]
-        assert activity and activity[0]["world_cells"] == [item["cell"]]
+        assert activity and activity[0]["world_cells"] == [item["context"]]
         assert activity[0]["contributing_methods"] == [str(method.id)]
         assert not item["projection"]["phases"][1]["od_transport_constraints"]
-    brief = summarize_surface_site_sweep(sweep)
+    brief = summarize_world_context_sweep(sweep)
     assert "projection" not in brief["sites"][0]
-    with pytest.raises(ValueError, match="World Cell-dependent"):
-        evaluate_surface_site_sweep({"surface_site_sweep": {
+    with pytest.raises(ValueError, match="context-dependent"):
+        evaluate_world_context_sweep({"world_context_sweep": {
             "plan": {"phases": [{"name": "no_context", "days": 1}]},
-            "cells": sites[:2]}}, app=definitions)
-    with pytest.raises(ValueError, match="Surface Cell"):
-        evaluate_surface_site_sweep({"surface_site_sweep": {
-            "plan": plan, "cells": ["unknown.cell"]}}, app=definitions)
+            "contexts": sites[:2]}}, app=definitions)
+    with pytest.raises(ValueError, match="World context"):
+        evaluate_world_context_sweep({"world_context_sweep": {
+            "plan": plan, "contexts": ["unknown.cell"]}}, app=definitions)
 
 
 def test_world_parameters_are_content_variables_in_the_same_site_and_development_comparison(definitions):
@@ -1450,16 +1330,16 @@ def test_world_parameters_are_content_variables_in_the_same_site_and_development
     generator = next(f for f in sim.facilities.definitions.values()
                      if f.id in sim.power.specs and isinstance(sim.power.specs[f.id].generation, SolarGeneration))
     generator_asset = {"node": node, "facility": str(generator.id), "units": 1}
-    selected = {"solar_sites": [{"node": node, "facility": str(generator.id), "context": "$surface_cell"}],
+    selected = {"solar_sites": [{"node": node, "facility": str(generator.id), "context": "$world_context"}],
                 "phases": [
         {"name": "investment", "days": 8, "facility_investments": [asset, generator_asset]},
         {"name": "operation", "days": 16,
          "facilities": [{**asset, "extraction": str(method.id)}, generator_asset],
-         "extraction_sites": [{"node": node, "developed_cells": ["$surface_cell"],
-                               "knowledge": [{"cell": "$surface_cell", "resource": resource, "level": 3}]}],
+         "extraction_sites": [{"node": node, "developed_cells": ["$world_context"],
+                               "knowledge": [{"cell": "$world_context", "resource": resource, "level": 3}]}],
         },
     ]}
-    sweep = {"surface_site_sweep": {"plan": selected, "cells": candidates[:2]}}
+    sweep = {"world_context_sweep": {"plan": selected, "contexts": candidates[:2]}}
     changes = [
         {"kind": "world_cell", "id": str(cell_id), "field": "resource_potential",
          "resource_id": resource, "value": prior + max(1., prior)},
@@ -1478,7 +1358,7 @@ def test_world_parameters_are_content_variables_in_the_same_site_and_development
     report = compare_content_variant(sweep, changes)
     assert report["world_parameter_edits"] == changes
     assert report["source_world_definition_id"] == definitions.world_definition_id
-    assert [row["cell"] for row in report["sites"]] == candidates[:2]
+    assert [row["context"] for row in report["sites"]] == candidates[:2]
     pair = report["sites"][0]["comparison"]["cases"]
     pre, post = pair[0]["projection"], pair[1]["projection"]
     left = pre["phases"][1]["extraction_world_context"][0]
@@ -1725,3 +1605,140 @@ def test_movement_definition_parameters_share_the_content_numeric_edit_path(defi
     with pytest.raises(ValueError, match="positive"):
         build_game_application_for_load(definition_transform=lambda target, catalog: apply_content_variant(
             target, catalog, [{**changes[1], "value": 0}]))
+
+
+def test_world_context_parameter_uses_registered_surface_and_non_surface_physics(definitions):
+    """A selected power investment can be compared across World contexts without a site-specific evaluator."""
+    from space_idle.power import SolarGeneration
+    sim = definitions._simulation
+    generator = next(f for f in sim.facilities.definitions.values()
+                     if isinstance(getattr(sim.power.specs.get(f.id), "generation", None), SolarGeneration))
+    world = sim.power.environment.graph
+    contexts = [str(next(iter(world.surface_cells))), str(next(iter(world.nodes)))]
+    site = "selected.world.context"
+    asset = {"node": site, "facility": str(generator.id), "units": 1}
+    selected = {"initial_facilities": [asset], "solar_sites": [
+        {"node": site, "facility": str(generator.id), "context": "$world_context"}],
+        "phases": [{"name": "operation", "days": 6, "facilities": [asset]}]}
+    before = deepcopy(capture_state(sim))
+    result = evaluate_world_context_sweep({"world_context_sweep": {
+        "plan": selected, "contexts": contexts,
+        "reference_context": contexts[0]}}, app=definitions)
+    assert {row["context_kind"] for row in result["sites"]} == {"surface", "non_surface"}
+    assert "relative_to_reference" not in result["sites"][0]
+    assert result["sites"][1]["relative_to_reference"] == compare_cases({"cases": [
+        {"name": contexts[0], "plan": _bind_world_context(selected, contexts[0])},
+        {"name": contexts[1], "plan": _bind_world_context(selected, contexts[1])},
+    ]}, app=definitions)["differences"]
+    for row in result["sites"]:
+        phase = row["projection"]["phases"][0]
+        assert phase["power_world_context"][0]["world_context"] == row["context"]
+        assert phase["resources"] == evaluate(
+            _bind_world_context(selected, row["context"]), app=definitions)["phases"][0]["resources"]
+        assert not phase["od_transport_constraints"]
+    assert capture_state(sim) == before
+
+
+def test_selected_multistage_industry_is_accounted_through_actual_process_activity(definitions):
+    """Upstream selection changes the same Node ledger, not a hypothetical parallel recipe catalog."""
+    sim = definitions._simulation
+    facilities = list(sim.facilities.definitions.values())
+    producer, consumer, upstream_facility, downstream_facility, intermediary = next(
+        (p, q, f, g, resource)
+        for p in sim.industry.processes.values()
+        for q in sim.industry.processes.values() if p.id != q.id
+        for resource in set(p.outputs_per_day) & set(q.inputs_per_day)
+        if p.outputs_per_day[resource] > 0 and q.inputs_per_day[resource] > 0
+        for f in facilities if f.process_throughput_per_day > 0
+        and p.required_capabilities <= {cap.id for cap in f.capability_supplies}
+        for g in facilities if g.id != f.id and g.process_throughput_per_day > 0
+        and q.required_capabilities <= {cap.id for cap in g.capability_supplies}
+    )
+    node = "shared.industry.site"
+    a = {"node": node, "facility": str(upstream_facility.id), "units": 1}
+    b = {"node": node, "facility": str(downstream_facility.id), "units": 1}
+    def plan(producer_duty):
+        return {"initial_facilities": [a, b], "phases": [{"name": "operation", "days": 9,
+                "facilities": [{**a, "process": str(producer.id), "duty": producer_duty},
+                               {**b, "process": str(consumer.id), "duty": .5}]}]}
+    before = deepcopy(capture_state(sim))
+    result = compare_cases({"cases": [
+        {"name": "downstream", "plan": plan(0)},
+        {"name": "connected", "plan": plan(.5)}]}, app=definitions)
+    left, right = (entry["projection"]["phases"][0] for entry in result["cases"])
+    resource = str(intermediary)
+    upstream = _rows(left)[(node, resource)]
+    connected = _rows(right)[(node, resource)]
+    assert connected["production_t"] - upstream["production_t"] == pytest.approx(
+        producer.outputs_per_day[intermediary] * upstream_facility.process_throughput_per_day * 9 * .5)
+    assert connected["process_demand_t"] == pytest.approx(upstream["process_demand_t"])
+    assert connected["shortfall_t"] <= upstream["shortfall_t"]
+    assert any(d["section"] == "resources" and d["identity"] == {"node": node, "resource": resource}
+               for d in result["differences"])
+    assert capture_state(sim) == before
+
+
+def test_registered_scenario_opening_is_explicit_read_only_basis_not_automatic_operation():
+    """Reuse real opening physical holdings without duplicating a long Scenario manifest."""
+    from space_idle.bootstrap import build_game_application
+    app = build_game_application()
+    sim = app._simulation
+    before = deepcopy(capture_state(sim))
+    selected = {"opening_from_reference": True, "movement_reference": "applied_scenario",
+                "phases": [{"name": "observation", "days": 10}]}
+    projected = evaluate(selected, app=app)
+    phase = projected["phases"][0]
+    assert projected["opening_conditions_source"] == "applied_scenario_domain_state"
+    assert projected["scenario_id"] == sim.scenario_id
+    assert all(item["precommitted_units"] == item["owned_units"] - item["free_units"]
+               for item in projected["opening_fleet_precommitments"])
+    assert phase["scale"]["facility_units"] == 0  # no implicit industry/research activity
+    assert phase["scale"]["fleet_units"] == sum(
+        sim.transport.fleet_pool_snapshot(vehicle, node).total_units
+        for vehicle, node in sim.transport.fleet_pool_keys())
+    assert all(row["assumed_turnarounds"] == 0 for row in phase["fleet"])
+    assert phase["fleet_availability_constraints"] == []  # holdings are not activities
+    committed = next((vehicle, node, sim.transport.fleet_pool_snapshot(vehicle, node))
+                     for vehicle, node in sim.transport.fleet_pool_keys()
+                     if sim.transport.fleet_pool_snapshot(vehicle, node).total_units >
+                     sim.transport.fleet_pool_snapshot(vehicle, node).free_units)
+    vehicle, node, held = committed
+    selected_use = {"node": str(node), "vehicle": str(vehicle),
+                    "units": held.total_units, "turnarounds_per_unit_per_day": .1}
+    blocked = evaluate({**selected, "phases": [{"name": "operation", "days": 10,
+        "fleet": [selected_use]}]}, app=app)["phases"][0]
+    bound, = blocked["fleet_availability_constraints"]
+    assert bound["selected_duty_units"] == held.total_units
+    assert bound["conditional_available_uncommitted_units"] == held.free_units
+    assert bound["units_requiring_reallocation"] == held.total_units - held.free_units
+    assert "existing_scenario_fleet_commitment_or_acquisition_condition" in blocked["unassessed_constraints"]
+    free_vehicle, free_node, free_held = next(
+        (vehicle, node, sim.transport.fleet_pool_snapshot(vehicle, node))
+        for vehicle, node in sim.transport.fleet_pool_keys()
+        if sim.transport.fleet_pool_snapshot(vehicle, node).free_units > 0)
+    free_use = {"node": str(free_node), "vehicle": str(free_vehicle),
+                "units": free_held.free_units, "turnarounds_per_unit_per_day": .1}
+    available = evaluate({**selected, "phases": [{"name": "operation", "days": 10,
+        "fleet": [free_use]}]}, app=app)["phases"][0]
+    assert available["fleet_availability_constraints"][0]["units_requiring_reallocation"] == 0
+    with pytest.raises(ValueError, match="movement_reference=applied_scenario"):
+        evaluate({"opening_from_reference": True,
+                  "phases": [{"name": "observation", "days": 10}]}, app=app)
+    opening = {(row["node"], row["resource"]): row for row in phase["resources"]}
+    for (node, resource), amount in sim.inventory.stock.items():
+        if amount > 0:
+            assert opening[(str(node), str(resource))]["notional_end_t"] == pytest.approx(amount)
+    # The State-owned Facility ceiling may be selected without reauthoring
+    # the whole registered initial asset inventory or a fictional investment.
+    holding = next(iter(sim.facilities.facilities.values()))
+    chosen = {"node": str(holding.operational_node_id),
+              "facility": str(holding.definition_id), "units": 1,
+              "level": holding.level}
+    operating = evaluate({**selected, "phases": [
+        {"name": "operation", "days": 10, "facilities": [chosen]}]}, app=app)
+    assert operating["phases"][0]["scale"]["facility_units"] == 1
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        evaluate({**selected, "initial_stock": []}, app=app)
+    with pytest.raises(ValueError, match="requires an applied Scenario"):
+        evaluate(selected, app=build_game_application_for_load())
