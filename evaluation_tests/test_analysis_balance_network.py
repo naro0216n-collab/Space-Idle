@@ -280,35 +280,44 @@ def test_finite_science_rp_can_replace_nominal_provider_demand_only_conditionall
     assert any('movement' in note for note in science['model_limitations'])
 
 
-def test_research_branch_pacing_uses_real_prerequisite_closure_and_parallel_site_work(source):
-    """Multiple projects' independent demonstration work cannot be added as elapsed days."""
-    from dataclasses import replace
+def test_research_branch_pacing_does_not_equate_work_to_elapsed_days(source):
+    """Independent registered project Stage work is limited by Provider rates.
+
+    Quantities of work are never themselves Stage durations, and independent
+    Technology projects need not execute their Stages serially with each other.
+    """
     from scripts.analysis_balance_research import analyze_research_goal
+    from space_idle.execution_requirements import ServiceCapacityRequirement
     sim = source._simulation
-    independent = [d for d in sim.research.definitions.values() if not d.prerequisites]
-    sample = next(s for d in sim.research.definitions.values()
-                  for s in d.stage_specs if s.stage_type.value == 'prototype')
+    independent = [definition for definition in sim.research.definitions.values()
+                   if not definition.prerequisites]
     assert len(independent) >= 2
-    chosen = independent[:2]
-    for i, definition in enumerate(chosen):
-        existing = definition.stage_specs[0]
-        assert existing.stage_type.value == 'theory'
-        theory = replace(existing, research_point_cost=1.0)
-        proto = replace(sample, stage_id='synthetic_parallel_prototype', required_work=8 + i * 6)
-        sim.research.definitions[definition.id] = replace(definition, stage_specs=(theory, proto))
-    analysis = analyze_research_goal(research_ids=[str(d.id) for d in chosen], app=source)
-    assert analysis['goal']['serial_site_stage_work'] == pytest.approx(22)
+    chosen = sorted(independent, key=lambda d: str(d.id))[:2]
+    def registered_org_work(definition):
+        return sum(
+            requirement.amount_per_execution * (
+                getattr(stage, 'research_point_cost', 0) or getattr(stage, 'required_work', 0))
+            for stage in definition.stage_specs
+            for requirement in stage.execution_requirements
+            if isinstance(requirement, ServiceCapacityRequirement)
+            and requirement.scope.value == 'ORGANIZATION'
+            and requirement.service_type == 'research_execution'
+        )
+    observed = analyze_research_goal(research_ids=[str(d.id) for d in chosen], app=source)
+    selected_work = [registered_org_work(d) for d in chosen]
+    assert next(row['total_work'] for row in observed['goal']['research_stage_service_work'] if row['scope'] == 'ORGANIZATION' and row['service'] == 'research_execution') == pytest.approx(sum(selected_work))
     viable = 0
-    for option in analysis['provider_choices']:
-        if option['rp_generation_lower_bound_days'] is None or option['research_execution_capacity_per_day'] <= 0:
-            assert option['operating_lower_bound_days_excluding_unassessed_dependencies'] is None
+    for choice in observed['provider_choices']:
+        rate = choice['research_execution_capacity_per_day']
+        if choice['rp_generation_lower_bound_days'] is None or rate <= 0:
+            assert choice['operating_lower_bound_days_excluding_unassessed_dependencies'] is None
             continue
         viable += 1
-        expected_serial = 14 + 1 / option['research_execution_capacity_per_day']
-        assert option['selected_project_serial_stage_lower_bound_days'] == pytest.approx(expected_serial)
-        assert option['operating_lower_bound_days_excluding_unassessed_dependencies'] == pytest.approx(
-            max(expected_serial, option['rp_generation_lower_bound_days'],
-                option['research_execution_lower_bound_days']))
+        expected_serial = max(selected_work) / rate
+        assert choice['selected_project_serial_stage_lower_bound_days'] == pytest.approx(expected_serial)
+        assert choice['operating_lower_bound_days_excluding_unassessed_dependencies'] == pytest.approx(
+            max(expected_serial, choice['rp_generation_lower_bound_days'],
+                choice['research_execution_lower_bound_days']))
     assert viable > 0
 
 

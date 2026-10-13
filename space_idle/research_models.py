@@ -117,6 +117,17 @@ ResearchStageSpec: TypeAlias = (
 )
 
 
+def site_stage_daily_progress_request_limit(spec: ResearchStageSpec) -> float | None:
+    """Research-owned maximum nominal work request for a site Stage per day.
+
+    Theory consumes finite RP/execution through its allocation bundle instead;
+    Operational Experience is an external event gate, not timed work.
+    """
+    if isinstance(spec, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
+        return 1.0
+    return None
+
+
 @dataclass(frozen=True)
 class ResearchDefinition:
     id: DefinitionId

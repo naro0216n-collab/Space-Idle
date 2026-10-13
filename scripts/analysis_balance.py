@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context
+from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
     registered_material_links, registered_activity_coefficients, trace_material_system,
@@ -690,10 +690,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             unassessed.add("facility_upgrade_level_eligibility_and_sequencing")
         facility_units_added = sum(pending_facility_investments.values())
         previous = current
-        # The existing (pre-investment) capacity is the only defensible bound
-        # for the investment work: new providers cannot construct themselves.
+        # The opening composition, not the preceding Phase's composition,
+        # supplies acquisition work. Prior Phase investments can only be used
+        # once explicitly commissioned at this opening boundary.
         existing_construction = defaultdict(float)
-        for node, name, units, _p, _e, duty, _y, _people in previous_assets:
+        for node, name, units, _p, _e, duty, _y, _people in assets:
             provider = sim.projects.construction_providers.get(DefinitionId(name))
             if provider:
                 existing_construction[node] += provider.work_per_day * units * duty
@@ -777,6 +778,15 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         research_execution_per_day = 0.0
         research_crew_demand_per_day = 0.0
         assigned_source_units = defaultdict(int)
+        # The same Facility cannot offer its entire nameplate to processing
+        # and to Research. Compare their explicitly requested duty against a
+        # single installed-unit budget; leave the nominal demands visible
+        # rather than implying both flows have been allocated successfully.
+        facility_activity_duty = defaultdict(float)
+        for source_node, source_id, units, process_id, extraction_id, duty, _yield, _people in assets:
+            if process_id or extraction_id:
+                facility_activity_duty[(source_node, source_id)] += units * duty
+        facility_research_duty = defaultdict(float)
         for row in phase.get("research_provider_allocations", ()):
             _keys(row, {"node", "provider", "source_facility", "source_vehicle", "units", "level", "duty"},
                   {"node", "provider", "units"}, "research provider")
@@ -818,6 +828,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             duty = _number(row.get("duty", 1), "research provider duty")
             if duty > 1:
                 raise ValueError("research provider duty cannot exceed 1")
+            if provider.source_kind.value == "facility":
+                facility_research_duty[(node, source)] += units * duty
             activity_sources.append({"kind": "research_provider", "node": row["node"],
                                      "definition": name, "source_kind": provider.source_kind.value,
                                      "source_definition": source,
@@ -834,6 +846,21 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             research_storage_nominal += units * level_spec.storage_capacity_points
             research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
                                               * provider.crew_person_days_per_research_point)
+        facility_use_constraints = []
+        for source_key in sorted(set(facility_activity_duty) | set(facility_research_duty)):
+            use = facility_activity_duty[source_key] + facility_research_duty[source_key]
+            installed_units = current[source_key]
+            excess = max(0.0, use - installed_units)
+            facility_use_constraints.append({
+                "node": source_key[0], "facility": source_key[1],
+                "installed_unit_duty_per_day": float(installed_units),
+                "selected_industry_unit_duty_per_day": facility_activity_duty[source_key],
+                "selected_research_unit_duty_per_day": facility_research_duty[source_key],
+                "nominal_shared_unit_duty_gap_per_day": excess,
+                "status": "conditional_shared_facility_duty_not_allocated",
+            })
+            if excess > 1e-12:
+                unassessed.add("industry_and_research_exceed_shared_facility_operating_duty")
         # Selected Fleet is reserved once across authored OD services. The
         # Transport owner's read-only preview supplies paths, cycle, payload,
         # propellant, servicing, infrastructure and blockers. This tool does
@@ -1160,6 +1187,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     requirements.append({"kind": "service", "name": requirement.service_type,
                                          "amount_per_execution": requirement.amount_per_execution,
                                          "scope": requirement.scope.value,
+                                         "node": str(requirement.constraint_node(row["node"]))
+                                                 if requirement.scope.value != "ORGANIZATION" else None,
                                          "total_required": requirement.amount_per_execution * progress_amount})
                 elif isinstance(requirement, ResourceRequirement):
                     node = str(requirement.constraint_node_id or row["node"])
@@ -1488,6 +1517,15 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "crew_requirement_person_days_per_day": research_crew_demand_per_day,
             "conditional_scientific_exploration_reward_points_not_awarded": science_reward_conditional,
         }
+        research_time_structure = selected_research_time_structure(
+            sim.research.definitions, stage_details,
+            [(scope, service, research_execution_per_day if scope == "organization" and service == "research_execution"
+              else services[(scope.removeprefix("node:"), service)] if scope.startswith("node:") else 0.0)
+             for scope, service in research_service_work],
+            organization_execution_per_day=research_execution_per_day,
+            rp_generation_lower_bound_days=theory_days_by_generation,
+            total_execution_lower_bound_days=research_metrics["total_execution_capacity_lower_bound_days"],
+        )
         constraints = []
         for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | set(housing_nominal) | {n for n, _ in services}):
             construction_supply = services[(node, "construction_work")] * days
@@ -1526,6 +1564,84 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "nominal_capacity_per_day": nominal,
                 "nominal_gap_per_day": max(0.0, required_per_day - nominal),
             })
+        # The service ledger already merges every authored use of a Node's
+        # finite Service. A whole-Phase workload bound catches contention that
+        # independent construction, manufacturing or Research estimates miss.
+        # It is not a completion schedule for any constituent activity.
+        shared_service_workloads = []
+        for row in service_constraints:
+            if row["required_per_day"] <= 0:
+                continue
+            demand = row["required_per_day"] * days
+            capacity = row["nominal_capacity_per_day"]
+            shared_service_workloads.append({
+                "node": row["node"], "service": row["service"],
+                "required_work": demand, "nominal_capacity_per_day": capacity,
+                "conditional_shared_workload_lower_bound_days": (
+                    demand / capacity if capacity > 0 else None),
+                "status": "capacity_bound_not_selected_activity_schedule",
+            })
+        # Compare the investment/assembly/Research/transport time scales on
+        # the same selected Phase without scheduling a single canonical tick.
+        # Daily maintenance/operation is an ongoing burden, never mistakenly
+        # accumulated into a one-shot completion duration.
+        time_constraints = []
+        for row in investment_constraints:
+            time_constraints.append({"kind": "construction", "subject": row["node"],
+                                     "node": row["node"], "unit": "construction_work",
+                                     "required_quantity": row["required_work"],
+                                     "available_rate_per_day": row["pre_investment_work_per_day"],
+                                     "conditional_lower_bound_days": row["pre_investment_work_lower_bound_days"],
+                                     "status": "capacity_lower_bound_not_a_completion_schedule"})
+        for row in vehicle_build_details:
+            service_type = row["production_service"]
+            rate = services[(row["node"], service_type)] if service_type else None
+            required = row["production_work_days"]
+            time_constraints.append({"kind": "vehicle_assembly", "node": row["node"],
+                                     "subject": f'{row["node"]}/{row["vehicle"]}',
+                                     "vehicle": row["vehicle"], "unit": "service_work",
+                                     "required_quantity": required,
+                                     "service": service_type, "available_rate_per_day": rate,
+                                     "conditional_lower_bound_days": (
+                                         required / rate if rate and rate > 0 else
+                                         0.0 if required == 0 else None),
+                                     "status": "capacity_lower_bound_not_a_completion_schedule"})
+        for row in od_transport_constraints:
+            origin, destination = row["origin"], row["destination"]
+            # The OD ledger has already checked every selected route and its
+            # Transport-owned blockers. A route's nominal *cycle* rate is a
+            # stationary throughput scale, not an initial dispatch schedule.
+            # The first possible arrival has a separate one-way latency bound.
+            eligible = row["status"] == "conditional_capacity_not_cargo_settlement"
+            capacity = row["nominal_capacity_t_per_day"] if eligible else None
+            requirement = row["demand_t_per_day"] * days
+            eligible_routes = [service for service in transport_services
+                if not service["blockers"] and service["cycle_days"] is not None
+                and ((service["origin"], service["destination"]) == (origin, destination)
+                     or ((service["destination"], service["origin"]) == (origin, destination)
+                         and service["reverse_path"]))]
+            latencies = [(service["forward_latency_days"]
+                          if service["origin"] == origin else service["reverse_latency_days"])
+                         for service in eligible_routes]
+            latency = min((value for value in latencies if value is not None), default=None)
+            time_constraints.append({
+                "kind": "transport_volume", "subject": f"{origin}/{destination}",
+                "origin": origin, "destination": destination, "unit": "cargo_t",
+                "required_quantity": requirement, "available_rate_per_day": capacity,
+                "conditional_lower_bound_days": latency if eligible and requirement > 0 else None,
+                "one_way_latency_lower_bound_days": latency if eligible else None,
+                "conditional_throughput_duration_scale_days": (
+                    requirement / capacity if capacity and capacity > 0 else None),
+                "status": "conditional_OD_latency_and_cycle_not_cargo_arrival" if eligible
+                          else "route_or_capacity_unresolved_not_an_arrival_date",
+            })
+        if stage_details:
+            time_constraints.append({"kind": "research_selected_workload", "subject": "selected_research",
+                                     "unit": "research_points",
+                                     "required_quantity": research_points,
+                                     "conditional_lower_bound_days": research_time_structure[
+                                         "conditional_known_capacity_lower_bound_days"],
+                                     "status": "serial_and_shared_capacity_lower_bound_not_completion_date"})
         storage_constraints = []
         pool_keys = set(storage)
         pool_keys.update((n, catalog.resources[DefinitionId(r)].storage_pool_key)
@@ -1553,6 +1669,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "activity_sources": activity_sources,
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
+                       "time_constraints": time_constraints,
+                       "shared_service_workloads": shared_service_workloads,
+                       "research_time_structure": research_time_structure,
+                       "research_stage_time_constraints": research_time_structure["selected_stage_service_bounds"],
+                       "facility_use_constraints": facility_use_constraints,
                        "facility_investments": facility_investment_details,
                        "vehicle_builds": vehicle_build_details,
                        "research_stages": stage_details,
@@ -1643,13 +1764,17 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 # This is an *individual* candidate Process bound. Idle
                 # portions of one Facility are not additive across proposed
                 # Processes, and current production has already been booked.
-                available_rate = sum(units * (1.0 - duty) *
+                compatible_assets_by_facility = {facility for facility, *_ in compatible}
+                available_rate = sum(max(0.0, current[(node, facility)]
+                    - facility_activity_duty[(node, facility)]
+                    - facility_research_duty[(node, facility)]) *
                     sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
-                    for facility, units, duty, active_proc in compatible)
+                    for facility in compatible_assets_by_facility)
                 required_runs = process.get("process_run_days_at_unit_throughput")
                 capacity_context.append({
                     "process": process_id,
                     "separately_available_selected_facility_process_runs_per_day": available_rate,
+                    "shared_research_and_industry_source_duty_included": True,
                     "required_incremental_process_runs": required_runs,
                     "independent_capacity_only_lower_bound_days": (
                         required_runs / available_rate if required_runs is not None and available_rate > 0
@@ -1669,7 +1794,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "world_definition_id": app.world_definition_id,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
-                "Facility changes take effect at phase start; construction work is a separate nominal demand, not scheduled completion.",
+                "Only pre-existing or explicitly assumed previously commissioned Facilities operate at each phase opening; construction never operates in the investment phase.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
                 "Facility Upgrade projects consume registered materials and work, without Level transition, completion sequencing, or updated provider capability.",
                 "Scientific Exploration campaigns include registered resources and potential RP rewards; for selected crewed trips to unestablished physical targets, onboard Resource demand covers only the registered site-duration lower bound, not unknown travel or return. No mission or Population progression is executed.",
@@ -1893,6 +2018,35 @@ def compare_projection_results(results: list[dict]) -> dict:
                 differences.append({"case": alternative["name"], "phase": left["name"],
                                     "section": "research_point_balance", "identity": {"pool": "organization"},
                                     "delta_from_baseline": rp_delta})
+            left_timing, right_timing = left["research_time_structure"], right["research_time_structure"]
+            timing_metrics = ("serial_prerequisite_stage_service_lower_bound_days",
+                              "shared_rp_generation_lower_bound_days",
+                              "shared_research_execution_lower_bound_days",
+                              "conditional_known_capacity_lower_bound_days")
+            numerical_timing = {}
+            unresolved_timing = {}
+            for metric in timing_metrics:
+                prior, selected = left_timing[metric], right_timing[metric]
+                if prior is None or selected is None:
+                    if prior != selected:
+                        unresolved_timing[metric] = {"baseline": prior, "case": selected}
+                elif abs(selected - prior) > 1e-12:
+                    numerical_timing[metric] = selected - prior
+            conditional_keys = ("missing_stage_service_capacity",
+                                "operational_experience_gates_not_elapsed_time",
+                                "unselected_stages_in_technology", "external_prerequisites")
+            conditions = {key: {"baseline": left_timing[key], "case": right_timing[key]}
+                          for key in conditional_keys if left_timing[key] != right_timing[key]}
+            if numerical_timing or unresolved_timing or conditions:
+                change = {"case": alternative["name"], "phase": left["name"],
+                          "section": "research_time_structure", "identity": {"workload": "selected_research"}}
+                if numerical_timing:
+                    change["delta_from_baseline"] = numerical_timing
+                if unresolved_timing:
+                    change["incomparable_unassessed_metrics"] = unresolved_timing
+                if conditions:
+                    change["condition_change"] = conditions
+                differences.append(change)
             for section, key_fields, metrics in (
                 ("research_service_constraints", ("scope", "service"),
                  ("total_required", "nominal_capacity_per_day", "conditional_lower_bound_days")),
@@ -1902,6 +2056,12 @@ def compare_projection_results(results: list[dict]) -> dict:
                  ("amount_t",)),
                 ("service_constraints", ("node", "service"),
                  ("required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day")),
+                ("facility_use_constraints", ("node", "facility"),
+                 ("installed_unit_duty_per_day", "selected_industry_unit_duty_per_day",
+                  "selected_research_unit_duty_per_day", "nominal_shared_unit_duty_gap_per_day")),
+                ("shared_service_workloads", ("node", "service"),
+                 ("required_work", "nominal_capacity_per_day",
+                  "conditional_shared_workload_lower_bound_days")),
                 ("system_resources", ("resource",), ("one_time_investment_and_activity_demand_t", "nominal_recurring_net_t_per_day", "production_t", "process_demand_t",
                       "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t",
                       "fleet_turnaround_demand_t", "transport_service_demand_t", "passenger_provisions_demand_t", "notional_end_t", "shortfall_t")),
@@ -1930,6 +2090,11 @@ def compare_projection_results(results: list[dict]) -> dict:
                  ("required_work", "pre_investment_work_per_day", "pre_investment_work_lower_bound_days")),
                 ("facility_investments", ("node", "facility"), ("units", "construction_work")),
                 ("vehicle_builds", ("node", "vehicle"), ("units", "production_work_days")),
+                ("research_stage_time_constraints", ("research", "stage"),
+                 ("serial_service_lower_bound_days",)),
+                ("time_constraints", ("kind", "subject"),
+                 ("required_quantity", "available_rate_per_day", "conditional_lower_bound_days",
+                  "one_way_latency_lower_bound_days", "conditional_throughput_duration_scale_days")),
                 ("spatial_projects", ("node", "recipe"), ("units", "required_construction_work")),
                 ("upgrade_projects", ("node", "facility", "target_level"),
                  ("units", "required_construction_work")),
@@ -2221,6 +2386,11 @@ def summarize_projection(projection: dict) -> dict:
             "research_goal": phase["research_goal"],
             "upstream_supply_comparisons": phase["upstream_supply_comparisons"],
             "research_service_constraints": phase["research_service_constraints"],
+            "research_time_structure": phase["research_time_structure"],
+            "time_constraints": phase["time_constraints"],
+            "shared_service_workloads": phase["shared_service_workloads"],
+            "facility_use_pressures": [row for row in phase["facility_use_constraints"]
+                                      if row["nominal_shared_unit_duty_gap_per_day"] > 1e-12],
             "investment_constraints": phase["investment_constraints"],
             "facility_investments": phase["facility_investments"],
             "vehicle_builds": phase["vehicle_builds"],
@@ -2256,7 +2426,7 @@ def summarize_projection(projection: dict) -> dict:
             "unassessed_constraints": phase["unassessed_constraints"],
             "system_coupling": network_overview(phase["system_network"]),
             "detail_sections": [
-                "activity_sources", "system_network", "facility_investments", "vehicle_builds", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
+                "activity_sources", "system_network", "facility_investments", "vehicle_builds", "time_constraints", "shared_service_workloads", "research_time_structure", "facility_use_constraints", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],

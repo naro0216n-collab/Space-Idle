@@ -13,31 +13,34 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.execution_requirements import ResourceRequirement, ServiceCapacityRequirement
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.shared import DefinitionId
+from space_idle.research_models import site_stage_daily_progress_request_limit
 from scripts.analysis_balance_network import aggregate_material, source_investment, producer_catalog, conditional_material_paths
 
 
 def _research_stage_elapsed_capacity_floor(spec, execution_rate):
-    """A single Stage's strictly serial progress given *one* provider option.
+    """Stage request and selected Organization Service supply impose joint bounds.
 
-    RP may have been accumulated before the Theory Stage. We therefore only
-    count its finite execution-service work here; the entire technology
-    closure's RP supply is bounded separately. Across separate projects,
-    Stage work can progress concurrently and must not be summed as days.
+    A site Stage asks for at most its Research-owned daily work limit, even
+    without an explicit Service requirement. The requested bundle may impose
+    a stricter capacity bound. This is not an actual Site/Allocation schedule.
     """
-    kind, rp, work, requirements = spec
+    kind = spec.stage_type.value
     if kind == 'operational_experience':
-        return 0.0  # Actual activity/Knowledge gates are a separate constraint.
-    if kind != 'theory':
-        return work
+        return 0.0  # Knowledge/experience remains an independent gate.
+    rp = getattr(spec, 'research_point_cost', 0.0)
+    work = getattr(spec, 'required_work', 0.0)
     execution_work = sum(
-        req.amount_per_execution * rp
-        for req in requirements
+        req.amount_per_execution * (rp or work)
+        for req in spec.execution_requirements
         if isinstance(req, ServiceCapacityRequirement)
         and req.service_type == 'research_execution'
         and req.scope.value == 'ORGANIZATION')
     if execution_work > 0 and execution_rate <= 0:
         return None
-    return execution_work / execution_rate if execution_rate > 0 else 0.0
+    service_floor = execution_work / execution_rate if execution_rate > 0 else 0.0
+    limit = site_stage_daily_progress_request_limit(spec)
+    site_floor = work / limit if limit else 0.0
+    return max(site_floor, service_floor)
 
 
 def _registered_branch_pacing(sim, research_ids, provider_choices):
@@ -68,19 +71,19 @@ def _registered_branch_pacing(sim, research_ids, provider_choices):
         return closures[tech_id]
 
     def spec_parts(tech_id):
-        for spec in defs[DefinitionId(tech_id)].stage_specs:
-            yield (spec.stage_type.value, getattr(spec, 'research_point_cost', 0.0),
-                   getattr(spec, 'required_work', 0.0), getattr(spec, 'execution_requirements', ()))
+        return defs[DefinitionId(tech_id)].stage_specs
 
     def work_for(tech_id):
-        return sum(sum(req.amount_per_execution * rp
-                       for req in reqs
+        return sum(sum(req.amount_per_execution * (
+                       getattr(spec, 'research_point_cost', 0.0) or getattr(spec, 'required_work', 0.0))
+                       for req in getattr(spec, 'execution_requirements', ())
                        if isinstance(req, ServiceCapacityRequirement)
                        and req.scope.value == 'ORGANIZATION'
                        and req.service_type == 'research_execution')
-                   for _, rp, _, reqs in spec_parts(tech_id))
+                   for spec in spec_parts(tech_id))
 
-    rp = {str(tech_id): sum(part[1] for part in spec_parts(str(tech_id))) for tech_id in defs}
+    rp = {str(tech_id): sum(getattr(spec, 'research_point_cost', 0.0)
+                            for spec in spec_parts(str(tech_id))) for tech_id in defs}
     execution_work = {str(tech_id): work_for(str(tech_id)) for tech_id in defs}
     rows = []
     for tech_id in sorted(research_ids):
@@ -134,6 +137,98 @@ def _registered_branch_pacing(sim, research_ids, provider_choices):
             'interpretation': 'conditional_branch_capacity_bound_not_a_gameplay_completion_day',
         })
     return rows
+
+
+def selected_research_time_structure(definitions, stages, services, *,
+                                     organization_execution_per_day,
+                                     rp_generation_lower_bound_days,
+                                     total_execution_lower_bound_days):
+    """Conditional, non-scheduling lower bounds for a selected Research workload.
+
+    An actual Research Project executes its registered Stages in order, and a
+    prerequisite Technology precedes its dependent Technology. Independent
+    projects can overlap. Only Service work that can be quantified from the
+    same selected-activity ledger participates in the serial path; RP can be
+    banked before a Stage and its aggregate generation floor is separate.
+    Missing Service capacity and experience are gates, never zero-day unlocks.
+    """
+    chosen = {row['research'] for row in stages}
+    stage_by_id = {(row['research'], row['stage']): row for row in stages}
+    service_capacity = {(scope, kind): capacity for scope, kind, capacity in services}
+    stage_bounds = []
+    serial_by_tech = {}
+    missing_capacity = set()
+    experience = []
+    missing_stages = []
+    for tech_id in sorted(chosen):
+        definition = definitions[DefinitionId(tech_id)]
+        serial = 0.0
+        for spec in definition.stage_specs:
+            stage = stage_by_id.get((tech_id, spec.stage_id))
+            if stage is None:
+                missing_stages.append(f'{tech_id}/{spec.stage_id}')
+                continue
+            requirements = []
+            daily_request_limit = site_stage_daily_progress_request_limit(spec)
+            progress_floor = (getattr(spec, 'required_work', 0.0) / daily_request_limit
+                              if daily_request_limit else 0.0)
+            duration_floor = progress_floor
+            for requirement in stage['execution_requirements']:
+                if requirement['kind'] != 'service':
+                    continue
+                scope = ('organization' if requirement['scope'] == 'ORGANIZATION'
+                         else f"node:{requirement.get('node', stage['node'])}")
+                amount = requirement['total_required']
+                rate = (organization_execution_per_day
+                        if (scope, requirement['name']) == ('organization', 'research_execution')
+                        else service_capacity.get((scope, requirement['name']), 0.0))
+                floor = amount / rate if rate > 0 else 0.0 if amount == 0 else None
+                if floor is None:
+                    missing_capacity.add((scope, requirement['name']))
+                else:
+                    duration_floor = max(duration_floor, floor)
+                requirements.append({'scope': scope, 'service': requirement['name'],
+                                     'required_work': amount, 'capacity_per_day': rate,
+                                     'lower_bound_days': floor})
+            if stage['stage_type'] == 'operational_experience':
+                experience.append(f'{tech_id}/{spec.stage_id}')
+            serial += duration_floor
+            stage_bounds.append({'research': tech_id, 'stage': spec.stage_id,
+                                 'stage_type': stage['stage_type'],
+                                 'required_service_bounds': requirements,
+                                 'site_progress_request_limit_per_day': daily_request_limit,
+                                 'site_progress_lower_bound_days': progress_floor,
+                                 'serial_service_lower_bound_days': duration_floor,
+                                 'unresolved_stage_gate': (
+                                     stage['stage_type'] == 'operational_experience'
+                                     or any(v['lower_bound_days'] is None for v in requirements)),
+                                 'status': 'lower_bound_not_a_stage_completion_schedule'})
+        serial_by_tech[tech_id] = serial
+    memo = {}
+    def critical(tech_id):
+        if tech_id not in memo:
+            prerequisites = [critical(str(p)) for p in definitions[DefinitionId(tech_id)].prerequisites
+                             if str(p) in chosen]
+            memo[tech_id] = serial_by_tech[tech_id] + max(prerequisites, default=0.0)
+        return memo[tech_id]
+    critical_floor = max((critical(k) for k in chosen), default=0.0)
+    numeric_floors = [critical_floor]
+    numeric_floors.extend(v for v in (rp_generation_lower_bound_days,
+                                      total_execution_lower_bound_days) if v is not None)
+    return {
+        'selected_stage_service_bounds': stage_bounds,
+        'serial_prerequisite_stage_service_lower_bound_days': critical_floor,
+        'shared_rp_generation_lower_bound_days': rp_generation_lower_bound_days,
+        'shared_research_execution_lower_bound_days': total_execution_lower_bound_days,
+        'conditional_known_capacity_lower_bound_days': max(numeric_floors),
+        'missing_stage_service_capacity': [
+            {'scope': scope, 'service': name} for scope, name in sorted(missing_capacity)],
+        'operational_experience_gates_not_elapsed_time': experience,
+        'unselected_stages_in_technology': sorted(missing_stages),
+        'external_prerequisites': sorted({str(pre) for key in chosen
+            for pre in definitions[DefinitionId(key)].prerequisites if str(pre) not in chosen}),
+        'status': 'conditional_lower_bound_not_a_completion_date',
+    }
 
 
 def research_goal_closure(definitions, research_ids, *, include_prerequisites=False):
@@ -232,7 +327,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                 prototype_demonstration_work += work
             if spec.stage_type.value == 'operational_experience':
                 experience_gates.append(identifier)
-            project_stages[identifier].append((spec.stage_type.value, rp, work, getattr(spec, "execution_requirements", ())))
+            project_stages[identifier].append(spec)
             material = aggregate_material((r, v) for r, v in getattr(spec, 'resources', {}).items())
             for r, value in material.items():
                 research_requirements[r] += value

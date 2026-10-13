@@ -21,6 +21,7 @@ from .research_models import (
     ResearchStage,
     ResearchStageSpec,
     ResearchState,
+    site_stage_daily_progress_request_limit,
 )
 
 
@@ -374,7 +375,9 @@ class ResearchWorkflowMixin:
             remaining = max(0.0, required_work - (state.stage_progress or 0.0))
             if remaining <= 1e-12:
                 continue
-            request = min(1.0, remaining)
+            request_limit = site_stage_daily_progress_request_limit(spec)
+            assert request_limit is not None
+            request = min(request_limit, remaining)
             rows.append(ExecutionRequirementBundle(
                 self._stage_bundle_id(research_id, spec.stage_id, spec.stage_type, site),
                 "research_project", self._project_owner_id(research_id), spec.stage_id,

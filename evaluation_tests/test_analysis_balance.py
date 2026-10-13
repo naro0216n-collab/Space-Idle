@@ -536,9 +536,21 @@ def test_content_impact_uses_composition_comparison_and_registered_stage_demand(
     change = [{"kind": "research_theory_stage", "id": str(tech.id),
                "stage_id": stage.stage_id, "field": "research_point_cost",
                "value": stage.research_point_cost + delta}]
-    plan = {"phases": [{"name": "research", "days": 31, "facilities": [],
-                         "research_goal": {"node": "hypothetical.site",
-                                           "research_ids": [str(tech.id)]}}]}
+    provider, facility = next((provider, facility)
+                              for provider in sim.research.providers.values()
+                              for facility in sim.facilities.definitions.values()
+                              if provider.source_kind.value == 'facility'
+                              and provider.levels[0].generation_points_per_day > 0
+                              and provider.levels[0].research_execution_per_day > 0
+                              and provider.accepts_source(
+                                  capability.id for capability in facility.capability_supplies))
+    asset = {'node': 'hypothetical.site', 'facility': str(facility.id), 'units': 1}
+    plan = {"initial_facilities": [asset], "phases": [{
+        "name": "research", "days": 31, "facilities": [asset],
+        "research_provider_allocations": [{
+            "node": asset['node'], "provider": str(provider.id),
+            "source_facility": str(facility.id), "units": 1}],
+        "research_goal": {"node": asset['node'], "research_ids": [str(tech.id)]}}]}
     before = deepcopy(capture_state(sim))
     record = compare_content_variant(plan, change, summary=False)
     changes = record["comparisons"][0]["differences"]
@@ -547,6 +559,13 @@ def test_content_impact_uses_composition_comparison_and_registered_stage_demand(
                for r in changes)
     assert any(r["section"] == "research_stages"
                and r["delta_from_baseline"].get("point_cost") == pytest.approx(delta)
+               for r in changes)
+    assert any(r['section'] == 'research_time_structure'
+               and r['delta_from_baseline'].get('shared_rp_generation_lower_bound_days')
+               == pytest.approx(delta / provider.levels[0].generation_points_per_day)
+               for r in changes)
+    assert any(r['section'] == 'time_constraints'
+               and r['identity']['kind'] == 'research_selected_workload'
                for r in changes)
     variant = build_game_application_for_load(
         definition_transform=lambda simulation, catalog: apply_content_variant(
@@ -746,3 +765,165 @@ def test_vehicle_build_orders_are_not_usable_fleet_until_following_phase(definit
     assert any(row["section"] == "vehicle_builds"
                and row["delta_from_baseline"]["units"] == 2
                for row in compared["differences"])
+
+
+def test_shared_facility_use_and_upstream_supply_expose_one_operating_budget(definitions):
+    """New compatible Content cannot spend the same Facility duty twice."""
+    from dataclasses import replace
+    # Create an isolated, Definition-only Content configuration whose Process
+    # and Research Provider genuinely compete for a source. No static game ID
+    # or balance target is an assertion here.
+    app = build_game_application_for_load()
+    sim = app._simulation
+    provider, facility = next((p, f) for p in sim.research.providers.values()
+                              for f in sim.facilities.definitions.values()
+                              if p.source_kind.value == 'facility'
+                              and p.accepts_source(cap.id for cap in f.capability_supplies)
+                              and f.process_throughput_per_day > 0
+                              and p.levels[0].research_execution_per_day > 0)
+    process = next(p for p in sim.industry.processes.values() if p.outputs_per_day)
+    sim.industry.processes[process.id] = replace(
+        process, required_capabilities=frozenset(cap.id for cap in facility.capability_supplies))
+    output, quantity = next(iter(process.outputs_per_day.items()))
+    node = 'shared.operation.site'
+    def plan(industry_duty, research_duty):
+        asset = {'node': node, 'facility': str(facility.id), 'units': 1,
+                 'process': str(process.id), 'duty': industry_duty}
+        return {'initial_facilities': [asset], 'phases': [{
+            'name': 'shared-work', 'days': 4, 'facilities': [asset],
+            'research_provider_allocations': [{
+                'node': node, 'provider': str(provider.id),
+                'source_facility': str(facility.id), 'units': 1, 'duty': research_duty}],
+            'external_rates': [{'node': node, 'resource': str(output),
+                                'net_t_per_day': -(quantity * facility.process_throughput_per_day + 3)}],
+            'upstream_supply_choices': [{'node': node, 'resource': str(output),
+                                         'process': str(process.id)}],
+        }]}
+    within = evaluate(plan(.25, .5), app=app)['phases'][0]
+    overloaded = evaluate(plan(1, 1), app=app)['phases'][0]
+    within_use, = within['facility_use_constraints']
+    overloaded_use, = overloaded['facility_use_constraints']
+    assert within_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(0)
+    assert overloaded_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(1)
+    assert 'industry_and_research_exceed_shared_facility_operating_duty' in overloaded['unassessed_constraints']
+    candidate, = within['upstream_supply_comparisons'][0]['existing_capacity_options']
+    assert candidate['separately_available_selected_facility_process_runs_per_day'] == pytest.approx(
+        .25 * facility.process_throughput_per_day)
+    overloaded_candidate, = overloaded['upstream_supply_comparisons'][0]['existing_capacity_options']
+    assert overloaded_candidate['separately_available_selected_facility_process_runs_per_day'] == 0
+    compared = compare_cases({'cases': [{'name': 'within', 'plan': plan(.25, .5)},
+                                        {'name': 'overload', 'plan': plan(1, 1)}]}, app=app)
+    assert any(item['section'] == 'facility_use_constraints'
+               and item['delta_from_baseline']['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(1)
+               for item in compared['differences'])
+
+
+def test_phase_time_structure_respects_stage_order_and_investment_commissioning(definitions):
+    """All chosen Research stages and investments share phase-local time bounds."""
+    sim = definitions._simulation
+    provider = next(p for p in sim.research.providers.values()
+                    if p.source_kind.value == 'facility'
+                    and p.levels[0].research_execution_per_day > 0
+                    and p.levels[0].generation_points_per_day > 0)
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if provider.accepts_source(cap.id for cap in f.capability_supplies))
+    tech = next(t for t in sim.research.definitions.values()
+                if len(t.stage_specs) > 1 and any(getattr(s, 'research_point_cost', 0) > 0
+                                                   for s in t.stage_specs))
+    node = 'phase.time.research'
+    asset = {'node': node, 'facility': str(facility.id), 'units': 1}
+    goal = {'node': node, 'research_ids': [str(tech.id)], 'include_prerequisites': False}
+    phase = evaluate({'initial_facilities': [asset], 'phases': [{
+        'name': 'goal', 'days': 13, 'facilities': [asset], 'research_goal': goal,
+        'research_provider_allocations': [{
+            'node': node, 'provider': str(provider.id),
+            'source_facility': str(facility.id), 'units': 1}],
+    }]}, app=definitions)['phases'][0]
+    structure = phase['research_time_structure']
+    stages = [row for row in structure['selected_stage_service_bounds']
+              if row['research'] == str(tech.id)]
+    assert len(stages) == len(tech.stage_specs)
+    assert structure['serial_prerequisite_stage_service_lower_bound_days'] == pytest.approx(
+        sum(row['serial_service_lower_bound_days'] for row in stages))
+    assert structure['conditional_known_capacity_lower_bound_days'] >= structure[
+        'serial_prerequisite_stage_service_lower_bound_days']
+    assert any(row['kind'] == 'research_selected_workload' for row in phase['time_constraints'])
+    # Registered prototype/demonstration work cannot be completed in zero
+    # days simply because no additional finite Service is requested.
+    from space_idle.research_models import site_stage_daily_progress_request_limit
+    stage_bounds = {(row['research'], row['stage']): row for row in stages}
+    for spec in tech.stage_specs:
+        limit = site_stage_daily_progress_request_limit(spec)
+        if limit is not None:
+            bound = stage_bounds[str(tech.id), spec.stage_id]
+            assert bound['site_progress_lower_bound_days'] == pytest.approx(spec.required_work / limit)
+            assert bound['serial_service_lower_bound_days'] >= bound['site_progress_lower_bound_days']
+
+    # Scaling a selected Research source changes the same ledger's RP capacity,
+    # Stage lower bounds and comparative time sections, not an isolated goal lens.
+    doubled = {**asset, 'units': 2}
+    def selected_source(units):
+        return {'initial_facilities': [doubled], 'phases': [{
+            'name': 'goal', 'days': 13, 'facilities': [doubled], 'research_goal': goal,
+            'research_provider_allocations': [{
+                'node': node, 'provider': str(provider.id),
+                'source_facility': str(facility.id), 'units': units}],
+        }]}
+    different_providers = compare_cases({'cases': [
+        {'name': 'single', 'plan': selected_source(1)},
+        {'name': 'double', 'plan': selected_source(2)},
+    ]}, app=definitions)
+    assert any(row['section'] == 'research_time_structure' for row in different_providers['differences'])
+    assert any(row['section'] == 'time_constraints' and row['identity']['kind'] == 'research_selected_workload'
+               for row in different_providers['differences'])
+
+    builder, builder_source = next((d, sim.facilities.definitions[key])
+                                   for key, d in sim.projects.construction_providers.items()
+                                   if d.work_per_day > 0 and key in sim.projects.recipes
+                                   and sim.projects.recipes[key].construction_work > 0)
+    node = 'phase.time.industry'
+    source_id = str(builder_source.id)
+    first = {'node': node, 'facility': source_id, 'units': 1}
+    plan = {'initial_facilities': [first], 'solar_yield': {node: 1.0}, 'phases': [
+        {'name': 'acquire', 'days': 5, 'facilities': [first],
+         'facility_investments': [{'node': node, 'facility': source_id, 'units': 1}]},
+        {'name': 'use-acquired', 'days': 5, 'facilities': [{**first, 'units': 2}],
+         'facility_investments': [{'node': node, 'facility': source_id, 'units': 1}]},
+        {'name': 'after-commission', 'days': 5,
+         'facilities': [{**first, 'units': 3}]},
+    ]}
+    invest, reinvest, operational = evaluate(plan, app=definitions)['phases']
+    first_constraint, = invest['investment_constraints']
+    second_constraint, = reinvest['investment_constraints']
+    assert first_constraint['pre_investment_work_per_day'] == pytest.approx(builder.work_per_day)
+    assert second_constraint['pre_investment_work_per_day'] == pytest.approx(2 * builder.work_per_day)
+    assert first_constraint['pre_investment_work_lower_bound_days'] == pytest.approx(
+        second_constraint['pre_investment_work_lower_bound_days'] * 2)
+    assert not operational['facility_investments']
+    assert all(row['kind'] == 'construction' for row in invest['time_constraints'])
+
+    assembly_provider = next(f for f in sim.facilities.definitions.values()
+                             if any(supply.service_type == 'vehicle_assembly'
+                                    for supply in f.service_capacity_supplies))
+    vehicle_a, vehicle_b = list(sim.transport.vehicle_definitions())[:2]
+    assembly_node = 'phase.shared.assembly'
+    assembly = {'node': assembly_node, 'facility': str(assembly_provider.id), 'units': 1}
+    baseline_plan = {'initial_facilities': [assembly], 'phases': [{
+        'name': 'vehicle-production', 'days': 15, 'facilities': [assembly],
+        'vehicle_builds': [{'node': assembly_node, 'vehicle': str(vehicle_a.id), 'units': 1}],
+    }]}
+    two_orders = deepcopy(baseline_plan)
+    two_orders['phases'][0]['vehicle_builds'].append(
+        {'node': assembly_node, 'vehicle': str(vehicle_b.id), 'units': 1})
+    assembly_report = evaluate(two_orders, app=definitions)['phases'][0]
+    shared, = [item for item in assembly_report['shared_service_workloads']
+               if item['node'] == assembly_node and item['service'] == 'vehicle_assembly']
+    assert shared['required_work'] == pytest.approx(
+        vehicle_a.production.days + vehicle_b.production.days)
+    assert shared['conditional_shared_workload_lower_bound_days'] == pytest.approx(
+        shared['required_work'] / shared['nominal_capacity_per_day'])
+    comparison = compare_cases({'cases': [{'name': 'first', 'plan': baseline_plan},
+                                            {'name': 'both', 'plan': two_orders}]}, app=definitions)
+    assert any(item['section'] == 'shared_service_workloads'
+               and item['delta_from_baseline']['required_work'] == pytest.approx(vehicle_b.production.days)
+               for item in comparison['differences'])
