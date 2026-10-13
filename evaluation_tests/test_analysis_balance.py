@@ -225,7 +225,6 @@ def test_registered_cross_domain_activity_provenance_and_comparison_is_content_d
     This contract does not depend on a checked-in Facility composition or a
     prescribed scale. New registered coefficients must change the same ledger.
     """
-    from scripts.analysis_balance import evaluate_research_with_economies
     from scripts.analysis_balance_research import analyze_research_goal
     sim = definitions._simulation
     facility, process = next((f, p) for f, p in _compatible_processes(sim)
@@ -265,17 +264,15 @@ def test_registered_cross_domain_activity_provenance_and_comparison_is_content_d
     for row in projection["service_constraints"]:
         assert service_contributed[row["node"], row["service"], "demand"] == pytest.approx(row["required_per_day"])
         assert service_contributed[row["node"], row["service"], "nominal_supply"] == pytest.approx(row["nominal_capacity_per_day"])
-    # The selected Technology goal and the economic alternatives use one
-    # public quantity evaluator, with no constant fixture or additional State.
-    goal = analyze_research_goal(research_ids=(str(tech.id),), app=definitions)
+    # Workload alternatives are the same quantity evaluation as the single
+    # plan, not a separate Research goal/economy recomputation.
     second = deepcopy(plan)
     second["phases"][0]["facilities"][0]["duty"] = .75
-    joined = evaluate_research_with_economies(goal, {"first": plan, "second": second},
-                                              app=definitions, summary=True)
-    assert len(joined) == 2
-    assert all(row["research_and_economy"]["contexts"] and row["system_balance"]["phases"]
-               for row in joined)
-    assert joined[0]["system_balance"]["phases"] != joined[1]["system_balance"]["phases"]
+    comparison = compare_cases({"cases": [
+        {"name": "first", "plan": plan}, {"name": "second", "plan": second}]}, app=definitions)
+    assert comparison["cases"][0]["projection"]["phases"][0] == projection
+    assert comparison["cases"][1]["projection"]["phases"][0] != projection
+    assert comparison["differences"]
     assert capture_state(sim) == before
 
 
@@ -435,59 +432,79 @@ def test_spatial_investment_sensitivity_is_definition_derived_and_does_not_devel
 
 
 def test_research_and_economy_cli_share_one_composition_contract(definitions, tmp_path, monkeypatch, capsys):
-    """Technology goals can be evaluated with one or many authored economies.
+    """Registered Technology goals and economic choices use one Phase ledger.
 
-    Neither a repository Fixture nor an alternative research-only quantity
-    engine is involved; the CLI reports the same node-local ledger as evaluate.
+    Standalone catalog alternatives remain descriptive; they cannot silently
+    override or re-bill the quantitative plan's selected Stage requirements.
     """
     import json
     import sys
     from scripts.analysis_balance import main
+    from space_idle.research_models import ResearchTheoryStageSpec
 
-    research_id = str(next(iter(definitions._simulation.research.definitions)))
+    sim = definitions._simulation
+    source = next(definition for definition in sim.research.definitions.values()
+                  if any(isinstance(stage, ResearchTheoryStageSpec) for stage in definition.stage_specs))
+    stage = next(stage for stage in source.stage_specs if isinstance(stage, ResearchTheoryStageSpec))
+    original_stage_specs = deepcopy(source.stage_specs)
+    research_id = str(source.id)
     inputs = []
     for name, days in (("first", 3), ("second", 15)):
         path = tmp_path / f"{name}.json"
         path.write_text(json.dumps({"phases": [{"name": "activity", "days": days,
-                                               "facilities": []}]}), encoding="utf-8")
+            "facilities": [], "research_goal": {"node": "portfolio.research.site",
+            "research_ids": [research_id]}}]}), encoding="utf-8")
         inputs.append(path)
-    for args, expected in (([str(inputs[0])], [str(inputs[0])]),
-                           (["--portfolio", *(str(p) for p in inputs)], sorted(map(str, inputs)))):
-        monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *args,
-                                          "--research-id", research_id, "--summary"])
-        main()
-        report = json.loads(capsys.readouterr().out)
-        assert any(item["research"] == research_id for item in report["goal"]["research_items"])
-        assert [row["name"] for row in report["selected_economies"]] == expected
-        for record in report["selected_economies"]:
-            assert record["system_balance"]["phases"]
-            assert record["research_and_economy"]["contexts"]
 
-    # A Definition edit changes the same research/industry lens; neither a
-    # parallel experiment simulator nor a second Research rule is involved.
-    from space_idle.research_models import ResearchTheoryStageSpec
-    original = definitions._simulation.research.definitions
-    source = next(definition for definition in original.values()
-                  if any(isinstance(stage, ResearchTheoryStageSpec) for stage in definition.stage_specs))
-    stage = next(stage for stage in source.stage_specs if isinstance(stage, ResearchTheoryStageSpec))
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]), "--summary"])
+    main()
+    single = json.loads(capsys.readouterr().out)
+    phase = single["phases"][0]
+    assert phase["research_goal"]["included_technologies"] == [research_id]
+    assert phase["research_time_structure"]
+    assert any(row["kind"] == "research_selected_workload" for row in phase["time_constraints"])
+
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", "--portfolio",
+                                     *(str(p) for p in inputs), "--summary"])
+    main()
+    portfolio = json.loads(capsys.readouterr().out)
+    assert "research_generation_economics" not in portfolio
+    assert [row["plan"] for row in portfolio["scenarios"]] == sorted(str(p) for p in inputs)
+    for scenario in portfolio["scenarios"]:
+        scenario_phase = scenario["cases"][0]["phases"][0]
+        assert scenario_phase["research_time_structure"]
+        assert scenario_phase["research_goal"]["included_technologies"] == [research_id]
+        if scenario["plan"] == str(inputs[0]):
+            assert scenario_phase["shared_service_workloads"] == phase["shared_service_workloads"]
+        assert any(row["kind"] == "research_selected_workload"
+                   for row in scenario_phase["time_constraints"])
+
+    # Selecting a Technology without a physical plan exposes registered
+    # alternatives, not an independent and misleading capacity calculator.
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", "--research-id", research_id,
+                                     "--summary"])
+    main()
+    catalog = json.loads(capsys.readouterr().out)
+    assert any(item["research"] == research_id for item in catalog["goal"]["research_items"])
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]),
+                                     "--research-id", research_id])
+    with pytest.raises(SystemExit):
+        main()
+    assert "research_goal and Stage demands" in capsys.readouterr().err
+
     changed = tmp_path / "definition_changes.json"
     changed.write_text(json.dumps([{
-        "kind": "research_theory_stage", "id": str(source.id),
+        "kind": "research_theory_stage", "id": research_id,
         "stage_id": stage.stage_id, "field": "research_point_cost",
         "value": stage.research_point_cost * 1.3,
     }]), encoding="utf-8")
-    baseline_args = [str(inputs[0]), "--research-id", str(source.id), "--summary"]
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *baseline_args])
-    main()
-    baseline = json.loads(capsys.readouterr().out)
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *baseline_args,
-                                      "--content-variant", str(changed)])
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]),
+                                     "--summary", "--content-variant", str(changed)])
     main()
     adjusted = json.loads(capsys.readouterr().out)
-    assert adjusted["goal"]["research_point_requirement"] == pytest.approx(
-        baseline["goal"]["research_point_requirement"] + stage.research_point_cost * .3)
-    assert [row["name"] for row in adjusted["selected_economies"]] == [str(inputs[0])]
-    assert original[source.id].stage_specs == source.stage_specs
+    assert adjusted["phases"][0]["research_point_balance"]["research_stage_demand_points"] == pytest.approx(
+        phase["research_point_balance"]["research_stage_demand_points"] + stage.research_point_cost * .3)
+    assert sim.research.definitions[source.id].stage_specs == original_stage_specs
 
 
 def test_registered_goal_closure_enters_the_physical_ledger_without_claiming_progress(definitions):
@@ -597,26 +614,6 @@ def test_content_impact_handles_independent_alternative_cases(definitions):
     assert report["comparisons"][0]["differences"] == []
     assert any(c["section"] == "research_point_balance"
                for c in report["comparisons"][1]["differences"])
-
-
-def test_goal_join_does_not_rebill_selected_goal_as_an_unrelated_research(definitions):
-    from scripts.analysis_balance import evaluate_research_with_economies
-    from scripts.analysis_balance_research import analyze_research_goal
-    sim = definitions._simulation
-    tech = next(iter(sim.research.definitions.values()))
-    goal = analyze_research_goal(research_ids=[str(tech.id)], app=definitions)
-    plan = {"initial_research_points": 10, "phases": [{
-        "name": "activity", "days": 30, "facilities": [],
-        "research_goal": {"node": "research.zone", "research_ids": [str(tech.id)]}}]}
-    joined = evaluate_research_with_economies(goal, {"selected": plan}, app=definitions)
-    context = joined[0]["research_and_economy"]["contexts"][0]
-    assert context["goal_stage_demand_already_booked_in_ledger"]
-    assert context["goal_stage_rp_booked_in_ledger"] == pytest.approx(
-        goal["goal"]["theory_research_point_demand"])
-    assert context["current_other_research_rp_claim_per_day"] == pytest.approx(0)
-    assert context["opening_rp_conditionally_available_for_goal"] == pytest.approx(10)
-    assert context["goal_rp_remaining_after_opening_stock"] == pytest.approx(max(
-        0.0, goal["goal"]["theory_research_point_demand"] - 10))
 
 
 def test_selected_upstream_process_traces_unmet_local_demand_without_creating_supply(definitions):

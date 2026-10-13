@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context, selected_research_time_structure
+from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, compare_research_generation_reports, summarize_research_goal, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
     registered_material_links, registered_activity_coefficients, trace_material_system,
@@ -2544,6 +2544,8 @@ def _portfolio_phase_view(phase):
     fields = (
         "name", "days", "scale", "resources", "service_constraints", "constraints",
         "research_point_balance", "research_service_constraints", "investment_constraints",
+        "research_time_structure", "time_constraints", "shared_service_workloads",
+        "facility_use_constraints", "facility_investments", "vehicle_builds", "research_goal",
         "transport_services", "od_transport_constraints", "extraction_world_context",
         "power_world_context", "market_provider_constraints", "market_funds_condition",
         "unassessed_constraints", "system_network", "spatial_projects", "upgrade_projects",
@@ -2563,8 +2565,9 @@ def _portfolio_phase_view(phase):
 def _selected_composition_projections(plans: dict[str, dict], *, app, graph):
     """Sole analysis dispatch for explicit economic compositions.
 
-    Research goals and catalog-wide aggregate views consume the same
-    Definition/World-backed evaluations. No strategy-specific calculator.
+    Registered Research goal stages belong in the same Plan phases as every
+    other activity. Catalog-only Research candidate descriptions are separate
+    from this capacity ledger and cannot be overlaid upon its quantities.
     """
     if not plans:
         raise ValueError("at least one explicit composition is required")
@@ -2622,7 +2625,6 @@ def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
             for resource, records in sorted(observed.items())
         ],
         "evaluations": results,
-        "research_generation_economics": evaluate_research_generations(app=app),
     }
 
 
@@ -2671,6 +2673,23 @@ def summarize_portfolio(portfolio: dict) -> dict:
                         "nominal_generation_points", "research_stage_demand_points", "point_shortfall",
                         "nominal_storage_capacity_points", "nominal_execution_per_day",
                         "total_execution_capacity_lower_bound_days")},
+                    "research_goal": phase["research_goal"],
+                    "research_time_structure": {k: phase["research_time_structure"][k] for k in (
+                        "serial_prerequisite_stage_service_lower_bound_days",
+                        "shared_rp_generation_lower_bound_days",
+                        "shared_research_execution_lower_bound_days",
+                        "conditional_known_capacity_lower_bound_days",
+                        "missing_stage_service_capacity",
+                        "operational_experience_gates_not_elapsed_time",
+                        "external_prerequisites")},
+                    "time_constraints": phase["time_constraints"],
+                    "shared_service_workloads": phase["shared_service_workloads"],
+                    "facility_use_pressures": [item for item in phase["facility_use_constraints"]
+                                               if item["nominal_shared_unit_duty_gap_per_day"] > 1e-12],
+                    "investment": {
+                        "facility_investments": phase["facility_investments"],
+                        "vehicle_builds": phase["vehicle_builds"],
+                    },
                     "full_detail_section": "system_network",
                 })
             if not per_case:
@@ -2715,31 +2734,8 @@ def summarize_portfolio(portfolio: dict) -> dict:
             for row in portfolio["pressure_exposure_index"]
         ],
         "scenarios": scenarios,
-        "research_generation_economics": research_generations_portfolio_overview(portfolio["research_generation_economics"]),
-        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index", "research_generation_economics"],
+        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index"],
     }
-
-
-def evaluate_research_with_economies(goal_report: dict, plans: dict[str, dict], *,
-                                     app=None, summary=False) -> list[dict]:
-    """Join a selected Technology goal to authored economic alternatives once.
-
-    The inventory/Service/OD ledger is the *same* evaluator used for standalone
-    compositional comparisons. Plans are optional sensitivities, never built-in
-    phase or Facility targets. Each independently selected composition retains
-    its own time basis and local Resource ownership.
-    """
-    if app is None:
-        app = build_game_application_for_load()
-    graph = build_definition_dependency_graph(app._simulation, app._catalog)
-    joined = []
-    for name, comparison in _selected_composition_projections(plans, app=app, graph=graph):
-        economy = relate_research_goal_to_economy(goal_report, comparison)
-        joined.append({"name": name,
-                       "research_and_economy": (summarize_research_economy_context(economy)
-                                                if summary else economy),
-                       "system_balance": (summarize(comparison) if summary else comparison)})
-    return joined
 
 
 def _selected_plan_files(plan, portfolio, parser) -> dict[str, dict]:
@@ -2804,8 +2800,8 @@ def main():
     selected_methods = (json.loads(args.research_production_methods.read_text(encoding='utf-8'))
                         if args.research_production_methods else {})
     selected_plans = _selected_plan_files(args.plan, args.portfolio, parser)
-    if args.research_generations and selected_plans:
-        parser.error("all-generation catalog summary cannot imply a selected economy; select Technology goals")
+    if research_mode and selected_plans:
+        parser.error("an explicit Plan owns its research_goal and Stage demands; use Plan phases for quantitative projection or select standalone --research-id for registered alternatives")
     if args.research_compare and selected_plans:
         parser.error("--research-compare compares two completed reports, not new economic conditions")
     if args.portfolio and not selected_plans:
@@ -2873,9 +2869,6 @@ def main():
                                            selected_science_campaigns=args.research_science,
                                            production_methods=selected_methods, app=app)
             output = summarize_research_goal(result) if args.summary else result
-            if selected_plans:
-                output = {**output, 'selected_economies': evaluate_research_with_economies(
-                    result, selected_plans, summary=args.summary, app=app)}
     elif args.portfolio:
         result = evaluate_portfolio(selected_plans, app=app)
         output = summarize_portfolio(result) if args.summary else result
