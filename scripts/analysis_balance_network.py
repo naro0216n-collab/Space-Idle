@@ -42,6 +42,81 @@ def registered_material_links(graph):
                   for kind, rows in value.items()} for key, value in sorted(links.items())}
 
 
+def _inter_node_capacity_bounds(phase):
+    """Compare local Resource pressure to possible imports without routing cargo.
+
+    Every candidate OD is independent. The upper bounds for distinct resources
+    or distinct origin nodes MUST NOT be summed: both share the same Fleet,
+    cargo handling and finite production conditions. These are not allocations.
+    """
+    duration = phase["days"]
+    available_by_resource = defaultdict(list)
+    missing_by_resource = defaultdict(list)
+    for row in phase["resources"]:
+        # No speculative arrivals or externally authored inflows can be
+        # re-exported as a sourced surplus. Positive nominal production is
+        # still only a conditional (not settled) Resource upper bound.
+        local_balance = (row["notional_end_without_assumed_arrivals_t"]
+                         - max(0.0, row["external_net_t"]))
+        if local_balance > 1e-9:
+            available_by_resource[row["resource"]].append((row["node"], local_balance))
+        deficit = row["shortfall_without_assumed_arrivals_t"]
+        if deficit > 1e-9:
+            missing_by_resource[row["resource"]].append((row["node"], deficit))
+
+    # A reverse leg consumes the same Fleet cycle; it is not an independent
+    # second fleet. Other resources on the same OD share that capacity too.
+    capacity = defaultdict(float)
+    candidate_routes = set()
+    blocked = defaultdict(set)
+    for plan in phase["transport_services"]:
+        legs = [(plan["origin"], plan["destination"], "forward_capacity_t_per_day")]
+        if plan["reverse_path"]:
+            legs.append((plan["destination"], plan["origin"], "reverse_capacity_t_per_day"))
+        for origin, destination, metric in legs:
+            key = (origin, destination)
+            candidate_routes.add(key)
+            if plan["blockers"] or plan[metric] is None:
+                blocked[key].update(plan["blockers"] or ["route_capacity_unavailable"])
+            else:
+                capacity[key] += plan[metric]
+    handling = {
+        row["node"]: max(0.0, row["nominal_capacity_per_day"] - row["required_per_day"])
+        for row in phase["service_constraints"] if row["service"] == "cargo_transfer"
+    }
+    candidates = []
+    for resource in sorted(missing_by_resource):
+        for destination, deficit in sorted(missing_by_resource[resource]):
+            for origin, surplus in sorted(available_by_resource[resource]):
+                if origin == destination:
+                    continue
+                key = origin, destination
+                path_known = key in candidate_routes and not blocked[key]
+                # Resource matching is possible even without a known path;
+                # absence of transport or handling must not appear feasible.
+                od_rate = capacity[key] if path_known else None
+                handling_rate = (min(handling.get(origin, 0.0), handling.get(destination, 0.0))
+                                 if path_known else None)
+                per_resource_bound = min(surplus, deficit)
+                # If several OD Fleet allocations share nodes, this remains
+                # a per-candidate envelope, not an achievable simultaneous flow.
+                combined_bound = (min(per_resource_bound, duration * od_rate,
+                                      duration * handling_rate)
+                                  if od_rate is not None else None)
+                candidates.append({
+                    "origin": origin, "destination": destination, "resource": resource,
+                    "source_nominal_exportable_t": surplus,
+                    "destination_unmet_without_arrivals_t": deficit,
+                    "resource_overlap_upper_bound_t": per_resource_bound,
+                    "od_capacity_t_per_day": od_rate,
+                    "uncommitted_handling_t_per_day": handling_rate,
+                    "transport_and_handling_upper_bound_t": combined_bound,
+                    "blockers": sorted(blocked[key]) if key in candidate_routes else ["no_selected_transport_service"],
+                    "status": "independent_conditional_bound_not_an_allocation",
+                })
+    return candidates
+
+
 def trace_material_system(phase, registered_links):
     """Join booked quantities and typed relations by Resource and physical Node.
 
@@ -157,6 +232,7 @@ def trace_material_system(phase, registered_links):
             ],
             "status": "nominal_shared_service_not_allocated",
         } for row in phase["service_constraints"] if row["nominal_gap_per_day"] > 1e-9],
+        "inter_node_resource_options": _inter_node_capacity_bounds(phase),
         "unresolved_transport_od": [
             {"origin": row["origin"], "destination": row["destination"],
              "requested_t_per_day": row["demand_t_per_day"],
@@ -182,6 +258,10 @@ def network_overview(network):
             "potentially_affected_outputs": row["potentially_affected_outputs"],
         } for row in network["pressure_exposures"]],
         "service_pressure_count": len(network["service_pressures"]),
+        "inter_node_resource_options_count": len(network["inter_node_resource_options"]),
+        "inter_node_routes_with_selected_capacity": sum(
+            option["od_capacity_t_per_day"] is not None
+            for option in network["inter_node_resource_options"]),
         "unresolved_od_count": len(network["unresolved_transport_od"]),
         "detail_section": "system_network",
         "status": network["status"],

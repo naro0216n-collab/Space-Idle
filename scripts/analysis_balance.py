@@ -1359,18 +1359,37 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         organization_research_execution_work = research_service_work.get(("organization", "research_execution"), 0.0)
         research_services = []
         for (scope, service), amount in sorted(research_service_work.items()):
-            capacity = (research_execution_per_day if (scope, service) ==
-                        ("organization", "research_execution") else None)
+            if (scope, service) == ("organization", "research_execution"):
+                capacity = research_execution_per_day
+                shared_with_others = None  # Other Organization workload is contained in amount.
+                status = "conditional_shared_organization_capacity"
+            elif scope.startswith("node:"):
+                # Node Service Capacity is already supplied by installed
+                # Facilities and debited by every other selected activity.
+                # Using the owner ledger also avoids a second formula for
+                # Research's local Service requirements.
+                node = scope.removeprefix("node:")
+                capacity = services[(node, service)]
+                other_per_day = max(0.0, services[(node, f"required:{service}")] - amount / days)
+                shared_with_others = max(0.0, capacity - other_per_day)
+                status = "conditional_shared_node_capacity"
+            else:
+                capacity = None
+                shared_with_others = None
+                status = "service_capacity_not_assessed"
+                unassessed.add("research_execution_service_capacity_not_assessed")
             research_services.append({
                 "scope": scope, "service": service, "total_required": amount,
                 "nominal_capacity_per_day": capacity,
                 "conditional_lower_bound_days": (amount / capacity if capacity and capacity > 0 else
                                                   0.0 if amount == 0 else None),
-                "status": "conditional_shared_organization_capacity" if capacity is not None
-                          else "service_capacity_not_assessed",
+                "status": status,
+                **({"nominal_capacity_remaining_after_other_activities_per_day": shared_with_others,
+                    "conditional_lower_bound_days_after_other_activities": (
+                        amount / shared_with_others if shared_with_others > 0
+                        else 0.0 if amount == 0 else None)}
+                   if scope.startswith("node:") else {}),
             })
-            if capacity is None:
-                unassessed.add("research_execution_service_capacity_not_assessed")
         research_metrics = {
             "execution_capacity_lower_bound_days": theory_days_by_execution,
             "total_research_execution_work": organization_research_execution_work,
@@ -1555,7 +1574,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects"}:
+            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
                 raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
@@ -1565,17 +1584,25 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                                 "research_provider_allocations": ("node", "provider"),
                                 "passenger_transfers": ("origin", "destination", "vehicle"),
                                 "science_campaigns": ("campaign",),
-                                "spatial_projects": ("node", "recipe")})[collection]
-            if any(not isinstance(row.get(key), str) or not row[key] for key in identity_fields):
+                                "spatial_projects": ("node", "recipe"),
+                                "upgrade_projects": ("node", "facility", "target_level")})[collection]
+            if any(not isinstance(row.get(key), str) or not row[key] for key in identity_fields
+                   if key != "target_level") or (collection == "upgrade_projects" and
+                                                (type(row.get("target_level")) is not int or
+                                                 row["target_level"] <= 0)):
                 raise ValueError("case addition requires explicit activity identity and Definition ID")
             phases = [phase for phase in plan["phases"] if phase["name"] == change["phase"]]
             if len(phases) != 1:
                 raise ValueError("case addition requires exactly one existing phase")
             rows = phases[0].setdefault(collection, [])
-            if any(tuple(existing.get(key) for key in identity_fields) ==
-                   tuple(row[key] for key in identity_fields) for existing in rows):
+            def addition_key(item):
+                key = tuple(item.get(field) for field in identity_fields)
+                if collection == "research_provider_allocations":
+                    key += (item.get("level", 1),)
+                return key
+            if any(addition_key(existing) == addition_key(row) for existing in rows):
                 raise ValueError("case addition cannot duplicate a selected source or activity")
-            identity = (collection, change["phase"], *(row[key] for key in identity_fields))
+            identity = (collection, change["phase"], *addition_key(row))
             if identity in seen:
                 raise ValueError(f"duplicate case update: {identity}")
             seen.add(identity)
@@ -2188,7 +2215,9 @@ def summarize_portfolio(portfolio: dict) -> dict:
                     "name": phase["name"], "days": phase["days"], "scale": phase["scale"],
                     "resource_pressures": [
                         {"node": e["node"], "resource": e["resource"],
-                         "condition": e["condition"]}
+                         "condition": e["condition"],
+                         "shortfall_without_assumed_arrivals_t": e["shortfall_without_assumed_arrivals_t"],
+                         "recurring_net_t_per_day": e["recurring_net_t_per_day"]}
                         for e in network["pressure_exposures"]],
                     "service_gaps": [
                         {"node": e["node"], "service": e["service"],
@@ -2197,6 +2226,20 @@ def summarize_portfolio(portfolio: dict) -> dict:
                     "power_gaps": [
                         {"node": c["node"], "nominal_gap_mw": c["power_gap_mw"]}
                         for c in phase["constraints"] if c["power_gap_mw"] > 1e-9],
+                    "inter_node_options": [{
+                        "origin": option["origin"], "destination": option["destination"],
+                        "resource": option["resource"],
+                        "resource_overlap_upper_bound_t": option["resource_overlap_upper_bound_t"],
+                        "transport_and_handling_upper_bound_t": option["transport_and_handling_upper_bound_t"],
+                        "blockers": option["blockers"],
+                    } for option in network["inter_node_resource_options"]],
+                    "od_transport": [
+                        {"origin": od["origin"], "destination": od["destination"],
+                         "demand_t_per_day": od["demand_t_per_day"],
+                         "nominal_capacity_t_per_day": od["nominal_capacity_t_per_day"],
+                         "nominal_gap_t_per_day": od["nominal_gap_t_per_day"],
+                         "status": od["status"], "blockers": od["blockers"]}
+                        for od in phase["od_transport_constraints"]],
                     "unresolved_od_count": len(network["unresolved_transport_od"]),
                     "research": {k: phase["research_point_balance"][k] for k in (
                         "nominal_generation_points", "research_stage_demand_points", "point_shortfall",

@@ -1399,6 +1399,83 @@
           }
         }
       ]
+    },
+    {
+      "name": "partial_lab_upgrade_in_industrial_economy",
+      "updates": [
+        {
+          "collection": "upgrade_projects",
+          "phase": "established_earth_and_orbital_preparation",
+          "action": "add",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.research_laboratory",
+            "target_level": 2,
+            "units": 1
+          }
+        },
+        {
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.research_laboratory",
+          "units": 2
+        },
+        {
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "action": "add",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 1,
+            "level": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "new_lab_instead_of_level_upgrade",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.research_laboratory",
+          "units": 4
+        },
+        {
+          "collection": "research_provider_allocations",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.research_laboratory",
+          "units": 4
+        }
+      ]
+    },
+    {
+      "name": "precision_machining_and_inline_electronics_generation",
+      "updates": [
+        {
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.machine_shop",
+          "process": "base.process.precision_components"
+        },
+        {
+          "action": "add",
+          "collection": "facilities",
+          "phase": "conditional_surface_industry_and_supply",
+          "row": {
+            "node": "base.location.earth_industrial",
+            "facility": "base.facility.inline_inspected_microelectronics",
+            "units": 1,
+            "process": "base.process.yield_monitored_microelectronics"
+          }
+        }
+      ]
     }
   ]
 }

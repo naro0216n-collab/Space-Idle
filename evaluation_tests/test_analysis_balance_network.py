@@ -114,6 +114,11 @@ def test_portfolio_keeps_different_duration_compositions_independent(source):
     assert [r["plan"] for r in portfolio["evaluations"]] == ["long", "short"]
     summary = summarize_portfolio(portfolio)
     assert len(summary["scenarios"]) == 2
+    baseline_phase = summary["scenarios"][0]["cases"][0]["phases"][0]
+    assert all("shortfall_without_assumed_arrivals_t" in item and
+               "recurring_net_t_per_day" in item
+               for item in baseline_phase["resource_pressures"])
+    assert "od_transport" in baseline_phase
     assert [s["cases"][0]["phases"][0]["days"] for s in summary["scenarios"]] == [30, 3]
     assert "not_gameplay" in portfolio["portfolio_conditions"]
     assert portfolio["registered_activity_coefficients"]
@@ -175,3 +180,121 @@ def test_unconfirmed_arrival_does_not_make_downstream_input_assured(source):
     assert exposed["condition"] == "nominal_shortfall_without_assumed_arrivals"
     assert exposed["status"] == "possible_exposure_not_allocated_lost_output"
     assert phase["system_network"]["unresolved_transport_od"]
+
+
+def test_inter_node_resource_options_keep_physical_boundaries_and_nonarrival_accounting(source):
+    """A remote surplus is neither local stock nor a booked transport capacity."""
+    sim = source._simulation
+    recipe = next(recipe for recipe in sim.projects.recipes.values()
+                  if recipe.resources and recipe.facility_def_id in sim.facilities.definitions)
+    resource = str(recipe.resources[0].resource_id)
+    facility = str(recipe.facility_def_id)
+    origin, destination = "physical.supplier", "physical.consumer"
+    candidate = {"initial_stock": [{"node": origin, "resource": resource, "amount_t": 10000}],
+                 "phases": [{"name": "resource_distribution", "days": 10,
+                             "facilities": [{"node": destination, "facility": facility, "units": 1}]}]}
+    phase = evaluate(candidate, app=source)["phases"][0]
+    option = next(r for r in phase["system_network"]["inter_node_resource_options"]
+                  if (r["origin"], r["destination"], r["resource"]) ==
+                  (origin, destination, resource))
+    deficit = next(r["shortfall_without_assumed_arrivals_t"] for r in phase["resources"]
+                   if r["node"] == destination and r["resource"] == resource)
+    assert option["resource_overlap_upper_bound_t"] == pytest.approx(deficit)
+    assert option["od_capacity_t_per_day"] is None
+    assert option["transport_and_handling_upper_bound_t"] is None
+    assert option["blockers"] == ["no_selected_transport_service"]
+    assert next(row for row in phase["resources"]
+                if row["node"] == destination and row["resource"] == resource)["shortfall_t"] > 0
+
+    # A nominal purchase/source assumption cannot be counted as confirmed
+    # exportable production by a different Node.
+    conditional = deepcopy(candidate)
+    conditional["initial_stock"] = []
+    conditional["phases"][0]["external_rates"] = [
+        {"node": origin, "resource": resource, "net_t_per_day": 200}]
+    phase = evaluate(conditional, app=source)["phases"][0]
+    assert not any(o["origin"] == origin and o["resource"] == resource
+                   for o in phase["system_network"]["inter_node_resource_options"])
+
+
+def test_inter_node_shared_freight_bounds_are_independent_and_require_handling(source):
+    """Multiple Resource overlap bounds do not mint repeated OD or handling capacity."""
+    sim = source._simulation
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if sim.projects.recipes.get(f.id)
+                    and len(sim.projects.recipes[f.id].resources) >= 2)
+    inputs = list(sim.projects.recipes[facility.id].resources)[:2]
+    origin, destination = "capacity.origin", "capacity.destination"
+    plan = {"initial_stock": [{"node": origin, "resource": str(item.resource_id),
+                               "amount_t": 10000} for item in inputs],
+            "phases": [{"name": "investment", "days": 10,
+                        "facilities": [{"node": destination, "facility": str(facility.id),
+                                        "units": 1}]}]}
+    phase = evaluate(plan, app=source)["phases"][0]
+    # A transport capacity preview is an input to this generic diagnostics
+    # function. This does not introduce an alternate in-game transport engine.
+    phase["transport_services"] = [{"origin": origin, "destination": destination,
+                                     "forward_capacity_t_per_day": 3.0,
+                                     "reverse_capacity_t_per_day": 0.0,
+                                     "reverse_path": [], "blockers": []}]
+    phase["service_constraints"] += [
+        {"node": node, "service": "cargo_transfer", "nominal_capacity_per_day": capacity,
+         "required_per_day": 0.0, "nominal_gap_per_day": 0.0}
+        for node, capacity in [(origin, 2.0), (destination, 1.5)]]
+    from scripts.analysis_balance_network import trace_material_system
+    network = trace_material_system(phase, {})
+    options = [option for option in network["inter_node_resource_options"]
+               if option["origin"] == origin and option["destination"] == destination
+               and option["resource"] in {str(item.resource_id) for item in inputs}]
+    assert len(options) == 2
+    assert all(option["od_capacity_t_per_day"] == pytest.approx(3) for option in options)
+    assert all(option["uncommitted_handling_t_per_day"] == pytest.approx(1.5) for option in options)
+    assert all(option["transport_and_handling_upper_bound_t"] == pytest.approx(min(
+        option["resource_overlap_upper_bound_t"], 15)) for option in options)
+    # Distinct resources cannot each be promised 15t of delivery; there is
+    # one shared 15t handling envelope at the receiving Node for this period.
+    assert all(option["status"] == "independent_conditional_bound_not_an_allocation"
+               for option in options)
+
+
+def test_node_scoped_research_and_freight_draw_one_registered_service_pool():
+    """Research capacity is the installed owner's Service supply, net of competing duty."""
+    from dataclasses import replace
+    from space_idle.execution_requirements import ServiceCapacityRequirement
+    from space_idle.service_capacity import ServiceCapacityScope
+
+    app = build_game_application_for_load()
+    sim = app._simulation
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if any(s.service_type == "cargo_transfer" for s in f.service_capacity_supplies))
+    capacity = next(s.nominal_rate for s in facility.service_capacity_supplies
+                    if s.service_type == "cargo_transfer")
+    technology = next(iter(sim.research.definitions.values()))
+    stage = technology.stage_specs[0]
+    service = ServiceCapacityRequirement(
+        "cargo_transfer", 0.005, scope=ServiceCapacityScope.OPERATIONAL_NODE)
+    sim.research.definitions[technology.id] = replace(
+        technology, stage_specs=(replace(stage, execution_requirements=(
+            *stage.execution_requirements, service)), *technology.stage_specs[1:]))
+    node, receiver, days = "research-and-freight", "freight-destination", 8
+    resource = str(next(iter(app._catalog.resources)))
+    selected = {"node": node, "facility": str(facility.id), "units": 1}
+    phase = evaluate({"initial_facilities": [selected],
+                      "initial_stock": [{"node": node, "resource": resource, "amount_t": 100}],
+                      "phases": [{"name": "shared", "days": days, "facilities": [selected],
+                                  "research_stages": [{"node": node,
+                                                       "research": str(technology.id),
+                                                       "stage": stage.stage_id}],
+                                  "transfers": [{"origin": node, "destination": receiver,
+                                                 "resource": resource, "t_per_day": 1}]}]},
+                     app=app)["phases"][0]
+    research = next(row for row in phase["research_service_constraints"]
+                    if row["scope"] == f"node:{node}" and row["service"] == "cargo_transfer")
+    assert research["nominal_capacity_per_day"] == pytest.approx(capacity)
+    assert research["nominal_capacity_remaining_after_other_activities_per_day"] == pytest.approx(capacity - 1)
+    assert research["conditional_lower_bound_days_after_other_activities"] == pytest.approx(
+        research["total_required"] / (capacity - 1))
+    handling = next(row for row in phase["service_constraints"]
+                    if row["node"] == node and row["service"] == "cargo_transfer")
+    assert handling["nominal_capacity_per_day"] == pytest.approx(capacity)
+    assert handling["required_per_day"] == pytest.approx(1 + research["total_required"] / days)

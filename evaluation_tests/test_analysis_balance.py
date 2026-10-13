@@ -964,13 +964,13 @@ def test_resource_contributions_reconcile_by_source_with_all_projected_dimension
     from pathlib import Path
     from scripts.analysis_balance import compare_cases
 
-    named = ("industrial_scale_comparison", "industrial_fleet_scale_comparison",
-             "cross_domain_industrial_research_logistics", "world_growth_research_logistics")
+    named = ("industrial_fleet_scale_comparison",
+             "connected_industry_science_settlement_tradeoffs", "world_growth_research_logistics")
     dimensions = ("production_t", "process_demand_t", "maintenance_demand_t",
                   "construction_demand_t", "vehicle_build_demand_t",
                   "fleet_turnaround_demand_t", "transport_service_demand_t",
                   "research_material_demand_t", "science_material_demand_t",
-                  "founding_payload_demand_t", "life_support_demand_t",
+                  "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t",
                   "external_net_t", "shipped_t", "received_t")
     before = deepcopy(capture_state(definitions._simulation))
     for name in named:
@@ -1080,44 +1080,33 @@ def test_world_opportunity_shared_across_distinct_method_outputs():
     assert outputs[str(raw.output_resource_id)] == pytest.approx(outputs[str(other_resource)])
 
 
-def test_research_investment_comparison_preserves_distinct_capital_and_capacity_dimensions(definitions):
-    """Check the comparison contract, not which registered option is 'optimal'."""
+def test_integrated_research_upgrade_compares_partial_levels_and_new_labs(definitions):
+    """Upgrade/expansion use the same industrial, logistic and research base."""
     import json
     from pathlib import Path
 
     data = json.loads((Path(__file__).parent.parent / "evaluation_plans" /
-                       "research_capacity_investment.json").read_text())
+                       "connected_industry_science_settlement_tradeoffs.json").read_text())
+    selected = [data["cases"][0]] + [case for case in data["cases"]
+                 if case["name"] in ("partial_lab_upgrade_in_industrial_economy",
+                                     "new_lab_instead_of_level_upgrade")]
     before = deepcopy(capture_state(definitions._simulation))
-    results = compare_cases(data, app=definitions)["cases"]
+    results = compare_cases({"base_plan": data["base_plan"], "cases": selected},
+                            app=definitions)["cases"]
     assert len(results) == 3
-    sim = definitions._simulation
-    lab_id = next(p.id for p in sim.research.providers.values()
-                  if len(p.levels) > 1 and p.source_kind.value == "facility")
-    provider = sim.research.providers[lab_id]
-    upgrade = sim.projects.upgrade_recipes[(lab_id, 2)]
-    initial, upgraded, expanded = (row["projection"]["phases"] for row in results)
-    for phases in (initial, upgraded, expanded):
-        first, second = phases
-        assert not first["research_stages"]
-        assert second["research_point_balance"]["research_stage_demand_points"] > 0
-        assert second["research_point_balance"]["execution_capacity_lower_bound_days"] is not None
-    assert upgraded[0]["upgrade_projects"][0]["required_construction_work"] == pytest.approx(
-        upgrade.construction_work
-    )
-    assert expanded[0]["scale"]["facility_units_added"] == 1
-    assert upgraded[0]["scale"]["facility_units_added"] == 0
-    assert initial[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
-        provider.level_spec(1).research_execution_per_day
-    )
-    assert upgraded[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
-        provider.level_spec(2).research_execution_per_day
-    )
-    assert expanded[1]["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
-        2 * provider.level_spec(1).research_execution_per_day
-    )
-    assert "research_source_facility_level_and_upgrade_investment_unassessed" in upgraded[1][
-        "unassessed_constraints"
-    ]
+    baseline = results[0]["projection"]["phases"]
+    upgraded = next(row["projection"]["phases"] for row in results
+                    if row["name"] == "partial_lab_upgrade_in_industrial_economy")
+    expanded = next(row["projection"]["phases"] for row in results
+                    if row["name"] == "new_lab_instead_of_level_upgrade")
+    assert upgraded[0]["upgrade_projects"] and upgraded[0]["scale"] == baseline[0]["scale"]
+    assert upgraded[1]["scale"] == baseline[1]["scale"]
+    assert expanded[1]["scale"]["facility_units"] == baseline[1]["scale"]["facility_units"] + 1
+    def research_capacity(phase):
+        return phase["research_point_balance"]["nominal_execution_per_day"]
+    assert research_capacity(upgraded[1]) > research_capacity(baseline[1])
+    assert research_capacity(expanded[1]) > research_capacity(baseline[1])
+    assert upgraded[0]["resources"] != expanded[0]["resources"]
     assert capture_state(definitions._simulation) == before
 
 
@@ -1152,6 +1141,12 @@ def test_new_node_scoped_research_requirement_shares_node_service_ledger():
                and row["rate_per_day"] == pytest.approx(expected)
                for row in report["service_contributions"])
     assert not any(row["node"] == f"node:{node}" for row in report["service_constraints"])
+    shared = next(row for row in report["research_service_constraints"]
+                  if row["scope"] == f"node:{node}" and row["service"] == "cargo_transfer")
+    assert shared["nominal_capacity_per_day"] == pytest.approx(0)
+    assert shared["conditional_lower_bound_days"] is None
+    assert shared["conditional_lower_bound_days_after_other_activities"] is None
+    assert "research_execution_service_capacity_not_assessed" not in report["unassessed_constraints"]
 
 
 def test_registered_solar_power_uses_owner_world_context_without_settling_operation(definitions):
