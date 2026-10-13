@@ -24,8 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.analysis_balance_research import research_goal_closure, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
-    registered_material_links, trace_material_system,
-    network_overview, producer_catalog, conditional_material_paths,
+    producer_catalog, conditional_material_paths,
     shared_upstream_capacity_bounds,
 )
 from space_idle.bootstrap import (build_game_application_for_load, build_game_application,
@@ -258,7 +257,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     graph = (_definition_graph if _definition_graph is not None else
              build_definition_dependency_graph(sim, catalog))
     graph_nodes = frozenset(graph.nodes)
-    registered_links = registered_material_links(graph)
     relation_index = defaultdict(list)
     for relation in graph.relations:
         relation_index[relation.source].append(relation)
@@ -1770,7 +1768,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "nominal_services_per_day": [dict(node=n, service=s, capacity=q)
                                                      for (n, s), q in sorted(services.items())
                                                      if not s.startswith("required:")]})
-        report[-1]["system_network"] = trace_material_system(report[-1], registered_links)
         # Supply strategy is an analyst choice, not a solver-selected recipe.
         # Expand *unmet* demands at their own Node without booking imaginary
         # production or combining the same Facility throughput across methods.
@@ -2510,6 +2507,8 @@ def summarize_projection(projection: dict) -> dict:
                                              category="service", identifier=row["service"],
                                              quantity="rate_per_day")
 
+        stage_bounds = {(item["research"], item["stage"]): item
+                        for item in phase["research_time_structure"]["selected_stage_service_bounds"]}
         phases.append({
             "name": phase["name"], "days": phase["days"],
             "scale": phase["scale"],
@@ -2553,9 +2552,18 @@ def summarize_projection(projection: dict) -> dict:
             ],
             "research_point_balance": phase["research_point_balance"],
             "research_goal": phase["research_goal"],
+            "selected_research_stage_requirements": [
+                {"research": stage["research"], "stage": stage["stage"],
+                 "type": stage["stage_type"], "rp_points": stage["point_cost"],
+                 "resource_requirements_t": stage["resource_requirements_t"],
+                 "required_experience": stage["experience_requirements"],
+                 "conditional_service_lower_bound_days": stage_bounds[(stage["research"], stage["stage"])]["serial_service_lower_bound_days"],
+                 "unresolved_stage_gate": stage_bounds[(stage["research"], stage["stage"])]["unresolved_stage_gate"]}
+                for stage in phase["research_stages"]],
             "upstream_supply_comparisons": phase["upstream_supply_comparisons"],
             "research_service_constraints": phase["research_service_constraints"],
-            "research_time_structure": phase["research_time_structure"],
+            "research_time_structure": {key: value for key, value in phase["research_time_structure"].items()
+                                        if key != "selected_stage_service_bounds"},
             "time_constraints": phase["time_constraints"],
             "shared_service_workloads": phase["shared_service_workloads"],
             "facility_use_pressures": [row for row in phase["facility_use_constraints"]
@@ -2612,6 +2620,7 @@ _SUMMARY_ROW_IDENTITY = {
     "service_gaps": ("node", "service"),
     "power_gaps": ("node",),
     "recurring_resource_pressures_by_node": ("node", "resource"),
+    "selected_research_stage_requirements": ("research", "stage"),
     "conditional_incoming_cargo_risks_by_node": ("node", "resource"),
     "service_shortfalls_by_node": ("node", "service"),
     "power_and_population_by_node": ("node",),

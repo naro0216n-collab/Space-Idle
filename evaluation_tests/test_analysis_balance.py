@@ -533,6 +533,11 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
     assert phase["research_goal"]["included_technologies"] == [research_id]
     assert phase["research_time_structure"]
     assert any(row["kind"] == "research_selected_workload" for row in phase["time_constraints"])
+    assert sum(row["rp_points"] for row in phase["selected_research_stage_requirements"]) == pytest.approx(
+        phase["research_point_balance"]["research_stage_demand_points"])
+    assert all("conditional_service_lower_bound_days" in row
+               for row in phase["selected_research_stage_requirements"])
+    assert "selected_stage_service_bounds" not in phase["research_time_structure"]
 
     # Alternative research horizons belong in the same case-comparison entry,
     # not a batch report that cannot justify cross-condition deltas.
