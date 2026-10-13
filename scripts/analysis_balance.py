@@ -252,6 +252,8 @@ def _selected_reference_opening(sim) -> dict:
         if total:
             fleet.append({"node": str(node), "vehicle": str(vehicle), "units": total})
     return {
+        "initial_experience": dict(sorted(sim.research.knowledge_state.experience_by_category.items())),
+        "initial_available_funds_musd": sim.market.available_funds_musd,
         "initial_stock": [{"node": str(node), "resource": str(resource), "amount_t": amount}
                           for (node, resource), amount in sorted(sim.inventory.stock.items())
                           if amount > 0],
@@ -272,7 +274,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day", "opening_from_reference", "initial_completed_technologies"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day", "opening_from_reference", "initial_completed_technologies",
+                 "initial_experience", "initial_available_funds_musd", "opening_adjustments"},
+          {"phases"}, "plan")
     reference = _movement_reference(plan)
     if app is None:
         app = _new_reference_application(reference)
@@ -282,15 +286,26 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         raise ValueError("opening_from_reference must be a boolean")
     opening_fleet_commitments = []
     opening_fleet_free = {}
+    opening_adjustments = plan.get("opening_adjustments", [])
+    if not isinstance(opening_adjustments, list):
+        raise ValueError("opening_adjustments must be a list of common case updates")
     if from_reference:
         if reference != "applied_scenario":
             raise ValueError("opening_from_reference requires movement_reference=applied_scenario")
         if any(key in plan for key in ("initial_stock", "initial_facilities", "initial_fleet",
-                                      "initial_research_points", "initial_completed_technologies")):
-            raise ValueError("Scenario opening and authored initial holdings cannot be mixed")
+                                      "initial_research_points", "initial_completed_technologies",
+                                      "initial_experience", "initial_available_funds_musd")):
+            raise ValueError("Scenario opening and authored initial holdings cannot be mixed; use opening_adjustments")
         if not any(sim.graph.operational_nodes()):
             raise ValueError("opening_from_reference requires an applied Scenario")
         plan = {**_selected_reference_opening(sim), **plan}
+        if opening_adjustments:
+            initial_fields = {field for field in plan if field.startswith("initial_")}
+            if any(not isinstance(change, dict) or change.get("phase") is not None
+                   or change.get("collection") not in initial_fields
+                   for change in opening_adjustments):
+                raise ValueError("Scenario opening adjustments must select registered initial conditions only")
+            plan = _apply_case_updates(plan, opening_adjustments)
         for vehicle, node in sim.transport.fleet_pool_keys():
             held = sim.transport.fleet_pool_snapshot(vehicle, node)
             opening_fleet_free[(str(node), str(vehicle))] = held.free_units
@@ -301,6 +316,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     "precommitted_units": held.total_units - held.free_units,
                     "status": "scenario_commitment_requires_explicit_reallocation_for_other_use",
                 })
+    elif opening_adjustments:
+        raise ValueError("opening_adjustments require opening_from_reference and an applied Scenario")
     if reference == "applied_scenario" and not any(sim.graph.operational_nodes()):
         raise ValueError("applied_scenario Movement reference needs an applied Scenario, "
                          "not a definitions-only supplied Application")
@@ -384,6 +401,19 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         label="initial Fleet", allow_turnarounds=False,
     ).items()}
     previous_fleet = dict(initial_fleet_units)
+    if from_reference:
+        # Existing commitments cannot be erased by rewriting a hypothetical
+        # opening Fleet total. New units are uncommitted only because they are
+        # an explicit analyst-selected opening asset, not an owner transition.
+        for item in opening_fleet_commitments:
+            key = item["node"], item["vehicle"]
+            if initial_fleet_units.get(key, 0) < item["precommitted_units"]:
+                raise ValueError("Scenario Fleet opening adjustment would erase an existing commitment")
+        opening_fleet_free = {
+            key: max(0, total - next((item["precommitted_units"] for item in opening_fleet_commitments
+                                      if (item["node"], item["vehicle"]) == key), 0))
+            for key, total in initial_fleet_units.items()
+        }
     cumulative_vehicle_builds = defaultdict(int)
     known_technologies = {str(identifier) for identifier in sim.research.definitions}
     initially_completed = plan.get("initial_completed_technologies", [])
@@ -394,6 +424,27 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     initially_completed = {_identifier(identifier, known_technologies, "initial completed Technology")
                            for identifier in initially_completed}
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
+    initial_experience = plan.get("initial_experience", {})
+    if (not isinstance(initial_experience, dict) or
+            any(not isinstance(category, str) or not category for category in initial_experience)):
+        raise ValueError("initial_experience must map nonempty experience categories to points")
+    initial_experience = {category: _number(amount, f"experience {category}")
+                          for category, amount in initial_experience.items()}
+    initial_available_funds = (None if "initial_available_funds_musd" not in plan else
+                               _number(plan["initial_available_funds_musd"], "initial available funds"))
+    conditional_funds = initial_available_funds
+    # Owner-supplied day-zero Market availability is only a quantity bound.
+    # In a Definition-only experiment the registered initial supply is the
+    # explicit counterfactual starting stock, not a purchased Resource.
+    opening_market_supply = {}
+    for provider_id, provider in sim.market.provider_defs.items():
+        for supply in provider.supply:
+            key = (str(provider_id), str(supply.resource_id))
+            opening_market_supply[key] = (sim.market.available_provider_supply_t(
+                provider_id, supply.resource_id) if from_reference
+                and provider_id in sim.market.provider_states else supply.initial_t)
+    prior_market_requests = defaultdict(float)
+    elapsed_market_days = 0
     # Cumulative authored receipts are conditional upon actual Cargo settlement.
     # This is an algebraic lower Stock-bound, not a second logistics scheduler.
     unverified_cargo_receipts = defaultdict(float)
@@ -403,7 +454,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     opening_reference_day = _integer(plan.get("start_day", 0), "initial World reference day")
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "reference_day"},
+        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "assumed_experience", "reference_day"},
               {"name", "days"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
@@ -499,6 +550,15 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             service_origins[(node, "construction_work", "demand", origin_kind, str(origin_id),
                              "definition_x_selected_investment")] += required_work / days
         unassessed = set()
+        phase_experience = phase.get("assumed_experience", initial_experience)
+        if (not isinstance(phase_experience, dict) or
+                any(not isinstance(category, str) or not category for category in phase_experience)):
+            raise ValueError("assumed_experience must map category IDs to available points")
+        phase_experience = {category: _number(points, f"assumed experience {category}")
+                            for category, points in phase_experience.items()}
+        experience_source = ("analyst_selected_phase_experience"
+                             if "assumed_experience" in phase else
+                             "opening_research_knowledge_state_or_initial_assumption")
         stage_details = []
         transfer_details = []
         transport_services = []
@@ -1326,13 +1386,20 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     requirements.append({"kind": type(requirement).__name__,
                                          "name": requirement.pool_id,
                                          "amount_per_execution": requirement.amount_per_execution})
+            experience_requirements = dict(sorted(getattr(spec, "requirements", {}).items()))
+            experience_gaps = {category: max(0.0, quantity - phase_experience.get(category, 0.0))
+                               for category, quantity in experience_requirements.items()}
             stage_details.append({
                 "node": row["node"], "research": rid, "stage": spec.stage_id,
                 "stage_type": spec.stage_type.value,
                 "direct_prerequisites": sorted(str(r) for r in definition.prerequisites),
                 "point_cost": getattr(spec, "research_point_cost", 0.0),
                 "work": getattr(spec, "required_work", 0.0),
-                "experience_requirements": dict(sorted(getattr(spec, "requirements", {}).items())),
+                "experience_requirements": experience_requirements,
+                "available_experience_points": {category: phase_experience.get(category, 0.0)
+                                                for category in experience_requirements},
+                "experience_condition_source": experience_source,
+                "unmet_experience_points": experience_gaps,
                 "resource_requirements_t": {str(r): amount for r, amount in
                                             sorted(getattr(spec, "resources", {}).items(), key=lambda pair: str(pair[0]))},
                 "execution_requirements": requirements,
@@ -1342,7 +1409,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "not_scheduled_or_eligibility_checked",
             })
             unassessed.add("research_stage_order_prerequisites_site_and_execution_allocation")
-            if spec.stage_type.value == "operational_experience":
+            if any(experience_gaps.values()):
                 unassessed.add("operational_experience_not_generated_by_elapsed_time")
         # A selected one-shot dedicated passenger trip consumes real Vehicle
         # accommodation provisions, not a fictional Population-as-Cargo item.
@@ -1425,12 +1492,19 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             provider = sim.market.provider_defs[DefinitionId(provider_id)]
             supply = provider.supply_def(DefinitionId(resource))
             price = market_price[(provider_id, resource)]
-            # Supply is the provider-wide potential, not repeated per Node.
-            conditional_supply = (supply.initial_t + supply.replenishment_t_per_day * days
+            # The same Provider supply is shared by all Node requests and
+            # comparison Phases. This is an optimistic finite quantity envelope,
+            # conditional on earlier selected buys, NOT an Order settlement.
+            key = (provider_id, resource)
+            starting_supply = (min(supply.capacity_t, max(0.0,
+                opening_market_supply[key] + supply.replenishment_t_per_day * elapsed_market_days
+                - prior_market_requests[key])) if supply else None)
+            conditional_supply = (starting_supply + supply.replenishment_t_per_day * days
                                   if supply else None)
             arrival_window = max(0, days - provider.lead_time_days)
             conditional_deliverable = (None if supply is None else
-                                       supply.initial_t + supply.replenishment_t_per_day * arrival_window
+                                       min(conditional_supply,
+                                           starting_supply + supply.replenishment_t_per_day * arrival_window)
                                        if arrival_window > 0 else 0.0)
             market_provider_constraints.append({
                 "provider": provider_id, "resource": resource,
@@ -1438,6 +1512,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "unit_price_musd_per_t": price,
                 "nominal_cost_musd": (price * quantity if price is not None else None),
                 "provider_definition_initial_supply_t": supply.initial_t if supply else None,
+                "provider_opening_available_supply_t": opening_market_supply.get(key),
+                "conditional_supply_at_phase_start_t": starting_supply,
+                "prior_selected_buy_requests_t": prior_market_requests[key],
+                "provider_supply_basis": ("scenario_available_provider_supply" if from_reference
+                                          else "registered_definition_initial_supply"),
                 "provider_definition_stock_capacity_t": supply.capacity_t if supply else None,
                 "provider_definition_replenishment_t_per_day": supply.replenishment_t_per_day if supply else None,
                 "conditional_total_supply_upper_bound_t": conditional_supply,
@@ -1445,19 +1524,29 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "theoretical_shortfall_t": (max(0.0, quantity - conditional_deliverable)
                                             if supply and price is not None else None),
                 "lead_time_days": provider.lead_time_days,
-                "status": "conditional_provider_definition_not_market_state_or_delivery"
+                "status": "conditional_shared_provider_envelope_not_purchase_or_delivery"
                           if supply and price is not None else "no_registered_buy_offer_or_supply",
             })
+            prior_market_requests[key] += quantity
+        elapsed_market_days += days
+        override_funds = "assumed_funds_musd" in phase
         assumed_funds = (_number(phase["assumed_funds_musd"], "authored phase funds")
-                         if "assumed_funds_musd" in phase else None)
+                         if override_funds else conditional_funds)
         nominal_market_cost = (sum(row["nominal_cost_musd"] for row in market_provider_constraints)
                                if all(row["nominal_cost_musd"] is not None for row in market_provider_constraints)
                                else None)
+        ending_funds = (assumed_funds - nominal_market_cost
+                        if assumed_funds is not None and nominal_market_cost is not None else None)
         market_funds = {"assumed_funds_musd": assumed_funds,
+                        "source": ("analyst_selected_phase_funds" if override_funds else
+                                   "opening_funds_less_prior_selected_requests" if assumed_funds is not None
+                                   else "unassessed_funds"),
                         "nominal_request_cost_musd": nominal_market_cost,
-                        "conditional_funds_gap_musd": (max(0.0, nominal_market_cost - assumed_funds)
-                                                       if assumed_funds is not None and nominal_market_cost is not None else None),
-                        "status": "phase_condition_not_actual_market_state"}
+                        "conditional_remaining_funds_musd": ending_funds,
+                        "conditional_funds_gap_musd": (max(0.0, -ending_funds)
+                                                       if ending_funds is not None else None),
+                        "status": "conditional_requests_not_actual_market_settlement"}
+        conditional_funds = ending_funds
         for row in phase.get("external_rates", ()):
             _keys(row, {"node", "resource", "net_t_per_day"}, {"node", "resource", "net_t_per_day"}, "external rate")
             _identifier(row["resource"], known_resource, "Resource")
@@ -1817,6 +1906,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "facility_investments": facility_investment_details,
                        "vehicle_builds": vehicle_build_details,
                        "research_stages": stage_details,
+                       "research_experience_condition": {"source": experience_source,
+                                                        "available_points": phase_experience},
                        "research_goal": goal_details,
                        "research_service_constraints": research_services,
                        "spatial_projects": spatial_activity_details,
@@ -1867,14 +1958,20 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
             "movement_reference": reference,
-            "opening_conditions_source": ("applied_scenario_domain_state" if from_reference else
-                                          "analyst_selected_initial_holdings"),
+            "opening_conditions_source": (
+                "applied_scenario_with_explicit_initial_adjustments" if from_reference and opening_adjustments else
+                "applied_scenario_domain_state" if from_reference else
+                "analyst_selected_initial_holdings"),
+            "opening_adjustments": deepcopy(opening_adjustments),
             "scenario_id": sim.scenario_id,
             "initial_completed_technologies": sorted(initially_completed),
+            "initial_experience": initial_experience,
+            "initial_available_funds_musd": initial_available_funds,
             "opening_fleet_precommitments": opening_fleet_commitments,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
-                "A referenced Scenario opening provides only physical Stock and holding ceilings; installed assets require explicit Phase selection and Fleet commitments remain conditional.",
+                "A referenced Scenario opening supplies Domain-owned holdings, funds and Knowledge; selected operation and conditional phase changes remain authored.",
+                "Scenario Funds are currently available funds, net of existing Market reservations; future Buy requests debit only a conditional balance, not actual Funds or delivered Resources.",
                 "Opening Facility compositions are explicitly authored and their prior investment only bounds conditional availability; construction never operates in the investment phase.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
                 "Facility upgrades consume materials and work; a higher Level contributes only in a later Phase whose opening holdings explicitly select that Level, bounded by prior investments.",
@@ -1929,7 +2026,8 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                 raise ValueError("phase sensitivity requires phase and set")
             destination = target
             match = None
-        elif collection in {"initial_research_points", "initial_completed_technologies", "start_day"}:
+        elif collection in {"initial_research_points", "initial_completed_technologies", "start_day",
+                            "initial_available_funds_musd", "initial_experience"}:
             if phase_name is not None or set(change) != {"collection", "value"}:
                 raise ValueError("initial condition sensitivity requires only a value")
             destination = plan
@@ -1981,7 +2079,8 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             if len(selected) != 1:
                 raise ValueError(f"case row change is not uniquely selected: {collection}/{match}")
             destination = selected[0]
-        if collection in {"initial_research_points", "initial_completed_technologies", "start_day", "solar_yield"}:
+        if collection in {"initial_research_points", "initial_completed_technologies", "start_day",
+                          "initial_available_funds_musd", "initial_experience", "solar_yield"}:
             if "set" in change or "action" in change:
                 raise ValueError("scalar sensitivity cannot use row edits")
             key = collection if collection != "solar_yield" else match["node"]
@@ -2003,7 +2102,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             continue
         if "action" in change or "row" in change or "value" in change or not isinstance(change.get("set"), dict) or not change["set"]:
             raise ValueError("case update requires a nonempty set of Plan fields")
-        if collection == "phase" and (set(change["set"]) - {"days", "reference_day", "assumed_funds_musd"}):
+        if collection == "phase" and (set(change["set"]) - {"days", "reference_day", "assumed_funds_musd", "assumed_experience"}):
             raise ValueError("phase comparison may change time or assumed funds, not its identity")
         if collection != "research_goal" and collection != "phase" and "name" in change["set"]:
             raise ValueError("case updates must not rename selected phases")
@@ -2232,6 +2331,13 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                                 "section": "initial_technology_conditions",
                                 "baseline_completed": baseline_technologies,
                                 "case_completed": case_technologies})
+        for key, section in (("initial_experience", "initial_experience_conditions"),
+                             ("initial_available_funds_musd", "initial_funds_conditions")):
+            original = results[0]["projection"][key]
+            updated = alternative["projection"][key]
+            if original != updated:
+                differences.append({"case": alternative["name"], "phase": None,
+                                    "section": section, "baseline": original, "case_condition": updated})
         source = alternative["projection"]["opening_conditions_source"]
         if source != baseline_source:
             differences.append({"case": alternative["name"], "phase": None,
@@ -2305,6 +2411,16 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                 if conditions:
                     change["condition_change"] = conditions
                 differences.append(change)
+            if left["market_funds_condition"] != right["market_funds_condition"]:
+                differences.append({"case": alternative["name"], "phase": left["name"],
+                                    "section": "market_funds_condition",
+                                    "baseline": left["market_funds_condition"],
+                                    "case_condition": right["market_funds_condition"]})
+            if left["research_experience_condition"] != right["research_experience_condition"]:
+                differences.append({"case": alternative["name"], "phase": left["name"],
+                                    "section": "research_experience_condition",
+                                    "baseline": left["research_experience_condition"],
+                                    "case_condition": right["research_experience_condition"]})
             for section, key_fields, metrics in (
                 ("research_service_constraints", ("scope", "service"),
                  ("total_required", "nominal_capacity_per_day", "conditional_lower_bound_days")),
@@ -2545,7 +2661,10 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
             raise ValueError("different Movement reference conditions")
         initial_defaults = {"initial_stock": (), "initial_facilities": (), "initial_fleet": (),
                             "initial_research_points": 0, "solar_yield": {}, "solar_sites": (),
-                            "start_day": 0, "opening_from_reference": False}
+                            "start_day": 0, "opening_from_reference": False,
+                            "initial_experience": {},
+                            "initial_available_funds_musd": None,
+                            "initial_completed_technologies": (), "opening_adjustments": ()}
         for key, default in initial_defaults.items():
             if before_plan.get(key, default) != after_plan.get(key, default):
                 raise ValueError(f"development comparison needs identical initial conditions: {key}")
@@ -2675,11 +2794,14 @@ def summarize_projection(projection: dict) -> dict:
             ],
             "research_point_balance": phase["research_point_balance"],
             "research_goal": phase["research_goal"],
+            "research_experience_condition": (phase["research_experience_condition"]
+                                              if phase["research_stages"] else {}),
             "selected_research_stage_requirements": [
                 {"research": stage["research"], "stage": stage["stage"],
                  "type": stage["stage_type"], "rp_points": stage["point_cost"],
                  "resource_requirements_t": stage["resource_requirements_t"],
                  "required_experience": stage["experience_requirements"],
+                 "unmet_experience_points": stage["unmet_experience_points"],
                  "conditional_service_lower_bound_days": stage_bounds[(stage["research"], stage["stage"])]["serial_service_lower_bound_days"],
                  "unresolved_stage_gate": stage_bounds[(stage["research"], stage["stage"])]["unresolved_stage_gate"]}
                 for stage in phase["research_stages"]],
@@ -2742,6 +2864,9 @@ def summarize_projection(projection: dict) -> dict:
             "opening_conditions_source": projection["opening_conditions_source"],
             "scenario_id": projection["scenario_id"],
             "initial_completed_technologies": projection["initial_completed_technologies"],
+            "opening_adjustments": projection["opening_adjustments"],
+            "initial_experience": projection["initial_experience"],
+            "initial_available_funds_musd": projection["initial_available_funds_musd"],
             "opening_fleet_precommitments": projection["opening_fleet_precommitments"],
             "model": "definition_quantity_summary_v1", "phases": phases}
 

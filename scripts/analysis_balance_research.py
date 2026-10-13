@@ -62,7 +62,9 @@ def selected_research_time_structure(definitions, stages, services, *,
                 requirements.append({'scope': scope, 'service': requirement['name'],
                                      'required_work': amount, 'capacity_per_day': rate,
                                      'lower_bound_days': floor})
-            if stage['stage_type'] == 'operational_experience':
+            if stage['stage_type'] == 'operational_experience' and any(
+                amount > 0 for amount in stage['unmet_experience_points'].values()
+            ):
                 experience.append(f'{tech_id}/{spec.stage_id}')
             serial += duration_floor
             stage_bounds.append({'research': tech_id, 'stage': spec.stage_id,
@@ -72,7 +74,7 @@ def selected_research_time_structure(definitions, stages, services, *,
                                  'site_progress_lower_bound_days': progress_floor,
                                  'serial_service_lower_bound_days': duration_floor,
                                  'unresolved_stage_gate': (
-                                     stage['stage_type'] == 'operational_experience'
+                                     any(stage['unmet_experience_points'].values())
                                      or any(v['lower_bound_days'] is None for v in requirements)),
                                  'status': 'lower_bound_not_a_stage_completion_schedule'})
         serial_by_tech[tech_id] = serial

@@ -1737,11 +1737,55 @@ def test_registered_scenario_opening_is_explicit_read_only_basis_not_automatic_o
     operating = evaluate({**selected, "phases": [
         {"name": "operation", "days": 10, "facilities": [chosen]}]}, app=app)
     assert operating["phases"][0]["scale"]["facility_units"] == 1
+    assert projected["initial_available_funds_musd"] == pytest.approx(sim.market.available_funds_musd)
+    provider, resource, price = next(
+        (provider, entry.resource_id, provider.buy_price(entry.resource_id))
+        for provider in sim.market.provider_defs.values()
+        for entry in provider.supply if provider.buy_price(entry.resource_id))
+    market_plan = {**selected, "phases": [
+        {"name": "first", "days": 5, "market_buys": [{"node": str(node),
+            "provider": str(provider.id), "resource": str(resource), "requested_t": 20}]},
+        {"name": "second", "days": 5, "market_buys": [{"node": str(node),
+            "provider": str(provider.id), "resource": str(resource), "requested_t": 10}]},
+    ]}
+    first, second = evaluate(market_plan, app=app)["phases"]
+    assert first["market_funds_condition"]["assumed_funds_musd"] == pytest.approx(sim.market.available_funds_musd)
+    assert second["market_funds_condition"]["assumed_funds_musd"] == pytest.approx(
+        sim.market.available_funds_musd - price * 20)
+    assert second["market_funds_condition"]["conditional_remaining_funds_musd"] == pytest.approx(
+        sim.market.available_funds_musd - price * 30)
+    first_supply, = first["market_provider_constraints"]
+    later_supply, = second["market_provider_constraints"]
+    assert first_supply["provider_opening_available_supply_t"] == pytest.approx(
+        sim.market.available_provider_supply_t(provider.id, resource))
+    assert later_supply["prior_selected_buy_requests_t"] == pytest.approx(20)
+    registered = provider.supply_def(resource)
+    assert later_supply["conditional_supply_at_phase_start_t"] == pytest.approx(min(
+        registered.capacity_t, max(0.0,
+            sim.market.available_provider_supply_t(provider.id, resource)
+            + 5 * registered.replenishment_t_per_day - 20)))
+    assert "not_purchase_or_delivery" in later_supply["status"]
     assert capture_state(sim) == before
     with pytest.raises(ValueError, match="cannot be mixed"):
         evaluate({**selected, "initial_stock": []}, app=app)
     with pytest.raises(ValueError, match="requires an applied Scenario"):
         evaluate(selected, app=build_game_application_for_load())
+    # A Scenario-derived baseline can vary registered opening quantities with
+    # the *same* common case-update contract; the adjusted version is explicit.
+    from scripts.analysis_balance import compare_cases
+    held_fleet_edit = {"collection": "initial_fleet", "match": {
+        "node": str(committed[1]), "vehicle": str(committed[0])},
+        "set": {"units": held.total_units + 1}}
+    fleet_alternative = evaluate({**selected, "opening_adjustments": [held_fleet_edit]}, app=app)
+    assert fleet_alternative["opening_fleet_precommitments"] == projected["opening_fleet_precommitments"]
+    with pytest.raises(ValueError, match="existing commitment"):
+        evaluate({**selected, "opening_adjustments": [
+            {**held_fleet_edit, "set": {"units": 0}}]}, app=app)
+    with pytest.raises(ValueError, match="initial conditions only"):
+        evaluate({**selected, "opening_adjustments": [
+            {"collection": "facilities", "phase": "observation", "action": "add",
+             "row": chosen}]}, app=app)
+    assert capture_state(sim) == before
 
 
 def test_opening_technology_and_survey_knowledge_are_owned_conditions_not_recharged_work(definitions):
@@ -1827,4 +1871,31 @@ def test_opening_technology_and_survey_knowledge_are_owned_conditions_not_rechar
     authored_world, = evaluate(explicit, app=app)["phases"][0]["extraction_world_context"]
     assert authored_world["knowledge_source"] == "authored_over_scenario_survey_state"
     assert authored_world["effective_opportunity"] <= world["effective_opportunity"]
+    # Experience is a Knowledge-owned starting condition; elapsed days never
+    # invent work or erase an already satisfied Operational Experience gate.
+    experience_tech, experience_stage = next(
+        (definition, stage) for definition in sim.research.definitions.values()
+        for stage in definition.stage_specs if stage.stage_type.value == "operational_experience"
+        and stage.requirements)
+    activity = {"node": node, "research": str(experience_tech.id),
+                "stage": experience_stage.stage_id}
+    no_experience = evaluate({"phases": [{"name": "work", "days": 15,
+        "research_stages": [activity]}]}, app=app)["phases"][0]
+    with_experience = evaluate({"initial_experience": dict(experience_stage.requirements),
+        "phases": [{"name": "work", "days": 15,
+                    "research_stages": [activity]}]}, app=app)["phases"][0]
+    assert no_experience["research_time_structure"]["operational_experience_gates_not_elapsed_time"]
+    assert not with_experience["research_time_structure"]["operational_experience_gates_not_elapsed_time"]
+    assert all(value == 0 for value in with_experience["research_stages"][0]["unmet_experience_points"].values())
+    assert no_experience["research_stages"][0]["unmet_experience_points"] == dict(experience_stage.requirements)
+    # Production in a preceding phase does not secretly earn Experience, but
+    # a selected phase boundary condition allows the impact to be compared.
+    phases = [{"name": "investment", "days": 9},
+              {"name": "research", "days": 15, "research_stages": [activity]}]
+    without = evaluate({"phases": phases}, app=app)
+    available = evaluate({"phases": [phases[0], {
+        **phases[1], "assumed_experience": dict(experience_stage.requirements)}]}, app=app)
+    assert without["phases"][1]["research_time_structure"]["operational_experience_gates_not_elapsed_time"]
+    assert not available["phases"][1]["research_time_structure"]["operational_experience_gates_not_elapsed_time"]
+    assert available["phases"][1]["research_experience_condition"]["source"] == "analyst_selected_phase_experience"
     assert capture_state(sim) == before
