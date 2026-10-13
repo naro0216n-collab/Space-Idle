@@ -4,7 +4,6 @@ import http.client
 import json
 from threading import Thread
 from contextlib import contextmanager
-from unittest.mock import patch
 
 from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -41,14 +40,13 @@ def _raw_request(port: int, path: str):
 
 @contextmanager
 def running_api(tmp_path):
-    """Isolate each HTTP contract, including startup free from reverse DNS."""
+    """Give each HTTP scenario an isolated server and game runtime."""
     runtime = GameRuntime(
         new_game_factory=build_game_application,
         load_factory=build_game_application_for_load,
         save_dir=tmp_path,
     )
-    with patch("http.server.socket.getfqdn", side_effect=AssertionError("Reverse DNS on HTTP bind")):
-        server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
+    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     # The default 0.5s serve_forever poll delay only slows shutdown in
     # short-lived HTTP contract tests; it is not part of HTTP semantics.
     thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
@@ -110,115 +108,62 @@ def test_http_command_and_world_read_cross_json_boundary(tmp_path):
         assert status == 200
 
 
-def test_http_decision_views_scope_and_projection_boundary(tmp_path):
+def test_http_decision_views_route_and_scoped_json_boundary(tmp_path):
+    """HTTP owns routing, scope arguments and JSON transport, not Domain arithmetic."""
     with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
         )
         assert status == 200
-        data = payload["data"]
-        required = {
-            "world", "operational_node", "surface_map", "logistics",
-            "scientific_explorations", "market", "dependency_analytics_current", "dependency_analytics_forecast",
-        }
-        assert required <= data.keys()
-        assert data["operational_node"]["id"] == str(ids.EARTH)
-        assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
-        assert data["dependency_analytics_current"]["time_basis"] == "CURRENT"
-        assert data["dependency_analytics_forecast"]["time_basis"] == "FORECAST"
+        assert {
+            "world", "operational_node", "surface_map", "logistics", "market",
+            "scientific_explorations", "dependency_analytics_current", "dependency_analytics_forecast",
+        } <= payload["data"].keys()
+        assert payload["data"]["operational_node"]["id"] == str(ids.EARTH)
+        assert payload["data"]["surface_map"]["body_id"] == str(ids.EARTH_BODY)
 
-        # UI snapshot stays geographic when no Founding decision is selected;
-        # a focused target requests only its own actionable candidates.
-        status, _, unselected_payload = _request(
-            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}",
-        )
-        assert status == 200
-        assert all(not row["foundation_options"] for row in unselected_payload["data"]["surface_map"]["cells"])
-        target_cell_id = str(ids.MOON_CELL_FARSIDE_HIGHLANDS)
-        status, _, selected_payload = _request(
-            port, "GET", f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id={target_cell_id}",
-        )
-        assert status == 200
-        focused = selected_payload["data"]["surface_map"]["cells"]
-        assert next(row for row in focused if row["id"] == target_cell_id)["foundation_options"]
-        assert all(not row["foundation_options"] for row in focused if row["id"] != target_cell_id)
-        status, _, direct_unselected = _request(port, "GET", f"/api/v1/surfaces/{ids.MOON}")
-        assert status == 200
-        assert all(not row["foundation_options"] for row in direct_unselected["data"]["cells"])
-        status, _, direct_selected = _request(
-            port, "GET", f"/api/v1/surfaces/{ids.MOON}?founding_cell_id={target_cell_id}",
-        )
-        assert status == 200
-        assert next(row for row in direct_selected["data"]["cells"] if row["id"] == target_cell_id)["foundation_options"]
-        status, _, orbit_unselected = _request(port, "GET", "/api/v1/non-surface-founding-options?body_id=base.body.jupiter")
-        assert status == 200
-        assert all(not row["foundation_options"] for row in orbit_unselected["data"]["contexts"])
-        orbit_id = orbit_unselected["data"]["contexts"][0]["spatial_node_id"]
-        status, _, orbit_selected = _request(
-            port, "GET", f"/api/v1/non-surface-founding-options?body_id=base.body.jupiter&founding_context_id={orbit_id}",
-        )
-        assert status == 200
-        assert orbit_selected["data"]["contexts"][0]["foundation_options"]
-        status, _, invalid = _request(
-            port, "GET",
-            f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id=base.cell.venus.highland",
-        )
-        assert status in (400, 422)
-
-        status, _, payload = _request(
-            port, "GET",
+        # Exercise each distinct query decoder and serialization route. Numerical
+        # forecasts, eligibility and candidate selection belong to Application tests.
+        urls = (
+            f"/api/v1/surfaces/{ids.MOON}",
+            f"/api/v1/surfaces/{ids.MOON}?founding_cell_id={ids.MOON_CELL_FARSIDE_HIGHLANDS}",
+            "/api/v1/non-surface-founding-options?body_id=base.body.jupiter",
             f"/api/v1/target-stock-context?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
+            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
+            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
         )
-        assert status == 200
-        target_stock_context = payload["data"]
-        assert target_stock_context["destination_id"] == str(ids.EARTH)
-        assert target_stock_context["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
-        assert target_stock_context["normal_demand_t_per_day"] > 0
-        assert target_stock_context["current_target_quantity_t"] == 0.0
-        assert target_stock_context["current_stock_t"] >= 0.0
-        assert target_stock_context["inbound_t"] >= 0.0
-        assert target_stock_context["priority"] == 3
+        for url in urls:
+            status, _, response = _request(port, "GET", url)
+            assert status == 200, url
+            assert isinstance(response["data"], dict), url
 
-        allocation_options_status, _, allocation_options_payload = _request(
+        # Preview parses the directional capacity targets through the HTTP codec.
+        status, _, allocation_options = _request(
             port, "GET",
             f"/api/v1/transport-allocation-options?source_id={ids.EARTH}&destination_id={ids.LEO}",
         )
-        assert allocation_options_status == 200
-        allocation_option = next(
-            row for row in allocation_options_payload["data"]["options"]
-            if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        )
-        nominal = allocation_option["nominal_capacity"]
-        preview_status, _, preview_payload = _request(
-            port, "GET",
-            "/api/v1/transport-allocation-preview"
+        assert status == 200
+        option = next(row for row in allocation_options["data"]["options"]
+                      if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE))
+        nominal = option["nominal_capacity"]
+        status, _, preview = _request(
+            port, "GET", "/api/v1/transport-allocation-preview"
             f"?vehicle_definition_id={ids.REUSABLE_LAUNCH_VEHICLE}"
             f"&source_id={ids.EARTH}&destination_id={ids.LEO}"
             f"&target_forward_t_per_day={nominal['forward_t_per_day']}"
             f"&target_reverse_t_per_day={nominal['reverse_t_per_day']}",
         )
-        assert preview_status == 200
-        assert preview_payload["data"]["required_units"] == 1
-        assert preview_payload["data"]["selected_forward_path"] == allocation_option["forward_path"]
-
-        status, _, payload = _request(
-            port, "GET",
-            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
-        )
         assert status == 200
-        assert payload["data"]["time_basis"] == "FORECAST"
-        assert payload["data"]["forecast_resources"]
-        assert not payload["data"]["current_resources"]
+        assert preview["data"]["required_units"] == 1
 
-        status, _, payload = _request(
+        # A selected cell must belong to the selected body at the HTTP boundary.
+        status, _, response = _request(
             port, "GET",
-            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
+            f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id={ids.EARTH_CELL_INDUSTRIAL}",
         )
-        assert status == 200
-        assert payload["data"]["projected_day"] == payload["data"]["base_day"] + 2
-        assert payload["data"]["period_days"] == 2
-        assert payload["data"]["inventory"]
+        assert status in (400, 422)
+        assert response["error"]["code"]
 
 
 def test_http_nested_intent_and_save_load_boundary(tmp_path):

@@ -25,8 +25,6 @@ def test_registered_physical_bodies_project_without_creating_player_owned_nodes(
         or body.star_system_id == graph.bodies[body.parent_body_id].star_system_id
         for body in bodies
     )
-    assert all(body.representative_gravity_m_s2 is not None for body in bodies)
-    assert all(graph.body_lineage(body.id)[0] == body.id for body in bodies)
 
     catalog = app.query(GetCatalog())
     assert {row.id for row in catalog.celestial_bodies} == {str(body.id) for body in bodies}

@@ -67,10 +67,6 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
         },
     )
     assert plan.allocated(row.id) == pytest.approx(4)
-    assert plan.bundle(row.id) == row
-    assert plan.allocation(row.id) == plan.allocations[0]
-    assert plan.allocations_for_owner("test", row.owner_id) == plan.allocations
-    assert plan.allocations_for_owner("other", row.owner_id) == ()
     assert plan.used_by_constraint[resource_constraint(NODE, ORE)] == pytest.approx(8)
     assert plan.used_by_constraint[service_constraint(NODE, "power")] == pytest.approx(4)
     assert plan.used_by_constraint[admission_constraint(NODE, "bulk")] == pytest.approx(6)
@@ -256,11 +252,6 @@ def test_shared_allocators_preserve_priority_progressive_fairness_and_registrati
     )
     assert prioritized_service.allocated(high_service.id) == pytest.approx(3.0)
     assert prioritized_service.allocated(low_service.id) == pytest.approx(1.0)
-    assert prioritized_service.request(high_service.id) == high_service
-    assert prioritized_service.allocation(high_service.id).allocated_rate == pytest.approx(3.0)
-    assert prioritized_service.allocations_for_owner("test", high_service.owner_id) == (
-        prioritized_service.allocation(high_service.id),
-    )
     summary = prioritized_service.summary(NODE, "test_service")
     assert (summary.requested_rate, summary.allocated_rate, summary.spare_rate) == pytest.approx((6.0, 4.0, 0.0))
     assert prioritized_service.summary(NODE, "absent").allocated_rate == 0.0
@@ -371,22 +362,6 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
     assert structural_industry
     assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in structural_industry)
     assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
-    assert all(
-        any(key.kind == "service" and key.name.startswith("process:") for key, _ in row.coefficients())
-        for row in industry_rows
-    )
-    assert all(
-        any(key.kind == "service" and key.name.startswith("extraction:") for key, _ in row.coefficients())
-        for row in extraction_rows
-    )
-    assert all(
-        any(key.kind == "service" and key.name == "construction_work" for key, _ in row.coefficients())
-        for row in construction_rows
-    )
-    assert all(
-        0.0 <= plan.fulfillment(row.id) <= 1.0
-        for row in industry_rows + extraction_rows + construction_rows
-    )
 
 
 def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():

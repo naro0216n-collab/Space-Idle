@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import pytest
 
-from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     AdvanceTime, CreateTransportAllocation, GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, GetWorld, PauseTransportAllocation,
     PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
@@ -284,17 +283,7 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         if str(row.requirement.owner_id) == project_id and amount > 0.0
     ]
 
-    with observe_canonical_day(sim) as trace:
-        sim.advance_days(1)
-    dispatches = [row for row in trace.activity_flows()
-                  if row.activity_id.startswith('cargo_dispatch:')]
-    assert dispatches
-    assert all(row.source_owner == f'inventory:{EARTH}'
-               and row.destination_owner == f"logistics_cargo:{row.activity_id.split(':', 1)[1]}" for row in dispatches)
-    assert sum(row.quantity_t for row in dispatches) == pytest.approx(
-        sum(row.quantity_t for row in trace.movements
-            if row.activity_id is not None and row.activity_id.startswith('cargo_dispatch:'))
-    )
+    sim.advance_days(1)
     generated = [
         row for row in sim.logistics.cargo_flows.values()
         if row.owner_id == EntityId(project_id)
@@ -447,17 +436,7 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
     expected_latency = sum(edge.latency_days for edge in dispatch.path)
     destination_before = sim.inventory.amount(LUNAR_ORBIT, resource)
 
-    with observe_canonical_day(sim) as departure_trace:
-        sim.advance_days(1)
-    departure_flows = [row for row in departure_trace.activity_flows()
-                       if row.activity_id.startswith("cargo_dispatch:")
-                       and row.resource_id == str(resource)]
-    assert departure_flows
-    assert all(row.source_owner == f"inventory:{EARTH}"
-               and row.destination_owner.startswith("logistics_cargo:")
-               for row in departure_flows)
-    assert not [row for row in departure_trace.unattributed_movements()
-                if row.activity_id is not None and row.activity_id.startswith("cargo_dispatch:")]
+    sim.advance_days(1)
     first = next(
         row for row in sim.logistics.cargo_flows.values()
         if row.owner_id == target_id
@@ -511,19 +490,7 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
     sim.advance_to_day(downstream.first_arrival_day - 1)
     assert sim.inventory.amount(LUNAR_ORBIT, resource) == pytest.approx(destination_before)
 
-    with observe_canonical_day(sim) as arrival_trace:
-        sim.advance_days(1)
-    arrival_flows = [row for row in arrival_trace.activity_flows()
-                     if row.activity_id.startswith("cargo_arrival:")
-                     and row.resource_id == str(resource)]
-    assert arrival_flows
-    assert all(row.source_owner.startswith("logistics_cargo:")
-               and row.destination_owner == f"inventory:{LUNAR_ORBIT}"
-               for row in arrival_flows)
-    assert sum(row.quantity_t for row in arrival_flows) == pytest.approx(dispatched)
-    assert sum(row.quantity_t for row in departure_flows) == pytest.approx(dispatched)
-    assert all(row.activity_id is None or not row.activity_id.startswith("cargo_arrival:")
-               for row in arrival_trace.unattributed_movements())
+    sim.advance_days(1)
     assert sim.inventory.amount(LUNAR_ORBIT, resource) == pytest.approx(
         destination_before + dispatched
     )

@@ -280,5 +280,5 @@
     viewport.x=dragging.ox+event.clientX-dragging.x;viewport.y=dragging.oy+event.clientY-dragging.y;applyViewport();
   });
   for(const type of ['pointerup','pointercancel'])document.addEventListener(type,(event)=>{if(dragging?.id===event.pointerId)dragging=null;});
-  window.SpaceIdleSystemMap={detach,render,worldPositionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
+  window.SpaceIdleSystemMap={detach,render,worldPositionsFor,onSelect:()=>{}};
 })();

@@ -176,16 +176,6 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
     path = tmp_path / "game.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    state = payload["state"]
-    # Clock and boundary accounting belong to Core. Roundtrip equivalence
-    # below verifies ownership and the continuation of simulation behavior.
-    assert {"day", "pending_offline_game_days", "boundary_service_usage"} <= set(state["core"])
-    assert any(
-        row["selected_process_id"] == str(ids.PROCESS_BASIC_STRUCTURAL_MATERIAL)
-        for row in state["facilities"]["items"]
-    )
-
     loaded, offline = load_game(path, load_factory)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)

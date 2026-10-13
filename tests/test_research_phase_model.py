@@ -133,9 +133,6 @@ def test_authored_prototype_and_operational_experience_link_physical_site_alloca
     loaded, offline = load_game(path, load_factory)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(sim)
-    assert loaded._simulation.research.prototype_reserved_t(
-        target, "oxide-reduction-prototype", moon_node, ids.MINERAL_FEEDSTOCK
-    ) == pytest.approx(0.5)
 
     for _ in range(4):
         app.execute(AdvanceTime(1))

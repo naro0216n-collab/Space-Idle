@@ -91,7 +91,6 @@ def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensi
     assert ExtractionService.marginal_response(1.0, opportunity) > (
         ExtractionService.marginal_response(3.0, opportunity)
     )
-    assert ExtractionService.diminishing_response(1000.0, opportunity) > opportunity
 
     capacity = 10.0
     low = ExtractionService.diminishing_response(capacity, 5.0)

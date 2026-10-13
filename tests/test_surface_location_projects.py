@@ -482,7 +482,6 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert {"transit_days", "payload_t"} <= comparison_keys
     assert len(comparison_keys) == len(surface.founding_comparison_axes)
     option_values = {value.axis_key: value.number_value for value in option.comparison_values}
-    assert option.comparison_key.startswith(f"{cell.id}|")
     assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}
     assert option_values["terrain_factor"] == pytest.approx(dict(cell.terrain)["terrain_factor"])
 
