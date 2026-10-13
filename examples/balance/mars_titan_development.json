@@ -1,0 +1,436 @@
+{
+  "base_plan": {
+    "initial_facilities": [
+      {
+        "node": "analysis.mars.surface",
+        "facility": "base.facility.research_laboratory",
+        "units": 1
+      },
+      {
+        "node": "analysis.mars.surface",
+        "facility": "base.facility.metal_ore_mine",
+        "units": 1,
+        "extraction": "base.extraction.crust_ore"
+      },
+      {
+        "node": "analysis.mars.surface",
+        "facility": "base.facility.habitat",
+        "units": 1
+      },
+      {
+        "node": "analysis.mars.surface",
+        "facility": "base.facility.surface_solar_power_grid",
+        "units": 1
+      },
+      {
+        "node": "analysis.titan.surface",
+        "facility": "base.facility.volatile_extractor",
+        "units": 1,
+        "extraction": "base.extraction.cold_volatiles"
+      },
+      {
+        "node": "analysis.titan.surface",
+        "facility": "base.facility.surface_solar_power_grid",
+        "units": 1
+      }
+    ],
+    "solar_sites": [
+      {
+        "node": "analysis.mars.surface",
+        "facility": "base.facility.surface_solar_power_grid",
+        "context": "base.cell.mars.equatorial_plain"
+      },
+      {
+        "node": "analysis.titan.surface",
+        "facility": "base.facility.surface_solar_power_grid",
+        "context": "base.cell.titan.highland"
+      }
+    ],
+    "phases": [
+      {
+        "name": "equipment_investment",
+        "days": 24,
+        "facilities": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 1,
+            "extraction": "base.extraction.crust_ore"
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.habitat",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.volatile_extractor",
+            "units": 1,
+            "extraction": "base.extraction.cold_volatiles"
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          }
+        ],
+        "research_provider_allocations": [
+          {
+            "node": "analysis.mars.surface",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 1
+          }
+        ],
+        "extraction_sites": [
+          {
+            "node": "analysis.mars.surface",
+            "developed_cells": [
+              "base.cell.mars.equatorial_plain"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.mars.equatorial_plain",
+                "resource": "base.resource.metal_ore",
+                "level": 3
+              }
+            ]
+          },
+          {
+            "node": "analysis.titan.surface",
+            "developed_cells": [
+              "base.cell.titan.highland"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.titan.highland",
+                "resource": "base.resource.volatile_bearing_material",
+                "level": 3
+              }
+            ]
+          }
+        ],
+        "habitation_demands": [
+          {
+            "node": "analysis.mars.surface",
+            "people": 12,
+            "life_support_facility": "base.facility.habitat"
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "analysis.titan.surface",
+            "destination": "analysis.mars.surface",
+            "resource": "base.resource.volatile_bearing_material",
+            "t_per_day": 0.6
+          }
+        ],
+        "facility_investments": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.ore_processing",
+            "units": 1
+          }
+        ]
+      },
+      {
+        "name": "research_and_upstream",
+        "days": 72,
+        "facilities": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory",
+            "units": 2
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 1,
+            "extraction": "base.extraction.crust_ore"
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.habitat",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.volatile_extractor",
+            "units": 1,
+            "extraction": "base.extraction.cold_volatiles"
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.ore_processing",
+            "units": 1,
+            "process": "base.process.ore_processing"
+          }
+        ],
+        "research_provider_allocations": [
+          {
+            "node": "analysis.mars.surface",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 2
+          }
+        ],
+        "research_goal": {
+          "node": "analysis.mars.surface",
+          "research_ids": [
+            "AR-AUTONOMY-ROBOTICS-02"
+          ],
+          "include_prerequisites": true
+        },
+        "extraction_sites": [
+          {
+            "node": "analysis.mars.surface",
+            "developed_cells": [
+              "base.cell.mars.equatorial_plain"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.mars.equatorial_plain",
+                "resource": "base.resource.metal_ore",
+                "level": 3
+              }
+            ]
+          },
+          {
+            "node": "analysis.titan.surface",
+            "developed_cells": [
+              "base.cell.titan.highland"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.titan.highland",
+                "resource": "base.resource.volatile_bearing_material",
+                "level": 3
+              }
+            ]
+          }
+        ],
+        "habitation_demands": [
+          {
+            "node": "analysis.mars.surface",
+            "people": 12,
+            "life_support_facility": "base.facility.habitat"
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "analysis.titan.surface",
+            "destination": "analysis.mars.surface",
+            "resource": "base.resource.volatile_bearing_material",
+            "t_per_day": 0.6
+          }
+        ],
+        "facility_investments": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.volatile_processing",
+            "units": 1
+          }
+        ]
+      },
+      {
+        "name": "next_industry_scale",
+        "days": 48,
+        "facilities": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory",
+            "units": 2
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 1,
+            "extraction": "base.extraction.crust_ore"
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.habitat",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.volatile_extractor",
+            "units": 1,
+            "extraction": "base.extraction.cold_volatiles"
+          },
+          {
+            "node": "analysis.titan.surface",
+            "facility": "base.facility.surface_solar_power_grid",
+            "units": 1
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.ore_processing",
+            "units": 1,
+            "process": "base.process.ore_processing"
+          },
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.volatile_processing",
+            "units": 1,
+            "process": "base.process.volatile_water_recovery"
+          }
+        ],
+        "research_provider_allocations": [
+          {
+            "node": "analysis.mars.surface",
+            "provider": "base.facility.research_laboratory",
+            "source_facility": "base.facility.research_laboratory",
+            "units": 2
+          }
+        ],
+        "extraction_sites": [
+          {
+            "node": "analysis.mars.surface",
+            "developed_cells": [
+              "base.cell.mars.equatorial_plain"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.mars.equatorial_plain",
+                "resource": "base.resource.metal_ore",
+                "level": 3
+              }
+            ]
+          },
+          {
+            "node": "analysis.titan.surface",
+            "developed_cells": [
+              "base.cell.titan.highland"
+            ],
+            "knowledge": [
+              {
+                "cell": "base.cell.titan.highland",
+                "resource": "base.resource.volatile_bearing_material",
+                "level": 3
+              }
+            ]
+          }
+        ],
+        "habitation_demands": [
+          {
+            "node": "analysis.mars.surface",
+            "people": 12,
+            "life_support_facility": "base.facility.habitat"
+          }
+        ],
+        "transfers": [
+          {
+            "origin": "analysis.titan.surface",
+            "destination": "analysis.mars.surface",
+            "resource": "base.resource.volatile_bearing_material",
+            "t_per_day": 0.6
+          }
+        ],
+        "facility_investments": [
+          {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.metal_ore_mine",
+            "units": 1
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "research_base",
+      "updates": []
+    },
+    {
+      "name": "research_capital_expansion",
+      "updates": [
+        {
+          "phase": "equipment_investment",
+          "collection": "facility_investments",
+          "match": {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory"
+          },
+          "set": {
+            "units": 2
+          }
+        },
+        {
+          "phase": "research_and_upstream",
+          "collection": "facilities",
+          "match": {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory"
+          },
+          "set": {
+            "units": 3
+          }
+        },
+        {
+          "phase": "research_and_upstream",
+          "collection": "research_provider_allocations",
+          "match": {
+            "node": "analysis.mars.surface",
+            "provider": "base.facility.research_laboratory"
+          },
+          "set": {
+            "units": 3
+          }
+        },
+        {
+          "phase": "next_industry_scale",
+          "collection": "facilities",
+          "match": {
+            "node": "analysis.mars.surface",
+            "facility": "base.facility.research_laboratory"
+          },
+          "set": {
+            "units": 3
+          }
+        },
+        {
+          "phase": "next_industry_scale",
+          "collection": "research_provider_allocations",
+          "match": {
+            "node": "analysis.mars.surface",
+            "provider": "base.facility.research_laboratory"
+          },
+          "set": {
+            "units": 3
+          }
+        }
+      ]
+    }
+  ]
+}

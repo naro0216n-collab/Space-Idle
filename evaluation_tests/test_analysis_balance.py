@@ -1899,3 +1899,50 @@ def test_opening_technology_and_survey_knowledge_are_owned_conditions_not_rechar
     assert not available["phases"][1]["research_time_structure"]["operational_experience_gates_not_elapsed_time"]
     assert available["phases"][1]["research_experience_condition"]["source"] == "analyst_selected_phase_experience"
     assert capture_state(sim) == before
+
+
+def test_habitation_scale_compares_selected_net_resource_demand_and_nominal_capacity(definitions):
+    """Habitation is a demand variable, not an attempted Population allocation."""
+    sim = definitions._simulation
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if f.life_support is not None and f.life_support.net_resources
+                    and f.housing_at_level(1) > 0)
+    capacity = facility.life_support.capacity_at_level(1)
+    site = 'chosen.habitation.site'
+    asset = {'node': site, 'facility': str(facility.id), 'units': 1}
+    demand = {'node': site, 'life_support_facility': str(facility.id),
+              'people': capacity * 2}
+    source = {'initial_facilities': [asset], 'phases': [
+        {'name': 'investment', 'days': 4, 'facilities': [asset],
+         'habitation_demands': [demand], 'facility_investments': [asset]},
+        {'name': 'expanded', 'days': 9,
+         'facilities': [{**asset, 'units': 2}], 'habitation_demands': [demand]},
+    ]}
+    state = deepcopy(capture_state(sim))
+    initial, expanded = evaluate(source, app=definitions)['phases']
+    by_site = {r['node']: r for r in initial['constraints']}
+    assert by_site[site]['habitation_demand_people'] == capacity * 2
+    assert by_site[site]['life_support_nominal_person_days_per_day'] == capacity
+    assert by_site[site]['life_support_capacity_shortfall_person_days_per_day'] == capacity
+    assert next(r for r in expanded['constraints'] if r['node'] == site)[
+        'life_support_capacity_shortfall_person_days_per_day'] == 0
+    for phase in (initial, expanded):
+        period = phase['days']
+        stock = _rows(phase)
+        for resource, per_person in facility.life_support.net_resources:
+            resource_id = str(resource)
+            assert stock[(site, resource_id)]['life_support_demand_t'] == pytest.approx(
+                per_person * demand['people'] * period)
+    changed = compare_cases({'base_plan': source, 'cases': [
+        {'name': 'baseline', 'updates': []},
+        {'name': 'larger_habitation', 'updates': [{
+            'phase': 'expanded', 'collection': 'habitation_demands',
+            'match': {'node': site}, 'set': {'people': capacity * 3}}]},
+    ]}, app=definitions)
+    assert any(row['section'] == 'resources' and row['phase'] == 'expanded'
+               and row['delta_from_baseline'].get('life_support_demand_t', 0) > 0
+               for row in changed['differences'])
+    assert capture_state(sim) == state
+    with pytest.raises(ValueError, match='invalid initial facility fields'):
+        evaluate({**source, 'initial_facilities': [
+            {**asset, 'supported_person_days_per_day': 1}]}, app=definitions)

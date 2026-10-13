@@ -66,7 +66,7 @@ def _asset_rows(rows, sim, nodes, *, label):
     """One method per Facility block; sum units by definition for construction."""
     result = []
     for row in rows:
-        _keys(row, {"node", "facility", "units", "level", "process", "extraction", "duty", "extraction_yield_fraction", "supported_person_days_per_day"},
+        _keys(row, {"node", "facility", "units", "level", "process", "extraction", "duty", "extraction_yield_fraction"},
               {"node", "facility", "units"}, label)
         node = _identifier(row["node"], nodes, "node")
         name = _identifier(row["facility"], sim.facilities.definitions, "facility")
@@ -87,12 +87,6 @@ def _asset_rows(rows, sim, nodes, *, label):
         yield_factor = _number(row.get("extraction_yield_fraction", 0), "extraction_yield_fraction")
         if yield_factor > 1:
             raise ValueError("extraction_yield_fraction cannot exceed 1")
-        people = _number(row.get("supported_person_days_per_day", 0), "supported_person_days_per_day")
-        support = definition.life_support
-        if people > 0 and support is None:
-            raise ValueError(f"facility {name} has no Life Support capability")
-        if support is not None and people > units * support.capacity_at_level(level):
-            raise ValueError("assigned Life Support exceeds nominal person-days")
         if process_id and extraction_id:
             raise ValueError("one Facility block cannot run a Process and Extraction simultaneously")
         if process_id is not None:
@@ -105,7 +99,7 @@ def _asset_rows(rows, sim, nodes, *, label):
             method_id = _identifier(extraction_id, sim.extraction.specs, "extraction method")
             if not sim.extraction.specs[DefinitionId(method_id)].required_capabilities <= capabilities:
                 raise ValueError(f"extraction {method_id} incompatible with facility {name}")
-        result.append((node, name, units, process_id, extraction_id, duty, yield_factor, people, level))
+        result.append((node, name, units, process_id, extraction_id, duty, yield_factor, level))
     return sorted(result)
 
 
@@ -349,6 +343,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("survey_activities", ()))
     nodes.update(str(row["staging_node"]) for phase in plan["phases"] for row in phase.get("founding_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("market_buys", ()))
+    nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("habitation_demands", ()))
     nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("passenger_transfers", ()))
     nodes.update(str(row["destination"]) for phase in plan["phases"] for row in phase.get("passenger_transfers", ()))
     nodes.update(str(row["origin"]) for phase in plan["phases"] for row in phase.get("transport_allocations", ()))
@@ -390,7 +385,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
     initial_facility_units = defaultdict(int)
     initial_level_units = defaultdict(int)
-    for node, name, units, _p, _e, _d, _y, _people, level in initial:
+    for node, name, units, _p, _e, _d, _y, level in initial:
         initial_facility_units[(node, name)] += units
         initial_level_units[(node, name, level)] += units
     cumulative_facility_investments = defaultdict(int)
@@ -454,7 +449,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     opening_reference_day = _integer(plan.get("start_day", 0), "initial World reference day")
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "assumed_experience", "reference_day"},
+        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "habitation_demands", "assumed_funds_musd", "assumed_experience", "reference_day"},
               {"name", "days"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
@@ -522,7 +517,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         upgrade_activity_details = []
         life_support_inputs = defaultdict(float)
         life_support_supplied = defaultdict(float)
-        life_support_committed = defaultdict(float)
+        habitation_demand = defaultdict(float)
         housing_nominal = defaultdict(int)
         research_points = 0.0
         research_work = 0.0
@@ -567,7 +562,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         extraction_context_report = []
         power_world_context_report = []
         # Everything here is a request or nominal nameplate, never settled flow.
-        for node, name, units, process_id, extraction_id, duty, yield_factor, people, level in assets:
+        for node, name, units, process_id, extraction_id, duty, yield_factor, level in assets:
             current[(node, name)] += units
             facility = sim.facilities.definitions[DefinitionId(name)]
             mult = units * duty
@@ -588,10 +583,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             housing_nominal[node] += facility.housing_at_level(level) * units
             if facility.life_support is not None:
                 life_support_supplied[node] += facility.life_support.capacity_at_level(level) * mult
-                life_support_committed[node] += people
-                for resource_id, amount in facility.life_support.net_resources:
-                    book(life_support_inputs, "life_support_demand_t", node, resource_id,
-                         amount * people * days, "facility_life_support", name)
             if process_id:
                 proc = sim.industry.processes[DefinitionId(process_id)]
                 for res, quantity in proc.inputs_per_day.items():
@@ -776,6 +767,27 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "investment_only_not_operating_in_current_phase",
             })
             unassessed.add("facility_investment_technology_site_resource_and_completion_not_settled")
+        # Habitation headcount is an authored demand, independent of Facility
+        # holdings and of any Game Population / Life Support Allocation State.
+        # When the analyst selects a registered Life Support method, its net
+        # per-person Resource coefficients enter the same Node ledger even if
+        # nameplate capacity is insufficient. That deficit is a physical
+        # capacity comparison, not a command failure or population transition.
+        for row in phase.get("habitation_demands", ()):
+            _keys(row, {"node", "people", "life_support_facility"},
+                  {"node", "people", "life_support_facility"}, "habitation demand")
+            node = _identifier(row["node"], nodes, "habitation Node")
+            name = _identifier(row["life_support_facility"], sim.facilities.definitions,
+                               "Life Support method")
+            facility = sim.facilities.definitions[DefinitionId(name)]
+            if facility.life_support is None:
+                raise ValueError(f"facility {name} does not register a Life Support Resource profile")
+            people = _number(row["people"], "habitation people")
+            habitation_demand[node] += people
+            for resource_id, per_person in facility.life_support.net_resources:
+                book(life_support_inputs, "life_support_demand_t", node, resource_id,
+                     per_person * people * days, "selected_life_support_method", name,
+                     "definition_x_authored_habitation_demand")
         # Explicit Spatial Development demand is a registered one-time
         # project recipe; it never constructs Cells or awards territory.
         for row in phase.get("spatial_projects", ()):
@@ -856,7 +868,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # Only explicitly authored opening Facilities provide construction
         # capacity; an investment order does not supply its own work.
         existing_construction = defaultdict(float)
-        for node, name, units, _p, _e, duty, _y, _people, _level in assets:
+        for node, name, units, _p, _e, duty, _y, _level in assets:
             provider = sim.projects.construction_providers.get(DefinitionId(name))
             if provider:
                 existing_construction[node] += provider.work_per_day * units * duty
@@ -957,7 +969,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # budget; preserve nominal demands without simulating Allocation.
         # rather than implying both flows have been allocated successfully.
         facility_activity_duty = defaultdict(float)
-        for source_node, source_id, units, process_id, extraction_id, duty, _yield, _people, _level in assets:
+        for source_node, source_id, units, process_id, extraction_id, duty, _yield, _level in assets:
             if process_id or extraction_id:
                 facility_activity_duty[(source_node, source_id)] += units * duty
         facility_research_duty = defaultdict(float)
@@ -1015,7 +1027,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             unassessed.add("research_source_site_technology_crew_power_and_finite_allocation")
             if provider.source_kind.value == "facility" and any(
                 n == node and f == source and (proc or extraction)
-                for n, f, _u, proc, extraction, _d, _y, _people, _level in assets):
+                for n, f, _u, proc, extraction, _d, _y, _level in assets):
                 unassessed.add("research_and_industry_share_facility_sources")
             research_generation_per_day += units * duty * level_spec.generation_points_per_day
             research_execution_per_day += units * duty * level_spec.research_execution_per_day
@@ -1463,7 +1475,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "dedicated_departure_conditions_only_no_route_population_or_arrival_settlement",
             })
             unassessed.add("passenger_dedicated_movement_propellant_route_departure_and_arrival_unassessed")
-            unassessed.add("passenger_origin_population_and_destination_housing_life_support_unassessed")
             if onboard_days > days:
                 unassessed.add("passenger_onboard_duration_extends_beyond_comparison_phase")
         # Market Definition supply is an upper bound on a shared provider's
@@ -1735,7 +1746,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             initially_completed=initially_completed,
         )
         constraints = []
-        for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | set(housing_nominal) | {n for n, _ in services}):
+        for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | set(housing_nominal) | set(habitation_demand) | {n for n, _ in services}):
             construction_supply = services[(node, "construction_work")] * days
             constraints.append({
                 "node": node, "power_generation_nominal_mw": power_supply[node],
@@ -1745,11 +1756,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "construction_work_nominal_capacity": construction_supply,
                 "construction_work_gap": max(0.0, work[node] - construction_supply),
                 "life_support_nominal_person_days_per_day": life_support_supplied[node],
-                "life_support_assigned_person_days_per_day": life_support_committed[node],
-                "life_support_gap_person_days_per_day": max(0.0, life_support_committed[node] - life_support_supplied[node]),
+                "habitation_demand_people": habitation_demand[node],
+                "life_support_capacity_shortfall_person_days_per_day": max(0.0, habitation_demand[node] - life_support_supplied[node]),
                 "housing_nominal_people": housing_nominal[node],
-                "conditional_supported_residents_people": life_support_committed[node],
-                "conditional_housing_gap_people": max(0.0, life_support_committed[node] - housing_nominal[node]),
+                "housing_capacity_shortfall_people": max(0.0, habitation_demand[node] - housing_nominal[node]),
                 "cargo_transfer_demand_t_per_day": services[(node, "required:cargo_transfer")],
                 "cargo_transfer_nominal_capacity_t_per_day": services[(node, "cargo_transfer")],
                 "cargo_transfer_gap_t_per_day": max(0.0, services[(node, "required:cargo_transfer")] - services[(node, "cargo_transfer")]),
@@ -1986,7 +1996,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Selected registered Process activity consumes and produces at its authored Facility and Node; no parallel hypothetical upstream supply is credited.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
                 "Facility investment requests book Resource/work in their Phase but do not acquire or commission assets; later explicitly selected installed holdings remain conditional on construction and Site eligibility.",
-                "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
+                "Authored habitation headcount selects the registered Life Support Resource profile; nominal Life Support and Housing capacity are compared to that demand, not Population assignment, survival, admission or occupancy.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
                 "Selected Facility holdings cannot exceed initial holdings plus earlier investment quantities. Investments are cumulative evidence for a hypothetical opening composition, not an automatic Project completion or a required next-Phase transition.",
                 "Vehicle build orders debit Resource/Service without modifying Fleet holdings. Only explicitly authored later Fleet compositions may include earlier ordered units, conditionally on manufacturing completion; no Fleet is auto-commissioned.",
@@ -2293,10 +2303,16 @@ def _period_sensitivity(baseline: dict, alternative: dict) -> dict:
                               "power_gap_mw": row["power_gap_mw"],
                               "construction_work_required": row["construction_work_required"],
                               "construction_capacity_work_per_day": (
-                                  row["construction_work_nominal_capacity"] / phase["days"])}
+                                  row["construction_work_nominal_capacity"] / phase["days"]),
+                              "habitation_demand_people": row["habitation_demand_people"],
+                              "life_support_nominal_person_days_per_day": row["life_support_nominal_person_days_per_day"],
+                              "housing_nominal_people": row["housing_nominal_people"]}
                              for row in phase["constraints"] if (
                                  row["power_demand_nominal_mw"] > 1e-12
-                                 or row["construction_work_required"] > 1e-12)],
+                                 or row["construction_work_required"] > 1e-12
+                                 or row["habitation_demand_people"] > 1e-12
+                                 or row["life_support_nominal_person_days_per_day"] > 1e-12
+                                 or row["housing_nominal_people"] > 0)],
             "od_transport": [{"origin": row["origin"], "destination": row["destination"],
                               "demand_t_per_day": row["demand_t_per_day"],
                               "nominal_capacity_t_per_day": row["nominal_capacity_t_per_day"],
@@ -2440,9 +2456,9 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                        "maintenance_demand_t", "construction_demand_t", "vehicle_build_demand_t", "fleet_turnaround_demand_t",
                        "transport_service_demand_t", "research_material_demand_t", "science_material_demand_t", "founding_payload_demand_t", "passenger_provisions_demand_t", "life_support_demand_t", "notional_end_t", "shortfall_t", "cumulative_unverified_incoming_cargo_t", "shortfall_without_assumed_arrivals_t")),
                 ("constraints", ("node",), ("power_generation_nominal_mw", "power_demand_nominal_mw",
-                       "power_gap_mw", "life_support_nominal_person_days_per_day", "life_support_assigned_person_days_per_day",
-                       "life_support_gap_person_days_per_day", "housing_nominal_people",
-                       "conditional_supported_residents_people", "conditional_housing_gap_people",
+                       "power_gap_mw", "life_support_nominal_person_days_per_day", "habitation_demand_people",
+                       "life_support_capacity_shortfall_person_days_per_day", "housing_nominal_people",
+                       "housing_capacity_shortfall_people",
                        "construction_work_required", "construction_work_nominal_capacity",
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
                 ("od_transport_constraints", ("origin", "destination"),
@@ -2702,8 +2718,7 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
         "world_parameter_edits": [change for change in changes if str(change.get("kind", "")).startswith("world_")],
         "comparisons": [
             {"baseline": record["baseline_case"],
-             "cases": ([{"name": case["name"], "projection": summarize_projection(case["projection"])}
-                        for case in record["cases"]] if summary else record["cases"]),
+             "cases": (summarize(record)["cases"] if summary else record["cases"]),
              "differences": record["differences"]}
             for record in pairs],
         "interpretation": "conditional_quantity_and_constraint_movement_not_a_completion_or_optimality_claim",
@@ -2738,11 +2753,6 @@ def summarize_projection(projection: dict) -> dict:
     """
     phases = []
     for phase in projection["phases"]:
-        def resource_drivers(row):
-            return _leading_activity_drivers(phase, "resource_contributions", node=row["node"],
-                                             category="resource", identifier=row["resource"],
-                                             quantity="amount_t")
-
         def service_drivers(row):
             return _leading_activity_drivers(phase, "service_contributions", node=row["node"],
                                              category="service", identifier=row["service"],
@@ -2757,9 +2767,7 @@ def summarize_projection(projection: dict) -> dict:
             "resource_shortfalls_by_node": [
                 {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"],
                  "one_time_investment_and_activity_demand_t": row["one_time_investment_and_activity_demand_t"],
-                 "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
-                 "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"],
-                 "largest_activity_drivers": resource_drivers(row)["drivers"][:2]}
+                 "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"]}
                 for row in phase["resources"] if row["shortfall_t"] > 1e-12
             ],
             "conditional_incoming_cargo_risks_by_node": [
@@ -2770,27 +2778,30 @@ def summarize_projection(projection: dict) -> dict:
                  "status": "incoming_cargo_not_settled_or_guaranteed"}
                 for row in phase["resources"] if row["cumulative_unverified_incoming_cargo_t"] > 1e-12
             ],
+            # If the same Resource is already a shortfall its recurring rate
+            # appears there. Keep only otherwise-hidden future demand pressure.
             "recurring_resource_pressures_by_node": [
                 {"node": row["node"], "resource": row["resource"],
                  "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
                  "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"]}
                 for row in phase["resources"] if row["nominal_recurring_net_t_per_day"] < -1e-12
+                and row["shortfall_t"] <= 1e-12
             ],
             "service_shortfalls_by_node": [
                 {"node": row["node"], "service": row["service"], "gap_per_day": row["nominal_gap_per_day"],
                  **service_drivers(row)}
                 for row in phase["service_constraints"] if row["nominal_gap_per_day"] > 1e-12
             ],
-            "power_and_population_by_node": [
+            "power_and_habitation_by_node": [
                 {k: row[k] for k in ("node", "power_generation_nominal_mw", "power_demand_nominal_mw",
                                          "power_gap_mw", "life_support_nominal_person_days_per_day",
-                                         "life_support_assigned_person_days_per_day",
-                                         "life_support_gap_person_days_per_day", "housing_nominal_people",
-                                         "conditional_supported_residents_people", "conditional_housing_gap_people")}
+                                         "habitation_demand_people",
+                                         "life_support_capacity_shortfall_person_days_per_day", "housing_nominal_people",
+                                         "housing_capacity_shortfall_people")}
                 for row in phase["constraints"]
                 if row["power_generation_nominal_mw"] > 0 or row["power_demand_nominal_mw"] > 0
                 or row["housing_nominal_people"] > 0 or row["life_support_nominal_person_days_per_day"] > 0
-                or row["life_support_assigned_person_days_per_day"] > 0
+                or row["habitation_demand_people"] > 0
             ],
             "research_point_balance": phase["research_point_balance"],
             "research_goal": phase["research_goal"],
@@ -2822,8 +2833,15 @@ def summarize_projection(projection: dict) -> dict:
             "facility_investments": phase["facility_investments"],
             "vehicle_builds": phase["vehicle_builds"],
             "od_transport_constraints": phase["od_transport_constraints"],
-            "extraction_world_context": phase["extraction_world_context"],
-            "power_world_context": phase["power_world_context"],
+            "extraction_world_context": [
+                {key: row[key] for key in ("node", "resource", "output_resource", "world_body",
+                                            "world_cells", "world_reference_day", "effective_opportunity",
+                                            "adjusted_installed_capacity_t_per_day", "diminishing_output_t_per_day")}
+                for row in phase["extraction_world_context"]],
+            "power_world_context": [
+                {key: row[key] for key in ("node", "facility", "world_context", "world_reference_day",
+                                            "nominal_unallocated_generation_mw")}
+                for row in phase["power_world_context"]],
             "science_activity_bounds": [
                 {k: item[k] for k in ("campaign", "origin", "duration_days", "conditional_rp_reward",
                                      "required_crew", "crew_seat_gap_people", "crew_registered_site_days_lower_bound",
@@ -2881,7 +2899,7 @@ _SUMMARY_ROW_IDENTITY = {
     "conditional_incoming_cargo_risks_by_node": ("node", "resource"),
     "service_shortfalls_by_node": ("node", "service"),
     "shared_facility_activity_capacity": ("node", "facility"),
-    "power_and_population_by_node": ("node",),
+    "power_and_habitation_by_node": ("node",),
     "od_transport_constraints": ("origin", "destination"),
     "extraction_world_context": ("node", "resource", "output_resource"),
     "power_world_context": ("node", "facility"),

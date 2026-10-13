@@ -1,0 +1,9 @@
+[
+  {
+    "kind": "research_provider",
+    "id": "base.facility.research_laboratory",
+    "field": "levels.generation_points_per_day",
+    "selector": {"level": 1},
+    "value": 6.0
+  }
+]
