@@ -307,3 +307,25 @@ def test_research_branch_pacing_uses_real_prerequisite_closure_and_parallel_site
             max(expected_serial, option['rp_generation_lower_bound_days'],
                 option['research_execution_lower_bound_days']))
     assert viable > 0
+
+
+def test_cyclic_selected_material_chain_exposes_one_shared_symbolic_run_per_process():
+    """Cyclic material accounting is a constrained system, never recursive free supply."""
+    from types import SimpleNamespace
+    from scripts.analysis_balance_network import conditional_material_paths
+    from space_idle.shared import DefinitionId
+    a, b = DefinitionId("test.cycle.a"), DefinitionId("test.cycle.b")
+    first, second = DefinitionId("test.cycle.first"), DefinitionId("test.cycle.second")
+    process_a = SimpleNamespace(id=first, inputs_per_day={b: .25}, outputs_per_day={a: 1.0})
+    process_b = SimpleNamespace(id=second, inputs_per_day={a: .4}, outputs_per_day={b: 1.0})
+    sim = SimpleNamespace(industry=SimpleNamespace(processes={first: process_a, second: process_b}))
+    report = conditional_material_paths({str(a): 3}, sim,
+        {str(a): [(process_a, 1.0, ())], str(b): [(process_b, 1.0, ())]}, {},
+        {str(a): str(first), str(b): str(second)})
+    assert not report["material_bill_complete"]
+    assert len(report["selected_processes"]) == 2
+    assert report["cyclic_selected_resource_paths"]
+    assert len(report["conditional_simultaneous_resource_constraints"]) == 2
+    assert report["gross_resource_requirements_t"] == {str(a): 3}
+    assert all(r["external_supply"] == "requires_explicit_stock_extraction_process_or_OD_choice"
+               for r in report["conditional_simultaneous_resource_constraints"])

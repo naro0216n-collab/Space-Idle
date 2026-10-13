@@ -13,171 +13,7 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.execution_requirements import ResourceRequirement, ServiceCapacityRequirement
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.shared import DefinitionId
-
-
-def _aggregate(items):
-    result = defaultdict(float)
-    for name, value in items:
-        result[str(name)] += value
-    return {name: value for name, value in sorted(result.items()) if abs(value) > 1e-12}
-
-
-def _source_investment(sim, source_kind, source_id, level=1):
-    if source_kind == 'facility':
-        recipe = sim.projects.recipes.get(DefinitionId(source_id))
-        components = list(recipe.resources) if recipe else []
-        work = recipe.construction_work if recipe else None
-        technologies = set(recipe.prerequisite_technologies) if recipe else set()
-        for target_level in range(2, level + 1):
-            upgrade = sim.projects.upgrade_recipes.get((DefinitionId(source_id), target_level))
-            if upgrade is None:
-                # A provider can advertise a Level without a physical way to
-                # acquire it. Do not treat Level n as a free initial placement.
-                return {}, None, sorted(str(t) for t in technologies), 'missing_registered_upgrade_recipe'
-            components.extend(upgrade.resources)
-            work = work + upgrade.construction_work if work is not None else None
-            technologies.update(upgrade.prerequisite_technologies)
-        return _aggregate((r.resource_id, r.amount_t) for r in components), work, (
-            sorted(str(v) for v in technologies)), (
-            'construction_plus_upgrade_recipes' if level > 1 else
-            'construction_recipe' if recipe else 'no_registered_construction_recipe')
-    vehicle = next(v for v in sim.transport.vehicle_definitions() if str(v.id) == source_id)
-    return dict((str(k), v) for k, v in vehicle.production.resources), None, (
-        sorted(str(v) for v in vehicle.production.prerequisite_technologies)), 'vehicle_production_recipe'
-
-
-def _producer_catalog(sim):
-    """Resolve every registered Process, Extraction and compatible equipment generically."""
-    facilities = sorted(sim.facilities.definitions.values(), key=lambda f: str(f.id))
-    production = defaultdict(list)
-    for process in sim.industry.processes.values():
-        equipment = [f for f in facilities if process.required_capabilities <= {c.id for c in f.capability_supplies}
-                     and f.process_throughput_per_day > 0]
-        for resource, amount in process.outputs_per_day.items():
-            if amount > 0:
-                production[str(resource)].append((process, amount, equipment))
-    extraction = defaultdict(list)
-    if sim.extraction is not None:
-        for method in sim.extraction.specs.values():
-            extraction[str(method.output_resource_id)].append({
-                'method': str(method.id), 'resource_opportunity': str(method.resource_id),
-                'required_capabilities': sorted(method.required_capabilities),
-                'minimum_knowledge_level': (int(method.minimum_knowledge_level)
-                                            if method.minimum_knowledge_level is not None else None),
-                'status': 'site_knowledge_geology_and_shared_opportunity_required',
-            })
-    return production, extraction
-
-
-def _material_paths(resources, sim, production, extraction, selected_methods):
-    """Build a selected-input chain and evidence for every unchosen alternative.
-
-    Quantities in each option are defined by a registered Process output ratio.
-    No alternative quantities are added. Selected paths are recursively expanded
-    only when the selected production graph is acyclic. Coproduction/shared
-    Facility scheduling and eligible extraction remain separate constraints.
-    """
-    if not isinstance(selected_methods, dict) or any(not isinstance(k, str) or not isinstance(v, str)
-                                                     for k, v in selected_methods.items()):
-        raise ValueError('production_methods must map Resource IDs to Process IDs')
-    known_methods = {str(p.id) for p in sim.industry.processes.values()}
-    for resource, method in selected_methods.items():
-        if method not in known_methods or method not in {str(p.id) for p, _, _ in production.get(resource, ())}:
-            raise ValueError(f'Process {method} does not produce {resource}')
-    required = defaultdict(float, resources)
-    # One selected Process per produced Resource. If a Process is selected for
-    # two of its outputs, both output demands must share its production runs;
-    # do not treat that as two independent factories.
-    used_processes = defaultdict(list)
-    for resource, method in selected_methods.items():
-        used_processes[method].append(resource)
-    graph = defaultdict(set)
-    for resource, method in selected_methods.items():
-        process = sim.industry.processes[DefinitionId(method)]
-        graph[resource].update(str(k) for k, v in process.inputs_per_day.items() if v > 0)
-    visit, ordered = {}, []
-    def walk(resource):
-        if visit.get(resource) == 1:
-            raise ValueError(f'cyclic selected production chain at {resource}; no finite material bill')
-        if visit.get(resource) == 2:
-            return
-        visit[resource] = 1
-        for dependency in sorted(graph[resource]):
-            walk(dependency)
-        visit[resource] = 2
-        ordered.append(resource)
-    for resource in sorted(set(resources) | set(selected_methods)):
-        walk(resource)
-    # Process outputs can form a joint product. Resolve at most once, after
-    # all its output Resource needs are known (within the chosen acyclic graph).
-    resolved = set()
-    processes = []
-    for resource in reversed(ordered):
-        method = selected_methods.get(resource)
-        if method is None or method in resolved:
-            continue
-        process = sim.industry.processes[DefinitionId(method)]
-        chosen_outputs = used_processes[method]
-        # For independent selected outputs the maximum run amount covers both
-        # as a *conditional* envelope, without multiplying shared throughput.
-        runs = max((required[output] / process.outputs_per_day[DefinitionId(output)]
-                    for output in chosen_outputs if required[output] > 0), default=0)
-        resolved.add(method)
-        inputs = _aggregate((k, amount * runs) for k, amount in process.inputs_per_day.items())
-        outputs = _aggregate((k, amount * runs) for k, amount in process.outputs_per_day.items())
-        for k, amount in inputs.items():
-            required[k] += amount
-        equipment_rows = []
-        for facility in sorted((f for f in sim.facilities.definitions.values()
-                                if process.required_capabilities <= {c.id for c in f.capability_supplies}
-                                and f.process_throughput_per_day > 0), key=lambda f: str(f.id)):
-            invested, work, technologies, source = _source_investment(sim, 'facility', str(facility.id))
-            # Quantity of processing work is in full-utilization Facility-days;
-            # daily simultaneous capacity is not implied.
-            equipment_rows.append({
-                'facility': str(facility.id),
-                'required_full_duty_facility_days': runs / facility.process_throughput_per_day,
-                'capital_resource_per_facility_t': invested,
-                'construction_work_per_facility': work,
-                'required_technologies': technologies,
-                'status': 'eligible_facility_day_option_not_allocated_or_built',
-            })
-        processes.append({
-            'process': method, 'selected_output_demands_t': {k: required[k] for k in sorted(chosen_outputs)},
-            'process_run_days_at_unit_throughput': runs,
-            'input_resource_t': inputs, 'co_products_t': outputs,
-            'equipment_options': equipment_rows,
-            'required_technologies': sorted(str(v) for v in process.prerequisite_technologies),
-            'status': 'conditional_selected_process_not_commissioned_or_allocated',
-        })
-    alternatives = []
-    for resource, quantity in sorted(required.items()):
-        if quantity <= 1e-12:
-            continue
-        rows = []
-        for process, amount, equipment in sorted(production.get(resource, ()), key=lambda row: str(row[0].id)):
-            runs = quantity / amount
-            rows.append({
-                'process': str(process.id), 'output_t_per_process_day': amount,
-                'required_process_days_at_unit_throughput': runs,
-                'inputs_for_resource_amount_t': _aggregate((k, v * runs)
-                                                           for k, v in process.inputs_per_day.items()),
-                'compatible_facilities': [str(f.id) for f in equipment],
-                'technology_prerequisites': sorted(str(v) for v in process.prerequisite_technologies),
-            })
-        alternatives.append({
-            'resource': resource, 'gross_requirement_t': quantity,
-            'selected_process': selected_methods.get(resource),
-            'registered_process_options': rows,
-            'registered_extraction_options': sorted(extraction.get(resource, ()), key=lambda r: r['method']),
-            'status': ('selected_process_input_expanded_conditionally' if resource in selected_methods else
-                       'supply_route_unselected_no_upstream_quantity_claim'),
-        })
-    return {'gross_resource_requirements_t': _aggregate(required.items()),
-            'selected_processes': processes, 'resource_supply_options': alternatives,
-            'non_additivity': 'Process alternatives, coproduction and equipment choices are not additive',
-            'status': 'conditional_definition_material_bill_not_allocated_or_delivered'}
-
+from scripts.analysis_balance_network import aggregate_material, source_investment, producer_catalog, conditional_material_paths
 
 
 def _research_stage_elapsed_capacity_floor(spec, execution_rate):
@@ -300,6 +136,28 @@ def _registered_branch_pacing(sim, research_ids, provider_choices):
     return rows
 
 
+def research_goal_closure(definitions, research_ids, *, include_prerequisites=False):
+    """Resolve the registered Technology DAG once for both goal and quantity views.
+
+    The closure is a set of *requirements*, not a scheduled Research Project
+    sequence or a claim of unlocked Technologies.
+    """
+    chosen = set(research_ids)
+    if not chosen or len(chosen) != len(research_ids):
+        raise ValueError('research IDs must be nonempty and unique')
+    if not chosen <= {str(identifier) for identifier in definitions}:
+        raise ValueError('unknown research ID')
+    if include_prerequisites:
+        todo = list(chosen)
+        while todo:
+            definition = definitions[DefinitionId(todo.pop())]
+            for prerequisite in definition.prerequisites:
+                if str(prerequisite) not in chosen:
+                    chosen.add(str(prerequisite))
+                    todo.append(str(prerequisite))
+    return tuple(sorted(chosen))
+
+
 def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_units=1,
                           production_methods=None, include_prerequisites=False,
                           horizon_days=(), selected_science_campaigns=(), app=None):
@@ -332,14 +190,8 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
         chosen = set(research_ids)
         if not chosen <= {str(x) for x in defs}:
             raise ValueError('unknown research ID')
-    if include_prerequisites:
-        todo = list(chosen)
-        while todo:
-            definition = defs[DefinitionId(todo.pop())]
-            for prerequisite in definition.prerequisites:
-                if str(prerequisite) not in chosen:
-                    chosen.add(str(prerequisite))
-                    todo.append(str(prerequisite))
+    chosen = set(research_goal_closure(defs, tuple(sorted(chosen)),
+                                       include_prerequisites=include_prerequisites))
     # The display generation is metadata, not an unlock rule or hidden build order.
     # Only actual prerequisite edges can add selected projects.
     external_prerequisites = sorted({str(pre) for identifier in chosen
@@ -355,7 +207,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
         'on_site_science_activity_days': c.duration_days,
         'required_fleet_units': c.required_units,
         'required_crew': c.required_crew,
-        'departure_consumable_resource_t': _aggregate(c.consumable_resources),
+        'departure_consumable_resource_t': aggregate_material(c.consumable_resources),
         'prerequisite_technologies': sorted(map(str, c.prerequisite_technologies)),
         'selected_as_conditional_rp_source': str(c.id) in selected_science_campaigns,
         'status': 'finite_campaign_not_awarded_requires_movement_fleet_rp_admission',
@@ -381,7 +233,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
             if spec.stage_type.value == 'operational_experience':
                 experience_gates.append(identifier)
             project_stages[identifier].append((spec.stage_type.value, rp, work, getattr(spec, "execution_requirements", ())))
-            material = _aggregate((r, v) for r, v in getattr(spec, 'resources', {}).items())
+            material = aggregate_material((r, v) for r, v in getattr(spec, 'resources', {}).items())
             for r, value in material.items():
                 research_requirements[r] += value
             for requirement in getattr(spec, 'execution_requirements', ()):
@@ -413,7 +265,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                              'theory_rp': item['research_point_cost'], 'work': item['execution_work']}
                             for item in own],
         })
-    production, extraction = _producer_catalog(sim)
+    production, extraction = producer_catalog(sim)
     facilities = sorted(sim.facilities.definitions.values(), key=lambda f: str(f.id))
     vehicles = sorted(sim.transport.vehicle_definitions(), key=lambda v: str(v.id))
     providers = []
@@ -439,9 +291,9 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                 standby_load = None
                 generation = None
             for level in sorted(provider.levels, key=lambda level: level.level):
-                invested, construction_work, technology, recipe_basis = _source_investment(
+                invested, construction_work, technology, recipe_basis = source_investment(
                     sim, provider.source_kind.value, source_id, level.level)
-                maintenance_rate = (_aggregate(sim.facilities.maintenance_requirements_for_investment(
+                maintenance_rate = (aggregate_material(sim.facilities.maintenance_requirements_for_investment(
                     source_obj.id, {DefinitionId(r): amount for r, amount in invested.items()}).items())
                     if provider.source_kind.value == 'facility' and recipe_basis != 'missing_registered_upgrade_recipe'
                     else None)
@@ -480,12 +332,12 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                     duration_floor = max(duration_floor, serial_dag_floor) if serial_dag_floor is not None else None
                 # Fixed, per-provider construction versus operating bill is
                 # separated. None is unknown, never a free 0-cost Fleet.
-                resource_rate = (_aggregate((k, v * provider_units) for k, v in maintenance_rate.items())
+                resource_rate = (aggregate_material((k, v * provider_units) for k, v in maintenance_rate.items())
                                  if maintenance_rate is not None else None)
-                maintenance_total = (_aggregate((k, v * duration_floor) for k, v in resource_rate.items())
+                maintenance_total = (aggregate_material((k, v * duration_floor) for k, v in resource_rate.items())
                                      if resource_rate is not None and duration_floor is not None else None)
-                fixed_capital = _aggregate((k, v * provider_units) for k, v in invested.items())
-                footprint = _aggregate(list(research_requirements.items()) + list(fixed_capital.items())
+                fixed_capital = aggregate_material((k, v * provider_units) for k, v in invested.items())
+                footprint = aggregate_material(list(research_requirements.items()) + list(fixed_capital.items())
                                        + list((maintenance_total or {}).items()))
                 horizon_sensitivity = []
                 for days in sorted(horizon_days):
@@ -498,10 +350,10 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                         horizon_sensitivity.append({'days': days, 'minimum_provider_units_capacity_only': None,
                                                     'status': 'no_positive_rp_or_execution_capacity'})
                         continue
-                    candidate_maintenance = (_aggregate((r, amount * min_units * days)
+                    candidate_maintenance = (aggregate_material((r, amount * min_units * days)
                                                        for r, amount in (maintenance_rate or {}).items())
                                              if maintenance_rate is not None else None)
-                    candidate_capital = _aggregate((r, amount * min_units) for r, amount in invested.items())
+                    candidate_capital = aggregate_material((r, amount * min_units) for r, amount in invested.items())
                     horizon_sensitivity.append({
                         'days': days,
                         'minimum_units_for_rp_rate': min_units_rp,
@@ -539,7 +391,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                     'construction_work': construction_work * provider_units if construction_work is not None else None,
                     'source_maintenance_resource_per_day_t': resource_rate,
                     'maintenance_for_goal_rp_generation_t': maintenance_total,
-                    'direct_research_material_t': _aggregate(research_requirements.items()),
+                    'direct_research_material_t': aggregate_material(research_requirements.items()),
                     'combined_direct_resource_burden_t': footprint,
                     'source_power_load_mw': power_load,
                     'source_standby_power_mw': standby_load,
@@ -557,7 +409,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                                                       if provider.source_kind.value == 'fleet' else None),
                     'physical_upgrade_recipe_required': level.level > 1,
                     'investment_obtained': recipe_basis not in ('missing_registered_upgrade_recipe', 'no_registered_construction_recipe'),
-                    'upstream_material_dependencies': _material_paths(footprint, sim, production, extraction,
+                    'upstream_material_dependencies': conditional_material_paths(footprint, sim, production, extraction,
                                                                       production_methods or {}),
                     'status': 'conditional_independent_provider_choice_no_tech_site_allocation_or_shipping',
                 })
@@ -574,7 +426,7 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                  'serial_site_stage_work': prototype_demonstration_work,
                  'experience_gated_research_ids': sorted(set(experience_gates)),
                  'external_direct_prerequisites_not_in_selection': external_prerequisites,
-                 'research_stage_direct_material_t': _aggregate(research_requirements.items()),
+                 'research_stage_direct_material_t': aggregate_material(research_requirements.items()),
                  'research_stage_service_work': services,
                  'experience_requirements': dict(sorted(experience.items())),
                  'direct_registered_unlocks': [],
@@ -805,11 +657,30 @@ def relate_research_goal_to_economy(goal_analysis, comparison):
             duration = phase['days']
             r = phase['research_point_balance']
             generated = r['nominal_generation_points'] / duration
-            occupied_rp = r['research_stage_demand_points'] / duration
+            # Selected Research Stages may already be physically booked in the
+            # economy projection (including an explicitly authored goal). Do
+            # not count them as a competing unrelated project, then charge the
+            # exact same goal a second time in this independent capacity bound.
+            goal_ids = set(goal['research_ids'])
+            booked = [stage for stage in phase['research_stages'] if stage['research'] in goal_ids]
+            already_booked_rp = sum(stage['point_cost'] for stage in booked)
+            already_booked_execution = sum(
+                req['total_required'] for stage in booked
+                for req in stage['execution_requirements']
+                if req['kind'] == 'service' and req['scope'] == 'ORGANIZATION'
+                and req['name'] == 'research_execution')
+            unrelated_rp = max(0.0, r['research_stage_demand_points'] - already_booked_rp)
+            unrelated_execution = max(0.0, r['total_research_execution_work'] - already_booked_execution)
+            occupied_rp = unrelated_rp / duration
             available_generation = max(0.0, generated - occupied_rp)
             available_execution = max(0.0, r['nominal_execution_per_day'] -
-                                      r['total_research_execution_work'] / duration)
-            rp_days = demand_rp / available_generation if available_generation > 0 else (0.0 if demand_rp == 0 else None)
+                                      unrelated_execution / duration)
+            # Opening RP is organization stock; claim it once, after reserving
+            # unrelated Research demand. Storage admission is still not solved.
+            goal_initial_rp_upper_bound = max(0.0, r['start_points'] - unrelated_rp)
+            unfinanced_goal_rp = max(0.0, demand_rp - goal_initial_rp_upper_bound)
+            rp_days = (unfinanced_goal_rp / available_generation if available_generation > 0
+                       else 0.0 if unfinanced_goal_rp == 0 else None)
             exec_days = (demanded_exec / available_execution if available_execution > 0
                          else 0.0 if demanded_exec == 0 else None)
             resources = {}
@@ -878,6 +749,11 @@ def relate_research_goal_to_economy(goal_analysis, comparison):
                 'new_source_acquisition_site_time_comparisons': capital_node_options,
                 'current_nominal_rp_generation_per_day': generated,
                 'current_other_research_rp_claim_per_day': occupied_rp,
+                'goal_stage_demand_already_booked_in_ledger': bool(booked),
+                'goal_stage_rp_booked_in_ledger': already_booked_rp,
+                'goal_research_execution_work_booked_in_ledger': already_booked_execution,
+                'opening_rp_conditionally_available_for_goal': goal_initial_rp_upper_bound,
+                'goal_rp_remaining_after_opening_stock': unfinanced_goal_rp,
                 'residual_nominal_rp_rate_per_day': available_generation,
                 'current_nominal_research_execution_per_day': r['nominal_execution_per_day'],
                 'residual_nominal_research_execution_per_day': available_execution,
@@ -916,7 +792,7 @@ def relate_research_goal_to_economy(goal_analysis, comparison):
         'research_execution_work_requirement': demanded_exec,
         'contexts': contexts,
         'caveats': [
-            'Remaining RP and execution rates assume other selected research demand has priority; no dynamic allocation performed',
+            'Remaining RP and execution rates reserve unrelated selected research demand once; no dynamic allocation performed',
             'Goal acquisition and maintenance are shown separately and are not already commissioned in selected economy',
             'Each Resource and Facility capacity is local; cross-node balances never compensate without selected OD delivery',
             'Capacity lower bounds do not incorporate technology prerequisite sequencing, storage headroom or Construction lead-in',
@@ -1063,4 +939,75 @@ def summarize_research_economy_context(report):
             for context in report['contexts']
         ],
         'full_provider_bill_available_in_detailed_report': True,
+    }
+
+
+def research_goal_impact(before, after, *, summary=False):
+    """Research Goal sensitivity from registered Stage and Provider quantities.
+
+    This reports only same-identity changes. There is no implied physical
+    comparison of unrelated Provider sources and no scalar balance score.
+    """
+    def comparable_changes(left, right, fields, identity):
+        original = {identity(v): v for v in left}
+        edited = {identity(v): v for v in right}
+        changes = []
+        for key in sorted(set(original) | set(edited)):
+            a, b = original.get(key), edited.get(key)
+            if a is None or b is None:
+                changes.append({'identity': key, 'before': a, 'after': b,
+                                'condition': 'candidate_membership_changed'})
+                continue
+            delta = {field: b[field] - a[field] for field in fields
+                     if isinstance(a.get(field), (float, int)) and isinstance(b.get(field), (float, int))
+                     and abs(a[field] - b[field]) > 1e-12}
+            condition = {field: {'before': a.get(field), 'after': b.get(field)}
+                         for field in fields if a.get(field) != b.get(field)
+                         and (a.get(field) is None or b.get(field) is None)}
+            if delta or condition:
+                changes.append({'identity': key, 'delta': delta,
+                                'unassessed_condition_change': condition})
+        return changes
+
+    g0, g1 = before['goal'], after['goal']
+    if g0['research_ids'] != g1['research_ids']:
+        raise ValueError('Research Content comparison changed the goal membership')
+    stage_changes = comparable_changes(g0['registered_stages'], g1['registered_stages'],
+        ('research_point_cost', 'execution_work'),
+        lambda row: (row['research'], row['stage']))
+    provider_changes = comparable_changes(before['provider_choices'], after['provider_choices'],
+        ('rp_generation_per_day', 'research_execution_capacity_per_day',
+         'operating_lower_bound_days_excluding_unassessed_dependencies',
+         'construction_work', 'source_power_load_mw',
+         'power_load_mw_days_during_nominal_operating_lower_bound'),
+        lambda row: (row['provider'], row['source'], row['provider_level']))
+    def resource_deltas(a, b):
+        return {name: b.get(name, 0.0) - a.get(name, 0.0)
+                for name in sorted(set(a) | set(b))
+                if abs(b.get(name, 0.0) - a.get(name, 0.0)) > 1e-12}
+    material = resource_deltas(g0['research_stage_direct_material_t'],
+                               g1['research_stage_direct_material_t'])
+    for record in provider_changes:
+        key = record['identity']
+        first = next((v for v in before['provider_choices'] if
+                     (v['provider'], v['source'], v['provider_level']) == key), None)
+        second = next((v for v in after['provider_choices'] if
+                      (v['provider'], v['source'], v['provider_level']) == key), None)
+        if first and second:
+            record['construction_resource_delta_t'] = resource_deltas(
+                first['construction_resource_t'], second['construction_resource_t'])
+            record['maintenance_resource_rate_delta_t_per_day'] = resource_deltas(
+                first['source_maintenance_resource_per_day_t'] or {},
+                second['source_maintenance_resource_per_day_t'] or {})
+    return {
+        'model': 'research_goal_registered_definition_impact_v1',
+        'research_ids': g0['research_ids'],
+        'research_point_demand_delta': (g1['theory_research_point_demand']
+                                        - g0['theory_research_point_demand']),
+        'research_stage_material_delta_t': material,
+        'stage_changes': stage_changes,
+        'provider_changes': provider_changes,
+        'baseline': summarize_research_goal(before) if summary else before,
+        'edited_content': summarize_research_goal(after) if summary else after,
+        'caveat': 'Stage and Provider options remain uncommitted; physical demand is booked only in selected economic compositions',
     }

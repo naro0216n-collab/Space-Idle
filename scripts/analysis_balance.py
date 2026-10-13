@@ -21,9 +21,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.analysis_balance_research import evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context
+from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context
 from scripts.analysis_variants import apply_content_variant
-from scripts.analysis_balance_network import registered_material_links, registered_activity_coefficients, trace_material_system, network_overview
+from scripts.analysis_balance_network import (
+    registered_material_links, registered_activity_coefficients, trace_material_system,
+    network_overview, producer_catalog, conditional_material_paths,
+)
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.transport import MovementEndpoint
@@ -237,6 +240,10 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("external_rates", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("extraction_sites", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("research_provider_allocations", ()))
+    nodes.update(str(phase["research_goal"]["node"]) for phase in plan["phases"]
+                 if isinstance(phase.get("research_goal"), dict) and "node" in phase["research_goal"])
+    nodes.update(str(row["node"]) for phase in plan["phases"]
+                 for row in phase.get("upstream_supply_choices", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("spatial_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("upgrade_projects", ()))
     nodes.update(str(row["node"]) for phase in plan["phases"] for row in phase.get("survey_activities", ()))
@@ -298,7 +305,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     previous_assets = initial
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
+        _keys(phase, {"name", "days", "facilities", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
               {"name", "days", "facilities"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
@@ -1044,7 +1051,41 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "target_site_preparation_fleet_movement_and_arrival_unassessed",
             })
             unassessed.add("founding_target_site_knowledge_movement_payload_and_settlement")
-        for row in phase.get("research_stages", ()):
+        # A declared goal is a demand footprint in the *same* Phase ledger,
+        # rather than a separate Research-side cost summation. The analyst
+        # explicitly chooses its physical node and the planning interval;
+        # actual ordered stage progression remains Research-owned.
+        goal = phase.get("research_goal")
+        goal_stage_rows = []
+        goal_details = None
+        if goal is not None:
+            _keys(goal, {"node", "research_ids", "include_prerequisites"},
+                  {"node", "research_ids"}, "research goal")
+            node = _identifier(goal["node"], nodes, "research goal Node")
+            ids = goal["research_ids"]
+            if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+                raise ValueError("research goal IDs must be a list of Technology IDs")
+            include = goal.get("include_prerequisites", False)
+            if type(include) is not bool:
+                raise ValueError("include_prerequisites must be boolean")
+            selected = research_goal_closure(sim.research.definitions, ids,
+                                             include_prerequisites=include)
+            for identifier in selected:
+                for spec in sim.research.definitions[DefinitionId(identifier)].stage_specs:
+                    goal_stage_rows.append({"node": node, "research": identifier,
+                                            "stage": spec.stage_id})
+            goal_details = {"requested_technologies": ids,
+                            "included_technologies": list(selected),
+                            "node": node, "includes_prerequisites": include,
+                            "execution_basis": "registered_stage_demand_in_selected_phase_not_a_schedule",
+                            "external_prerequisites": sorted({str(pre)
+                                for identifier in selected
+                                for pre in sim.research.definitions[DefinitionId(identifier)].prerequisites
+                                if str(pre) not in selected})}
+            # Stage eligibility, serial order, prerequisite unlock, and Site
+            # must be resolved before any derived completion day is meaningful.
+            unassessed.add("research_goal_stage_order_unlock_and_site_not_scheduled")
+        for row in [*phase.get("research_stages", ()), *goal_stage_rows]:
             _keys(row, {"node", "research", "stage"}, {"node", "research", "stage"}, "research stage")
             rid = _identifier(row["research"], sim.research.definitions, "research")
             definition = sim.research.definitions[DefinitionId(rid)]
@@ -1479,6 +1520,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
                        "research_stages": stage_details,
+                       "research_goal": goal_details,
                        "research_service_constraints": research_services,
                        "spatial_projects": spatial_activity_details,
                        "upgrade_projects": upgrade_activity_details,
@@ -1527,6 +1569,65 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                                                      for (n, s), q in sorted(services.items())
                                                      if not s.startswith("required:")]})
         report[-1]["system_network"] = trace_material_system(report[-1], registered_links)
+        # Supply strategy is an analyst choice, not a solver-selected recipe.
+        # Expand *unmet* demands at their own Node without booking imaginary
+        # production or combining the same Facility throughput across methods.
+        selections = defaultdict(dict)
+        for row in phase.get("upstream_supply_choices", ()):
+            _keys(row, {"node", "resource", "process"},
+                  {"node", "resource", "process"}, "upstream supply choice")
+            node = _identifier(row["node"], nodes, "upstream supply Node")
+            resource = _identifier(row["resource"], known_resource, "upstream Resource")
+            process = _identifier(row["process"], sim.industry.processes, "upstream Process")
+            if resource in selections[node]:
+                raise ValueError(f"duplicate upstream supply choice: {node}/{resource}")
+            selections[node][resource] = process
+        if selections:
+            production_catalog, extraction_catalog = producer_catalog(sim)
+        upstream = []
+        for node, methods in sorted(selections.items()):
+            outstanding = {row["resource"]: row["shortfall_without_assumed_arrivals_t"]
+                           for row in breakdown if row["node"] == node
+                           and row["shortfall_without_assumed_arrivals_t"] > 1e-12}
+            # Every local shortfall is included in the chain; only the
+            # analyst-selected methods are expanded, never arbitrary catalog
+            # alternatives or incoming Cargo expected but not received.
+            dependencies = conditional_material_paths(outstanding, sim, production_catalog,
+                                           extraction_catalog, methods)
+            capacity_context = []
+            for process in dependencies["selected_processes"]:
+                process_id = process["process"]
+                definition = sim.industry.processes[DefinitionId(process_id)]
+                compatible = [
+                    (facility, units, duty, active_proc)
+                    for site, facility, units, active_proc, _extraction, duty, _yield, _people in assets
+                    if site == node and definition.required_capabilities <=
+                        {cap.id for cap in sim.facilities.definitions[DefinitionId(facility)].capability_supplies}
+                ]
+                # This is an *individual* candidate Process bound. Idle
+                # portions of one Facility are not additive across proposed
+                # Processes, and current production has already been booked.
+                available_rate = sum(units * (1.0 - duty) *
+                    sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
+                    for facility, units, duty, active_proc in compatible)
+                required_runs = process.get("process_run_days_at_unit_throughput")
+                capacity_context.append({
+                    "process": process_id,
+                    "separately_available_selected_facility_process_runs_per_day": available_rate,
+                    "required_incremental_process_runs": required_runs,
+                    "independent_capacity_only_lower_bound_days": (
+                        required_runs / available_rate if required_runs is not None and available_rate > 0
+                        else 0.0 if required_runs == 0 else None),
+                    "currently_assigned_other_processes": sorted({active_proc for _f, _u, _d, active_proc in compatible
+                                                                     if active_proc and active_proc != process_id}),
+                    "status": "independent_candidate_existing_idle_throughput_not_a_shared_allocation",
+                })
+            upstream.append({"node": node, "selected_methods": methods,
+                             "unmet_local_resource_demand_t": outstanding,
+                             "conditional_material_paths": dependencies,
+                             "existing_capacity_options": capacity_context,
+                             "status": "unmet_demand_conditional_supply_strategy_not_booked_or_delivered"})
+        report[-1]["upstream_supply_comparisons"] = upstream
         previous_assets = assets
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
@@ -1543,6 +1644,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Negative projected stock records unsatisfied notional demand; no automatic procurement or allocation occurs.",
                 "Power and finite service are nominal capacities, not eligibility or maintenance-adjusted availability.",
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
+                "Selected upstream Process chains are conditional additions for unfilled local demand, not automatically booked production; each Process capacity option is independent of competing choices.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
@@ -1724,6 +1826,17 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
                      _apply_case_updates(payload["base_plan"], case.get("updates", [])))
         results.append({"name": case["name"], "projection": evaluate(
             case_plan, app=app, _definition_graph=graph)})
+    return compare_projection_results(results)
+
+
+def compare_projection_results(results: list[dict]) -> dict:
+    """Compare independently calculated Definition/World quantity projections.
+
+    This is the *only* physical delta calculation for both composition and
+    Content edits. No Content edit is allowed to modify Game State.
+    """
+    if not results:
+        raise ValueError("comparison requires at least one projection")
     differences = []
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
@@ -1842,6 +1955,49 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
                         if incomparable:
                             change["incomparable_unassessed_metrics"] = incomparable
                         differences.append(change)
+            # Conditional upstream routes also participate in the same
+            # comparison. They do not increase ledger stock or compete for
+            # reserved throughput, so report their own resource/process
+            # requirements separately from actually authored production.
+            def upstream_requirements(phase):
+                records = {}
+                for choice in phase["upstream_supply_comparisons"]:
+                    node = choice["node"]
+                    paths = choice["conditional_material_paths"]
+                    for resource, amount in paths["gross_resource_requirements_t"].items():
+                        records[(node, "resource", resource)] = amount
+                    for process in paths["selected_processes"]:
+                        if process.get("process_run_days_at_unit_throughput") is not None:
+                            records[(node, "process", process["process"])] = process["process_run_days_at_unit_throughput"]
+                return records
+            before_upstream, after_upstream = upstream_requirements(left), upstream_requirements(right)
+            for identity in sorted(set(before_upstream) | set(after_upstream)):
+                before, after = before_upstream.get(identity, 0.0), after_upstream.get(identity, 0.0)
+                if abs(after - before) > 1e-12:
+                    node, kind, identifier = identity
+                    differences.append({"case": alternative["name"], "phase": left["name"],
+                                        "section": "conditional_upstream_material_requirements",
+                                        "identity": {"node": node, "kind": kind, "id": identifier},
+                                        "delta_from_baseline": {"required_t" if kind == "resource" else "process_run_days_at_unit_throughput": after - before}})
+            before_upstream_conditions = {row["node"]: row["conditional_material_paths"]
+                                         for row in left["upstream_supply_comparisons"]}
+            after_upstream_conditions = {row["node"]: row["conditional_material_paths"]
+                                        for row in right["upstream_supply_comparisons"]}
+            for node in sorted(set(before_upstream_conditions) | set(after_upstream_conditions)):
+                before = before_upstream_conditions.get(node, {})
+                after = after_upstream_conditions.get(node, {})
+                # Cyclic routes are symbolic; a numeric delta would wrongly
+                # imply that unchosen external supply was already solved.
+                if before.get("status") != after.get("status") or before.get("conditional_simultaneous_resource_constraints") != after.get("conditional_simultaneous_resource_constraints"):
+                    differences.append({"case": alternative["name"], "phase": left["name"],
+                                        "section": "conditional_upstream_constraints", "identity": {"node": node},
+                                        "baseline_status": before.get("status"), "case_status": after.get("status"),
+                                        "baseline_equations": before.get("conditional_simultaneous_resource_constraints", []),
+                                        "case_equations": after.get("conditional_simultaneous_resource_constraints", [])})
+            if left["research_goal"] != right["research_goal"]:
+                differences.append({"case": alternative["name"], "phase": left["name"],
+                                    "section": "research_goal_conditions",
+                                    "baseline": left["research_goal"], "case_conditions": right["research_goal"]})
             # A nonnumeric change can be the only meaningful result: a new
             # World Cell, route blocker or Infrastructure condition may leave
             # nominal capacity unknown on *both* sides. Do not reinterpret
@@ -1894,6 +2050,50 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
                                 "reason": "missing_baseline_phase"})
     return {"model": "definition_quantity_comparison_v1", "baseline_case": results[0]["name"],
             "cases": results, "differences": differences}
+
+
+
+def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -> dict:
+    """Isolate a Content hypothesis and evaluate before/after on identical inputs.
+
+    Each side gets its own Composition; only the registered Definitions vary.
+    All Resource, Service, RP, Power and time differences come from the same
+    quantitative evaluator used for normal selected-composition comparisons.
+    """
+    if not isinstance(changes, list) or not changes or any(not isinstance(e, dict) for e in changes):
+        raise ValueError("Content hypothesis requires a nonempty list of typed edits")
+    baseline = build_game_application_for_load()
+    variant = build_game_application_for_load(
+        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
+    projections = []
+    for label, application in (("baseline", baseline), ("edited_content", variant)):
+        projection = compare_cases(plan, app=application) if "cases" in plan else evaluate(plan, app=application)
+        if "cases" in projection:
+            projections.extend({"name": f"{label}:{case['name']}", "projection": case['projection']}
+                               for case in projection["cases"])
+        else:
+            projections.append({"name": label, "projection": projection})
+    # A case comparison with different inputs cannot be flattened into a
+    # consecutive baseline/variant series (the first alternative must be
+    # identical in authored scenario, not just position).
+    if "cases" in plan:
+        n = len(projections) // 2
+        pairs = [compare_projection_results([projections[i], projections[i + n]])
+                 for i in range(n)]
+    else:
+        pairs = [compare_projection_results(projections)]
+    return {
+        "model": "definition_content_impact_v1",
+        "comparison_basis": "identical_explicit_conditions_independent_registered_compositions",
+        "selected_definition_edits": changes,
+        "comparisons": [
+            {"baseline": record["baseline_case"],
+             "cases": ([{"name": case["name"], "projection": summarize_projection(case["projection"])}
+                        for case in record["cases"]] if summary else record["cases"]),
+             "differences": record["differences"]}
+            for record in pairs],
+        "interpretation": "conditional_quantity_and_constraint_movement_not_a_completion_or_optimality_claim",
+    }
 
 
 def _leading_activity_drivers(phase: dict, collection: str, *, node: str,
@@ -1978,6 +2178,8 @@ def summarize_projection(projection: dict) -> dict:
                 or row["life_support_assigned_person_days_per_day"] > 0
             ],
             "research_point_balance": phase["research_point_balance"],
+            "research_goal": phase["research_goal"],
+            "upstream_supply_comparisons": phase["upstream_supply_comparisons"],
             "research_service_constraints": phase["research_service_constraints"],
             "investment_constraints": phase["investment_constraints"],
             "od_transport_constraints": phase["od_transport_constraints"],
@@ -2012,7 +2214,7 @@ def summarize_projection(projection: dict) -> dict:
             "unassessed_constraints": phase["unassessed_constraints"],
             "system_coupling": network_overview(phase["system_network"]),
             "detail_sections": [
-                "activity_sources", "system_network", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
+                "activity_sources", "system_network", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
@@ -2355,6 +2557,10 @@ def main():
     parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
     parser.add_argument("--content-variant", type=Path, metavar="JSON",
                         help="apply explicit typed Definition edits in a fresh Composition for the same quantitative analysis")
+    parser.add_argument("--content-impact", action="store_true",
+                        help="compare edited Definitions against baseline using the identical selected conditions")
+    parser.add_argument("--adjustment-note", type=Path, metavar="JSON",
+                        help="analyst-authored question, expected trade-off, risks and adoption decision for the comparison")
     parser.add_argument("--research-generations", action="store_true", help="trace all registered research display generations to research-source time, upkeep and upstream industry")
     parser.add_argument("--research-stage", type=int, metavar="N", help="trace one registered research display generation")
     parser.add_argument("--research-id", action="append", dest="research_ids", help="trace selected Technology ID (repeatable)")
@@ -2371,6 +2577,10 @@ def main():
     parser.add_argument("--research-include-prerequisites", action="store_true", help="expand actual Technology DAG prerequisites for selected Research IDs")
     args = parser.parse_args()
     research_mode = args.research_generations or args.research_stage is not None or bool(args.research_ids)
+    if args.content_impact and not args.content_variant:
+        parser.error("--content-impact requires --content-variant")
+    if args.adjustment_note and not args.content_impact:
+        parser.error("--adjustment-note requires --content-impact")
     if args.research_compare and args.content_variant:
         parser.error("--content-variant requires an analysis goal or economic composition")
     if args.research_compare and (research_mode or args.portfolio or args.plan):
@@ -2388,6 +2598,19 @@ def main():
         parser.error("--research-compare compares two completed reports, not new economic conditions")
     if args.portfolio and not selected_plans:
         parser.error("a portfolio needs at least one explicit composition")
+    if args.content_impact and (args.research_generations or args.research_compare):
+        parser.error("compare explicitly selected goals and activities, not catalog-wide generation totals")
+    if args.content_impact and not (selected_plans or research_mode):
+        parser.error("content impact requires a selected plan or Research goal")
+    note = None
+    if args.adjustment_note:
+        note = json.loads(args.adjustment_note.read_text(encoding="utf-8"))
+        _keys(note, {"question", "player_decision", "hypothesized_constraint_change",
+                     "potential_side_effects", "assessment", "decision"},
+              {"question", "player_decision", "hypothesized_constraint_change",
+               "potential_side_effects"}, "adjustment note")
+        if not all(isinstance(value, str) and value.strip() for value in note.values()):
+            parser.error("adjustment note values must be nonempty strings")
     if args.content_variant:
         changes = json.loads(args.content_variant.read_text(encoding='utf-8'))
         if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
@@ -2396,7 +2619,32 @@ def main():
             definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
     else:
         app = None
-    if args.research_compare:
+    if args.content_impact:
+        output = {"model": "definition_driven_adjustment_cycle_v1",
+                  "analyst_context": note,
+                  "assumptions": "explicit_conditions_not_gameplay_or_a_required_balance_target"}
+        if selected_plans:
+            output["economic_comparisons"] = {
+                name: compare_content_variant(payload, changes, summary=args.summary)
+                for name, payload in selected_plans.items()
+            }
+        if research_mode:
+            from scripts.analysis_balance_research import research_goal_impact
+            before = analyze_research_goal(progression_stage=args.research_stage,
+                research_ids=args.research_ids or (), provider_units=args.research_provider_units,
+                include_prerequisites=args.research_include_prerequisites,
+                horizon_days=args.research_horizons,
+                selected_science_campaigns=args.research_science,
+                production_methods=selected_methods)
+            after = analyze_research_goal(progression_stage=args.research_stage,
+                research_ids=args.research_ids or (), provider_units=args.research_provider_units,
+                include_prerequisites=args.research_include_prerequisites,
+                horizon_days=args.research_horizons,
+                selected_science_campaigns=args.research_science,
+                production_methods=selected_methods, app=app)
+            output["research_comparison"] = research_goal_impact(before, after,
+                summary=args.summary)
+    elif args.research_compare:
         before, after = [json.loads(path.read_text(encoding='utf-8')) for path in args.research_compare]
         output = compare_research_generation_reports(before, after)
     elif research_mode:

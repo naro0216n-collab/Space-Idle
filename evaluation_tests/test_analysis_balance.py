@@ -486,3 +486,162 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
         baseline["goal"]["research_point_requirement"] + stage.research_point_cost * .3)
     assert [row["name"] for row in adjusted["selected_economies"]] == [str(inputs[0])]
     assert original[source.id].stage_specs == source.stage_specs
+
+
+def test_registered_goal_closure_enters_the_physical_ledger_without_claiming_progress(definitions):
+    """A selected Technology goal and authored stages have identical physical bills."""
+    sim = definitions._simulation
+    tech = next(iter(sim.research.definitions.values()))
+    tech_id, node = str(tech.id), "comparison.research.site"
+    full = {"phases": [{"name": "work", "days": 37, "facilities": [],
+                        "research_goal": {"node": node, "research_ids": [tech_id],
+                                          "include_prerequisites": True}}]}
+    from scripts.analysis_balance_research import research_goal_closure
+    included = research_goal_closure(sim.research.definitions, (tech_id,),
+                                      include_prerequisites=True)
+    explicit = deepcopy(full)
+    del explicit["phases"][0]["research_goal"]
+    explicit["phases"][0]["research_stages"] = [
+        {"node": node, "research": identifier, "stage": stage.stage_id}
+        for identifier in included
+        for stage in sim.research.definitions[identifier].stage_specs]
+    before = deepcopy(capture_state(sim))
+    goal, authored = (evaluate(plan, app=definitions)["phases"][0]
+                      for plan in (full, explicit))
+    assert goal["research_goal"]["included_technologies"] == list(included)
+    assert goal["resource_contributions"] == authored["resource_contributions"]
+    assert goal["research_service_constraints"] == authored["research_service_constraints"]
+    assert goal["research_point_balance"] == authored["research_point_balance"]
+    assert "research_goal_stage_order_unlock_and_site_not_scheduled" in goal["unassessed_constraints"]
+    assert capture_state(sim) == before
+    duplicate = deepcopy(full)
+    duplicate["phases"][0]["research_stages"] = [explicit["phases"][0]["research_stages"][0]]
+    with pytest.raises(ValueError, match="duplicate Research Stage"):
+        evaluate(duplicate, app=definitions)
+
+
+def test_content_impact_uses_composition_comparison_and_registered_stage_demand(definitions):
+    """An edited registered Stage changes its research and resource accounting."""
+    from scripts.analysis_balance import compare_content_variant
+    from scripts.analysis_balance_research import analyze_research_goal, research_goal_impact
+    from scripts.analysis_variants import apply_content_variant
+    from space_idle.research_models import ResearchTheoryStageSpec
+    sim = definitions._simulation
+    tech = next(definition for definition in sim.research.definitions.values()
+                if any(isinstance(spec, ResearchTheoryStageSpec) for spec in definition.stage_specs))
+    stage = next(s for s in tech.stage_specs if isinstance(s, ResearchTheoryStageSpec))
+    delta = max(1.0, stage.research_point_cost * .23)
+    change = [{"kind": "research_theory_stage", "id": str(tech.id),
+               "stage_id": stage.stage_id, "field": "research_point_cost",
+               "value": stage.research_point_cost + delta}]
+    plan = {"phases": [{"name": "research", "days": 31, "facilities": [],
+                         "research_goal": {"node": "hypothetical.site",
+                                           "research_ids": [str(tech.id)]}}]}
+    before = deepcopy(capture_state(sim))
+    record = compare_content_variant(plan, change, summary=False)
+    changes = record["comparisons"][0]["differences"]
+    assert any(r["section"] == "research_point_balance"
+               and r["delta_from_baseline"].get("research_stage_demand_points") == pytest.approx(delta)
+               for r in changes)
+    assert any(r["section"] == "research_stages"
+               and r["delta_from_baseline"].get("point_cost") == pytest.approx(delta)
+               for r in changes)
+    variant = build_game_application_for_load(
+        definition_transform=lambda simulation, catalog: apply_content_variant(
+            simulation, catalog, change))
+    observed = research_goal_impact(analyze_research_goal(research_ids=[str(tech.id)], app=definitions),
+                                    analyze_research_goal(research_ids=[str(tech.id)], app=variant))
+    assert observed["research_point_demand_delta"] == pytest.approx(delta)
+    assert observed["stage_changes"]
+    assert capture_state(sim) == before
+
+
+def test_content_impact_handles_independent_alternative_cases(definitions):
+    from scripts.analysis_balance import compare_content_variant
+    from space_idle.research_models import ResearchTheoryStageSpec
+    tech = next(v for v in definitions._simulation.research.definitions.values()
+                if any(isinstance(s, ResearchTheoryStageSpec) for s in v.stage_specs))
+    stage = next(s for s in tech.stage_specs if isinstance(s, ResearchTheoryStageSpec))
+    delta = max(1.0, stage.research_point_cost / 10)
+    edit = [{"kind": "research_theory_stage", "id": str(tech.id),
+             "stage_id": stage.stage_id, "field": "research_point_cost",
+             "value": stage.research_point_cost + delta}]
+    plan = {"cases": [{"name": "industry-only", "plan": {
+        "phases": [{"name": "operation", "days": 17, "facilities": []}]}},
+        {"name": "selected-research", "plan": {
+        "phases": [{"name": "operation", "days": 17, "facilities": [],
+                    "research_goal": {"node": "selected.site", "research_ids": [str(tech.id)]}}]}}]}
+    report = compare_content_variant(plan, edit, summary=True)
+    assert len(report["comparisons"]) == 2
+    assert report["comparisons"][0]["differences"] == []
+    assert any(c["section"] == "research_point_balance"
+               for c in report["comparisons"][1]["differences"])
+
+
+def test_goal_join_does_not_rebill_selected_goal_as_an_unrelated_research(definitions):
+    from scripts.analysis_balance import evaluate_research_with_economies
+    from scripts.analysis_balance_research import analyze_research_goal
+    sim = definitions._simulation
+    tech = next(iter(sim.research.definitions.values()))
+    goal = analyze_research_goal(research_ids=[str(tech.id)], app=definitions)
+    plan = {"initial_research_points": 10, "phases": [{
+        "name": "activity", "days": 30, "facilities": [],
+        "research_goal": {"node": "research.zone", "research_ids": [str(tech.id)]}}]}
+    joined = evaluate_research_with_economies(goal, {"selected": plan}, app=definitions)
+    context = joined[0]["research_and_economy"]["contexts"][0]
+    assert context["goal_stage_demand_already_booked_in_ledger"]
+    assert context["goal_stage_rp_booked_in_ledger"] == pytest.approx(
+        goal["goal"]["theory_research_point_demand"])
+    assert context["current_other_research_rp_claim_per_day"] == pytest.approx(0)
+    assert context["opening_rp_conditionally_available_for_goal"] == pytest.approx(10)
+    assert context["goal_rp_remaining_after_opening_stock"] == pytest.approx(max(
+        0.0, goal["goal"]["theory_research_point_demand"] - 10))
+
+
+def test_selected_upstream_process_traces_unmet_local_demand_without_creating_supply(definitions):
+    """A chosen registered conversion has a bounded conditional bill, not arrivals."""
+    sim = definitions._simulation
+    facility, process = next((f, p) for f, p in _compatible_processes(sim)
+                             if f.process_throughput_per_day > 0 and p.outputs_per_day
+                             and p.inputs_per_day)
+    resource, amount = next((r, a) for r, a in process.outputs_per_day.items() if a > 0)
+    node = "upstream.selected"
+    available = {"node": node, "facility": str(facility.id), "units": 1, "duty": 0}
+    phase = {"name": "supply", "days": 4, "facilities": [available],
+             "external_rates": [{"node": node, "resource": str(resource),
+                                 "net_t_per_day": -amount}],
+             "upstream_supply_choices": [{"node": node, "resource": str(resource),
+                                           "process": str(process.id)}]}
+    plan = {"initial_facilities": [available], "phases": [phase]}
+    before = deepcopy(capture_state(sim))
+    selected = evaluate(plan, app=definitions)["phases"][0]
+    plain = evaluate({**plan, "phases": [{key: value for key, value in phase.items()
+                                        if key != "upstream_supply_choices"}]},
+                     app=definitions)["phases"][0]
+    assert selected["resources"] == plain["resources"]
+    option = selected["upstream_supply_comparisons"][0]
+    assert option["unmet_local_resource_demand_t"][str(resource)] == pytest.approx(4 * amount)
+    chain = option["conditional_material_paths"]
+    choice = next(r for r in chain["selected_processes"] if r["process"] == str(process.id))
+    assert choice["process_run_days_at_unit_throughput"] == pytest.approx(4)
+    capacity = next(r for r in option["existing_capacity_options"] if r["process"] == str(process.id))
+    assert capacity["separately_available_selected_facility_process_runs_per_day"] == pytest.approx(
+        facility.process_throughput_per_day)
+    assert capacity["independent_capacity_only_lower_bound_days"] == pytest.approx(
+        4 / facility.process_throughput_per_day)
+    # Differentiating an explicit demand produces corresponding upstream
+    # demand and process-run deltas, never an automatic supply credit.
+    more = deepcopy(plan)
+    more["phases"][0]["external_rates"][0]["net_t_per_day"] *= 2
+    comparison = compare_cases({"cases": [{"name": "base", "plan": plan},
+                                           {"name": "more", "plan": more}]}, app=definitions)
+    assert any(row["section"] == "conditional_upstream_material_requirements"
+               and row["identity"] == {"node": node, "kind": "process", "id": str(process.id)}
+               and row["delta_from_baseline"]["process_run_days_at_unit_throughput"] == pytest.approx(4)
+               for row in comparison["differences"])
+    assert capture_state(sim) == before
+    invalid = deepcopy(plan)
+    invalid["phases"][0]["upstream_supply_choices"][0]["resource"] = next(
+        str(x) for x in definitions._catalog.resources if x not in process.outputs_per_day)
+    with pytest.raises(ValueError, match="does not produce"):
+        evaluate(invalid, app=definitions)
