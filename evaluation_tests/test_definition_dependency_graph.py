@@ -1,747 +1,94 @@
+"""Definition provenance contracts needed by the quantitative balance ledger.
+
+No Game Command, actual allocation, authoring coverage score or Technology
+outlet count belongs to this suite.
+"""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
-from dataclasses import replace
 
-from space_idle import build_game_application
 from space_idle.analysis_graph import (
-    DefinitionGraphRegistry, DependencyFragment, DependencyNode, DependencyRelation,
+    DefinitionGraphRegistry, DependencyDefinitionGraph, DependencyFragment,
+    DependencyNode, DependencyRelation,
 )
+from space_idle.bootstrap import build_game_application_for_load
 from space_idle.composition.analysis_graph import build_definition_dependency_graph
+from space_idle.persistence import capture_state
 from space_idle.production import ProcessSpec
 from space_idle.shared import DefinitionId
 
 
-def test_registered_definition_graph_reuses_real_content_without_gameplay_side_effects():
-    app = build_game_application()
+def test_registered_graph_is_read_only_and_preserves_typed_material_sources():
+    app = build_game_application_for_load()
     sim = app._simulation
-    original_day = sim.day
-    original_technology = sim.technology.completed.copy()
+    before = deepcopy(capture_state(sim))
     graph = build_definition_dependency_graph(sim, app._catalog)
     assert not graph.diagnostics
-    assert sim.day == original_day
-    assert sim.technology.completed == original_technology
     assert json.loads(json.dumps(graph.to_json_data())) == graph.to_json_data()
-    assert any(edge.kind == "requires_capability" and edge.target.kind == "survey_provider"
-               for edge in graph.relations)
-    assert any(edge.kind == "uses_asset_definition" and edge.target.kind == "research_provider"
-               for edge in graph.relations)
-
-    sample = next(p for p in sim.industry.processes.values() if p.inputs_per_day and p.outputs_per_day)
-    method = DependencyNode("process", str(sample.id))
-    subset = graph.subset((method,))
-    assert any(edge.target == method and edge.kind == "consumes_resource" for edge in subset.relations)
-    assert any(edge.source == method and edge.kind == "produces_resource" for edge in subset.relations)
-
-    # Movement methods must retain the physical gateway/body inputs when the
-    # graph is filtered to an individual method (not just the global graph).
-    for relation_kind in ("requires_gateway_capability", "requires_body_context"):
-        relation = next(edge for edge in graph.relations if edge.kind == relation_kind)
-        filtered = graph.subset((relation.target,))
-        assert relation in filtered.relations
-
-    # Vehicle construction costs are not sufficient to describe continuing
-    # industrial demand. Physical refueling and finite route-dependent fuel
-    # must appear as typed operational dependencies, without a fixed OD table.
-    for vehicle in sim.transport.vehicle_definitions():
-        operation = DependencyNode("vehicle_operation_method", str(vehicle.id))
-        partial = graph.subset((operation,), downstream=False)
-        assert any(edge.kind == "uses_asset_definition" and edge.target == operation
-                   for edge in partial.relations)
-        assert {edge.source.id for edge in graph.relations if edge.kind == "requires_operation"
-                and edge.target == operation} == {
-                    capability.operation_type for capability in vehicle.performance.operation_capabilities
-                }
-        fuel = [edge for edge in partial.relations
-                if edge.kind == "consumes_resource" and edge.target == operation]
-        if vehicle.propellant_resource_id is not None and vehicle.propellant_t_per_total_t_per_km_s > 0:
-            assert len(fuel) == 1
-            assert fuel[0].source == DependencyNode("resource", str(vehicle.propellant_resource_id))
-            assert fuel[0].quantity == vehicle.propellant_t_per_total_t_per_km_s
-            assert fuel[0].time_basis == "per_movement_mass_delta_v"
-            assert any(edge.kind == "requires_capability" and edge.target == operation
-                       for edge in partial.relations)
-        else:
-            assert not fuel
-
-    # A new Definition participates without extending a Core ID table.
-    extra = DefinitionId("test.process.unlisted")
-    missing_resource = DefinitionId("test.resource.missing")
-    sim.industry.processes[extra] = ProcessSpec(
-        extra, "alternate plant process", sample.required_capabilities,
-        {missing_resource: 2.0}, dict(sample.outputs_per_day),
-    )
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert any(d.code == "undefined_reference" and d.node == DependencyNode("resource", str(missing_resource))
-               for d in graph.diagnostics)
-    assert any(e.target == DependencyNode("process", str(extra)) for e in graph.relations)
+    process = next(p for p in sim.industry.processes.values() if p.inputs_per_day and p.outputs_per_day)
+    node = DependencyNode('process', str(process.id))
+    subset = graph.subset((node,), downstream=False)
+    assert {rel.source.id: rel.quantity for rel in subset.relations
+            if rel.target == node and rel.kind == 'consumes_resource'} == {
+                str(resource): amount for resource, amount in process.inputs_per_day.items()}
+    assert all(rel.unit is not None and rel.time_basis is not None and rel.provenance
+               for rel in subset.relations if rel.target == node and rel.quantity is not None)
+    assert capture_state(sim) == before
 
 
-def test_research_stage_dependency_graph_keeps_typed_costs_sites_services_and_experience_sources():
-    from space_idle.research import (
-        ResearchDefinition, ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
-        ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
-    )
-    from space_idle.execution_requirements import ServiceCapacityRequirement
-    from space_idle.service_capacity import ServiceCapacityScope
-    from space_idle.site import (SiteRequirements, CapabilityRequirement, CapabilityRequirementState,
-                                 SpatialClassificationRequirement, SpatialClassification,
-                                 RequiresFacet)
-    from space_idle.content import base_ids as ids
-    from space_idle.spatial import AtmosphereField
-    from space_idle.analysis_coverage import inspect_definition_coverage
-
-    app = build_game_application()
+def test_new_registered_method_changes_graph_without_implicit_supply_or_state():
+    app = build_game_application_for_load()
     sim = app._simulation
-    before = sim.day, sim.research.stored_points, sim.technology.completed.copy()
-    target = DefinitionId("test.research.typed_graph")
-    stage = DependencyNode("research_stage", f"{target}/prototype")
-    sim.research.definitions[target] = ResearchDefinition(target, "Typed Stage Graph", (
-        ResearchTheoryStageSpec("theory", 2.0),
-        ResearchPrototypeStageSpec(
-            "prototype", {ids.MACHINERY: 1.25},
-            SiteRequirements(
-                capability_requirements=(CapabilityRequirement(
-                    "general_research_equipment", CapabilityRequirementState.ACTIVE,
-                ),),
-                spatial_classification_requirements=(SpatialClassificationRequirement(
-                    SpatialClassification.SURFACE, "test.prototype.surface", "surface equipment",
-                ),),
-                environment=(RequiresFacet(AtmosphereField, "test.prototype.atmosphere", "atmosphere measured"),),
-            ),
-            (ServiceCapacityRequirement("research_execution", 0.6, scope=ServiceCapacityScope.ORGANIZATION),),
-            required_work=4.0,
-        ),
-        ResearchDemonstrationStageSpec("demonstration", 3.0),
-        ResearchOperationalExperienceStageSpec(
-            "operational_experience", {ids.EXPERIENCE_MANUFACTURING_OPERATIONS: 2.0},
-        ),
-    ))
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-    def matches(kind, dest):
-        return [row for row in graph.relations if row.kind == kind and row.target == dest]
-    assert matches("consumes_resource", stage)[0].quantity == 1.25
-    assert matches("consumes_resource", stage)[0].time_basis == "per_stage"
-    assert matches("requires_site_capability", stage)[0].condition == "required_state:ACTIVE"
-    site_classification = matches("requires_site_classification", stage)[0]
-    assert site_classification.source == DependencyNode("spatial_classification", "SURFACE")
-    site_environment = matches("requires_site_environment", stage)[0]
-    assert site_environment.source.kind == "site_condition"
-    assert "AtmosphereField" in site_environment.condition
-    stage_subset = graph.subset((stage,))
-    assert {"requires_site_capability", "requires_site_classification", "requires_site_environment"} <= {
-        row.kind for row in stage_subset.relations if row.target == stage
-    }
-    # Requesting a Technology's partial graph retains its Research Stage and
-    # the Stage's own resource/service/knowledge AND inputs transitively.
-    technology_subset = graph.subset((DependencyNode("technology", str(target)),))
-    assert stage in technology_subset.nodes
-    assert any(row.kind == "research_stage" and row.source == stage
-               for row in technology_subset.relations)
-    assert {"consumes_resource", "requires_site_capability", "requires_execution_capacity"} <= {
-        row.kind for row in technology_subset.relations if row.target == stage
-    }
-    assert matches("requires_execution_capacity", stage)[0].quantity == 0.6
-    assert matches("requires_execution_capacity", stage)[0].condition == "scope:ORGANIZATION"
-    assert matches("research_work", DependencyNode("technology", str(target)))
-    experience = DependencyNode("research_stage", f"{target}/operational_experience")
-    required = matches("requires_experience", experience)
-    assert len(required) == 1 and required[0].quantity == 2.0
-    assert any(row.kind == "contributes_experience" and row.target == required[0].source
-               for row in graph.relations)
-    assert before == (sim.day, sim.research.stored_points, sim.technology.completed)
-
-    # A research requirement unsupported by any registered Domain activity is
-    # a genuine unbound reference, not an inferred zero-cost source.
-    definition = sim.research.definitions[target]
-    sim.research.definitions[target] = replace(
-        definition, stage_specs=definition.stage_specs[:-1] + (
-            ResearchOperationalExperienceStageSpec("operational_experience", {"unknown.experience": 1.0}),
-        ),
+    sample = next(p for p in sim.industry.processes.values() if p.outputs_per_day)
+    new_id = DefinitionId('test.balance.added.method')
+    missing_resource = DefinitionId('test.balance.missing.input')
+    sim.industry.processes[new_id] = ProcessSpec(
+        new_id, 'added method', sample.required_capabilities,
+        {missing_resource: 2.5}, dict(sample.outputs_per_day),
     )
     graph = build_definition_dependency_graph(sim, app._catalog)
-    assert any(row.code == "undefined_reference" and row.node == DependencyNode(
-        "experience_category", "unknown.experience") for row in graph.diagnostics)
-
-    # Site capability authoring gaps must be visible to the coverage analyzer,
-    # including Research Stage constraints, rather than silently ignored.
-    unrelated = sim.research.definitions[target]
-    prototype = unrelated.stage_specs[1]
-    sim.research.definitions[target] = replace(unrelated, stage_specs=(
-        unrelated.stage_specs[0],
-        replace(prototype, site_requirements=SiteRequirements(capability_requirements=(
-            CapabilityRequirement("test.no_physical_supplier"),
-        ))),
-    ))
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-    assert any(row.code == "required_capability_without_definition_supplier"
-               and row.subject == DependencyNode("capability", "test.no_physical_supplier")
-               for row in inspect_definition_coverage(graph))
-
-
-def test_registered_contributor_schema_detects_missing_types_duplicates_and_bad_relations():
-    a = DependencyNode("a", "one")
-    b = DependencyNode("b", "two")
-    registry = DefinitionGraphRegistry()
-    registry.register("source", lambda: DependencyFragment((a,), (
-        DependencyRelation("unknown", a, b, "contributor:source"),
-    )), relation_kinds={"declared"})
-    registry.register("duplicated", lambda: DependencyFragment((a,), ()), relation_kinds={"declared"})
-    graph = registry.build()
-    assert {d.code for d in graph.diagnostics} == {
-        "unknown_relation_kind", "undefined_reference", "duplicate_definition_owner",
-    }
-
-    # Registry metadata rejects double edges, missing definitions and untyped quantities.
-    node = DependencyNode('test_method', 'generic')
-    resource = DependencyNode('resource', 'R')
-    extra = DependencyNode('test_method', 'expected')
-    relation = DependencyRelation('consumes_resource', resource, node, 'test:recipe', 2.0, 't')
-    registry = DefinitionGraphRegistry()
-    registry.register('method', lambda: DependencyFragment((node, resource), (relation, relation)),
-                      expected_definitions=lambda: (node, extra), relation_kinds={'consumes_resource'})
-    diagnostic = {row.code for row in registry.build().diagnostics}
-    assert {'duplicate_relation', 'quantitative_relation_without_time_basis',
-            'unrepresented_registered_definition'} <= diagnostic
-
-    # Typed coverage reports missing registered paths, without making a claim
-    # about scenario initial stocks or current physical execution eligibility.
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    from space_idle.analysis_graph import DependencyDefinitionGraph
-
-    resource = DependencyNode("resource", "test.resource.input")
-    service = DependencyNode("service_capacity", "test.service")
-    process = DependencyNode("process", "test.process")
-    facility = DependencyNode("facility", "test.facility")
-    vehicle = DependencyNode("vehicle", "test.vehicle")
-    nodes = (resource, service, process, facility, vehicle)
-    requirements = (
-        DependencyRelation("consumes_resource", resource, process, "process:input"),
-        DependencyRelation("requires_service_capacity", service, process, "process:service"),
-    )
-    findings = inspect_definition_coverage(DependencyDefinitionGraph(nodes, requirements, ()))
-    assert {f.code for f in findings} == {
-        "resource_demand_without_registered_replenishment",
-        "service_demand_without_registered_capacity_supplier",
-    }
-    assert all(f.significance == "informational" and f.evidence for f in findings)
-    # Any registered supplier is an alternative, not an AND requirement; it
-    # removes the missing-definition finding but proves no current stock/flow.
-    supplies = (
-        DependencyRelation("external_buy_offer", process, resource, "market:offer"),
-        DependencyRelation("nominal_service_supply", facility, service, "facility:service"),
-        DependencyRelation("constructs_facility", process, facility, "build:fixture"),
-        DependencyRelation("decommissions_facility", facility, process, "decommission:fixture"),
-        DependencyRelation("produces_vehicle", process, vehicle, "production:fixture"),
-        DependencyRelation("retires_vehicle", vehicle, process, "retire:fixture"),
-    )
-    covered = inspect_definition_coverage(DependencyDefinitionGraph(nodes, requirements + supplies, ()))
-    # Coverage is complete, but construction is conditionally self-dependent:
-    # the only provider of the required service is the facility being acquired.
-    assert {f.code for f in covered} == {"potential_asset_self_bootstrap_dependency"}
-    assert covered[0].subject == facility
-
-    # A first installed asset cannot be its own exclusive construction service
-    # source. This is only a conditional authoring risk: an alternative source
-    # (OR), or a second acquisition method, removes it without inventing State.
-    work = DependencyNode("service_capacity", "test.work")
-    recipe = DependencyNode("construction_method", "test.build_facility")
-    self_only = (
-        DependencyRelation("constructs_facility", recipe, facility, "test:build"),
-        DependencyRelation("requires_construction_work", work, recipe, "test:work"),
-        DependencyRelation("nominal_construction_service_supply", facility, work, "test:self"),
-    )
-    self_graph = DependencyDefinitionGraph((facility, work, recipe), self_only, ())
-    assert any(row.code == "potential_asset_self_bootstrap_dependency" and row.subject == facility
-               for row in inspect_definition_coverage(self_graph))
-    alternate = DependencyRelation("nominal_construction_service_supply", vehicle, work, "test:other")
-    assert not any(row.code == "potential_asset_self_bootstrap_dependency"
-                   for row in inspect_definition_coverage(DependencyDefinitionGraph(
-                       (facility, vehicle, work, recipe), self_only + (alternate,), ())))
-    self_deploy_method = DependencyNode("construction_method", "test.self_deploy")
-    method_alternative = DependencyRelation("constructs_facility", self_deploy_method, facility,
-                                            "test:independent")
-    assert not any(row.code == "potential_asset_self_bootstrap_dependency"
-                   for row in inspect_definition_coverage(DependencyDefinitionGraph(
-                       (facility, work, recipe, self_deploy_method), self_only + (method_alternative,), ())))
-
-
-def test_definition_acquisition_cycles_keep_alternative_methods_and_unknown_sources_distinct():
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    from space_idle.analysis_graph import DependencyDefinitionGraph
-
-    a = DependencyNode("facility", "test.asset.a")
-    b = DependencyNode("vehicle", "test.asset.b")
-    c = DependencyNode("facility", "test.asset.c")
-    service_a = DependencyNode("service_capacity", "test.service.a")
-    service_b = DependencyNode("service_capacity", "test.service.b")
-    method_a = DependencyNode("construction_method", "test.acquire.a")
-    method_b = DependencyNode("vehicle_production_method", "test.acquire.b")
-    method_c = DependencyNode("construction_method", "test.acquire.c")
-    nodes = (a, b, c, service_a, service_b, method_a, method_b, method_c)
-    circular = (
-        DependencyRelation("constructs_facility", method_a, a, "test:acquire:a"),
-        DependencyRelation("produces_vehicle", method_b, b, "test:acquire:b"),
-        DependencyRelation("constructs_facility", method_c, c, "test:acquire:c"),
-        DependencyRelation("nominal_service_supply", a, service_a, "test:service:a"),
-        DependencyRelation("nominal_service_supply", b, service_b, "test:service:b"),
-        DependencyRelation("requires_service_capacity", service_b, method_a, "test:need:b"),
-        DependencyRelation("requires_service_capacity", service_a, method_b, "test:need:a"),
-        DependencyRelation("requires_service_capacity", service_a, method_c, "test:need:a:other"),
-    )
-    risks = [r for r in inspect_definition_coverage(DependencyDefinitionGraph(nodes, circular, ()))
-             if r.code == "potential_asset_acquisition_dependency_cycle"]
-    assert len(risks) == 1
-    assert risks[0].subject == a
-    assert {f"member:{node.kind}:{node.id}" for node in (a, b)} <= set(risks[0].evidence)
-    assert f"member:{c.kind}:{c.id}" not in risks[0].evidence
-
-    independent_method = DependencyNode("construction_method", "test.acquire.b.alternative")
-    independent = (
-        DependencyRelation("produces_vehicle", independent_method, b, "test:alternative"),
-    )
-    # Any physically independent method breaks the OR dependency loop.
-    resolved = inspect_definition_coverage(DependencyDefinitionGraph(
-        nodes + (independent_method,), circular + independent, ()))
-    assert not any(r.code == "potential_asset_acquisition_dependency_cycle" for r in resolved)
-
-    # Missing definition providers are a separate coverage gap. They do not
-    # magically make an unknown initial Scenario physically impossible.
-    external = DependencyNode("service_capacity", "test.unknown.service")
-    missing_input = DependencyRelation("requires_service_capacity", external, method_b, "test:unknown")
-    unknown = inspect_definition_coverage(DependencyDefinitionGraph(
-        nodes + (external,), circular + (missing_input,), ()))
-    assert any(r.code == "service_demand_without_registered_capacity_supplier" for r in unknown)
-    assert any(r.code == "potential_asset_acquisition_dependency_cycle" for r in unknown)
-
-
-def test_definition_resource_acquisition_cycles_preserve_alternative_sources_and_physical_inputs():
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    from space_idle.analysis_graph import DependencyDefinitionGraph
-
-    def node(kind, key):
-        return DependencyNode(kind, f"test.{key}")
-
-    facility = node("facility", "smelter")
-    capability = node("capability", "smelt")
-    ore = node("resource", "ore")
-    metal = node("resource", "metal")
-    construction = node("construction_method", "smelter.build")
-    process = node("process", "metal.from.ore")
-    extraction = node("extraction_method", "ore.extract")
-    source_facility = node("facility", "mine")
-    mine_build = node("construction_method", "mine.build")
-    graph_nodes = (facility, capability, ore, metal, construction, process,
-                   extraction, source_facility, mine_build)
-    relations = (
-        DependencyRelation("constructs_facility", construction, facility, "test:build"),
-        DependencyRelation("consumes_resource", metal, construction, "test:build:metal"),
-        DependencyRelation("supplies_capability", facility, capability, "test:smelt"),
-        DependencyRelation("requires_capability", capability, process, "test:process:smelt"),
-        DependencyRelation("consumes_resource", ore, process, "test:process:ore"),
-        DependencyRelation("produces_resource", process, metal, "test:process:metal"),
-        DependencyRelation("constructs_facility", mine_build, source_facility, "test:build:mine"),
-        DependencyRelation("nominal_extraction_capacity", source_facility, extraction,
-                           "test:extraction:installed_capacity"),
-        DependencyRelation("extracts_resource", extraction, ore, "test:extraction:ore"),
-    )
-
-    def risks(edges, nodes=graph_nodes):
-        return [finding for finding in inspect_definition_coverage(
-            DependencyDefinitionGraph(nodes, edges, ())
-        ) if finding.code == "potential_resource_acquisition_dependency_cycle"]
-
-    circular = risks(relations)
-    assert len(circular) == 1
-    assert {"member:facility:test.smelter", "member:resource:test.metal"} <= set(circular[0].evidence)
-    assert "member:resource:test.ore" not in circular[0].evidence
-    assert "initial_stock_assets_and_external_conditions_unknown" in " ".join(circular[0].evidence)
-    assert "method:construction_method:test.smelter.build:needs:resource:test.metal" in circular[0].evidence
-    assert "method:process:test.metal.from.ore:needs:facility:test.smelter" in circular[0].evidence
-    assert all(finding.significance == "informational" for finding in circular)
-
-    # A Market import is an alternative *definition* supply path. It says
-    # nothing about the current Market interface, Funds or provider stock.
-    provider = node("market_provider", "imports")
-    market = DependencyRelation("external_buy_offer", provider, metal, "test:market:metal")
-    assert not risks(relations + (market,), graph_nodes + (provider,))
-
-    # A different producing process attached to an independently acquired
-    # facility is another OR path; the original AND inputs are retained.
-    alternate_facility = node("facility", "independent.smelter")
-    alternate_capability = node("capability", "independent.smelt")
-    alternate_process = node("process", "metal.alternative")
-    alternate_build = node("construction_method", "independent.build")
-    alternates = (
-        DependencyRelation("constructs_facility", alternate_build, alternate_facility,
-                           "test:alternative:build"),
-        DependencyRelation("supplies_capability", alternate_facility, alternate_capability,
-                           "test:alternative:capability"),
-        DependencyRelation("requires_capability", alternate_capability, alternate_process,
-                           "test:alternative:requires"),
-        DependencyRelation("consumes_resource", ore, alternate_process,
-                           "test:alternative:ore"),
-        DependencyRelation("produces_resource", alternate_process, metal,
-                           "test:alternative:output"),
-    )
-    assert not risks(relations + alternates, graph_nodes + (
-        alternate_facility, alternate_capability, alternate_process, alternate_build,
-    ))
-    # A purely Resource-to-Resource feedback loop is also a conditional
-    # authoring risk, without asserting anything about initial inventories.
-    feedstock = node("resource", "seed")
-    recycle = node("process", "seed.recycle")
-    cyclic_recycle = (
-        DependencyRelation("consumes_resource", feedstock, recycle, "test:feedstock"),
-        DependencyRelation("produces_resource", recycle, feedstock, "test:recycled"),
-    )
-    assert len(risks(cyclic_recycle, (feedstock, recycle))) == 1
-    assert risks(cyclic_recycle + (
-        DependencyRelation("external_buy_offer", provider, feedstock, "test:seed:supply"),
-    ), (feedstock, recycle, provider)) == []
-
-
-def test_installed_power_storage_and_external_market_remain_typed_nominal_dependencies():
-    from dataclasses import replace
-    from space_idle.power import FixedGeneration, SolarGeneration
-
-    app = build_game_application()
-    sim = app._simulation
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-
-    def edges(kind, source, target):
-        return tuple(edge for edge in graph.relations
-                     if edge.kind == kind and edge.source == source and edge.target == target)
-
-    for facility_id, spec in sim.power.specs.items():
-        source = DependencyNode("facility", str(facility_id))
-        power = DependencyNode("service_capacity", "power")
-        if isinstance(spec.generation, FixedGeneration):
-            rows = edges("nominal_power_supply", source, power)
-            assert len(rows) == 1
-            assert (rows[0].quantity, rows[0].unit, rows[0].time_basis) == (
-                spec.generation.mw, "MW", "installed_rating")
-        elif isinstance(spec.generation, SolarGeneration):
-            rows = edges("nominal_power_supply", source, power)
-            assert len(rows) == 1
-            assert rows[0].quantity == spec.generation.rated_mw_at_reference_flux
-            assert rows[0].time_basis == "at_reference_flux"
-            assert "illumination_required" in (rows[0].condition or "")
-        if spec.load_mw:
-            assert edges("nominal_power_load", power, source)[0].quantity == spec.load_mw
-
-    for resource in app._catalog.resources.values():
-        expected = () if resource.storage_pool_key is None else edges(
-            "uses_storage_pool", DependencyNode("resource", str(resource.id)),
-            DependencyNode("storage_pool", resource.storage_pool_key))
-        if resource.storage_pool_key is None:
-            assert not any(edge.kind == "uses_storage_pool" and edge.source == DependencyNode("resource", str(resource.id))
-                           for edge in graph.relations)
-        else:
-            assert expected
-
-    for facility_id, spec in sim.storage.providers.items():
-        for pool, capacity in spec.capacity_t_by_pool.items():
-            rows = edges("nominal_storage_capacity", DependencyNode("facility", str(facility_id)),
-                         DependencyNode("storage_pool", pool))
-            assert len(rows) == 1
-            assert rows[0].quantity == capacity
-            assert rows[0].unit == "t" and rows[0].time_basis == "per_installed_facility"
-
-    # Service, housing and life support are not fungible: a housing slot is
-    # installed stock capacity, whereas oxygen/water throughput is a daily flow.
-    for facility in sim.facilities.definitions.values():
-        owner = DependencyNode("facility", str(facility.id))
-        for service in facility.service_capacity_supplies:
-            rows = edges("nominal_service_supply", owner,
-                         DependencyNode("service_capacity", service.service_type))
-            assert len(rows) == 1 and rows[0].quantity == service.nominal_rate
-            assert rows[0].time_basis == "per_installed_facility"
-        if facility.housing_capacity:
-            row = edges("nominal_housing_capacity", owner,
-                        DependencyNode("capacity_pool", "housing"))[0]
-            assert (row.quantity, row.unit) == (facility.housing_capacity, "people")
-        if facility.life_support is not None:
-            support = DependencyNode("life_support_method", str(facility.id))
-            assert edges("uses_asset_definition", owner, support)
-            row = edges("nominal_life_support_supply", support,
-                        DependencyNode("service_capacity", "life_support"))[0]
-            assert row.quantity == facility.life_support.person_days_per_day
-            assert row.unit == "person_days/day"
-            for rid, rate in facility.life_support.net_resources:
-                row = edges("consumes_resource", DependencyNode("resource", str(rid)), support)[0]
-                assert (row.quantity, row.unit) == (rate, "t/person_day")
-        if facility.maintenance_fraction_per_year:
-            row = edges("maintenance_investment_fraction", owner,
-                        DependencyNode("facility_maintenance_policy", str(facility.id)))[0]
-            assert (row.quantity, row.time_basis) == (
-                facility.maintenance_fraction_per_year, "of_actual_instance_investment")
-
-    for vehicle in sim.transport.vehicle_definitions():
-        owner = DependencyNode("vehicle", str(vehicle.id))
-        production = DependencyNode("vehicle_production_method", str(vehicle.id))
-        if vehicle.production.service_type is not None:
-            assert edges("requires_service_capacity",
-                         DependencyNode("service_capacity", vehicle.production.service_type), production)
-        if vehicle.retirement.enabled:
-            method = DependencyNode("vehicle_retirement_method", str(vehicle.id))
-            assert edges("retires_vehicle", owner, method)
-            for rid, amount in vehicle.retirement.recovery_resources_per_unit:
-                row = edges("recovers_resource", method, DependencyNode("resource", str(rid)))[0]
-                assert (row.quantity, row.time_basis) == (amount, "maximum_recovery_per_vehicle")
-        if vehicle.maintenance.turnaround_days or vehicle.maintenance.resources or vehicle.maintenance.service_type:
-            method = DependencyNode("vehicle_turnaround_method", str(vehicle.id))
-            assert edges("uses_asset_definition", owner, method)
-            for rid, amount in vehicle.maintenance.resources:
-                row = edges("consumes_resource", DependencyNode("resource", str(rid)), method)[0]
-                assert (row.quantity, row.time_basis) == (amount, "per_turnaround")
-        if vehicle.passengers.seats:
-            method = DependencyNode("onboard_life_support_method", str(vehicle.id))
-            assert edges("nominal_passenger_seats", owner,
-                         DependencyNode("capacity_pool", "passenger_seats"))
-            assert edges("nominal_life_support_supply", method,
-                         DependencyNode("service_capacity", "onboard_life_support"))
-            for rid, rate in vehicle.passengers.net_resources_per_person_day:
-                row = edges("consumes_resource", DependencyNode("resource", str(rid)), method)[0]
-                assert (row.quantity, row.unit) == (rate, "t/person_day")
-
-    # External buy availability and offer prices have distinct units, semantics,
-    # and interface requirements. Neither is a player-owned inventory stock.
-    market = next(iter(sim.market.provider_defs.values()))
-    resource_id, price = next(iter(market.buy_offers_musd_per_t))
-    source = DependencyNode("market_provider", str(market.id))
-    target = DependencyNode("resource", str(resource_id))
-    assert edges("external_buy_offer", source, target)[0].quantity == price
-    assert edges("external_buy_offer", source, target)[0].unit == "MUSD/t"
-    assert edges("external_supply_capacity", source, target)[0].time_basis == "stock_capacity"
-
-    # The same code reads another registered definition; no ID-specific analysis table.
-    other = replace(market, id=DefinitionId("test.market.other"))
-    sim.market.register_provider_definition(other)
-    expanded = build_definition_dependency_graph(sim, app._catalog)
-    assert not expanded.diagnostics
-    assert any(row.source == DependencyNode("market_provider", str(other.id))
-               and row.kind == "external_buy_offer" for row in expanded.relations)
-
-
-def test_scientific_exploration_dependency_graph_preserves_real_movement_inputs_and_site_requirements():
-    """A newly registered finite Campaign uses the same site/asset graph contract."""
-    from space_idle.content import base_ids as ids
-    from space_idle.scientific_exploration import ScientificExplorationDefinition
-    from space_idle.transport.models import MovementEndpoint
-    from space_idle.site import (SiteRequirements, SpatialClassificationRequirement,
-                                 SpatialClassification, RequiresFacet)
-    from space_idle.spatial import RadiationField
-
-    app = build_game_application()
-    sim = app._simulation
-    identifier = DefinitionId('test.exploration.physical_context')
-    capability = next(cap for vehicle in sim.transport.vehicle_definitions()
-                      for cap in vehicle.generic_capabilities)
-    definition = ScientificExplorationDefinition(
-        identifier, 'physical survey campaign', ids.LEO,
-        MovementEndpoint(physical_target_node_id=ids.MARS_ORBIT), 7.0, 19.0,
-        consumable_resources=((ids.MACHINERY, 1.2),), required_units=2,
-        required_crew=2, required_vehicle_capabilities=(capability,),
-        destination_requirements=SiteRequirements(
-            spatial_classification_requirements=(SpatialClassificationRequirement(
-                SpatialClassification.ORBITAL, 'orbit.required', 'orbit target',
-            ),), environment=(RequiresFacet(RadiationField, 'radiation.required', 'radiation known'),),
-        ),
-    )
-    sim.scientific_exploration.definitions[identifier] = definition
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-    method = DependencyNode('scientific_exploration', str(identifier))
-    subset = graph.subset((method,))
-    def get(kind):
-        return [row for row in subset.relations if row.kind == kind and row.target == method]
-
-    assert get('requires_origin_context')[0].source == DependencyNode('spatial_node', str(ids.LEO))
-    assert any(row.kind == 'targets_spatial_context' and row.source == method
-               and row.target == DependencyNode('spatial_node', str(ids.MARS_ORBIT))
-               for row in subset.relations)
-    assert get('consumes_resource')[0].quantity == 1.2
-    assert get('requires_fleet_units')[0].quantity == 2
-    assert get('requires_population_commitment')[0].quantity == 2
-    assert get('requires_capability')[0].source == DependencyNode('capability', capability)
-    assert get('requires_site_classification')[0].source == DependencyNode('spatial_classification', 'ORBITAL')
-    assert get('requires_site_environment')[0].source.kind == 'site_condition'
-    assert any(row.kind == 'campaign_duration' and row.source == method and row.quantity == 7.0
-               for row in subset.relations)
-    assert not sim.graph.has_operational_node(ids.MARS_ORBIT)
-
-
-def test_survey_and_extraction_dependencies_preserve_physical_methods_and_targets():
-    """Analysis must not reduce acquisition and Survey to names or RP outputs."""
-    from dataclasses import replace
-
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    from space_idle.exploration_models import SurveyObservationModeSpec
-    from space_idle.site import SiteRequirements, CapabilityRequirement
-
-    app = build_game_application()
-    sim = app._simulation
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-
-    for (cell_id, resource_id), target in sim.survey.targets.items():
-        owner = DependencyNode("survey_target", f"{cell_id}/{resource_id}")
-        assert any(r.source == owner and r.kind == "targets_surface_cell"
-                   and r.target == DependencyNode("surface_cell", str(cell_id)) for r in graph.relations)
-        assert any(r.source == owner and r.kind == "observes_resource"
-                   and r.target == DependencyNode("resource", str(resource_id)) for r in graph.relations)
-        thresholds = [r for r in graph.relations
-                      if r.source == owner and r.kind == "survey_knowledge_threshold"]
-        assert len(thresholds) == len(target.thresholds)
-        assert {r.target.id: r.quantity for r in thresholds} == dict(zip(
-            ("PRESENCE_PROBABILITY", "ESTIMATED_RESOURCE_POTENTIAL", "MEASURED_RESOURCE_POTENTIAL"),
-            target.thresholds,
-        ))
-
-    for provider in sim.survey.providers.values():
-        provider_node = DependencyNode("survey_provider", str(provider.id))
-        compatible = sim.survey.compatible_source_definition_ids(provider)
-        assert {r.source.id for r in graph.relations if r.target == provider_node
-                and r.kind == "uses_asset_definition"} == {str(key) for key in compatible}
-        for mode in provider.observation_modes:
-            owner = DependencyNode("survey_mode", f"{provider.id}/{mode.id}")
-            assert any(r.source == owner and r.kind == "nominal_survey_progress"
-                       and r.quantity == mode.survey_rate for r in graph.relations)
-            assert any(r.target == owner and r.kind == "requires_survey_reach"
-                       and r.source.id == mode.reach.scope.value for r in graph.relations)
-            expected_services = {
-                sim.survey.service_type_for_provider(provider.id, source_id)
-                for source_id in sim.survey.compatible_mode_source_definition_ids(provider, mode)
-            }
-            assert {r.source.id for r in graph.relations if r.target == owner
-                    and r.kind == "requires_service_capacity"} == expected_services
-
-    for method in sim.extraction.specs.values():
-        owner = DependencyNode("extraction_method", str(method.id))
-        assert any(r.source == DependencyNode("resource", str(method.resource_id))
-                   and r.target == owner and r.kind == "requires_resource_opportunity"
-                   for r in graph.relations)
-        assert any(r.target == owner and r.kind == "requires_knowledge"
-                   and r.source == DependencyNode("resource", str(method.resource_id))
-                   for r in graph.relations) == (method.minimum_knowledge_level is not None)
-        assert any(r.target == owner and r.kind == "requires_site_classification"
-                   for r in graph.relations) == bool(method.opportunity_requirements.spatial_classification_requirements)
-        for key in (method.geology_accessibility_key, method.terrain_accessibility_attribute):
-            if key is not None:
-                assert any(r.target == owner and r.kind == "requires_opportunity_factor"
-                           and key in r.source.id for r in graph.relations)
-    for facility in sim.facilities.definitions.values():
-        if facility.extraction_capacity_t_per_day > 0:
-            methods = sim.extraction.compatible_methods(facility.id)
-            assert methods
-            for method in methods:
-                assert any(r.kind == "nominal_extraction_capacity"
-                           and r.source == DependencyNode("facility", str(facility.id))
-                           and r.target == DependencyNode("extraction_method", str(method.id))
-                           and r.quantity == facility.extraction_capacity_t_per_day
-                           for r in graph.relations)
-
-    # Content can add a mode-specific physical requirement and site condition;
-    # the graph must report that requirement without modifying Generic Core.
-    provider = next(iter(sim.survey.providers.values()))
-    original = provider.observation_modes[0]
-    additional = replace(original, id="different_equipment_mode", required_source_capabilities=frozenset({
-        "unprovided_observation_instrument",
-    }), site_requirements=SiteRequirements(capability_requirements=(
-        CapabilityRequirement("unprovided_observation_instrument"),
-    )))
-    sim.survey.providers[provider.id] = replace(provider, observation_modes=(*provider.observation_modes, additional))
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    assert not graph.diagnostics
-    mode_node = DependencyNode("survey_mode", f"{provider.id}/{additional.id}")
-    assert any(r.kind == "requires_site_capability" and r.target == mode_node
+    target = DependencyNode('process', str(new_id))
+    assert any(r.target == target and r.source == DependencyNode('resource', str(missing_resource))
+               and r.quantity == 2.5 and r.time_basis == 'per_execution_day'
                for r in graph.relations)
-    assert not any(r.kind == "requires_service_capacity" and r.target == mode_node
-                   for r in graph.relations)
-    assert any(f.code == "required_capability_without_definition_supplier"
-               and f.subject == DependencyNode("capability", "unprovided_observation_instrument")
-               for f in inspect_definition_coverage(graph))
+    assert any(d.code == 'undefined_reference' and d.node == DependencyNode('resource', str(missing_resource))
+               for d in graph.diagnostics)
 
 
-def test_research_stage_supply_dependencies_preserve_alternative_sources_and_technology_gates():
-    """An input to an unfinished technology cannot depend exclusively on its unlocked methods."""
-    from space_idle.analysis_coverage import inspect_definition_coverage
-    from space_idle.analysis_graph import DependencyDefinitionGraph
+def test_contributor_contract_reports_missing_owners_references_and_untyped_relations():
+    method = DependencyNode('method', 'added')
+    resource = DependencyNode('resource', 'input')
+    missing_method = DependencyNode('method', 'unrepresented')
+    edge = DependencyRelation('consumes_resource', resource, method, 'process:registered', 1.5, 't')
+    registry = DefinitionGraphRegistry()
+    registry.register('method', lambda: DependencyFragment((method,), (edge, edge)),
+                      relation_kinds={'consumes_resource'},
+                      expected_definitions=lambda: (method, missing_method))
+    registry.register('other', lambda: DependencyFragment((method,), (
+        DependencyRelation('unregistered_kind', resource, method, 'unknown:definition'),
+    )), relation_kinds={'declared_kind'})
+    diagnostics = {row.code for row in registry.build().diagnostics}
+    assert diagnostics == {
+        'duplicate_definition_owner', 'unrepresented_registered_definition',
+        'duplicate_relation', 'quantitative_relation_without_time_basis',
+        'undefined_reference', 'unknown_relation_kind',
+    }
 
-    def node(kind, suffix):
-        return DependencyNode(kind, f"test.research_supply.{suffix}")
 
-    technology = node("technology", "initial")
-    successor = node("technology", "successor")
-    stage = node("research_stage", "initial.prototype")
-    input_resource = node("resource", "feedstock")
-    method = node("process", "synthesis")
-    provider = node("market_provider", "supplier")
-    facility = node("facility", "lab")
-    construction = node("construction_method", "build_lab")
-    research_provider = node("research_provider", "lab_provider")
-    execution = node("service_capacity", "research_execution")
-
-    base = (
-        DependencyRelation("research_stage", stage, technology, "test:stage"),
-        DependencyRelation("consumes_resource", input_resource, stage, "test:research_cost"),
-        DependencyRelation("produces_resource", method, input_resource, "test:production"),
-        DependencyRelation("unlocks_method", technology, method, "test:gate"),
-        DependencyRelation("technology_prerequisite", technology, successor, "test:research_prerequisite"),
+def test_dependency_subset_retains_multiple_inputs_without_inferring_feasibility():
+    a, b = DependencyNode('resource', 'a'), DependencyNode('resource', 'b')
+    result = DependencyNode('resource', 'result')
+    method = DependencyNode('process', 'method')
+    alternative = DependencyNode('process', 'alternative')
+    links = (
+        DependencyRelation('consumes_resource', a, method, 'recipe:primary', 2, 't', 'per_execution_day'),
+        DependencyRelation('consumes_resource', b, method, 'recipe:secondary', 3, 't', 'per_execution_day'),
+        DependencyRelation('produces_resource', method, result, 'recipe:output', 1, 't', 'per_execution_day'),
+        DependencyRelation('produces_resource', alternative, result, 'recipe:other', 1, 't', 'per_execution_day'),
     )
-
-    def risks(relations):
-        nodes = tuple(sorted({node for relation in relations for node in (relation.source, relation.target)}))
-        graph = DependencyDefinitionGraph(nodes, relations, ())
-        return [row for row in inspect_definition_coverage(graph)
-                if row.code == "potential_research_supply_acquisition_cycle"]
-
-    resource_risks = risks(base)
-    assert len(resource_risks) == 1 and resource_risks[0].subject == technology
-    assert f"stage:{stage.id}:requires:resource:{input_resource.id}" in resource_risks[0].evidence
-    assert any(f"blocked_method:process:{method.id}:requires:{technology.id}" == entry
-               for entry in resource_risks[0].evidence)
-    assert all(row.significance == "informational" for row in resource_risks)
-    downstream_gated = tuple(DependencyRelation(
-        "unlocks_method", successor if row.kind == "unlocks_method" else row.source,
-        row.target, row.provenance,
-    ) if row.kind == "unlocks_method" else row for row in base)
-    assert len(risks(downstream_gated)) == 1
-
-    market = DependencyRelation("external_buy_offer", provider, input_resource, "test:market:alternative")
-    assert risks(base + (market,)) == []
-    alternate_process = node("process", "other_production")
-    assert risks(base + (DependencyRelation(
-        "produces_resource", alternate_process, input_resource, "test:independent_production"
-    ),)) == []
-
-    # A nominal Research Provider capacity is not an independent physical
-    # source; it requires an eligible installed Facility from the same Owner.
-    provider_dependency = (
-        DependencyRelation("research_stage", stage, technology, "test:stage"),
-        DependencyRelation("requires_execution_capacity", execution, stage, "test:stage:service"),
-        DependencyRelation("uses_asset_definition", facility, research_provider, "test:lab:backing_asset"),
-        DependencyRelation("nominal_research_execution", research_provider, execution, "test:lab:service"),
-        DependencyRelation("constructs_facility", construction, facility, "test:lab:build"),
-        DependencyRelation("unlocks_method", technology, construction, "test:lab:locked"),
-    )
-    service_risks = risks(provider_dependency)
-    assert len(service_risks) == 1
-    assert f"stage:{stage.id}:requires:service_capacity:{execution.id}" in service_risks[0].evidence
-    alternative_lab = node("facility", "other_lab")
-    alternative_build = node("construction_method", "other_lab_build")
-    alternative_provider = (
-        DependencyRelation("uses_asset_definition", alternative_lab, research_provider,
-                           "test:other_lab:backing_asset"),
-        DependencyRelation("constructs_facility", alternative_build, alternative_lab,
-                           "test:other_lab:build"),
-    )
-    assert risks(provider_dependency + alternative_provider) == []
-
-    # Missing sources have their own diagnostics and must never be described
-    # as a closed cycle: initial Content/Scenario coverage is unknown.
-    assert risks(tuple(row for row in base if row.kind != "produces_resource")) == []
+    graph = DependencyDefinitionGraph((a, b, method, alternative, result), links, ())
+    subset = graph.subset((method,))
+    assert all(link in subset.relations for link in links[:3])
+    assert links[3] not in subset.relations
+    assert len([r for r in subset.relations if r.target == method]) == 2

@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.analysis_balance_research import evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context
+from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import registered_material_links, registered_activity_coefficients, trace_material_system, network_overview
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
@@ -2352,6 +2353,8 @@ def main():
     parser.add_argument("--portfolio", nargs="+", type=Path, metavar="PATH",
                         help="compare independent selected activity plans from files or directories as one system")
     parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
+    parser.add_argument("--content-variant", type=Path, metavar="JSON",
+                        help="apply explicit typed Definition edits in a fresh Composition for the same quantitative analysis")
     parser.add_argument("--research-generations", action="store_true", help="trace all registered research display generations to research-source time, upkeep and upstream industry")
     parser.add_argument("--research-stage", type=int, metavar="N", help="trace one registered research display generation")
     parser.add_argument("--research-id", action="append", dest="research_ids", help="trace selected Technology ID (repeatable)")
@@ -2368,6 +2371,8 @@ def main():
     parser.add_argument("--research-include-prerequisites", action="store_true", help="expand actual Technology DAG prerequisites for selected Research IDs")
     args = parser.parse_args()
     research_mode = args.research_generations or args.research_stage is not None or bool(args.research_ids)
+    if args.research_compare and args.content_variant:
+        parser.error("--content-variant requires an analysis goal or economic composition")
     if args.research_compare and (research_mode or args.portfolio or args.plan):
         parser.error("--research-compare cannot be combined with a Content analysis operation")
     if sum([bool(args.research_generations), args.research_stage is not None, bool(args.research_ids)]) > 1:
@@ -2383,13 +2388,21 @@ def main():
         parser.error("--research-compare compares two completed reports, not new economic conditions")
     if args.portfolio and not selected_plans:
         parser.error("a portfolio needs at least one explicit composition")
+    if args.content_variant:
+        changes = json.loads(args.content_variant.read_text(encoding='utf-8'))
+        if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
+            parser.error('--content-variant must contain a nonempty JSON list of typed Definition edits')
+        app = build_game_application_for_load(
+            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
+    else:
+        app = None
     if args.research_compare:
         before, after = [json.loads(path.read_text(encoding='utf-8')) for path in args.research_compare]
         output = compare_research_generation_reports(before, after)
     elif research_mode:
         if args.research_generations:
             result = evaluate_research_generations(horizon_days=args.research_horizons,
-                                                    production_methods=selected_methods)
+                                                    production_methods=selected_methods, app=app)
             output = summarize_research_generations(result) if args.summary else result
         else:
             result = analyze_research_goal(progression_stage=args.research_stage,
@@ -2398,19 +2411,19 @@ def main():
                                            include_prerequisites=args.research_include_prerequisites,
                                            horizon_days=args.research_horizons,
                                            selected_science_campaigns=args.research_science,
-                                           production_methods=selected_methods)
+                                           production_methods=selected_methods, app=app)
             output = summarize_research_goal(result) if args.summary else result
             if selected_plans:
                 output = {**output, 'selected_economies': evaluate_research_with_economies(
-                    result, selected_plans, summary=args.summary)}
+                    result, selected_plans, summary=args.summary, app=app)}
     elif args.portfolio:
-        result = evaluate_portfolio(selected_plans)
+        result = evaluate_portfolio(selected_plans, app=app)
         output = summarize_portfolio(result) if args.summary else result
     else:
         if not selected_plans:
             parser.error("select registered research goals or explicit economic compositions")
         payload = next(iter(selected_plans.values()))
-        result = compare_cases(payload) if "cases" in payload else evaluate(payload)
+        result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
         output = summarize(result) if args.summary else result
     json.dump(output, sys.stdout,
               ensure_ascii=False, indent=2, allow_nan=False)

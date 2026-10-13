@@ -141,129 +141,6 @@ def test_unsettled_incoming_cargo_never_becomes_an_assured_resource_balance(defi
                for row in summary["conditional_incoming_cargo_risks_by_node"])
 
 
-def test_registered_facility_quantity_contributions_follow_every_definition(definitions):
-    """Exercise every Facility, not one named generation or a preferred scale-up."""
-    from space_idle.power import FixedGeneration, SolarGeneration
-
-    sim = definitions._simulation
-    units, duty, days = 2, .4, 7
-    facilities = tuple(sorted(sim.facilities.definitions.values(), key=lambda f: str(f.id)))
-    assets = []
-    for index, facility in enumerate(facilities):
-        asset = {"node": f"facilities.{index}", "facility": str(facility.id),
-                 "units": units, "duty": duty}
-        if facility.life_support:
-            asset["supported_person_days_per_day"] = units * duty * facility.life_support.person_days_per_day / 2
-        assets.append(asset)
-    # A Facility may be present as inherited/Scenario capital without a
-    # generic construction recipe. Exercise its nominal supply regardless;
-    # only authored acquisition recipes produce construction investment.
-    initially_owned = [row for row, facility in zip(assets, facilities)
-                       if facility.id not in sim.projects.recipes]
-    report = evaluate({"initial_facilities": initially_owned,
-                       "solar_yield": {row["node"]: .75 for row in assets},
-                       "phases": [{"name": "all facilities", "days": days,
-                                   "facilities": assets}]}, app=definitions)["phases"][0]
-    resources = _rows(report)
-    constraints = {row["node"]: row for row in report["constraints"]}
-    services = {(row["node"], row["service"]): row for row in report["service_constraints"]}
-    pools = {(row["node"], row["pool"]): row for row in report["storage"]}
-    for asset, facility in zip(assets, facilities):
-        node = asset["node"]
-        recipe = sim.projects.recipes.get(facility.id)
-        if recipe:
-            for requirement in recipe.resources:
-                key = node, str(requirement.resource_id)
-                assert resources[key]["construction_demand_t"] == pytest.approx(units * requirement.amount_t), facility.id
-                assert resources[key]["maintenance_demand_t"] == pytest.approx(
-                    units * requirement.amount_t * facility.maintenance_fraction_per_year * days / 365), facility.id
-            assert constraints[node]["construction_work_required"] == pytest.approx(units * recipe.construction_work)
-        for supply in facility.service_capacity_supplies:
-            assert services[(node, supply.service_type)]["nominal_capacity_per_day"] == pytest.approx(
-                units * duty * supply.nominal_rate), facility.id
-        if facility.id in sim.projects.construction_providers:
-            assert services[(node, "construction_work")]["nominal_capacity_per_day"] == pytest.approx(
-                units * duty * sim.projects.construction_providers[facility.id].work_per_day)
-        if facility.life_support:
-            supported = asset["supported_person_days_per_day"]
-            assert constraints[node]["life_support_assigned_person_days_per_day"] == pytest.approx(supported)
-            assert constraints[node]["life_support_nominal_person_days_per_day"] == pytest.approx(
-                units * duty * facility.life_support.person_days_per_day)
-            for resource, amount in facility.life_support.net_resources:
-                assert resources[(node, str(resource))]["life_support_demand_t"] == pytest.approx(
-                    amount * supported * days), facility.id
-        power = sim.power.specs.get(facility.id)
-        if power:
-            assert constraints[node]["power_demand_nominal_mw"] == pytest.approx(
-                units * (duty * power.load_mw + (1 - duty) * power.standby_load_mw))
-            generation = power.generation
-            expected = (generation.mw if isinstance(generation, FixedGeneration) else
-                        .75 * generation.rated_mw_at_reference_flux if isinstance(generation, SolarGeneration) else 0)
-            assert constraints[node]["power_generation_nominal_mw"] == pytest.approx(units * duty * expected)
-        storage = sim.storage.providers.get(facility.id)
-        if storage:
-            for pool, capacity in storage.capacity_t_by_pool.items():
-                assert pools[(node, pool)]["physical_capacity_t"] == pytest.approx(units * capacity)
-
-
-def test_registered_extraction_and_research_sources_project_nominal_quantities(definitions):
-    """All supported methods and Facility-backed providers share generic coefficients."""
-    sim = definitions._simulation
-    days, units, duty = 5, 2, .6
-    assets = []
-    extraction = []
-    for facility in sorted(sim.facilities.definitions.values(), key=lambda f: str(f.id)):
-        for method in sim.extraction.compatible_methods(facility.id):
-            if facility.extraction_capacity_t_per_day <= 0:
-                continue
-            node = f"extraction.{len(extraction)}"
-            assets.append({"node": node, "facility": str(facility.id), "units": units,
-                           "duty": duty, "extraction": str(method.id),
-                           "extraction_yield_fraction": .25})
-            extraction.append((node, facility, method))
-    assignments = []
-    expected_generation = expected_execution = expected_storage = expected_crew = 0.0
-    for provider in sorted(sim.research.providers.values(), key=lambda p: str(p.id)):
-        if provider.source_kind.value != "facility":
-            continue  # Fleet-backed providers require Fleet assumptions, not free source units.
-        matching = [facility for facility in sim.facilities.definitions.values()
-                    if provider.required_source_capabilities <= {s.id for s in facility.capability_supplies}]
-        # Numeric projection evaluates the usable pairs. A Provider without a
-        # present compatible source is a Content-development question, not a
-        # failure of projection arithmetic or an entitlement to free capacity.
-        if not matching:
-            continue
-        for level in provider.levels:
-            node = f"research.{len(assignments)}"
-            source = matching[0]
-            assets.append({"node": node, "facility": str(source.id), "units": 1})
-            assignments.append({"node": node, "provider": str(provider.id),
-                                "source_facility": str(source.id), "units": 1,
-                                "level": level.level, "duty": duty})
-            expected_generation += level.generation_points_per_day * duty * days
-            expected_execution += level.research_execution_per_day * duty
-            expected_storage += level.storage_capacity_points
-            expected_crew += level.generation_points_per_day * duty * provider.crew_person_days_per_research_point
-    result = evaluate({"initial_facilities": assets,
-                       "solar_yield": {asset["node"]: .8 for asset in assets},
-                       "phases": [{"name": "catalog methods", "days": days,
-                                   "facilities": assets, "research_provider_allocations": assignments}]},
-                      app=definitions)["phases"][0]
-    by_node = {(row["node"], row["resource"]): row for row in result["extraction_projections_t"]}
-    rows = _rows(result)
-    for node, facility, method in extraction:
-        key = node, str(method.output_resource_id)
-        nominal = facility.extraction_capacity_t_per_day * units * duty * days
-        assert by_node[key]["nominal_t"] == pytest.approx(nominal)
-        assert by_node[key]["assumed_t"] == pytest.approx(nominal * .25)
-        assert rows[key]["production_t"] == pytest.approx(nominal * .25)
-    rp = result["research_point_balance"]
-    assert rp["nominal_generation_points"] == pytest.approx(expected_generation)
-    assert rp["nominal_execution_per_day"] == pytest.approx(expected_execution)
-    assert rp["nominal_storage_capacity_points"] == pytest.approx(expected_storage)
-    assert rp["crew_requirement_person_days_per_day"] == pytest.approx(expected_crew)
-
-
 def test_registered_vehicle_and_research_stage_inputs_keep_typed_dimensions(definitions):
     """Every Vehicle build and Technology stage participates without a named balancing target."""
     sim = definitions._simulation
@@ -359,78 +236,6 @@ def test_fleet_holdings_are_preserved_between_phases_and_production_is_counted_o
     with pytest.raises(ValueError, match="cannot both"):
         evaluate({"phases": [{"name": "double", "days": 1, "facilities": [],
                               "fleet": [spec], "vehicle_builds": [spec]}]}, app=definitions)
-
-
-def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity_contract():
-    """One Content list entry can add a Facility or Vehicle through normal owners."""
-    from scripts.analysis_variants import apply_content_variant
-    from space_idle.content.base_assets import build_base_assets
-    from space_idle.shared import DefinitionId
-
-    base = build_game_application_for_load()
-    sim = base._simulation
-    facility_assets, vehicle_assets = build_base_assets()
-    # Standard Content itself uses the same one-row installation that variants
-    # use, rather than reproducing ownership maps in separate source files.
-    assert {row.definition.id for row in facility_assets} == set(sim.facilities.definitions)
-    assert {row.id for row in vehicle_assets} == set(sim.transport.vehicle_defs)
-    for row in facility_assets:
-        identity = row.definition.id
-        assert sim.facilities.definitions[identity] == row.definition
-        assert sim.projects.recipes[identity] == row.construction
-        assert sim.power.specs[identity] == row.power
-        assert sim.projects.decommission_recipes[identity] == row.decommission
-        if row.storage is not None:
-            assert sim.storage.providers[identity] == row.storage
-        if row.construction_provider is not None:
-            assert sim.projects.construction_providers[identity] == row.construction_provider
-    source_facility = next(fid for fid in sim.facilities.definitions
-                           if fid in sim.projects.recipes and fid in sim.power.specs)
-    source_vehicle = next(vid for vid, vehicle in sim.transport.vehicle_defs.items()
-                          if vehicle.production.resources)
-    resource = next(iter(base._catalog.resources))
-    new_facility, new_vehicle = "variant.facility.scale", "variant.vehicle.scale"
-    changes = [
-        {"operation": "add", "kind": "asset_bundle", "asset_kind": "facility",
-         "id": new_facility, "source_id": str(source_facility), "edits": [
-             {"kind": "facility", "field": "display_name", "value": "Experimental Industry"},
-             {"kind": "construction", "field": "resources", "value": {str(resource): 5}},
-             {"kind": "facility", "field": "maintenance_fraction_per_year", "value": .12},
-         ]},
-        {"operation": "add", "kind": "asset_bundle", "asset_kind": "vehicle",
-         "id": new_vehicle, "source_id": str(source_vehicle), "edits": [
-             {"kind": "vehicle", "field": "display_name", "value": "Experimental Fleet"},
-             {"kind": "vehicle", "field": "production_resources", "value": {str(resource): 4}},
-             {"kind": "vehicle", "field": "production_days", "value": 8},
-         ]},
-    ]
-    app = build_game_application_for_load(
-        definition_transform=lambda runtime, catalog: apply_content_variant(runtime, catalog, changes),
-    )
-    new_sim = app._simulation
-    assert DefinitionId(new_facility) in new_sim.facilities.definitions
-    assert DefinitionId(new_facility) in new_sim.projects.recipes
-    assert DefinitionId(new_facility) in new_sim.projects.decommission_recipes
-    assert DefinitionId(new_facility) in new_sim.power.specs
-    assert DefinitionId(new_vehicle) in new_sim.transport.vehicle_defs
-    assert DefinitionId(new_facility) not in sim.facilities.definitions
-    assert DefinitionId(new_vehicle) not in sim.transport.vehicle_defs
-    phase = evaluate({"phases": [{"name": "capacity", "days": 10, "facilities": [
-        {"node": "one", "facility": new_facility, "units": 100}],
-        "fleet": [{"node": "one", "vehicle": new_vehicle, "units": 50}]}]}, app=app)["phases"][0]
-    row = _rows(phase)[("one", str(resource))]
-    assert row["construction_demand_t"] == pytest.approx(500)
-    assert row["vehicle_build_demand_t"] == pytest.approx(200)
-    assert row["maintenance_demand_t"] == pytest.approx(500 * .12 / 365 * 10)
-    assert phase["scale"]["facility_units"] == 100
-    assert phase["scale"]["fleet_units_built"] == 50
-    with pytest.raises(ValueError, match="new target"):
-        apply_content_variant(new_sim, app._catalog, changes)
-    with pytest.raises(ValueError, match="complete asset bundle"):
-        apply_content_variant(new_sim, app._catalog, [{
-            "operation": "add", "kind": "facility", "id": "invalid.partial.asset",
-            "source_id": str(source_facility),
-        }])
 
 
 def test_stage_requirements_investment_bounds_and_unassessed_constraints_are_not_execution_claims(definitions):
@@ -951,38 +756,6 @@ def test_registered_solar_power_uses_owner_world_context_without_settling_operat
     assert capture_state(sim) == before
 
 
-def test_solar_world_site_configuration_rejects_ambiguity(definitions):
-    from space_idle.power import SolarGeneration
-
-    sim = definitions._simulation
-    solar = next(id for id, spec in sim.power.specs.items() if isinstance(spec.generation, SolarGeneration))
-    cell = next(iter(sim.power.environment.graph.surface_cells))
-    asset = {"node": "site", "facility": str(solar), "units": 1}
-    base = {"initial_facilities": [asset], "phases": [{"name": "solar", "days": 1, "facilities": [asset]}]}
-    site = {"node": "site", "facility": str(solar), "context": str(cell)}
-    with pytest.raises(ValueError, match="solar_yield or solar_sites"):
-        evaluate(base, app=definitions)
-    with pytest.raises(ValueError, match="conflicts"):
-        evaluate({**base, "solar_sites": [site], "solar_yield": {"site": 1.0}}, app=definitions)
-    with pytest.raises(ValueError, match="duplicate solar World site"):
-        evaluate({**base, "solar_sites": [site, site]}, app=definitions)
-    with pytest.raises(ValueError, match="unknown World solar context"):
-        evaluate({**base, "solar_sites": [{**site, "context": "not.a.world.site"}]}, app=definitions)
-    # Two unrelated bodies may not be reported as one local Power/ore pool.
-    graph = sim.power.environment.graph
-    moon_cell = next(cell for cell in graph.surface_cells if str(graph.surface_cells[cell].body_id) == "base.body.moon")
-    other_cell = next(cell for cell in graph.surface_cells if graph.surface_cells[cell].body_id != graph.surface_cells[moon_cell].body_id)
-    with pytest.raises(ValueError, match="different bodies"):
-        evaluate({**base, "solar_sites": [{**site, "context": str(other_cell)}],
-                  "phases": [{**base["phases"][0], "extraction_sites": [
-                      {"node": "site", "developed_cells": [str(moon_cell)]}]}]}, app=definitions)
-    with pytest.raises(ValueError, match="exactly one existing target"):
-        compare_cases({"base_plan": {**base, "solar_sites": [site]},
-                       "cases": [{"name": "before"}, {"name": "changed", "updates": [
-                           {"collection": "solar_sites", "node": "site", "id": "unknown.facility", "day": 1},
-                       ]}]}, app=definitions)
-
-
 def test_investment_and_operating_resource_pressures_reconcile_with_actual_definition_ledger(definitions):
     """A single ledger must distinguish capital, sustained throughput and finite opening Stock."""
     from scripts.analysis_balance import summarize_projection
@@ -1209,3 +982,29 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
         for record in report["selected_economies"]:
             assert record["system_balance"]["phases"]
             assert record["research_and_economy"]["contexts"]
+
+    # A Definition edit changes the same research/industry lens; neither a
+    # parallel experiment simulator nor a second Research rule is involved.
+    from space_idle.research_models import ResearchTheoryStageSpec
+    original = definitions._simulation.research.definitions
+    source = next(definition for definition in original.values()
+                  if any(isinstance(stage, ResearchTheoryStageSpec) for stage in definition.stage_specs))
+    stage = next(stage for stage in source.stage_specs if isinstance(stage, ResearchTheoryStageSpec))
+    changed = tmp_path / "definition_changes.json"
+    changed.write_text(json.dumps([{
+        "kind": "research_theory_stage", "id": str(source.id),
+        "stage_id": stage.stage_id, "field": "research_point_cost",
+        "value": stage.research_point_cost * 1.3,
+    }]), encoding="utf-8")
+    baseline_args = [str(inputs[0]), "--research-id", str(source.id), "--summary"]
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *baseline_args])
+    main()
+    baseline = json.loads(capsys.readouterr().out)
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", *baseline_args,
+                                      "--content-variant", str(changed)])
+    main()
+    adjusted = json.loads(capsys.readouterr().out)
+    assert adjusted["goal"]["research_point_requirement"] == pytest.approx(
+        baseline["goal"]["research_point_requirement"] + stage.research_point_cost * .3)
+    assert [row["name"] for row in adjusted["selected_economies"]] == [str(inputs[0])]
+    assert original[source.id].stage_specs == source.stage_specs

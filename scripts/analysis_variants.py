@@ -1,7 +1,7 @@
-"""Typed experiment inputs applied before composing each independent Simulation.
+"""Typed Content changes for comparing Definition-derived balance outcomes.
 
-Allowed fields correspond to real authored Definitions, not a list of familiar
-Content IDs. The regular Composition validator rejects broken references.
+Applied only during fresh Composition, before any Simulation state is created.
+The owning Domain and normal Composition validators remain authoritative.
 """
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from typing import Mapping, Sequence
 
 from space_idle.catalog import GameCatalog
 from space_idle.content.asset_content import AssetDefinitions
-from space_idle.scenario import ScenarioDefinition, ScenarioInventoryStock, ScenarioFleet, ScenarioStorageInfrastructure, ScenarioPopulation, ScenarioFacility, ScenarioMarketInterface, ScenarioProviderFleetAssignment
-from space_idle.shared import DefinitionId, SpatialNodeId, SurfaceCellId, EntityId
+from space_idle.shared import DefinitionId
 from space_idle.population import ExternalPopulationSourceDefinition
 from space_idle.simulation import Simulation
 
@@ -21,200 +20,6 @@ def _finite_nonnegative(value: object) -> float:
     if type(value) not in (float, int) or not isfinite(value) or value < 0:
         raise ValueError("variant quantity must be finite and nonnegative")
     return float(value)
-
-
-def scenario_variant(base: ScenarioDefinition, changes: Mapping) -> ScenarioDefinition:
-    """Override or append typed initial assets; no mutations of running Game State."""
-    if not changes:
-        return base
-    allowed = {"inventory_stock", "fleet", "storage_infrastructure", "initial_population", "facilities",
-               "completed_technologies", "funds_balance_musd", "operational_node_ids",
-               "market_provider_ids", "market_interfaces", "survey_fleet_assignments",
-               "research_fleet_assignments", "external_population_sources"}
-    if set(changes) - allowed:
-        raise ValueError(f"unknown Scenario variant fields: {sorted(set(changes) - allowed)}")
-    updated = {}
-    for name in ("inventory_stock", "fleet", "storage_infrastructure", "initial_population"):
-        if name not in changes:
-            continue
-        definitions = {
-            "inventory_stock": (ScenarioInventoryStock, ("operational_node_id", "resource_id"), "amount_t"),
-            "fleet": (ScenarioFleet, ("operational_node_id", "vehicle_definition_id"), "units"),
-            "storage_infrastructure": (ScenarioStorageInfrastructure, ("operational_node_id", "storage_pool_key"), "amount_t"),
-            "initial_population": (ScenarioPopulation, ("operational_node_id",), "count"),
-        }
-        klass, key_fields, quantity_field = definitions[name]
-        rows = list(getattr(base, name))
-        for raw in changes[name]:
-            if set(raw) != set(key_fields) | {quantity_field}:
-                raise ValueError(f"invalid {name} row fields")
-            data = dict(raw)
-            for key in key_fields:
-                if key == "resource_id" or key == "vehicle_definition_id":
-                    data[key] = DefinitionId(str(data[key]))
-                elif key == "operational_node_id":
-                    data[key] = SpatialNodeId(str(data[key]))
-                elif not isinstance(data[key], str):
-                    raise ValueError(f"invalid {name} key {key}")
-            quantity = _finite_nonnegative(data[quantity_field])
-            if quantity_field in ("units", "count"):
-                if not quantity.is_integer():
-                    raise ValueError(f"{quantity_field} must be an integer")
-                data[quantity_field] = int(quantity)
-            else:
-                data[quantity_field] = quantity
-            replacement = klass(**data)
-            rows = [row for row in rows if tuple(getattr(row, key) for key in key_fields)
-                    != tuple(getattr(replacement, key) for key in key_fields)]
-            rows.append(replacement)
-        updated[name] = tuple(sorted(rows, key=lambda row: tuple(str(getattr(row, key)) for key in key_fields)))
-    if "facilities" in changes:
-        # Facilities have no authored per-instance key: two identical installed
-        # assets may coexist at one Site. Replace the complete starting set
-        # rather than ambiguously upserting by Definition or assigning IDs.
-        raw_rows = changes["facilities"]
-        if not isinstance(raw_rows, list):
-            raise ValueError("facilities must be a complete list of initial assets")
-        facilities = []
-        for raw in raw_rows:
-            if not isinstance(raw, Mapping) or set(raw) - {
-                "definition_id", "operational_node_id", "site_cell_id", "invested_resources",
-                "selected_extraction_method_id", "selected_process_id", "level"
-            } or not {"definition_id", "operational_node_id"} <= set(raw):
-                raise ValueError("invalid facilities row fields")
-            site = raw.get("site_cell_id")
-            if site is not None and not isinstance(site, str):
-                raise ValueError("site_cell_id must be a surface Cell ID or null")
-            investments = raw.get("invested_resources", [])
-            if not isinstance(investments, list):
-                raise ValueError("invested_resources must be a list")
-            invested = []
-            for investment in investments:
-                if not isinstance(investment, list) or len(investment) != 2 or not isinstance(investment[0], str):
-                    raise ValueError("invested_resources must contain [resource ID, quantity] pairs")
-                invested.append((DefinitionId(investment[0]), _finite_nonnegative(investment[1])))
-            if len({resource for resource, _ in invested}) != len(invested):
-                raise ValueError("duplicate investment resource")
-            selected_method = raw.get("selected_extraction_method_id")
-            if selected_method is not None and (not isinstance(selected_method, str) or not selected_method):
-                raise ValueError("selected_extraction_method_id must be a Definition ID or null")
-            level = raw.get("level", 1)
-            if type(level) is not int or level < 1:
-                raise ValueError("facility initial level must be a positive integer")
-            selected_process = raw.get("selected_process_id")
-            if selected_process is not None and (not isinstance(selected_process, str) or not selected_process):
-                raise ValueError("selected_process_id must be a Definition ID or null")
-            facilities.append(ScenarioFacility(
-                DefinitionId(str(raw["definition_id"])),
-                SpatialNodeId(str(raw["operational_node_id"])),
-                None if site is None else SurfaceCellId(site),
-                tuple(invested),
-                None if selected_method is None else DefinitionId(selected_method),
-                None if selected_process is None else DefinitionId(selected_process),
-                level,
-            ))
-        updated["facilities"] = tuple(facilities)
-    if "funds_balance_musd" in changes:
-        updated["funds_balance_musd"] = _finite_nonnegative(changes["funds_balance_musd"])
-    if "operational_node_ids" in changes:
-        new_nodes = changes["operational_node_ids"]
-        if not isinstance(new_nodes, list) or any(not isinstance(row, str) for row in new_nodes):
-            raise ValueError("operational_node_ids must be a list of stable IDs")
-        updated["operational_node_ids"] = tuple(sorted(
-            set(base.operational_node_ids) | {SpatialNodeId(node) for node in new_nodes}
-        ))
-    # Initial assignments are physical Fleet commitments owned by the normal
-    # Provider/Fleet Domains, not separate quantities supplied by an experiment.
-    # A provider and location identify the intended assignment; a new choice
-    # replaces it, allowing different Vehicle allocations across Scenarios.
-    for name in ("survey_fleet_assignments", "research_fleet_assignments"):
-        if name not in changes:
-            continue
-        incoming = changes[name]
-        if not isinstance(incoming, list):
-            raise ValueError(f"{name} must be a list of typed assignments")
-        assignments = {(row.provider_definition_id, row.operational_node_id): row
-                       for row in getattr(base, name)}
-        seen: set[tuple[DefinitionId, SpatialNodeId]] = set()
-        for raw in incoming:
-            row = _definition_fields(raw, {"provider_definition_id", "operational_node_id",
-                                          "vehicle_definition_id", "units"}, set(), name)
-            if any(not isinstance(row[key], str) or not row[key] for key in (
-                    "provider_definition_id", "operational_node_id", "vehicle_definition_id")):
-                raise ValueError(f"{name} requires nonempty typed IDs")
-            if type(row["units"]) is not int or row["units"] < 1:
-                raise ValueError(f"{name} units must be a positive integer")
-            assignment = ScenarioProviderFleetAssignment(
-                DefinitionId(row["provider_definition_id"]), SpatialNodeId(row["operational_node_id"]),
-                DefinitionId(row["vehicle_definition_id"]), row["units"],
-            )
-            key = assignment.provider_definition_id, assignment.operational_node_id
-            if key in seen:
-                raise ValueError(f"duplicate {name} assignment: {key}")
-            seen.add(key)
-            assignments[key] = assignment
-        updated[name] = tuple(assignments[key] for key in sorted(assignments))
-    if "external_population_sources" in changes:
-        incoming = changes["external_population_sources"]
-        if not isinstance(incoming, list):
-            raise ValueError("external_population_sources must be a list of typed sources")
-        sources = {row.id: row for row in base.external_population_sources}
-        seen: set[str] = set()
-        for raw in incoming:
-            row = _definition_fields(raw, {"id", "operational_node_id", "initial_people",
-                                          "max_acquisition_per_day"},
-                                     {"required_technology_ids"}, "external population source")
-            if not isinstance(row["id"], str) or not row["id"] or not isinstance(row["operational_node_id"], str) or not row["operational_node_id"]:
-                raise ValueError("external population source requires nonempty IDs")
-            if row["id"] in seen:
-                raise ValueError(f"duplicate external population source: {row['id']}")
-            seen.add(row["id"])
-            sources[row["id"]] = ExternalPopulationSourceDefinition(
-                row["id"], SpatialNodeId(row["operational_node_id"]),
-                row["initial_people"], row["max_acquisition_per_day"],
-                tuple(sorted(_definition_ids(row.get("required_technology_ids", []),
-                                             "population source prerequisites"))),
-            )
-        updated["external_population_sources"] = tuple(sources[key] for key in sorted(sources))
-    if "market_provider_ids" in changes:
-        providers = changes["market_provider_ids"]
-        if not isinstance(providers, list) or any(not isinstance(row, str) or not row for row in providers):
-            raise ValueError("market_provider_ids must be a list of nonempty Definition IDs")
-        if len(set(providers)) != len(providers):
-            raise ValueError("duplicate market provider in Scenario variant")
-        updated["market_provider_ids"] = tuple(sorted(
-            set(base.market_provider_ids) | {DefinitionId(row) for row in providers}
-        ))
-    if "market_interfaces" in changes:
-        incoming = changes["market_interfaces"]
-        if not isinstance(incoming, list):
-            raise ValueError("market_interfaces must be a list of typed interfaces")
-        interfaces = {row.id: row for row in base.market_interfaces}
-        seen: set[EntityId] = set()
-        for raw in incoming:
-            if not isinstance(raw, Mapping) or set(raw) - {
-                "id", "provider_id", "operational_node_id", "enabled"
-            } or not {"id", "provider_id", "operational_node_id"} <= set(raw):
-                raise ValueError("invalid market interface fields")
-            if any(not isinstance(raw[key], str) or not raw[key]
-                   for key in ("id", "provider_id", "operational_node_id")):
-                raise ValueError("market interface requires typed nonempty IDs")
-            if type(raw.get("enabled", True)) is not bool:
-                raise ValueError("market interface enabled must be boolean")
-            row = ScenarioMarketInterface(EntityId(raw["id"]), DefinitionId(raw["provider_id"]),
-                                          SpatialNodeId(raw["operational_node_id"]),
-                                          raw.get("enabled", True))
-            if row.id in seen:
-                raise ValueError(f"duplicate Scenario market interface: {row.id}")
-            seen.add(row.id)
-            interfaces[row.id] = row
-        updated["market_interfaces"] = tuple(interfaces[key] for key in sorted(interfaces))
-    if "completed_technologies" in changes:
-        technologies = changes["completed_technologies"]
-        if not isinstance(technologies, list) or len(set(technologies)) != len(technologies):
-            raise ValueError("completed_technologies must be a unique list")
-        updated["completed_technologies"] = tuple(DefinitionId(id) for id in technologies)
-    return replace(base, **updated)
 
 
 def _definition_fields(value: object, required: set[str], optional: set[str], label: str) -> Mapping:

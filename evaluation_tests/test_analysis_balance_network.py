@@ -359,32 +359,6 @@ def test_goal_research_source_upgrade_and_selected_industry_use_registered_owner
     assert context['contexts'][0]['pre_investment_construction_by_node'] == []
 
 
-def test_research_generation_adjustment_detects_definition_deltas_without_balance_oracle():
-    from dataclasses import replace
-    from scripts.analysis_balance_research import (
-        evaluate_research_generations, summarize_research_generations, compare_research_generation_reports)
-    from space_idle.research_models import ResearchTheoryStageSpec
-    app = build_game_application_for_load()
-    sim = app._simulation
-    tech = next(definition for definition in sim.research.definitions.values()
-                if definition.progression_stage is not None
-                and any(isinstance(spec, ResearchTheoryStageSpec) for spec in definition.stage_specs))
-    original = tech.stage_specs
-    before = summarize_research_generations(evaluate_research_generations(app=app))
-    sim.research.definitions[tech.id] = replace(tech, stage_specs=tuple(
-        replace(spec, research_point_cost=spec.research_point_cost * 1.25)
-        if isinstance(spec, ResearchTheoryStageSpec) else spec for spec in original))
-    after = summarize_research_generations(evaluate_research_generations(app=app))
-    delta = compare_research_generation_reports(before, after)
-    changed = next(row for row in delta['generation_changes']
-                   if row['generation'] == tech.progression_stage)
-    assert changed['research_point_requirement_change'] > 0
-    assert any(v['research'] == str(tech.id) for v in changed['changed_research_definitions'])
-    assert changed['changed_provider_economics']
-    assert delta['no_automatic_balance_verdict']
-    # The modification exists only in this isolated test Application's Definitions.
-
-
 def test_finite_science_rp_can_replace_nominal_provider_demand_only_conditionally(source):
     from scripts.analysis_balance_research import analyze_research_goal
     sim = source._simulation

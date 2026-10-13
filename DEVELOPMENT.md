@@ -58,7 +58,7 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合を実行する。バランス調整、設備世代間の量的比較、Content戦略実験、開発用依存Graph診断は`evaluation_tests/`に置き、Content・分析機構の変更や調整作業で明示実行する。評価結果から共通の不変条件が判明した場合は、値や攻略順を固定せず、所有するDomain・Application契約のテストへ組み込む。
+通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合を実行する。バランス調整の数量台帳・研究期間・Definition依存Graphの固有契約を`evaluation_tests/`に置き、Content・分析機構の変更や調整作業で明示実行する。評価結果から共通の不変条件が判明した場合は、値や攻略順を固定せず、所有するDomain・Application契約のテストへ組み込む。
 
 ```bash
 python scripts/local_test_run.py start -- evaluation_tests -q
@@ -177,9 +177,9 @@ Maintenanceのpacket実行・照合に失敗した場合は、同じtransaction�
 - **Fast CI**：`develop`へのpublish後、Unit / architecture、clean package install、Chromium direct HTTP smoke、次回復元用`source-snapshot`を検証する。run結果は次のpublish判断に必要な時点で確認する。
 - **Full Validation**：`main`反映候補、ユーザー要求、Persistence schema変更、Simulation Orchestrator処理順変更、package / server / launcher変更、Fast CIの範囲外となるOS・ブラウザ検証に使用する。Gameplay、Windows、WebKitは該当変更の検証時に実行する。
 
-バランス調整は通常pytest/Fast CIの合否判定ではなく、`docs/design.md` §22と`docs/architecture.md` §17.1の全体系評価として行う。入口は`python scripts/analysis_balance.py --research-id <Technology-ID> --research-include-prerequisites --research-horizons 60 180 360 --summary`等で実登録の技術的到達目標を選ぶ。明示的な設備・稼働・立地・輸送構成も合わせる場合は`python scripts/analysis_balance.py <plan.json> --research-id <Technology-ID> --research-include-prerequisites --summary`、複数構成は`--portfolio <plan.json> ...`を用いる。同じ数量台帳から研究・維持・施工・上流・物流の競合を調べ、調整前後を再比較する。入力Planは任意の感度条件であり、固定の施設数・理想日数・攻略順を目標にしない。Planを伴わない研究全体の目録評価は`--research-generations --summary`で行い、全件完了を必要経路としない。旧来の固定Fixtureプランを正準のバランス指標として維持しない。詳細値は同じコマンドの`--summary`なしの出力に含める。
+バランス調整は通常pytest/Fast CIの合否判定ではなく、`docs/design.md` §22と`docs/architecture.md` §17.1の全体系評価として行う。入口は`python scripts/analysis_balance.py --research-id <Technology-ID> --research-include-prerequisites --research-horizons 60 180 360 --summary`等で実登録の技術的到達目標を選ぶ。明示的な設備・稼働・立地・輸送構成も合わせる場合は`python scripts/analysis_balance.py <plan.json> --research-id <Technology-ID> --research-include-prerequisites --summary`、複数構成は`--portfolio <plan.json> ...`を用いる。同じ数量台帳から研究・維持・施工・上流・物流の競合を調べ、調整前後を再比較する。`--content-variant <changes.json>`は、登録Definitionの変更候補をGame Stateを作らない新しいCompositionへ適用して、同じ分析入口で調整案を再評価する。入力Planは任意の感度条件であり、固定の施設数・理想日数・攻略順を目標にしない。Planを伴わない研究全体の目録評価は`--research-generations --summary`で行い、全件完了を必要経路としない。旧来の固定Fixtureプランを正準のバランス指標として維持しない。詳細値は同じコマンドの`--summary`なしの出力に含める。
 
-数量評価はGame State/実Allocationではない。`evaluation_tests/`は台帳の保存則、Definition反映、研究前提、未充足・非二重計上等の汎用契約を検証する。機能上の疑義に対する短い実Application実験は別の検証であり、バランスを定める攻略自動化に転用しない。
+数量評価はGame State/実Allocationではない。`evaluation_tests/`は台帳の保存則、Definition反映、研究前提、未充足・非二重計上等の汎用契約を検証する。機能上の疑義は所有DomainやApplicationの通常契約テストで短く検証する。Game Commandを自動投入する独立ReplayやPareto比較をバランス評価の別経路として保持しない。
 
 Browser E2Eは`playwright/run_suite.py <scenario...>`へ対象Scenarioを明示して実行する。各Scenarioは独立したBrowserContext、GameRuntime、保存用一時ディレクトリ、HTTP serverを使用し、状態を共有しない。
 
