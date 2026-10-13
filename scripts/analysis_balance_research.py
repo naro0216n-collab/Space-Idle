@@ -14,7 +14,7 @@ from space_idle.research_models import site_stage_daily_progress_request_limit
 def selected_research_time_structure(definitions, stages, services, *,
                                      organization_execution_per_day,
                                      rp_generation_lower_bound_days,
-                                     total_execution_lower_bound_days):
+                                     total_execution_lower_bound_days, initially_completed=frozenset()):
     """Conditional, non-scheduling lower bounds for a selected Research workload.
 
     An actual Research Project executes its registered Stages in order, and a
@@ -98,7 +98,8 @@ def selected_research_time_structure(definitions, stages, services, *,
         'operational_experience_gates_not_elapsed_time': experience,
         'unselected_stages_in_technology': sorted(missing_stages),
         'external_prerequisites': sorted({str(pre) for key in chosen
-            for pre in definitions[DefinitionId(key)].prerequisites if str(pre) not in chosen}),
+            for pre in definitions[DefinitionId(key)].prerequisites
+            if str(pre) not in chosen and str(pre) not in initially_completed}),
         'status': 'conditional_lower_bound_not_a_completion_date',
     }
 

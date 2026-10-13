@@ -128,10 +128,11 @@ def _fleet_rows(rows, vehicles, nodes, *, label, allow_turnarounds):
     return result
 
 
-def _extraction_contexts(rows, sim, nodes, known_resource, reference_day):
+def _extraction_contexts(rows, sim, nodes, known_resource, reference_day, *, opening_from_reference=False):
     """Read selected World cells without adding hypothetical Game State.
 
-    Knowledge values here are *scenario claims*, never resolved Survey State.
+    Explicit Knowledge is an analyst condition. An applied Scenario opening
+    can supply observed Knowledge from the Survey owner when not overridden.
     A context does not establish Location founding, accessible service or method
     Technology. In particular, no non-surface World node can acquire ore.
     """
@@ -155,6 +156,12 @@ def _extraction_contexts(rows, sim, nodes, known_resource, reference_day):
         if len({cell.body_id for cell in cell_defs}) != 1:
             raise ValueError("extraction site cannot combine cells from different bodies")
         knowledge = {}
+        if opening_from_reference and sim.survey is not None:
+            selected_cells = set(cells)
+            for cell_id, resource_id in sim.survey.targets:
+                if str(cell_id) in selected_cells:
+                    knowledge[(str(cell_id), str(resource_id))] = sim.survey.knowledge_level(cell_id, resource_id)
+        authored_knowledge = set()
         for value in row.get("knowledge", ()):
             _keys(value, {"cell", "resource", "level"}, {"cell", "resource", "level"}, "survey knowledge")
             if value["cell"] not in cells:
@@ -167,11 +174,15 @@ def _extraction_contexts(rows, sim, nodes, known_resource, reference_day):
             except ValueError as exc:
                 raise ValueError("unknown survey knowledge level") from exc
             key = (value["cell"], resource)
-            if key in knowledge:
+            if key in authored_knowledge:
                 raise ValueError(f"duplicate Knowledge assumption: {key}")
+            authored_knowledge.add(key)
             knowledge[key] = level
         day = _integer(row.get("day", reference_day), "World opportunity reference day")
         contexts[node] = {"cells": tuple(cells), "knowledge": knowledge,
+                          "knowledge_source": ("authored_over_scenario_survey_state" if authored_knowledge
+                              else "applied_scenario_survey_state" if opening_from_reference
+                              else "authored_knowledge_levels"),
                           "body": str(cell_defs[0].body_id), "day": day}
     return contexts
 
@@ -249,6 +260,7 @@ def _selected_reference_opening(sim) -> dict:
                                for (node, facility, level), units in sorted(facility_units.items())],
         "initial_fleet": fleet,
         "initial_research_points": sim.research.stored_points,
+        "initial_completed_technologies": sorted(str(t) for t in sim.technology.completed),
     }
 
 
@@ -260,7 +272,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day", "opening_from_reference"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day", "opening_from_reference", "initial_completed_technologies"}, {"phases"}, "plan")
     reference = _movement_reference(plan)
     if app is None:
         app = _new_reference_application(reference)
@@ -274,7 +286,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         if reference != "applied_scenario":
             raise ValueError("opening_from_reference requires movement_reference=applied_scenario")
         if any(key in plan for key in ("initial_stock", "initial_facilities", "initial_fleet",
-                                      "initial_research_points")):
+                                      "initial_research_points", "initial_completed_technologies")):
             raise ValueError("Scenario opening and authored initial holdings cannot be mixed")
         if not any(sim.graph.operational_nodes()):
             raise ValueError("opening_from_reference requires an applied Scenario")
@@ -373,6 +385,14 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     ).items()}
     previous_fleet = dict(initial_fleet_units)
     cumulative_vehicle_builds = defaultdict(int)
+    known_technologies = {str(identifier) for identifier in sim.research.definitions}
+    initially_completed = plan.get("initial_completed_technologies", [])
+    if (not isinstance(initially_completed, list) or
+            any(not isinstance(identifier, str) for identifier in initially_completed) or
+            len(initially_completed) != len(set(initially_completed))):
+        raise ValueError("initial completed Technologies must be a unique ID list")
+    initially_completed = {_identifier(identifier, known_technologies, "initial completed Technology")
+                           for identifier in initially_completed}
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     # Cumulative authored receipts are conditional upon actual Cargo settlement.
     # This is an algebraic lower Stock-bound, not a second logistics scheduler.
@@ -422,7 +442,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     raise ValueError(f"Facility Level {threshold} opening holdings at "
                                      f"{node}/{facility} exceed initial Level and prior upgrades")
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
-                                                    sim, nodes, known_resource, reference_day)
+                                                    sim, nodes, known_resource, reference_day,
+                                                    opening_from_reference=from_reference)
         current = defaultdict(int)
         produced = defaultdict(float)
         process_inputs = defaultdict(float)
@@ -648,12 +669,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 extraction_assumed[key] += output
                 book(produced, "production_t", node, output_resource, output,
                      "extraction_opportunity", ",".join(sorted(output_methods[output_resource])),
-                     "world_definition_x_authored_knowledge")
+                     "world_definition_x_selected_knowledge")
                 extraction_context_report.append({
                     "node": node, "resource": resource, "output_resource": output_resource,
                     "contributing_methods": sorted(output_methods[output_resource]),
                     "world_body": context["body"], "world_cells": list(context["cells"]),
-                    "knowledge_source": "authored_knowledge_levels_not_survey_state",
+                    "knowledge_source": context["knowledge_source"],
                     "world_reference_day": context["day"],
                     "effective_opportunity": opportunity,
                     "shared_adjusted_installed_capacity_t_per_day": adjusted_capacity,
@@ -663,7 +684,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     "status": "conditional_world_definition_upper_bound_not_allocated",
                 })
             unassessed.add("extraction_site_technology_service_and_stock_allocation")
-            if any(method.minimum_knowledge_level is not None for method, _ in group):
+            if (context["knowledge_source"] != "applied_scenario_survey_state" and
+                    any(method.minimum_knowledge_level is not None for method, _ in group)):
                 unassessed.add("survey_knowledge_levels_are_authored_assumptions")
         # A declared Facility acquisition only books one-time work and
         # Resource. It cannot supply Power, Service, Process, Extraction,
@@ -1119,15 +1141,23 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if target is None:
                 raise ValueError("Survey target is not a registered Cell/Resource pair")
             threshold = target.thresholds[int(mode.max_knowledge_level) - 1]
-            start = (_number(row["starting_progress"], "authored Survey starting progress")
-                     if "starting_progress" in row else None)
+            if "starting_progress" in row:
+                start = _number(row["starting_progress"], "authored Survey starting progress")
+                progress_source = "analyst_selected"
+            elif from_reference:
+                start = sim.survey.progress(SurfaceCellId(cell_id), DefinitionId(resource))
+                progress_source = "applied_scenario_survey_state"
+            else:
+                start = None
+                progress_source = "not_specified"
             remaining = max(0.0, threshold - start) if start is not None else None
             nominal_rate = units * provider.capacity_units_per_source_per_day * mode.survey_rate
             survey_activity_details.append({
                 "node": node, "provider": provider_id, "source": source, "source_kind": source_kind,
                 "units": units, "mode": mode.id, "target_cell": cell_id, "target_resource": resource,
                 "max_knowledge_level": int(mode.max_knowledge_level),
-                "assumed_start_progress": start, "target_progress_threshold": threshold,
+                "assumed_start_progress": start, "starting_progress_source": progress_source,
+                "target_progress_threshold": threshold,
                 "remaining_progress": remaining, "nominal_progress_per_day": nominal_rate,
                 "conditional_minimum_days": (remaining / nominal_rate if remaining is not None and nominal_rate > 0 else None),
                 "survey_source_service": sim.survey.service_type_for_provider(DefinitionId(provider_id), DefinitionId(source)),
@@ -1219,20 +1249,22 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             include = goal.get("include_prerequisites", False)
             if type(include) is not bool:
                 raise ValueError("include_prerequisites must be boolean")
-            selected = research_goal_closure(sim.research.definitions, ids,
-                                             include_prerequisites=include)
+            closure = research_goal_closure(sim.research.definitions, ids,
+                                            include_prerequisites=include)
+            selected = tuple(identifier for identifier in closure if identifier not in initially_completed)
             for identifier in selected:
                 for spec in sim.research.definitions[DefinitionId(identifier)].stage_specs:
                     goal_stage_rows.append({"node": node, "research": identifier,
                                             "stage": spec.stage_id})
             goal_details = {"requested_technologies": ids,
                             "included_technologies": list(selected),
+                            "already_completed_technologies": sorted(set(closure) & initially_completed),
                             "node": node, "includes_prerequisites": include,
                             "execution_basis": "registered_stage_demand_in_selected_phase_not_a_schedule",
                             "external_prerequisites": sorted({str(pre)
                                 for identifier in selected
                                 for pre in sim.research.definitions[DefinitionId(identifier)].prerequisites
-                                if str(pre) not in selected})}
+                                if str(pre) not in selected and str(pre) not in initially_completed})}
             # Stage eligibility, serial order, prerequisite unlock, and Site
             # must be resolved before any derived completion day is meaningful.
             unassessed.add("research_goal_stage_order_unlock_and_site_not_scheduled")
@@ -1611,6 +1643,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             organization_execution_per_day=research_execution_per_day,
             rp_generation_lower_bound_days=theory_days_by_generation,
             total_execution_lower_bound_days=research_metrics["total_execution_capacity_lower_bound_days"],
+            initially_completed=initially_completed,
         )
         constraints = []
         for node in sorted(set(power_supply) | set(power_load) | set(work) | set(life_support_supplied) | set(housing_nominal) | {n for n, _ in services}):
@@ -1837,6 +1870,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "opening_conditions_source": ("applied_scenario_domain_state" if from_reference else
                                           "analyst_selected_initial_holdings"),
             "scenario_id": sim.scenario_id,
+            "initial_completed_technologies": sorted(initially_completed),
             "opening_fleet_precommitments": opening_fleet_commitments,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
@@ -1895,7 +1929,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                 raise ValueError("phase sensitivity requires phase and set")
             destination = target
             match = None
-        elif collection in {"initial_research_points", "start_day"}:
+        elif collection in {"initial_research_points", "initial_completed_technologies", "start_day"}:
             if phase_name is not None or set(change) != {"collection", "value"}:
                 raise ValueError("initial condition sensitivity requires only a value")
             destination = plan
@@ -1947,7 +1981,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             if len(selected) != 1:
                 raise ValueError(f"case row change is not uniquely selected: {collection}/{match}")
             destination = selected[0]
-        if collection in {"initial_research_points", "start_day", "solar_yield"}:
+        if collection in {"initial_research_points", "initial_completed_technologies", "start_day", "solar_yield"}:
             if "set" in change or "action" in change:
                 raise ValueError("scalar sensitivity cannot use row edits")
             key = collection if collection != "solar_yield" else match["node"]
@@ -2190,7 +2224,14 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
         raise ValueError("comparison cannot mix different Movement reference conditions")
     differences = []
     baseline_source = results[0]["projection"]["opening_conditions_source"]
+    baseline_technologies = results[0]["projection"]["initial_completed_technologies"]
     for alternative in results[1:]:
+        case_technologies = alternative["projection"]["initial_completed_technologies"]
+        if baseline_technologies != case_technologies:
+            differences.append({"case": alternative["name"], "phase": None,
+                                "section": "initial_technology_conditions",
+                                "baseline_completed": baseline_technologies,
+                                "case_completed": case_technologies})
         source = alternative["projection"]["opening_conditions_source"]
         if source != baseline_source:
             differences.append({"case": alternative["name"], "phase": None,
@@ -2700,6 +2741,7 @@ def summarize_projection(projection: dict) -> dict:
             "movement_reference": projection["movement_reference"],
             "opening_conditions_source": projection["opening_conditions_source"],
             "scenario_id": projection["scenario_id"],
+            "initial_completed_technologies": projection["initial_completed_technologies"],
             "opening_fleet_precommitments": projection["opening_fleet_precommitments"],
             "model": "definition_quantity_summary_v1", "phases": phases}
 

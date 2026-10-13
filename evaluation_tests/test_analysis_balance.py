@@ -1742,3 +1742,89 @@ def test_registered_scenario_opening_is_explicit_read_only_basis_not_automatic_o
         evaluate({**selected, "initial_stock": []}, app=app)
     with pytest.raises(ValueError, match="requires an applied Scenario"):
         evaluate(selected, app=build_game_application_for_load())
+
+
+def test_opening_technology_and_survey_knowledge_are_owned_conditions_not_recharged_work(definitions):
+    """Initial progress belongs to Technology and Survey, not the selected workload."""
+    from dataclasses import replace
+    from space_idle.bootstrap import build_game_application, build_game_application_for_scenario
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+
+    definitions_by_id = definitions._simulation.research.definitions
+    prerequisite = next(definition for definition in definitions_by_id.values()
+                        if not definition.prerequisites and any(
+                            definition.id in other.prerequisites
+                            for other in definitions_by_id.values()))
+    dependent = next(definition for definition in definitions_by_id.values()
+                     if prerequisite.id in definition.prerequisites)
+    scenario = replace(build_standard_scenario_definition(),
+                       completed_technologies=(prerequisite.id,))
+    app = build_game_application_for_scenario(scenario)
+    sim = app._simulation
+    before = deepcopy(capture_state(sim))
+    node = str(next(iter(sim.graph.operational_nodes())).id)
+    goal = {"node": node, "research_ids": [str(dependent.id)], "include_prerequisites": True}
+    selected = {"movement_reference": "applied_scenario", "opening_from_reference": True,
+                "phases": [{"name": "research", "days": 12, "research_goal": goal}]}
+    projected = evaluate(selected, app=app)
+    research = projected["phases"][0]["research_goal"]
+    assert str(prerequisite.id) in projected["initial_completed_technologies"]
+    assert str(prerequisite.id) in research["already_completed_technologies"]
+    assert str(prerequisite.id) not in research["included_technologies"]
+    assert str(prerequisite.id) not in projected["phases"][0]["research_time_structure"]["external_prerequisites"]
+    authored = evaluate({"initial_completed_technologies": [],
+        "phases": [{"name": "research", "days": 12, "research_goal": goal}]}, app=app)
+    assert str(prerequisite.id) in authored["phases"][0]["research_goal"]["included_technologies"]
+    assert authored["phases"][0]["research_point_balance"]["research_stage_demand_points"] >= (
+        projected["phases"][0]["research_point_balance"]["research_stage_demand_points"])
+
+    target = next((cell, resource) for (cell, resource), progress
+                  in sim.survey.knowledge_progress.items() if progress > 0)
+    candidate = next((provider, mode, vehicle, location, units)
+        for provider in sim.survey.providers.values() if provider.source_kind.value == "fleet"
+        for mode in provider.observation_modes
+        for vehicle, location in sim.transport.fleet_pool_keys()
+        if sim.survey.source_supports_mode(provider, mode, vehicle)
+        for units in (sim.transport.fleet_pool_snapshot(vehicle, location).total_units,)
+        if units >= mode.minimum_source_units)
+    provider, mode, vehicle, location, units = candidate
+    activity = {"node": str(location), "provider": str(provider.id),
+                "source": str(vehicle), "mode": mode.id, "units": mode.minimum_source_units,
+                "cell": str(target[0]), "resource": str(target[1])}
+    survey_plan = {"movement_reference": "applied_scenario", "opening_from_reference": True,
+                   "phases": [{"name": "survey", "days": 12, "survey_activities": [activity]}]}
+    survey, = evaluate(survey_plan, app=app)["phases"][0]["survey_activities"]
+    assert survey["starting_progress_source"] == "applied_scenario_survey_state"
+    assert survey["assumed_start_progress"] == pytest.approx(sim.survey.progress(*target))
+    specified, = evaluate({**survey_plan, "phases": [{"name": "survey", "days": 12,
+        "survey_activities": [{**activity, "starting_progress": 0.0}]}]}, app=app)["phases"][0]["survey_activities"]
+    assert specified["starting_progress_source"] == "analyst_selected"
+    assert specified["assumed_start_progress"] == 0.0
+
+    # An assumed developed Cell is still authored explicitly, but its
+    # initially measured Resource Knowledge can come from the Scenario owner.
+    facility, method, cell = next(
+        (held, method, cell) for held in sim.facilities.facilities.values()
+        for method in sim.extraction.specs.values()
+        if sim.extraction.nominal_capacity_for_level(held.definition_id, held.level) > 0
+        and method.required_capabilities <= {
+            cap.id for cap in sim.facilities.definitions[held.definition_id].capability_supplies}
+        for (cell, resource), progress in sim.survey.knowledge_progress.items()
+        if resource == method.resource_id and progress > 0)
+    operating = {"node": str(facility.operational_node_id),
+                 "facility": str(facility.definition_id), "level": facility.level,
+                 "units": 1, "extraction": str(method.id)}
+    extraction = {"node": str(facility.operational_node_id), "developed_cells": [str(cell)]}
+    selected_extraction = {"movement_reference": "applied_scenario", "opening_from_reference": True,
+                           "phases": [{"name": "extract", "days": 12, "facilities": [operating],
+                                       "extraction_sites": [extraction]}]}
+    world, = evaluate(selected_extraction, app=app)["phases"][0]["extraction_world_context"]
+    assert world["knowledge_source"] == "applied_scenario_survey_state"
+    explicit = {**selected_extraction, "phases": [{"name": "extract", "days": 12,
+                "facilities": [operating], "extraction_sites": [
+                    {**extraction, "knowledge": [{"cell": str(cell),
+                     "resource": str(method.resource_id), "level": 0}]}]}]}
+    authored_world, = evaluate(explicit, app=app)["phases"][0]["extraction_world_context"]
+    assert authored_world["knowledge_source"] == "authored_over_scenario_survey_state"
+    assert authored_world["effective_opportunity"] <= world["effective_opportunity"]
+    assert capture_state(sim) == before
