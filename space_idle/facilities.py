@@ -355,7 +355,7 @@ class FacilityBook:
         return tuple(
             (failure.code, failure.detail)
             for failure in evaluate_physical_site_requirements(
-                definition.operating_requirements, context_id, day, self.environment
+                definition.operating_requirements, context_id, self.environment
             )
         )
 

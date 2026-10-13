@@ -100,7 +100,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
             str(technology) for technology in sim.industry.missing_process_technologies(process)
         )
     nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
-        definition.id, ids.EARTH, sim.day,
+        definition.id, ids.EARTH,
     )
     assert candidate.power_nominal_generation_mw == pytest.approx(nominal_generation)
     assert candidate.power_nominal_load_mw == pytest.approx(nominal_load)
@@ -262,7 +262,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         for mode in survey.observation_modes
     )
     assert (option.power_nominal_generation_mw, option.power_nominal_load_mw) == pytest.approx(
-        sim.power.nominal_for_definition_at_context(recipe.facility_def_id, ids.EARTH_CELL_INDUSTRIAL, sim.day)
+        sim.power.nominal_for_definition_at_context(recipe.facility_def_id, ids.EARTH_CELL_INDUSTRIAL)
     )
     assert option.capabilities == tuple(sorted(
         supply.id for supply in sim.facilities.definitions[recipe.facility_def_id].capability_supplies

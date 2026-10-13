@@ -662,7 +662,7 @@ class ProjectProjectorMixin:
                 and sim.survey.source_is_compatible(provider, recipe.facility_def_id)
             )
         nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
-            recipe.facility_def_id, context_id, sim.day,
+            recipe.facility_def_id, context_id,
         )
         services = [
             (supply.service_type, supply.nominal_rate)

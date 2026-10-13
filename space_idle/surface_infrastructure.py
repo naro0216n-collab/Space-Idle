@@ -97,13 +97,13 @@ class SurfaceInfrastructureService:
 
     def _anchor_distances(
         self,
-        location_id: SpatialNodeId,
+        body_id,
         cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId],
         anchor_cells: tuple[SurfaceCellId, ...],
     ) -> dict[SurfaceCellId, tuple[float, SurfaceCellId]]:
         if not anchor_cells:
             return {}
-        body = self.graph.bodies[self.graph.locations[location_id].body_id]
+        body = self.graph.bodies[body_id]
         distances: dict[SurfaceCellId, tuple[float, SurfaceCellId]] = {
             anchor: (0.0, anchor) for anchor in anchor_cells if anchor in cell_ids
         }
@@ -140,25 +140,34 @@ class SurfaceInfrastructureService:
             raise ValueError("surface infrastructure territory must be connected to an active access anchor")
         return distances
 
-    def load_sources_for_cells(
-        self,
-        location_id: SpatialNodeId,
-        cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId],
-        day: int = 0,
+    def physical_load_sources_for_cells(
+        self, body_id, cell_ids, anchor_cells,
     ) -> tuple[SurfaceInfrastructureLoad, ...]:
-        if not cell_ids:
-            return ()
-        anchors = tuple(
-            anchor for anchor in self.active_access_anchor_cells(location_id, day)
-            if anchor in cell_ids
-        )
+        """World-only geography load for stated territory and stated access anchors.
+
+        Does not install or activate an anchor, found a Location, or infer
+        Service fulfillment. Live Location calculation calls this same model.
+        """
+        cells = frozenset(cell_ids)
+        anchors = tuple(sorted(set(anchor_cells), key=str))
+        if not cells:
+            raise ValueError("physical territory must contain a cell")
+        if body_id not in self.graph.bodies:
+            raise KeyError(body_id)
+        if any(cell not in self.graph.surface_cells or
+               self.graph.surface_cells[cell].body_id != body_id for cell in cells):
+            raise ValueError("physical territory must contain known cells on one body")
+        if not self.graph.cells_connected(cells):
+            raise ValueError('physical territory must form a connected Cell region')
+        if any(anchor not in cells for anchor in anchors):
+            raise ValueError("access anchors must belong to the stated territory")
         if not anchors:
-            return (SurfaceInfrastructureLoad("access_anchor_missing", float(len(cell_ids))),)
-        distances = self._anchor_distances(location_id, cell_ids, anchors)
+            return (SurfaceInfrastructureLoad("access_anchor_missing", float(len(cells))),)
+        distances = self._anchor_distances(body_id, cells, anchors)
         anchor_set = set(anchors)
         territory_area = 0.0
         territory_spread = 0.0
-        for cell_id in sorted(cell_ids, key=str):
+        for cell_id in sorted(cells, key=str):
             if cell_id in anchor_set:
                 continue
             distance_km, anchor_id = distances[cell_id]
@@ -174,6 +183,18 @@ class SurfaceInfrastructureService:
         if territory_spread > 1e-12:
             rows.append(SurfaceInfrastructureLoad("territory_spread", territory_spread))
         return tuple(rows)
+
+    def load_sources_for_cells(
+        self,
+        location_id: SpatialNodeId,
+        cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId],
+        day: int = 0,
+    ) -> tuple[SurfaceInfrastructureLoad, ...]:
+        location = self.graph.locations[location_id]
+        anchors = self.active_access_anchor_cells(location_id, day)
+        return self.physical_load_sources_for_cells(
+            location.body_id, cell_ids, (anchor for anchor in anchors if anchor in cell_ids)
+        )
 
     def load_sources(self, location_id: SpatialNodeId, day: int = 0) -> tuple[SurfaceInfrastructureLoad, ...]:
         location = self.graph.locations[location_id]

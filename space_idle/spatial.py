@@ -65,7 +65,7 @@ class IlluminationField(SpatialFacet):
     facet_key: ClassVar[str] = "illumination"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.SURFACE_CELL_LOCAL
     solar_flux_w_m2: float
-    availability: float = 1.0
+    availability: float = 1.0  # Long-run climate/exposure fraction, not a day-specific forecast.
 
     def __post_init__(self) -> None:
         if self.solar_flux_w_m2 < 0 or not 0 <= self.availability <= 1:
@@ -76,7 +76,7 @@ class IlluminationField(SpatialFacet):
 class ThermalField(SpatialFacet):
     facet_key: ClassVar[str] = "thermal"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
-    nominal_temperature_k: float
+    nominal_temperature_k: float  # Representative climate temperature, not a daily reading.
     min_temperature_k: float | None = None
     max_temperature_k: float | None = None
 
@@ -147,7 +147,7 @@ class CommunicationField(SpatialFacet):
     facet_key: ClassVar[str] = "communication"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
     baseline_latency_s: float
-    availability: float = 1.0
+    availability: float = 1.0  # Long-run climate/exposure fraction, not a day-specific forecast.
 
     def __post_init__(self) -> None:
         if self.baseline_latency_s < 0 or not 0 <= self.availability <= 1:
@@ -926,6 +926,10 @@ class SpatialGraph:
         if not self._cells_connected(location.developed_cell_ids, allow_unknown_neighbors=allow_unknown_neighbors):
             raise ValueError(f"location developed territory is not connected: {location.operational_node_id}")
 
+    def cells_connected(self, cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId]) -> bool:
+        """Pure World topology contract, including unowned prospective territory."""
+        return self._cells_connected(set(cell_ids))
+
     def _cells_connected(
         self,
         cell_ids: set[SurfaceCellId],
@@ -1067,7 +1071,7 @@ class StaticFacetStore:
 
 
 class StatefulEnvironmentOverlay(Protocol):
-    """Optional persistence contract for mutable environment overlays."""
+    """Persistence contract for action-driven climate modifications."""
 
     state_key: str
 
@@ -1077,7 +1081,7 @@ class StatefulEnvironmentOverlay(Protocol):
 
 
 class EnvironmentOverlay(Protocol):
-    """Explicit dynamic environment source."""
+    """Explicit action-driven environment modification, never a calendar-day model."""
 
     overlay_key: str
     priority: int
@@ -1088,7 +1092,6 @@ class EnvironmentOverlay(Protocol):
         context_id: SpatialContextId,
         facet_type: type[FacetT],
         current: FacetT | None,
-        day: int,
     ) -> FacetT | None: ...
 
 
@@ -1096,7 +1099,7 @@ class EnvironmentOverlay(Protocol):
 class EnvironmentResolver:
     graph: SpatialGraph
     static: StaticFacetStore
-    overlays: list[EnvironmentOverlay] = field(default_factory=list)
+    overlays: list[EnvironmentOverlay] = field(default_factory=list)  # Explicit environmental changes only.
 
     def ordered_overlays(self) -> tuple[EnvironmentOverlay, ...]:
         keyed: list[tuple[int, str, EnvironmentOverlay]] = []
@@ -1121,22 +1124,20 @@ class EnvironmentResolver:
         self,
         context_id: SpatialContextId,
         facet_type: type[FacetT],
-        day: int = 0,
     ) -> FacetT | None:
         if not self.static.field_applies_to_context(self.graph, context_id, facet_type):
             return None
         value = self.static.resolve(self.graph, context_id, facet_type)
         for overlay in self.ordered_overlays():
-            value = overlay.apply(self.graph, context_id, facet_type, value, day)
+            value = overlay.apply(self.graph, context_id, facet_type, value)
         return value
 
     def require(
         self,
         context_id: SpatialContextId,
         facet_type: type[FacetT],
-        day: int = 0,
     ) -> FacetT:
-        value = self.get(context_id, facet_type, day)
+        value = self.get(context_id, facet_type)
         if value is None:
             raise LookupError(f"{context_id} has no {facet_type.__name__}")
         return value

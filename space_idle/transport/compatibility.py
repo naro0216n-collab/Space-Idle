@@ -73,7 +73,7 @@ class TransportCompatibilityMixin:
                     failures.append(f"{prefix}:interface:{code}:{detail}")
             if endpoint.operational_node_id is None:
                 for failure in evaluate_physical_site_requirements(
-                    requirements, resolved.environment_context_id, day, self.facilities.environment
+                    requirements, resolved.environment_context_id, self.facilities.environment
                 ):
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")
                 for requirement in requirements.capability_requirements:
@@ -117,13 +117,13 @@ class TransportCompatibilityMixin:
                 return max(1, math.ceil(geometry.distance_km * multiplier / capability.speed_km_per_day))
         return max(1, math.ceil(plan.transit_days * multiplier - 1e-12))
 
-    def _surface_environment(self, context_id, day: int) -> SurfaceOperationEnvironment | None:
+    def _surface_environment(self, context_id) -> SurfaceOperationEnvironment | None:
         environment = self.facilities.environment
         if not environment.graph.is_surface_context(context_id):
             return None
-        gravity = environment.get(context_id, GravityField, day)
-        atmosphere = environment.get(context_id, AtmosphereField, day)
-        thermal = environment.get(context_id, ThermalField, day)
+        gravity = environment.get(context_id, GravityField)
+        atmosphere = environment.get(context_id, AtmosphereField)
+        thermal = environment.get(context_id, ThermalField)
         body_id = environment.graph.context_body_id(context_id)
         body = environment.graph.bodies.get(body_id) if body_id is not None else None
         gravity_value = None if gravity is None else gravity.local_acceleration_m_s2
@@ -165,8 +165,8 @@ class TransportCompatibilityMixin:
             transit_days=self.performance_movement_transit_days(
                 plan, performance, transit_multiplier=transit_multiplier
             ),
-            origin_surface=self._surface_environment(origin_endpoint.environment_context_id, day),
-            destination_surface=self._surface_environment(destination_endpoint.environment_context_id, day),
+            origin_surface=self._surface_environment(origin_endpoint.environment_context_id),
+            destination_surface=self._surface_environment(destination_endpoint.environment_context_id),
             surface_distance_km=geometry.distance_km if geometry.same_body_surface else None,
         )
         present_operations: set[str] = set()

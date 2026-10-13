@@ -81,7 +81,7 @@ def test_body_parent_validation_and_surface_capability_have_distinct_semantics()
 def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts():
     """Surface potential, sensing and energy have different owners and clocks."""
     from space_idle.spatial import (
-        GravityField, IlluminationField,
+        GravityField, IlluminationField, ThermalField,
     )
     from space_idle.facilities import FacilityBook, FacilityDef, FacilityPlacementScope
     from space_idle.power import PowerSpec, SolarGeneration
@@ -107,6 +107,21 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         )
         for resource in cell.resource_potential_by_resource:
             assert (cell_id, resource) in sim.survey.targets
+
+    # Advancing canonical game time does not evolve weather, season, or a
+    # synthetic daily solar forecast. The World uses representative climate.
+    baseline_climate = {
+        cell_id: (
+            env.require(cell_id, IlluminationField),
+            env.get(cell_id, ThermalField),
+        )
+        for cell_id in graph.surface_cells
+    }
+    sim.advance_days(3)
+    assert all((
+        env.require(cell_id, IlluminationField),
+        env.get(cell_id, ThermalField),
+    ) == climate for cell_id, climate in baseline_climate.items())
 
     # Same solar Facility in different Cells receives exactly the flux and
     # availability resolved from each Cell; no second AU attenuation is applied.

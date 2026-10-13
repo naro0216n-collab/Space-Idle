@@ -7,7 +7,6 @@ Nothing here prescribes quantities of facilities, routes, or technologies to buy
 """
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
 from space_idle.catalog import GameCatalog
@@ -25,6 +24,7 @@ from space_idle.research_models import (
 from space_idle.research_models import ResearchProviderSourceKind
 from space_idle.scenario import ScenarioDefinition
 from space_idle.simulation import Simulation
+from .world import world_evidence
 
 
 def _sorted_resources(amounts: dict | tuple) -> dict[str, float]:
@@ -346,38 +346,9 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
                         "rp_storage": lev.storage_capacity_points} for lev in provider.levels],
         })
 
-    # Each world's cell values are physical *potential*, not deposited stock.
-    world = []
-    for bid, body in sorted(sim.graph.bodies.items()):
-        cells = [cell for cell in sim.graph.surface_cells.values() if cell.body_id == bid]
-        by_resource: dict[str, list[float]] = defaultdict(list)
-        for cell in cells:
-            for rid, amount in cell.resource_potential_by_resource.items():
-                by_resource[str(rid)].append(float(amount))
-        world.append({
-            "id": str(bid), "name": getattr(body, "display_name", str(bid)),
-            "body_parameters": {
-                "mean_radius_km": body.mean_radius_km,
-                "reference_gravity_m_s2": body.representative_gravity_m_s2,
-                "parent_body_id": None if body.parent_body_id is None else str(body.parent_body_id),
-                "heliocentric_semimajor_axis_au": body.heliocentric_semimajor_axis_au,
-                "parent_orbit_semimajor_axis_km": body.parent_orbit_semimajor_axis_km,
-                "physical_surface": body.physical_surface.value,
-            },
-            "surface_cells": [
-                {"id": str(cell.id), "area_km2": cell.area_km2,
-                 "geology": dict(sorted(cell.static_geology.items())),
-                 "terrain": {"terrain_factor": cell.terrain.terrain_factor,
-                             "bearing_capacity_factor": cell.terrain.bearing_capacity_factor,
-                             "dust_factor": cell.terrain.dust_factor, "slope_factor": cell.terrain.slope_factor},
-                 "resource_potential_by_resource": _sorted_resources(cell.resource_potential_by_resource)}
-                for cell in sorted(cells, key=lambda value: str(value.id))
-            ],
-            "surface_cell_count": len(cells),
-            "potential_by_resource": {rid: {"positive_cells": sum(x > 0 for x in vals),
-                                          "min": min(vals), "max": max(vals)}
-                                      for rid, vals in sorted(by_resource.items())},
-        })
+    # Physical geography is projected by the World/Environment owners, not
+    # reconstructed from independent fixed field lists here.
+    world = world_evidence(sim)['bodies']
 
     for item in world:
         for resource, opportunity in item["potential_by_resource"].items():

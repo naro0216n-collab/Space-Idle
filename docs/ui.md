@@ -457,7 +457,7 @@ Surface MapとSurveyのCell選択は共通の地理的概略配置を使う。�
 
 Applicationがresolved provider / observation modeと実際のFacility / Vehicle供給元、拠点、配備数、利用可能Service Capacityを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。異なる機種の候補や排他的Fleet Commitmentは同じProvider名にまとめて隠さず、供給元のhard constraintはCampaignの他の設定とともに保持する。
 
-Map LayerはEnvironment、Knowledge、Resource Potential、Location territory、Movement accessibility等を切り替え、全情報を常時重ねない。選択Cell Inspectorでは判断情報を統合する。
+Map Layerは代表気候・Environment、Knowledge、Resource Potential、Location territory、Movement accessibility等を切り替え、全情報を常時重ねない。選択Cell Inspectorでは判断情報を統合する。
 
 Presence probability、Estimated Potential + uncertainty、Measured Potential、goal Knowledge Level、current Knowledge Levelを区別し、Knowledge進展をResource量の増減のように表現しない。
 

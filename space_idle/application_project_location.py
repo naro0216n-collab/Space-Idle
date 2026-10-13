@@ -147,7 +147,7 @@ class LocationProjectorMixin:
         for facet_type in sorted(
             facet_types, key=lambda value: getattr(value, "facet_key", value.__name__)
         ):
-            facet = sim.environment.get(location_id, facet_type, sim.day)
+            facet = sim.environment.get(location_id, facet_type)
             if facet is None:
                 continue
             rows.append(
@@ -174,14 +174,14 @@ class LocationProjectorMixin:
             scope = getattr(facet_type, "environment_scope", None)
             if not isinstance(scope, EnvironmentFieldScope):
                 continue
-            location_facet = sim.environment.get(location_id, facet_type, sim.day)
+            location_facet = sim.environment.get(location_id, facet_type)
             location_values = (
                 () if location_facet is None else self._environment_values(location_facet)
             )
             cell_values: list[tuple[str, tuple[tuple[str, object], ...]]] = []
             if scope is not EnvironmentFieldScope.BODY_GLOBAL:
                 for cell_id in sorted(location.developed_cell_ids, key=str):
-                    facet = sim.environment.get(cell_id, facet_type, sim.day)
+                    facet = sim.environment.get(cell_id, facet_type)
                     if facet is not None:
                         cell_values.append((str(cell_id), self._environment_values(facet)))
             if not location_values and not cell_values:

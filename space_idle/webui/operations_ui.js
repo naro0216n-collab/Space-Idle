@@ -956,7 +956,7 @@
     const placement=o.placement_scope==='SURFACE_CELL'?'地表地域':'拠点';
     const readiness=o.projected_material_readiness_day==null?'未確定':Number(o.projected_material_readiness_day)<=Number(state.world?.day??state.session?.day??0)?'現地準備済み':`Day ${fmt(o.projected_material_readiness_day,0)}`;
     setInspector(o.display_name,
-      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（現環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),...(Number(o.power_nominal_standby_load_mw)>0?[['停止時Power需要',`${fmt(o.power_nominal_standby_load_mw,2)} MW`]]:[]),...(o.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(o.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(o.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(o.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[]),['計画可否',esc(plan.label)]]))+
+      section('建設',kv([['必要工数',fmt(o.construction_required,0)],['資材準備見込み',esc(readiness)],['配置先',esc(placement)],['自己展開',o.self_deploying?'はい':'いいえ'],...(Number(o.power_nominal_generation_mw)>0?[['発電公称値（代表環境）',`${fmt(o.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(o.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(o.power_nominal_load_mw,2)} MW`]]:[]),...(Number(o.power_nominal_standby_load_mw)>0?[['停止時Power需要',`${fmt(o.power_nominal_standby_load_mw,2)} MW`]]:[]),...(o.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(o.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(o.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(o.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[]),['計画可否',esc(plan.label)]]))+
       section('実行条件',plan.blockers.length?plan.blockers.map(issueHtml).join(''):'<span class="badge ok">なし</span>')+
       section('操作',`<div class="action-stack">${planControls}<button type="button" class="primary" data-build="${esc(o.facility_definition_id)}" data-plan-prefix="buildPlan" ${plan.disabled?'disabled':''}>この条件で建設計画を作成</button></div>`)+
       section('必要資源',resourceCards(o.resources))+
@@ -1259,7 +1259,7 @@
       ]))+
       foundationSection+foundationComparisonSection+developmentSection+facilitySection+
       section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
-      section('現在の環境',environmentHtml(cell.environment))+
+      section('代表気候・環境条件',environmentHtml(cell.environment))+
       section('地形',kv([
         ['地形係数',fmt(terrain.terrain_factor,2)],
         ['支持力係数',fmt(terrain.bearing_capacity_factor,2)],

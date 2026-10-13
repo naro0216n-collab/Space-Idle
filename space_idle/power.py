@@ -71,14 +71,14 @@ class PowerService:
     specs: dict[DefinitionId, PowerSpec]
     environment: EnvironmentResolver
 
-    def _generation_at_context(self, spec: PowerSpec, context_id: SpatialContextId, day: int) -> float:
+    def _generation_at_context(self, spec: PowerSpec, context_id: SpatialContextId) -> float:
         """Same physical generator for installed Assets and prospective Build sites."""
         model = spec.generation
         if model is None:
             return 0.0
         if isinstance(model, FixedGeneration):
             return model.mw
-        illumination = self.environment.get(context_id, IlluminationField, day)
+        illumination = self.environment.get(context_id, IlluminationField)
         if illumination is None:
             return 0.0
         return (
@@ -89,7 +89,7 @@ class PowerService:
         )
 
     def nominal_for_definition_at_context(
-        self, definition_id: DefinitionId, context_id: SpatialContextId, day: int,
+        self, definition_id: DefinitionId, context_id: SpatialContextId,
     ) -> tuple[float, float]:
         """Unmaintained active generation/load at a site, without installing it.
 
@@ -100,11 +100,11 @@ class PowerService:
         spec = self.specs.get(definition_id)
         if spec is None:
             return 0.0, 0.0
-        return self._generation_at_context(spec, context_id, day), spec.load_mw
+        return self._generation_at_context(spec, context_id), spec.load_mw
 
-    def _generation(self, spec: PowerSpec, facility: FacilityState, facilities: FacilityBook, day: int) -> float:
+    def _generation(self, spec: PowerSpec, facility: FacilityState, facilities: FacilityBook) -> float:
         return self._generation_at_context(
-            spec, facilities.facility_environment_context(facility), day,
+            spec, facilities.facility_environment_context(facility),
         )
 
     def physical_snapshot(
@@ -126,7 +126,7 @@ class PowerService:
                 continue
             if not facility.paused:
                 generation_by_facility[facility.id] = self._generation(
-                    spec, facility, facilities, day
+                    spec, facility, facilities
                 )
             load = spec.standby_load_mw if facility.paused else spec.load_mw
             if load > 0:

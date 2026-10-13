@@ -12,10 +12,10 @@ from typing import Any
 
 from .catalog import describe_execution_requirement
 from space_idle.research_models import ResearchProviderSourceKind
-from .physical import physical_site_conditions, site_evidence
+from .physical import physical_site_conditions, site_evidence, surface_region_evidence
+from .world import physical_context_evidence
 from space_idle.research_models import (
-    ResearchTheoryStageSpec, ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec,
-)
+    ResearchTheoryStageSpec, ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)
 from space_idle.simulation import Simulation
 
 
@@ -52,13 +52,9 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             raise ValueError('level must be a positive integer')
         return level
 
-    def day_of(item):
-        day = item.get('day', 0)
-        if type(day) is not int or day < 0:
-            raise ValueError('day must be a non-negative integer')
-        return day
-
     for index, item in enumerate(activities):
+        if 'day' in item:
+            raise ValueError('calendar-day environment sampling is not supported; use representative climate')
         kind, node = item['kind'], str(item['node'])
         if not node:
             raise ValueError('node label required')
@@ -141,20 +137,24 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             rate = number(item, 'rate_t_per_day')
             units = number(item, 'facility_units', whole=True)
             physical = site_evidence(sim, item['context_id'], fid, method_id=method_id,
-                                     level=level_of(item), day=day_of(item))
+                                     level=level_of(item))
             info = physical['extraction']
             resource(info['output_resource_id'], rate * period_days, 'supply',
                      'assumed Extraction output rate; physical opportunity refers to deposit Resource')
             nominal = info['nominal_capacity_t_per_day'] * units
             service(sim.extraction.service_type(sim.extraction.specs[method_id].resource_id),
                     nominal * period_days, 'demand')
-            response = sim.extraction.diminishing_response(
-                nominal, info['physical_opportunity_before_knowledge'])
+            region = surface_region_evidence(
+                sim, item.get('cell_ids', [item['context_id']]), method_id, fid,
+                facility_units=units, level=level_of(item),
+                anchor_cell_ids=item.get('anchor_cell_ids', ()))
             measurements.append({'measure': 'extraction_physical_opportunity',
                                  'equipment_units': units, 'per_facility': info,
+                                 'region': region,
                                  'combined_nominal_capacity_t_per_day': nominal,
-                                 'combined_physical_response_t_per_day': response,
+                                 'combined_physical_response_t_per_day': region['physical_diminishing_response_t_per_day'],
                                  'interpretation': 'assumed production is not proven by physical response; '
+                                                   'Cell selection and anchors are assumptions, no founded territory; '
                                                    'extraction service demand is full nameplate request'})
         elif kind == 'spatial_development':
             rid, count = item['id'], number(item, 'count', whole=True)
@@ -163,6 +163,12 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 resource(requirement.resource_id, requirement.amount_t * count, 'demand',
                          'Surface Location development investment once')
             service('construction_work', recipe.construction_work * count, 'demand')
+            if 'target_cell_id' in item:
+                measurements.append({'measure': 'development_target_world',
+                    'context': physical_context_evidence(
+                        sim, item['target_cell_id']),
+                    **physical_site_conditions(sim, item['target_cell_id'], recipe.site_requirements),
+                    'interpretation': 'candidate only; no surveyed Knowledge or adjacent owned territory is asserted'})
             measurements.append({'measure': 'spatial_development_site',
                                  'prerequisite_technologies': sorted(map(str, recipe.prerequisite_technologies)),
                                  'interpretation': 'not a developed Surface Cell; geometric and site conditions '
@@ -198,21 +204,20 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             definition = sim.facilities.definitions[fid]
             context = item['context_id']
             site = site_evidence(sim, context, fid,
-                level=level_of(item), day=day_of(item),
-                window_days=period_days)
-            gen = site['power']['mean_generation_mw_per_facility']
+                level=level_of(item))
+            gen = site['power']['generation_mw_per_facility']
             load = site['power']['active_load_mw_per_facility']
             measurements.append({'measure': 'site_environment',
                 'installation': site['installation'], 'operation': site['operation'],
                 'research_provider': site['research_provider'],
                 'construction': site['construction'],
-                'power_window': site['power'],
+                'power_climate_coefficient': site['power'],
                 'interpretation': 'not an installed Facility or a legality preflight'})
             power[node]['nominal_generation_mw'] += gen * count
             power[node]['nominal_active_load_mw'] += load * count
             measurements.append({'measure': 'power', 'generation_mw': gen * count,
                                  'active_load_mw': load * count, 'context_id': str(context),
-                                 'basis': 'PowerService.nominal_for_definition_at_context; window mean, no fulfillment'})
+                                 'basis': 'PowerService.nominal_for_definition_at_context; long-run climate coefficient, no fulfillment'})
             level = level_of(item)
             if definition.housing_at_level(level):
                 habitation[node]['nominal_housing_people'] += definition.housing_at_level(level) * count
@@ -238,7 +243,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             if item.get('selected_extraction_method_id') is not None:
                 physical = site_evidence(sim, context, fid,
                     method_id=item['selected_extraction_method_id'],
-                    level=level, day=day_of(item))
+                    level=level)
                 method = sim.extraction.specs[item['selected_extraction_method_id']]
                 installed = sim.extraction.nominal_capacity_for_level(fid, level) * count
                 service(sim.extraction.service_type(method.resource_id), installed * period_days, 'supply')
@@ -297,8 +302,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                     nominal * period_days, 'supply')
             if 'context_id' in item:
                 measurements.append({'measure': 'survey_observation_mode_site',
-                    **physical_site_conditions(sim, item['context_id'], mode.site_requirements,
-                                               day=day_of(item)),
+                    **physical_site_conditions(sim, item['context_id'], mode.site_requirements),
                     'interpretation': 'physical constraints only; source availability and reach not certified'})
             measurements.append({'measure': 'survey_provider_nominal',
                                  'source_kind': provider.source_kind.value,
@@ -349,8 +353,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             service('crew', provider.crew_person_days_per_research_point * units * spec.generation_points_per_day * period_days, 'demand')
             if 'context_id' in item:
                 measurements.append({'measure': 'research_fleet_provider_site',
-                    **physical_site_conditions(sim, item['context_id'], provider.site_requirements,
-                                               day=day_of(item)),
+                    **physical_site_conditions(sim, item['context_id'], provider.site_requirements),
                     'interpretation': 'physical constraints only; capability supply and Fleet assignment not certified'})
             measurements.append({'measure': 'fleet_research_provider',
                 'fleet_units_assumed_committed': units,
@@ -375,6 +378,15 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                          'demand', 'Founding payload including deployed hardware AND initial stock')
             if recipe.preparation_service_type is not None:
                 service(recipe.preparation_service_type, recipe.preparation_work * count, 'demand')
+            if 'target_context_id' in item:
+                measurements.append({'measure': 'founding_target_world',
+                    'context': physical_context_evidence(sim, item['target_context_id']),
+                    **physical_site_conditions(sim, item['target_context_id'], recipe.target_requirements),
+                    'interpretation': 'physical target only, no installed infrastructure, Survey or legal founding'})
+            if 'staging_context_id' in item:
+                measurements.append({'measure': 'founding_staging_world',
+                    'context': physical_context_evidence(sim, item['staging_context_id']),
+                    **physical_site_conditions(sim, item['staging_context_id'], recipe.staging_requirements)})
             measurements.append({'measure': 'founding_payload_mass_t', 'quantity': recipe.payload_t * count,
                                  'interpretation': 'staging demand only, not transported/settled Cargo'})
         elif kind == 'transport_cycle':
@@ -446,8 +458,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             count = number(item, 'count', whole=True)
             cargo = number(item, 'cargo_t')
             origin, destination, vehicle_id = item['origin_context_id'], item['destination_context_id'], item['id']
-            evidence = movement_evidence(sim, origin, destination, vehicle_id, cargo_t=cargo,
-                                         day=day_of(item))
+            evidence = movement_evidence(sim, origin, destination, vehicle_id, cargo_t=cargo)
             matches = [row for row in evidence['forward'] if row['movement_plan_id'] == item['movement_plan_id']]
             if not matches:
                 raise ValueError(f'unknown physical Movement choice: {item["movement_plan_id"]}')
@@ -492,8 +503,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 from .catalog import describe_site_requirements
                 site = {'site': describe_site_requirements(stage.site_requirements)}
                 if 'context_id' in item:
-                    site = physical_site_conditions(sim, item['context_id'], stage.site_requirements,
-                                                    day=day_of(item))
+                    site = physical_site_conditions(sim, item['context_id'], stage.site_requirements)
                 measurements.append({'measure': 'research_stage_site', **site,
                     'interpretation': 'specified context only; active Capabilities and Research Stage eligibility not certified'})
                 if isinstance(stage, ResearchPrototypeStageSpec):

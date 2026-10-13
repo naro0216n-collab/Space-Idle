@@ -28,7 +28,7 @@ class SurfaceProjectorMixin:
             facility_id = deployment.facility_def_id
             definition = sim.facilities.definitions[facility_id]
             generation, load = sim.power.nominal_for_definition_at_context(
-                facility_id, context_id, sim.day,
+                facility_id, context_id,
             )
             storage = sim.storage.providers.get(facility_id)
             provider = sim.projects.construction_providers.get(facility_id)

@@ -160,7 +160,7 @@ Service CapacityはOperational Node等へ固定値として付与するのでは
 
 Service Capacityは用途に応じたscopeを持てる。Cargo Handling、Construction、Vehicle servicing等はOperational Node scopeを基本とし、Theory研究に用いるResearch executionのように組織全体へ集約して利用すること自体がゲーム上の意味を持つ能力はOrganization scopeを定義できる。Organization scopeへ供給される場合も、provider所在地でPower、Maintenance、Environment等のローカル成立条件を満たしたAvailable supplyだけを集約する。
 
-PowerはOperational NodeごとのService Capacityとして扱う。canonical dayのPhysical snapshot時点の発電設備、Environment、Facility状態等から当日のAvailable Powerを導出し、同日のAllocationで競合利用する。蓄電をPower Capacityへ暗黙に含めない。将来battery等をゲーム上の判断として導入する場合は、Energy Storageを明示Stock Stateとして定義し、充放電executionを介してPower Serviceへ接続する。
+PowerはOperational NodeごとのService Capacityとして扱う。Environmentは日付・季節・日周の変動ではなく、天体・Cellごとに定義した代表的な気候・日照利用率を参照する。canonical dayのPhysical snapshot時点の発電設備、代表Environment、Facility状態等からその日のAvailable Powerを導出し、同日のAllocationで競合利用する。日次のPower変化はFacility等のState変更に起因し、暦によるEnvironmentの自動変動は発生させない。蓄電をPower Capacityへ暗黙に含めない。将来battery等をゲーム上の判断として導入する場合は、Energy Storageを明示Stock Stateとして定義し、充放電executionを介してPower Serviceへ接続する。
 
 Research Point生成率のような有限flowと、Research Point貯蔵上限のようなPool Capacityも区別する。生成outputはPool admission可能量を同じexecution settlementへ含め、複数Producerが同じ空き容量を二重利用しない。このallocation graphへ当tickに新たに生産・到着したResourceやCapabilityを戻さず、次tick snapshotから利用可能にする。同tick依存関係に循環を持つContent / DefinitionはValidationでfail-closedとする。
 
@@ -398,26 +398,13 @@ Core Cellであること自体は内部物流コストを免除しない。設�
 
 人工的な与圧、温調、放射線遮蔽等はPhysical Environmentを書き換えない。Infrastructureは `pressurized workspace`、`thermal control`、`radiation shelter` 等のCapability / Service Capacityを供給し、それを必要とする活動が有限能力として利用する。 放射線の外部環境値はFacilityやFleetの耐性に対して評価する物理条件であり、設備による遮蔽の有無を環境値の変更として記録しない。
 
-### 8.4 環境変化と将来のテラフォーミング
+### 8.4 代表気候と明示的な環境改変
 
-Surface Cellは静的な地質・地形と、将来変化し得るPhysical Environment Stateを分離する。
+Surface Cellは地質・地形・Resource Potentialと、天体・地域のPhysical Environmentを別の定義として保持する。気温・大気・放射線・日照等は**暦の各日の実況・予報値ではなく、設備選定と産業規模の判断に使う代表的な環境・気候条件**を表す。`ThermalField` の代表温度と上下限は気候特性・耐環境性能の幅、`IlluminationField` の日射と `availability` は長期平均の立地日照・受光条件を表す。日周・季節・天候・軌道位相に応じたEnvironment自動更新や、日付を引数とする発電予測は持たない。発電の名目係数は立地・設備定義が同じ限り暦日によって変わらない。
 
-```text
-Static
-  geology / resource potential
-  terrain / elevation / area
+Physical Environmentの各fieldは、天体全体で共通な値、Surface Cell localでのみ評価する値、天体global値へCell local補正を合成する値を区別する。Surface Locationそのものには代表Cell由来の単一Environment値を持たせず、Cell-localな条件には明示Surface Cellを要求する。Location概要の気候表示はdeveloped cellsの範囲・上下限・分布等のderived summaryとし、Simulation判定の正本にしない。
 
-Dynamic physical environment
-  temperature
-  atmospheric pressure / composition
-  radiation
-  water / volatile state
-  illumination and other local conditions
-```
-
-Physical Environmentの各fieldは、天体全体で共通に評価する値、Surface Cell localでのみ評価する値、天体global値へCell local overlayを合成する値のいずれかとして定義する。Celestial Body全体に共通する環境変化とSurface Cell localな変化を、そのfieldのscope / composition規則に従って合成して現在のPhysical Environmentを得る。Surface Locationそのものには代表Cell由来の単一Environment値を持たせず、Cell-local値を必要とする活動は明示Surface Cellを要求する。UIがLocation概要を表示する場合は、developed cellsの範囲、extrema、分布、core cell値等を説明用summaryとして提示できるが、そのsummaryをSimulation判定の正本にはしない。
-
-テラフォーミングや自然変化はPhysical Environmentを更新し、Facility、Resource Opportunity、Movement、Construction等へ一般則として作用する。人工的な建屋内環境や保護InfrastructureはPhysical EnvironmentではなくCapability / Service Capacityとして扱う。
+テラフォーミングや明示的な地表改変等が実装された場合、その**ゲーム内Actionの結果**としてPhysical Environmentのauthoritative Stateを更新し、Facility、Resource Opportunity、Movement、Constructionへ一般則として作用させる。単なる日数経過で環境を変化させない。人工的な建屋内環境や保護InfrastructureはPhysical EnvironmentではなくCapability / Service Capacityとして扱う。
 
 地表以外の軌道・宇宙空間NodeはSurface Cellを要求しない。LEO、月周回等はそれぞれの物理・運用構造に適したSpatial Nodeとして扱い、Inventory・Facility・Fleet等を持つ場合だけOperational Nodeとして経済活動へ参加させる。
 
@@ -824,7 +811,7 @@ UIはiPad横画面を正式対応対象とし、Playerの判断対象を中心�
 
 ## 19. Save / Load / Offline / テスト
 
-Saveはversion付きSnapshotを基本とし、静的World / Content DefinitionはContentから再構築し、可変authoritative Stateだけを復元する。Snapshotはdomain-owned state sectionを保ち、Facility lifecycle / Process selection、Project / Activity control、FleetPool / Fleet Commitment、Transport Allocationの方向別Capacity target / Provisioning Priority / optional hard constraint、Inventory / Reservation / Cargo、Target Stock、必要なrouting hard constraint、Market State、Research Provider Assignment / Research Project current Stage、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope、Dynamic Environment等を各所有Domainの境界に沿って保存する。中央Save schemaへDomain内部fieldを無秩序に平坦化しない。
+Saveはversion付きSnapshotを基本とし、静的World / Content DefinitionはContentから再構築し、可変authoritative Stateだけを復元する。Snapshotはdomain-owned state sectionを保ち、Facility lifecycle / Process selection、Project / Activity control、FleetPool / Fleet Commitment、Transport Allocationの方向別Capacity target / Provisioning Priority / optional hard constraint、Inventory / Reservation / Cargo、Target Stock、必要なrouting hard constraint、Market State、Research Provider Assignment / Research Project current Stage、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope、明示的な環境改変State等を各所有Domainの境界に沿って保存する。中央Save schemaへDomain内部fieldを無秩序に平坦化しない。
 
 Movement Plan、Transport Service Plan、auto-selected source / path、Required Fleet Units、current Capacity、auto-selected Survey provider / observation mode、Survey Campaignから展開した未完了target集合、salvage回収見込、Analytics、Projected Material Readiness等のderived / transient stateは保存せず再導出する。Saveは `world_definition_id` と `scenario_id` をmetadataとして保持し、Load時にScenario初期化を再実行しない。
 

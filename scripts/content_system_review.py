@@ -1,7 +1,7 @@
 """Produce source-grounded material for design of the *whole Content system*.
 
 Usage: python scripts/content_system_review.py [--json] [--stage N]
-       python scripts/content_system_review.py --site CONTEXT --facility FACILITY [--method METHOD] [--window-days N]
+       python scripts/content_system_review.py --site CONTEXT --facility FACILITY [--method METHOD]
        python scripts/content_system_review.py --route FROM TO --vehicle VEHICLE
        python scripts/content_system_review.py --ledger worksheet.json
 
@@ -9,7 +9,7 @@ Worksheet JSON: {"period_days": 30, "activities": [{"kind": "process", "node": "
 "id": "process-definition-id", "rate_per_day": 1.0}, ...]}.
 All rows require `node` (explicit accounting label) and `kind`. Other kinds and keys:
   facility_operation: id, count, context_id; optional selected_process_id,
-    selected_extraction_method_id, level, day
+    selected_extraction_method_id, level
   extraction: id (method), facility_id, facility_units, context_id, rate_t_per_day
   facility_construction / vehicle_production / founding / spatial_development: id, count
   facility_upgrade: id (facility), target_level, count
@@ -43,7 +43,8 @@ from space_idle.content.base_catalog import build_base_catalog
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.composition.base_simulation import build_base_simulation
 from content_balance.catalog import review_content
-from content_balance.physical import site_evidence, movement_evidence
+from content_balance.physical import site_evidence, movement_evidence, surface_region_evidence
+from content_balance.world import world_evidence
 from content_balance.ledger import quantity_ledger
 
 
@@ -93,34 +94,51 @@ def main() -> None:
     parser.add_argument("--facility", help="Facility id to measure at --site")
     parser.add_argument("--method", help="Extraction method id (requires --site and --facility)")
     parser.add_argument("--level", type=int, default=1, help="hypothetical Facility level (site coefficient only)")
+    parser.add_argument("--world", nargs="?", const="all", help="physical World facets/cells for body id (or all), JSON")
+    parser.add_argument("--region", nargs="+", metavar="CELL", help="candidate physical territory Cells; requires --facility and --method")
+    parser.add_argument("--anchors", nargs="*", metavar="CELL", help="explicit assumed access-anchor Cells in --region")
+    parser.add_argument("--units", type=int, default=1, help="hypothetical Extraction Facility units for --region")
     parser.add_argument("--route", nargs=2, metavar=("ORIGIN_CONTEXT", "DEST_CONTEXT"),
                         help="physical World contexts, not active Transport endpoints")
     parser.add_argument("--vehicle", help="Vehicle id (required with --route)")
     parser.add_argument("--cargo-t", type=float, default=0.0, help="specified one-way mass in tonnes")
-    parser.add_argument("--day", type=int, default=0, help="first day to sample Environment coefficients")
-    parser.add_argument("--window-days", type=float, default=1,
-                        help="duration for Power sampling with --site (not a Simulation)")
     args = parser.parse_args()
-    physical_site = args.site is not None or args.facility is not None or args.method is not None
-    if args.window_days != 1 and not physical_site:
-        parser.error("--window-days requires --site and --facility")
+    physical_region = args.region is not None
+    physical_site = args.site is not None or (not physical_region and (args.facility is not None or args.method is not None))
     physical_route = args.route is not None or args.vehicle is not None
-    if args.ledger is not None and (physical_site or physical_route or args.stage is not None):
-        parser.error("--ledger is a separate quantity worksheet")
-    if physical_site and physical_route:
-        parser.error("--site/--facility and --route/--vehicle are separate physical queries")
+    world = args.world is not None
+    if sum((args.ledger is not None, physical_site, physical_region, physical_route, world)) > 1:
+        parser.error('choose one of --ledger, --site, --region, --route, --world')
     if physical_site and (args.site is None or args.facility is None):
-        parser.error("--site requires --facility and vice versa")
+        parser.error('--site requires --facility and vice versa')
+    if physical_region and (args.facility is None or args.method is None):
+        parser.error('--region requires --facility and --method')
+    if (args.anchors is not None or args.units != 1) and not physical_region:
+        parser.error('--anchors and --units require --region')
     if physical_route and (args.route is None or args.vehicle is None):
-        parser.error("--route requires --vehicle and vice versa")
-    if (physical_site or physical_route) and args.stage is not None:
-        parser.error("--stage filters only the registered Research catalog")
+        parser.error('--route requires --vehicle and vice versa')
+    if args.stage is not None and (physical_site or physical_region or physical_route or world or args.ledger is not None):
+        parser.error('--stage filters only registered Research')
     if args.json and args.stage is not None:
-        parser.error("--stageは閲覧用の段階絞り込みです。全係数をJSONで取得する場合は--stageを省略してください")
+        parser.error('--stage is for browsing; omit it for all registered coefficients')
     catalog = build_base_catalog()
     scenario = build_standard_scenario_definition()
     sim = build_base_simulation(catalog, population_rules=scenario.population_rules,
                                 external_population_sources=scenario.external_population_sources)
+    if world:
+        report = world_evidence(sim)
+        if args.world != 'all':
+            report['bodies'] = [row for row in report['bodies'] if row['id'] == args.world]
+            if not report['bodies']:
+                parser.error(f'unknown body: {args.world}')
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if physical_region:
+        print(json.dumps(surface_region_evidence(
+            sim, args.region, args.method, args.facility,
+            facility_units=args.units, level=args.level,
+            anchor_cell_ids=args.anchors or ()), ensure_ascii=False, indent=2))
+        return
     if args.ledger is not None:
         worksheet = json.loads(args.ledger.read_text(encoding="utf-8"))
         result = quantity_ledger(sim, period_days=worksheet["period_days"],
@@ -129,13 +147,12 @@ def main() -> None:
         return
     if physical_site:
         print(json.dumps(site_evidence(sim, args.site, args.facility,
-                                       method_id=args.method, level=args.level, day=args.day,
-                                       window_days=args.window_days),
+                                       method_id=args.method, level=args.level),
                          ensure_ascii=False, indent=2))
         return
     if physical_route:
         print(json.dumps(movement_evidence(sim, *args.route, args.vehicle,
-                                           cargo_t=args.cargo_t, day=args.day),
+                                           cargo_t=args.cargo_t),
                          ensure_ascii=False, indent=2))
         return
     report = review_content(sim, catalog, scenario)

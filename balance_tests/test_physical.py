@@ -30,7 +30,7 @@ def test_site_measurement_uses_local_environment_and_owner_extraction_physics():
     assert physical['nominal_capacity_t_per_day'] == sim.extraction.nominal_capacity_for_level(fid, 1)
     assert physical['diminishing_response_t_per_day'] == sim.extraction.diminishing_response(
         physical['nominal_capacity_t_per_day'], physical['physical_opportunity_before_knowledge'])
-    assert before['power']['generation_mw_per_facility'] == sim.power.nominal_for_definition_at_context(fid, cell.id, 0)[0]
+    assert before['power']['generation_mw_per_facility'] == sim.power.nominal_for_definition_at_context(fid, cell.id)[0]
     sim.graph.surface_cells[cell.id] = replace(cell, resource_potential_by_resource={
         **cell.resource_potential_by_resource, method.resource_id:
         cell.resource_potential_by_resource[method.resource_id] * 1.4,
@@ -70,21 +70,19 @@ def test_movement_physics_reuses_world_and_vehicle_contracts_without_endpoints()
     assert sim.transport.fleet_pools == {}
 
 
-def test_window_power_coefficients_sample_owner_per_day_without_running_game():
+def test_site_generation_is_representative_climate_coefficient_not_calendar_sampling():
     sim = _assembled()
     from space_idle.power import SolarGeneration
+    from space_idle.spatial import IlluminationField
     fid = next(fid for fid, spec in sim.power.specs.items()
                if isinstance(spec.generation, SolarGeneration))
-    context = next(iter(sim.graph.nodes))
-    window = 12.5
-    result = site_evidence(sim, context, fid, day=9, window_days=window)
-    values = [sim.power.nominal_for_definition_at_context(fid, context, 9 + i)[0]
-              for i in range(13)]
-    expected = (sum(values[:12]) + 0.5 * values[12]) / window
-    assert abs(result['power']['mean_generation_mw_per_facility'] - expected) < 1e-9
-    assert result['power']['minimum_generation_mw_per_facility'] == min(values)
-    assert result['power']['maximum_generation_mw_per_facility'] == max(values)
-    assert result['power']['generation_mw_per_facility'] == values[0]
+    cell = next(c for c in sim.graph.surface_cells.values()
+                if sim.environment.get(c.id, IlluminationField) is not None)
+    result = site_evidence(sim, cell.id, fid)
+    generation = sim.power.nominal_for_definition_at_context(fid, cell.id)[0]
+    assert result['power']['generation_mw_per_facility'] == generation
+    assert 'mean_generation_mw_per_facility' not in result['power']
+    assert 'window_start_day' not in result['power']
     assert sim.graph.locations == {}
     assert sim.facilities.facilities == {}
 

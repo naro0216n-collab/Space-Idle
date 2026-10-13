@@ -397,3 +397,14 @@ def test_one_period_demands_keep_owned_resource_service_habitation_and_organizat
     assert sim.facilities.facilities == {}
     assert sim.survey.campaigns == {}
     assert sim.market.orders == {}
+
+
+def test_balance_worksheet_rejects_calendar_day_as_environment_input():
+    import pytest
+    sim = _sim()
+    facility_id = next(iter(sim.facilities.definitions))
+    with pytest.raises(ValueError, match='calendar-day environment sampling'):
+        quantity_ledger(sim, period_days=5, activities=[
+            {'kind': 'facility_operation', 'node': 'assumed-node', 'id': facility_id,
+             'count': 1, 'context_id': next(iter(sim.graph.surface_cells)), 'day': 9},
+        ])

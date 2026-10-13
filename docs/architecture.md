@@ -345,13 +345,13 @@ Surface LocationのCell数はOperational Node数を増やさない。Inventory�
 
 ### 5.2 Environment
 
-Surface Cellは静的地質・地形と可変Physical Environmentを分離する。Static geology / Resource Potentialを通常の採掘で消費・減少させない。Dynamic Physical Environmentはテラフォーミング、自然変化、明示的な地表改変等によって更新可能とする。
+Surface Cellは地質・地形と代表Physical Environmentを分離する。Static geology / Resource Potentialを通常の採掘で消費・減少させない。Physical Environmentの値は代表気候・平均日照・耐環境範囲として定義し、ゲーム日付・季節・日周によって自動更新しない。テラフォーミングや明示的な地表改変がある場合に限り、Actionに起因するauthoritativeな環境改変Stateとして更新する。
 
 Physical Environmentのfield definitionはscope / compositionを明示し、少なくとも `BODY_GLOBAL`、`SURFACE_CELL_LOCAL`、`BODY_WITH_CELL_OVERLAY` に相当する意味を表現できるようにする。Resolverは個別field名のallowlistでscopeを決めず、このDefinition contractからCelestial Body global stateとSurface Cell local stateを評価・合成する。Surface Locationそのものには単一の代表Physical Environmentを持たせず、`core_cell_id` をEnvironment lookupのfallbackにしない。Location向けEnvironment表示はdeveloped cellsの範囲・extrema・分布等から作るderived summaryであり、Simulation判定の正本にはしない。
 
 Non-surface Operational Nodeは結び付いたSpatial contextのPhysical Environmentを評価する。Surface Location上のOPERATIONAL_NODE FacilityはBody-globalなPhysical Environment、Spatial classification、Infrastructure Capability / Service Capacityを利用できるが、Cell-localな日照・地形・局所温度等を暗黙の代表Cellから取得しない。Cell-localな物理条件が必要なFacility / Operationは明示Surface Cell contextを要求する。
 
-与圧、温調、放射線遮蔽等の人工運用環境はPhysical Environment Stateを書き換えず、Infrastructureが供給するCapability / Service Capacityとして表現する。 放射線は遮蔽前の環境線量率をtyped Fieldとして表し、Site/Operationが必要とする耐性や保護能力はその利用側のRequirementに帰属させる。天体ごとの基準日射は恒星周回軌道入力から導出し、局所日照率と分離してSolar Generationへ渡す。
+与圧、温調、放射線遮蔽等の人工運用環境はPhysical Environment Stateを書き換えず、Infrastructureが供給するCapability / Service Capacityとして表現する。放射線は遮蔽前の代表環境線量率をtyped Fieldとして表し、Site/Operationが必要とする耐性や保護能力はその利用側のRequirementに帰属させる。天体ごとの基準日射は恒星周回軌道入力から導出し、地域の**長期代表日照利用率**と分離してSolar Generationへ渡す。Environment Resolver / Environment Condition / Extractionの地質・環境Opportunity / Solar Generationの物理係数取得に `day` 引数を与えず、日付サンプリングや暦依存Overlayを実装しない。
 
 ### 5.3 SiteRequirements / Capability / Service Capacity
 
@@ -1107,7 +1107,7 @@ PopulationのGroup（位置・人数・commitment・不足・死亡端数）、�
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは `WorldDefinition` とContentから再構築し、可変Stateだけを復元する。Save metadataは `world_definition_id` と `scenario_id` を保持し、Load時にScenario初期化処理を再実行しない。
 
-保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、Dynamic Physical Environment、canonical game day等を含む。
+保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、明示的環境改変State、canonical game day等を含む。
 
 Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / Resource / Facility / Extraction / Process / Research Definition / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Dynamic StateはDefinition IDを参照し、display nameやbalance値を複製しない。Movement Plan候補、Transport Service Plan、auto-selected source / end-to-end path、Required Fleet Units、Nominal / Available Capacity、auto-selected Survey provider / observation mode、Survey未完了target展開、salvage recoverable projection、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
 

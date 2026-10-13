@@ -99,10 +99,10 @@ def test_housing_is_physical_and_facility_removal_cannot_evict_people():
     # by a planet ID; an artificial pressurized habitat supplies the alternative.
     ambient = sim.facilities.definitions[ids.BREATHABLE_SURFACE_LIFE_SUPPORT]
     assert not evaluate_physical_site_requirements(
-        ambient.operating_requirements, ids.EARTH, sim.day, sim.environment,
+        ambient.operating_requirements, ids.EARTH, sim.environment,
     )
     assert evaluate_physical_site_requirements(
-        ambient.operating_requirements, ids.MOON_CELL_NEARSIDE_MARE, sim.day, sim.environment,
+        ambient.operating_requirements, ids.MOON_CELL_NEARSIDE_MARE, sim.environment,
     )
     assert sim.facilities.definitions[ids.HABITAT].life_support is not None
 

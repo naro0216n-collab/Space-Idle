@@ -98,7 +98,7 @@ class ExtractionService:
         if location is None:
             return 0.0
         return self.opportunity_for_cells(
-            method.resource_id, (method,), location.developed_cell_ids, day,
+            method.resource_id, (method,), location.developed_cell_ids,
             eligible=lambda candidate, cell: self._knowledge_cell_eligible(
                 candidate, cell, method.resource_id,
             ),
@@ -124,7 +124,7 @@ class ExtractionService:
         )]
         if not eligible:
             return (f"knowledge:{method.resource_id}",)
-        if not any(self._cell_accessibility(method, cell_id, day) > 1e-12
+        if not any(self._cell_accessibility(method, cell_id) > 1e-12
                    for cell_id in eligible):
             return (f"site:{method.id}",)
         return ()
@@ -171,9 +171,9 @@ class ExtractionService:
             for cell_id in sorted(location.developed_cell_ids, key=str)
         )
 
-    def _cell_accessibility(self, spec: ExtractionSpec, cell_id, day: int) -> float:
+    def _cell_accessibility(self, spec: ExtractionSpec, cell_id) -> float:
         if evaluate_physical_site_requirements(
-            spec.opportunity_requirements, cell_id, day, self.environment
+            spec.opportunity_requirements, cell_id, self.environment
         ):
             return 0.0
         cell = self.graph.surface_cells[cell_id]
@@ -243,13 +243,13 @@ class ExtractionService:
         if not active_specs:
             return 0.0
         return self.opportunity_for_cells(
-            resource_id, active_specs, location.developed_cell_ids, day,
+            resource_id, active_specs, location.developed_cell_ids,
             eligible=lambda method, cell: self._knowledge_cell_eligible(method, cell, resource_id),
         )
 
     def opportunity_for_cells(
         self, resource_id: DefinitionId, methods: tuple[ExtractionSpec, ...],
-        cells, day: int, *, eligible,
+        cells, *, eligible,
     ) -> float:
         """Shared physical Resource opportunity for a selected Cell/Method set.
 
@@ -265,7 +265,7 @@ class ExtractionService:
             if potential <= 1e-12:
                 continue
             accessibility = max((
-                self._cell_accessibility(method, cell_id, day)
+                self._cell_accessibility(method, cell_id)
                 for method in methods
                 if method.resource_id == resource_id and eligible(method, cell_id)
             ), default=0.0)

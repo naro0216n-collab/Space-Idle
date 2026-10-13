@@ -144,3 +144,24 @@ def test_registered_upgrade_references_are_separate_from_new_build_costs():
                    and row['quantity_t'] == req.amount_t
                    for row in evidence['resources'][str(req.resource_id)]['uses'])
     assert sim.facilities.facilities == {}
+
+
+def test_physical_world_evidence_covers_registered_cells_without_climate_forecasting():
+    from content_balance.world import world_evidence
+    from space_idle.spatial import IlluminationField
+    sim, _, _ = _assembled()
+    report = world_evidence(sim)
+    assert {body['id'] for body in report['bodies']} == set(map(str, sim.graph.bodies))
+    all_cells = [cell for body in report['bodies'] for cell in body['surface_cells']]
+    assert {cell['id'] for cell in all_cells} == set(map(str, sim.graph.surface_cells))
+    for cell in all_cells:
+        registered = sim.graph.surface_cells[cell['id']]
+        assert cell['resource_potential_by_resource'] == {
+            str(key): value for key, value in registered.resource_potential_by_resource.items()
+        }
+        assert cell['environment']['illumination']['values']['availability'] == (
+            sim.environment.require(registered.id, IlluminationField).availability
+        )
+    assert 'day' not in report
+    assert sim.graph.locations == {}
+    assert sim.facilities.facilities == {}
