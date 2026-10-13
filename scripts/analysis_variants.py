@@ -385,6 +385,119 @@ def _change_definition_membership(sim: Simulation, catalog: GameCatalog, change:
     definitions[definition_id] = definition
 
 
+def _change_world_definition(sim: Simulation, catalog: GameCatalog, change: Mapping) -> None:
+    """Change authoritative *static* World inputs before ordinary validation.
+
+    These are the same physical definitions consumed by Extraction, Power,
+    Movement, Surface development and Survey.  No balance-only coefficients or
+    player-owned Location/Knowledge/Stock State are introduced.
+    """
+    from space_idle.shared import CelestialBodyId, SurfaceCellId, SpatialNodeId, StarSystemId
+
+    kind = change["kind"]
+    field_name = change.get("field")
+    identity = change.get("id")
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("World edit requires a registered physical ID")
+    value = change.get("value")
+    if kind == "world_cell" and field_name in {"latitude_deg", "longitude_deg"}:
+        if type(value) not in (int, float) or not isfinite(value):
+            raise ValueError("World geographic coordinate must be finite")
+        amount = float(value)
+    else:
+        amount = _finite_nonnegative(value)
+    graph = sim.graph
+
+    if kind == "world_cell":
+        cell_id = SurfaceCellId(identity)
+        if cell_id not in graph.surface_cells:
+            raise ValueError(f"unknown World Surface Cell: {identity}")
+        cell = graph.surface_cells[cell_id]
+        if field_name == "resource_potential":
+            resource_id = change.get("resource_id")
+            if not isinstance(resource_id, str) or DefinitionId(resource_id) not in catalog.resources:
+                raise ValueError("World Resource Potential requires a registered Resource")
+            updated = dict(cell.resource_potential_by_resource)
+            updated[DefinitionId(resource_id)] = amount
+            cell = replace(cell, resource_potential_by_resource=updated)
+        elif field_name == "geology_accessibility":
+            geology_key = change.get("geology_key")
+            if not isinstance(geology_key, str) or not geology_key:
+                raise ValueError("World geology edit requires a nonempty geology_key")
+            updated = dict(cell.static_geology)
+            updated[geology_key] = amount
+            cell = replace(cell, static_geology=updated)
+        elif field_name in {"terrain_factor", "bearing_capacity_factor", "dust_factor", "slope_factor"}:
+            cell = replace(cell, terrain=replace(cell.terrain, **{field_name: amount}))
+        elif field_name == "area_km2":
+            if amount <= 0:
+                raise ValueError("World Cell area must be positive")
+            cell = replace(cell, area_km2=amount)
+        elif field_name in {"latitude_deg", "longitude_deg"}:
+            cell = replace(cell, centroid=replace(cell.centroid, **{field_name: amount}))
+        else:
+            raise ValueError(f"unsupported World Cell parameter: {field_name}")
+        graph.surface_cells[cell_id] = cell
+    elif kind == "world_body":
+        body_id = CelestialBodyId(identity)
+        if body_id not in graph.bodies:
+            raise ValueError(f"unknown World Celestial Body: {identity}")
+        if field_name not in {
+            "mean_radius_km", "heliocentric_semimajor_axis_au", "parent_orbit_semimajor_axis_km",
+            "standard_gravitational_parameter_km3_s2", "reference_gravity_m_s2",
+        }:
+            raise ValueError(f"unsupported World Celestial Body parameter: {field_name}")
+        if amount <= 0:
+            raise ValueError(f"World Celestial Body {field_name} must be positive")
+        graph.bodies[body_id] = replace(graph.bodies[body_id], **{field_name: amount})
+        sim.transport.invalidate_movement_plans()
+    elif kind == "world_node":
+        node_id = SpatialNodeId(identity)
+        if node_id not in graph.nodes:
+            raise ValueError(f"unknown World Spatial Node: {identity}")
+        if field_name != "body_center_orbit_radius_km" or amount <= 0:
+            raise ValueError(f"unsupported or nonpositive World Spatial Node parameter: {field_name}")
+        graph.nodes[node_id] = replace(graph.nodes[node_id], body_center_orbit_radius_km=amount)
+        sim.transport.invalidate_movement_plans()
+    elif kind == "world_system":
+        system_id = StarSystemId(identity)
+        if system_id not in graph.star_systems:
+            raise ValueError(f"unknown World Star System: {identity}")
+        if field_name != "central_gravitational_parameter_km3_s2" or amount <= 0:
+            raise ValueError(f"unsupported or nonpositive World Star System parameter: {field_name}")
+        graph.star_systems[system_id] = replace(
+            graph.star_systems[system_id], central_gravitational_parameter_km3_s2=amount)
+        sim.transport.invalidate_movement_plans()
+    elif kind == "world_environment":
+        facet_name = change.get("facet")
+        # The World-owning StaticFacetStore defines the physical field kinds
+        # and scope. A supplied ID cannot turn a Body field into a Cell field.
+        facet_types = {facet.facet_key: facet for facet in sim.environment.static.facet_types()}
+        if not isinstance(facet_name, str) or facet_name not in facet_types:
+            raise ValueError(f"unknown World environment facet: {facet_name}")
+        facet_type = facet_types[facet_name]
+        if identity in graph.bodies:
+            definitions = sim.environment.static.body_facets
+            key = (CelestialBodyId(identity), facet_type)
+        elif identity in graph.surface_cells or identity in graph.nodes:
+            definitions = sim.environment.static.facets
+            key = (SurfaceCellId(identity) if identity in graph.surface_cells else SpatialNodeId(identity), facet_type)
+        else:
+            raise ValueError(f"unknown World environment context: {identity}")
+        if key not in definitions:
+            raise ValueError(f"World environment facet not registered at context: {identity}/{facet_name}")
+        facet = definitions[key]
+        from dataclasses import fields
+        if field_name not in {field.name for field in fields(facet)}:
+            raise ValueError(f"unsupported World environment parameter: {facet_name}.{field_name}")
+        previous = getattr(facet, field_name)
+        if type(previous) not in (int, float):
+            raise ValueError("World environment parameter must be a numeric scalar")
+        definitions[key] = replace(facet, **{field_name: amount})
+    else:
+        raise ValueError(f"unsupported World Definition kind: {kind}")
+
+
 def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequence[Mapping]) -> None:
     """Edit typed method attributes before validation, without Core ID branching.
 
@@ -398,6 +511,9 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
         if change.get("operation", "edit") != "edit":
             raise ValueError(f"unknown Content variant operation: {change.get('operation')}")
         kind = change.get("kind")
+        if kind in {"world_cell", "world_body", "world_node", "world_system", "world_environment"}:
+            _change_world_definition(sim, catalog, change)
+            continue
         definition_id = DefinitionId(str(change["id"]))
         field_name = change.get("field")
         value = change.get("value")

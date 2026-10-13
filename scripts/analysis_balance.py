@@ -2095,6 +2095,92 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
     return compare_projection_results(results)
 
 
+# A World location is a parameter of a selected composition, not a new
+# construction/Movement rule or a special-cased Celestial Body.  Bind only
+# fields whose owning Domains define them as Surface Cell references.
+_SURFACE_CELL_PARAMETER = "$surface_cell"
+
+
+def _bind_surface_cell(plan: dict, cell_id: str) -> dict:
+    result = deepcopy(plan)
+    bound = 0
+
+    def replace(row, field):
+        nonlocal bound
+        if row.get(field) == _SURFACE_CELL_PARAMETER:
+            row[field] = cell_id
+            bound += 1
+
+    for row in result.get("solar_sites", ()):
+        replace(row, "context")
+    for phase in result["phases"]:
+        for row in phase.get("extraction_sites", ()):
+            cells = row.get("developed_cells", ())
+            for index, value in enumerate(cells):
+                if value == _SURFACE_CELL_PARAMETER:
+                    cells[index] = cell_id
+                    bound += 1
+            for knowledge in row.get("knowledge", ()):
+                replace(knowledge, "cell")
+        for row in phase.get("survey_activities", ()):
+            replace(row, "cell")
+        for row in phase.get("founding_projects", ()):
+            replace(row, "target_cell")
+    if not bound:
+        raise ValueError("surface site sweep requires a selected World Cell-dependent activity")
+    return result
+
+
+def evaluate_surface_site_sweep(payload: dict, *, app=None, _definition_graph=None) -> dict:
+    """Evaluate one authored composition across registered World Surface Cells.
+
+    The analyst selects Facilities, Methods, Survey/Fleet use, investments,
+    initial Stock and timing once.  The World supplies *only* the physical
+    context: nothing is founded, shipped, surveyed, researched or commissioned.
+    Each site is an independent projection, never a connected supply network.
+    """
+    _keys(payload, {"surface_site_sweep"}, {"surface_site_sweep"}, "surface site sweep")
+    request = payload["surface_site_sweep"]
+    _keys(request, {"plan", "cells"}, {"plan", "cells"}, "surface site selection")
+    plan = request["plan"]
+    if not isinstance(plan, dict) or not isinstance(plan.get("phases"), list):
+        raise ValueError("surface site sweep requires one selected multi-phase plan")
+    cells = request["cells"]
+    if app is None:
+        app = _new_reference_application(_movement_reference(plan))
+    sim = app._simulation
+    world = sim.graph.surface_cells
+    if cells == "all":
+        selected = sorted(map(str, world))
+    elif isinstance(cells, list) and cells and len(set(cells)) == len(cells):
+        selected = sorted(_identifier(c, world, "Surface Cell") for c in cells)
+    else:
+        raise ValueError("surface site sweep cells must be 'all' or distinct registered Surface Cell IDs")
+    if not selected:
+        raise ValueError("surface site sweep has no registered Surface Cells")
+    graph = _definition_graph if _definition_graph is not None else build_definition_dependency_graph(sim, app._catalog)
+    results = []
+    for cell in selected:
+        # Validation and all quantity calculations stay in the ordinary
+        # evaluate() path; a location cannot activate an unstated Method.
+        projection = evaluate(_bind_surface_cell(plan, cell), app=app, _definition_graph=graph)
+        results.append({"cell": cell, "body": str(world[SurfaceCellId(cell)].body_id),
+                        "projection": projection})
+    return {"model": "definition_world_context_sweep_v1",
+            "content_id": app.content_id, "world_definition_id": app.world_definition_id,
+            "movement_reference": _movement_reference(plan),
+            "conditions": "same_authored_composition_each_site_no_survey_founding_or_transport_settlement",
+            "sites": results}
+
+
+def summarize_surface_site_sweep(result: dict) -> dict:
+    return {key: value for key, value in result.items() if key != "sites"} | {
+        "sites": [{"cell": site["cell"], "body": site["body"],
+                   "phases": summarize_projection(site["projection"])["phases"]}
+                  for site in result["sites"]],
+    }
+
+
 def _period_sensitivity(baseline: dict, alternative: dict) -> dict:
     """Comparable dimensions for two distinct authored observation horizons.
 
@@ -2440,6 +2526,32 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
     """
     if not isinstance(changes, list) or not changes or any(not isinstance(e, dict) for e in changes):
         raise ValueError("Content hypothesis requires a nonempty list of typed edits")
+    if "surface_site_sweep" in plan:
+        # The same authored activities and site identities are evaluated under
+        # each independently composed set of World *and* economic Definitions.
+        # World coefficients themselves are not treated as fixed reference data.
+        selection = plan["surface_site_sweep"]["plan"]
+        reference = _movement_reference(selection)
+        baseline = evaluate_surface_site_sweep(plan, app=_new_reference_application(reference))
+        variant = evaluate_surface_site_sweep(plan, app=_new_reference_application(
+            reference, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes)))
+        pairs = []
+        for before, after in zip(baseline["sites"], variant["sites"], strict=True):
+            if (before["cell"], before["body"]) != (after["cell"], after["body"]):
+                raise ValueError("Content variant changed World site identity")
+            difference = compare_projection_results([
+                {"name": "baseline", "projection": before["projection"]},
+                {"name": "edited_content", "projection": after["projection"]},
+            ])
+            pairs.append({"cell": before["cell"], "body": before["body"],
+                          "comparison": (summarize(difference) if summary else difference)})
+        return {"model": "definition_world_context_content_impact_v1",
+                "source_world_definition_id": baseline["world_definition_id"],
+                "selected_definition_edits": changes,
+                "world_parameter_edits": [change for change in changes if str(change.get("kind", "")).startswith("world_")],
+                "comparison_basis": "same_selected_activities_and_site_ids_independent_World_and_Content_compositions",
+                "sites": pairs,
+                "interpretation": "conditional_quantity_and_constraint_movement_not_site_feasibility_or_ranking"}
     # For a newly introduced Technology/Asset/Process, the old Composition
     # cannot resolve that ID. Compare two explicit selections of a common
     # development goal instead of silently injecting the new ID into baseline
@@ -2493,6 +2605,7 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
         **({"development_goal": plan["development_goal"],
             "comparison_does_not_claim_equivalent_outcomes": True} if distinct else {}),
         "selected_definition_edits": changes,
+        "world_parameter_edits": [change for change in changes if str(change.get("kind", "")).startswith("world_")],
         "comparisons": [
             {"baseline": record["baseline_case"],
              "cases": ([{"name": case["name"], "projection": summarize_projection(case["projection"])}
@@ -2822,11 +2935,17 @@ def main():
             changes = json.loads(args.content_variant.read_text(encoding="utf-8"))
             if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
                 parser.error("--content-variant must contain a nonempty JSON list of typed Definition edits")
+            reference = (_movement_reference(payload["surface_site_sweep"]["plan"])
+                         if "surface_site_sweep" in payload else _requested_reference(payload))
             app = _new_reference_application(
-                _requested_reference(payload),
+                reference,
                 definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
-        result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
-        output = result if args.details else summarize(result)
+        if "surface_site_sweep" in payload:
+            result = evaluate_surface_site_sweep(payload, app=app)
+            output = result if args.details else summarize_surface_site_sweep(result)
+        else:
+            result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
+            output = result if args.details else summarize(result)
     json.dump(output, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
     print()
 

@@ -10,9 +10,11 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.analysis_balance import compare_cases, evaluate
+from scripts.analysis_balance import (compare_cases, evaluate, evaluate_surface_site_sweep,
+                                      _bind_surface_cell, summarize_surface_site_sweep)
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.persistence import capture_state
+from space_idle.shared import SurfaceCellId
 
 
 @pytest.fixture(scope="module")
@@ -1364,3 +1366,157 @@ def test_case_changes_research_dag_and_conditionally_acquired_assets_without_pla
     with pytest.raises(ValueError, match='Fleet opening holdings'):
         compare_cases({'base_plan': base, 'cases': [
             {'name': 'unsupported', 'updates': [additions[3]]}]}, app=definitions)
+
+
+def test_world_site_comparison_reuses_one_authored_composition_without_founding_or_stock(definitions):
+    """A Surface Cell changes World coefficients, not held assets or Resource ownership.
+
+    This also covers new body/cell Content without a geography-specific fixture.
+    """
+    sim = definitions._simulation
+    method = next(m for m in sim.extraction.specs.values()
+                  if any(cell.resource_potential_by_resource.get(m.resource_id, 0) > 0
+                         for cell in sim.graph.surface_cells.values()))
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if method.required_capabilities <= {cap.id for cap in f.capability_supplies})
+    sites = sorted(map(str, sim.graph.surface_cells))
+    assert len(sites) >= 2
+    node = "prospective.site"
+    installation = {"node": node, "facility": str(facility.id), "units": 2}
+    operating = {**installation, "extraction": str(method.id)}
+    plan = {"phases": [
+        {"name": "acquire", "days": 10, "facility_investments": [installation]},
+        {"name": "operate", "days": 20, "facilities": [operating],
+         "extraction_sites": [{"node": node, "developed_cells": ["$surface_cell"],
+                               "knowledge": [{"cell": "$surface_cell",
+                                              "resource": str(method.resource_id), "level": 3}]}]},
+    ]}
+    source = deepcopy(plan)
+    state_before = deepcopy(capture_state(sim))
+    sweep = evaluate_surface_site_sweep({"surface_site_sweep": {
+        "plan": plan, "cells": sites[:2]}}, app=definitions)
+    assert plan == source
+    assert capture_state(sim) == state_before
+    assert [row["cell"] for row in sweep["sites"]] == sites[:2]
+    assert {row["body"] for row in sweep["sites"]} == {
+        str(sim.graph.surface_cells[SurfaceCellId(site)].body_id) for site in sites[:2]
+    }
+    for item in sweep["sites"]:
+        expected = evaluate(_bind_surface_cell(plan, item["cell"]), app=definitions)
+        assert item["projection"]["phases"] == expected["phases"]
+        activity = item["projection"]["phases"][1]["extraction_world_context"]
+        assert activity and activity[0]["world_cells"] == [item["cell"]]
+        assert activity[0]["contributing_methods"] == [str(method.id)]
+        assert not item["projection"]["phases"][1]["od_transport_constraints"]
+    brief = summarize_surface_site_sweep(sweep)
+    assert "projection" not in brief["sites"][0]
+    with pytest.raises(ValueError, match="World Cell-dependent"):
+        evaluate_surface_site_sweep({"surface_site_sweep": {
+            "plan": {"phases": [{"name": "no_context", "days": 1}]},
+            "cells": sites[:2]}}, app=definitions)
+    with pytest.raises(ValueError, match="Surface Cell"):
+        evaluate_surface_site_sweep({"surface_site_sweep": {
+            "plan": plan, "cells": ["unknown.cell"]}}, app=definitions)
+
+
+def test_world_parameters_are_content_variables_in_the_same_site_and_development_comparison(definitions):
+    """Resource, terrain, illumination and orbital World values are editable.
+
+    An unchanged Site ID is not an assertion that its geological or physical
+    Definition is immutable. No specific planetary distribution is normative.
+    """
+    from scripts.analysis_balance import compare_content_variant
+    from scripts.analysis_variants import apply_content_variant
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.spatial import IlluminationField
+    from space_idle.power import SolarGeneration
+
+    sim = definitions._simulation
+    method = next(m for m in sim.extraction.specs.values()
+                  if any(cell.resource_potential_by_resource.get(m.resource_id, 0) > 0
+                         for cell in sim.graph.surface_cells.values()))
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if method.required_capabilities <= {c.id for c in f.capability_supplies})
+    candidates = sorted(str(c.id) for c in sim.graph.surface_cells.values()
+                        if sim.environment.static.facets.get((c.id, IlluminationField)) is not None)
+    assert len(candidates) >= 2
+    cell_id = SurfaceCellId(candidates[0])
+    raw = sim.graph.surface_cells[cell_id]
+    resource = str(method.resource_id)
+    prior = float(raw.resource_potential_by_resource.get(method.resource_id, 0.0))
+    solar = sim.environment.static.facets[(cell_id, IlluminationField)]
+    node = "world.parameter.construction"
+    asset = {"node": node, "facility": str(facility.id), "units": 2}
+    generator = next(f for f in sim.facilities.definitions.values()
+                     if f.id in sim.power.specs and isinstance(sim.power.specs[f.id].generation, SolarGeneration))
+    generator_asset = {"node": node, "facility": str(generator.id), "units": 1}
+    selected = {"solar_sites": [{"node": node, "facility": str(generator.id), "context": "$surface_cell"}],
+                "phases": [
+        {"name": "investment", "days": 8, "facility_investments": [asset, generator_asset]},
+        {"name": "operation", "days": 16,
+         "facilities": [{**asset, "extraction": str(method.id)}, generator_asset],
+         "extraction_sites": [{"node": node, "developed_cells": ["$surface_cell"],
+                               "knowledge": [{"cell": "$surface_cell", "resource": resource, "level": 3}]}],
+        },
+    ]}
+    sweep = {"surface_site_sweep": {"plan": selected, "cells": candidates[:2]}}
+    changes = [
+        {"kind": "world_cell", "id": str(cell_id), "field": "resource_potential",
+         "resource_id": resource, "value": prior + max(1., prior)},
+        {"kind": "world_cell", "id": str(cell_id), "field": "geology_accessibility",
+         "geology_key": method.geology_accessibility_key or "unrelated_geology_key", "value": 0.75},
+        {"kind": "world_cell", "id": str(cell_id), "field": "terrain_factor",
+         "value": raw.terrain.terrain_factor * .9},
+        {"kind": "world_environment", "id": str(cell_id), "facet": "illumination",
+         "field": "solar_flux_w_m2", "value": solar.solar_flux_w_m2 * .75},
+        {"kind": "world_body", "id": str(raw.body_id), "field": "mean_radius_km",
+         "value": sim.graph.bodies[raw.body_id].mean_radius_km * 1.02},
+    ]
+    current_state = deepcopy(capture_state(sim))
+    # Cross-site results are compared in the ordinary Projection. World edits
+    # need not affect every selected Method, but they must not leak to other Cells.
+    report = compare_content_variant(sweep, changes)
+    assert report["world_parameter_edits"] == changes
+    assert report["source_world_definition_id"] == definitions.world_definition_id
+    assert [row["cell"] for row in report["sites"]] == candidates[:2]
+    pair = report["sites"][0]["comparison"]["cases"]
+    pre, post = pair[0]["projection"], pair[1]["projection"]
+    left = pre["phases"][1]["extraction_world_context"][0]
+    right = post["phases"][1]["extraction_world_context"][0]
+    assert right["effective_opportunity"] != pytest.approx(left["effective_opportunity"])
+    left_power = pre["phases"][1]["power_world_context"][0]
+    right_power = post["phases"][1]["power_world_context"][0]
+    assert right_power["nominal_unallocated_generation_mw"] < left_power["nominal_unallocated_generation_mw"]
+    assert report["sites"][1]["comparison"]["differences"] == []
+    assert capture_state(sim) == current_state
+    assert sim.graph.surface_cells[cell_id] == raw
+
+    orbital_node = next(n for n in sim.graph.nodes.values()
+                        if n.body_center_orbit_radius_km is not None)
+    stellar = sim.graph.star_systems[sim.graph.bodies[raw.body_id].star_system_id]
+    changes += [
+        {"kind": "world_node", "id": str(orbital_node.id), "field": "body_center_orbit_radius_km",
+         "value": orbital_node.body_center_orbit_radius_km * 1.03},
+        {"kind": "world_system", "id": str(stellar.id),
+         "field": "central_gravitational_parameter_km3_s2",
+         "value": stellar.central_gravitational_parameter_km3_s2 * 1.05},
+    ]
+    changed = build_game_application_for_load(
+        definition_transform=lambda instance, catalog: apply_content_variant(instance, catalog, changes))
+    assert changed._simulation.graph.nodes[orbital_node.id].body_center_orbit_radius_km != orbital_node.body_center_orbit_radius_km
+    assert changed._simulation.graph.surface_cells[cell_id].resource_potential_by_resource[method.resource_id] > prior
+    assert changed._simulation.environment.get(cell_id, IlluminationField).solar_flux_w_m2 == pytest.approx(
+        solar.solar_flux_w_m2 * .75)
+    assert changed._simulation.graph.bodies[raw.body_id].mean_radius_km != sim.graph.bodies[raw.body_id].mean_radius_km
+    for invalid, message in [
+        ({"kind": "world_cell", "id": str(cell_id), "field": "resource_potential",
+          "resource_id": resource, "value": -1}, "nonnegative"),
+        ({"kind": "world_cell", "id": str(cell_id), "field": "area_km2", "value": 0}, "positive"),
+        ({"kind": "world_cell", "id": "nonexistent", "field": "terrain_factor", "value": 1}, "unknown"),
+        ({"kind": "world_environment", "id": str(cell_id), "facet": "illumination",
+          "field": "availability", "value": 1.2}, "illumination"),
+        ({"kind": "world_body", "id": str(raw.body_id), "field": "mean_radius_km", "value": -1}, "nonnegative"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            build_game_application_for_load(
+                definition_transform=lambda instance, catalog: apply_content_variant(instance, catalog, [invalid]))
