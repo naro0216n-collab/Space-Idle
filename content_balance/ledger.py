@@ -422,8 +422,38 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 'endurance_failures': list(definition.endurance_failures(cycle.forward_days + cycle.reverse_days)),
                 'interpretation': 'selected Movement physics only; installed capabilities, actual refueling, '
                                   'Knowledge, Allocation, and Fleet exclusivity are not certified'})
-            target_forward = number(item, 'target_forward_t_per_day') if 'target_forward_t_per_day' in item else None
-            target_reverse = number(item, 'target_reverse_t_per_day') if 'target_reverse_t_per_day' in item else None
+            # Explicit OD contents are a sourcing obligation at the sending
+            # Node, not physical Cargo settlement or free receiving stock.
+            # They share the owner's aggregate directional-capacity contract.
+            def cargo_manifest(key, source_node):
+                if key not in item:
+                    return None
+                manifest = item[key]
+                if not isinstance(manifest, dict):
+                    raise ValueError(f'{key} must map Resource IDs to tonnes/day')
+                if not all(isinstance(rid, str) and rid for rid in manifest):
+                    raise ValueError(f'{key} requires Resource ID keys')
+                total = 0.0
+                for rid, rate in sorted(manifest.items()):
+                    if (isinstance(rate, bool) or not isinstance(rate, (int, float))
+                            or not isfinite(rate) or rate < 0):
+                        raise ValueError(f'{key} requires nonnegative finite Resource rates')
+                    resource(rid, rate * period_days, 'demand',
+                             'OD outbound Cargo sourcing; no dispatch or destination admission',
+                             at_node=source_node)
+                    total += rate
+                return total
+
+            forward_manifest = cargo_manifest('forward_cargo_t_per_day', node)
+            reverse_manifest = cargo_manifest('reverse_cargo_t_per_day', destination_node)
+            if reverse_manifest and not reverse:
+                raise ValueError('reverse Cargo requires a physical return Movement')
+            target_forward = number(item, 'target_forward_t_per_day') if 'target_forward_t_per_day' in item else forward_manifest
+            target_reverse = number(item, 'target_reverse_t_per_day') if 'target_reverse_t_per_day' in item else reverse_manifest
+            for direction, target, manifest in (('forward', target_forward, forward_manifest),
+                                                ('reverse', target_reverse, reverse_manifest)):
+                if manifest is not None and target is not None and not abs(target - manifest) <= 1e-9:
+                    raise ValueError(f'{direction} target mass must match its Resource manifest')
             if target_forward is not None or target_reverse is not None:
                 from space_idle.transport.models import DirectionalCapacity
                 requested = DirectionalCapacity(target_forward or 0.0, target_reverse or 0.0)
@@ -435,8 +465,10 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                                      'required_units_from_owner_physical_capacity': required_units,
                                      'assumed_fleet_units': units,
                                      'nominal_capacity_covers_target': units >= required_units,
+                                     'forward_cargo_t_per_day': item.get('forward_cargo_t_per_day'),
+                                     'reverse_cargo_t_per_day': item.get('reverse_cargo_t_per_day'),
                                      'basis': 'TransportDomain.required_units_for_capacity on physical cycle; '
-                                              'not a Fleet reservation or a delivered Resource'})
+                                              'manifest is source-side demand only, not reserved Fleet or delivered Resource'})
             for context, rid, rate in cycle.resource_t_per_full_utilization_day:
                 site_node = node if context == origin else destination_node if context == destination else None
                 if site_node is None:

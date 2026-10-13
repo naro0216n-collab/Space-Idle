@@ -24,7 +24,10 @@ All rows require `node` (explicit accounting label) and `kind`. Other kinds and 
     movement_plan_id, cargo_t, count
   transport_cycle: id (vehicle), units, origin_context_id, destination_context_id,
     destination_node, forward_plan_id, optional reverse_plan_id,
-    optional target_forward_t_per_day / target_reverse_t_per_day for nominal Fleet requirement
+    optional target_forward_t_per_day / target_reverse_t_per_day for nominal Fleet requirement;
+    optional forward_cargo_t_per_day / reverse_cargo_t_per_day as Resource ID → t/day
+    mappings, counted as source-side demand (never destination stock). When provided,
+    each manifest's total must match its directional target if supplied.
   market_trade: id (resource), provider_id, direction (buy/sell), quantity_t
 All physical quantities are conditional hypotheses; no registered operational
 State, Cargo, Funds, Research, or Game time is advanced. No cases, scoring,

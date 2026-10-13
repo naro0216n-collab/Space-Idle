@@ -408,3 +408,41 @@ def test_balance_worksheet_rejects_calendar_day_as_environment_input():
             {'kind': 'facility_operation', 'node': 'assumed-node', 'id': facility_id,
              'count': 1, 'context_id': next(iter(sim.graph.surface_cells)), 'day': 9},
         ])
+
+
+def test_od_resource_manifest_binds_source_demand_to_owner_fleet_coefficient_without_delivery():
+    sim = _sim()
+    origin, destination = tuple(sim.graph.nodes)[:2]
+    resolver = sim.transport.movement_resolver()
+    forward = resolver.physical_context_plans(origin, destination)[0]
+    reverse = resolver.physical_context_plans(destination, origin)[0]
+    from space_idle.transport.models import OperationAssetDisposition, DirectionalCapacity
+    vid = next(vid for vid, definition in sim.transport.vehicle_defs.items()
+               if definition.movement_asset_disposition(forward) is OperationAssetDisposition.DESTINATION)
+    resources = list(sim.inventory.resource_definitions)
+    assert len(resources) >= 2
+    manifest = {resources[0]: 0.3, resources[1]: 0.2}
+    activities = [{'kind': 'transport_cycle', 'node': 'origin', 'destination_node': 'destination',
+                   'id': vid, 'units': 1, 'origin_context_id': origin, 'destination_context_id': destination,
+                   'forward_plan_id': str(forward.id), 'reverse_plan_id': str(reverse.id),
+                   'forward_cargo_t_per_day': manifest}]
+    from pytest import raises
+    result = quantity_ledger(sim, period_days=40, activities=activities)
+    row = next(x for x in result['activity_evidence'][0]['evidence']
+               if x['measure'] == 'transport_od_demand')
+    assert row['target_forward_t_per_day'] == 0.5
+    assert row['target_reverse_t_per_day'] == 0
+    expected = sim.transport.physical_cycle_coefficients(vid, (forward,), (reverse,), anchor_context_id=origin)
+    assert row['required_units_from_owner_physical_capacity'] == sim.transport.required_units_for_capacity(
+        DirectionalCapacity(0.5, 0), expected.nominal_per_unit)
+    for rid, rate in manifest.items():
+        local = next(x for x in result['resource_by_node'] if x['node'] == 'origin' and x['resource_id'] == str(rid))
+        assert local['demand_t_per_day'] >= rate
+    assert all(x['supply_t_per_day'] == 0 for x in result['resource_by_node'])
+    assert sim.transport.transport_allocations == {}
+    assert sim.graph.operational_node_states == {}
+    bad = dict(activities[0], target_forward_t_per_day=0.6)
+    with raises(ValueError, match='target mass'):
+        quantity_ledger(sim, period_days=40, activities=[bad])
+    with raises(ValueError, match='finite'):
+        quantity_ledger(sim, period_days=40, activities=[dict(activities[0], forward_cargo_t_per_day={resources[0]: float('nan')})])
