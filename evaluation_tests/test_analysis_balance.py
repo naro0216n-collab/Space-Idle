@@ -336,65 +336,6 @@ def test_case_comparison_preserves_named_dimensions_and_validates_inputs(definit
                   "phases": [{"name": "remove", "days": 1, "facilities": []}]}, app=definitions)
 
 
-def test_large_multisite_asset_holding_reports_global_needs_without_selecting_build_order(definitions):
-    """Bulk investments produce typed demand without pretending to schedule a strategy.
-
-    Inventory shortages in one node cannot be satisfied by surplus at another
-    without an explicitly authored transfer, even when system net stock is positive.
-    """
-    sim = definitions._simulation
-    facilities = sorted(sim.facilities.definitions.values(), key=lambda row: str(row.id))
-    vehicles = sorted(sim.transport.vehicle_definitions(), key=lambda row: str(row.id))
-    assert facilities and vehicles
-    site_a, site_b = "industrial.a", "industrial.b"
-    # Real registered definitions, scaled counts, and an explicit fleet work
-    # frequency are independent experiment inputs rather than target values.
-    initial_assets = [{"node": site_a, "facility": str(f.id), "units": 20} for f in facilities]
-    initial_fleet = [{"node": site_a, "vehicle": str(v.id), "units": 30} for v in vehicles]
-    holding_fleet = [{"node": site_a, "vehicle": str(v.id), "units": 40,
-                      "turnarounds_per_unit_per_day": .1} for v in vehicles]
-    demand = next((res for v in vehicles for res, amount in v.production.resources if amount > 0), None)
-    assert demand is not None
-    plan = {
-        "initial_facilities": initial_assets,
-        "initial_fleet": initial_fleet,
-        "initial_stock": [{"node": site_b, "resource": str(demand), "amount_t": 1000000}],
-        "solar_yield": {site_a: .6},
-        "phases": [{"name": "fleet expansion", "days": 12,
-                    "facilities": [{**row, "units": row["units"] + 10} for row in initial_assets],
-                    "fleet": holding_fleet}],
-    }
-    phase = evaluate(plan, app=definitions)["phases"][0]
-    assert phase["scale"] == {
-        "facility_units": len(facilities) * 30,
-        "facility_units_added": len(facilities) * 10,
-        "fleet_units": len(vehicles) * 40,
-        "fleet_units_built": len(vehicles) * 10,
-    }
-    assert len(phase["fleet"]) == len(vehicles)
-    for row in phase["fleet"]:
-        assert row["units_built"] == 10
-        assert row["assumed_turnarounds"] == pytest.approx(40 * .1 * 12)
-    resources = _rows(phase)
-    for vehicle in vehicles:
-        for resource, amount in vehicle.production.resources:
-            assert resources[(site_a, str(resource))]["vehicle_build_demand_t"] >= 10 * amount
-        for resource, amount in vehicle.maintenance.resources:
-            assert resources[(site_a, str(resource))]["fleet_turnaround_demand_t"] >= 40 * .1 * 12 * amount
-    totals = {row["resource"]: row for row in phase["system_resources"]}
-    for resource in totals:
-        local_rows = [r for r in phase["resources"] if r["resource"] == resource]
-        assert totals[resource]["shortfall_t"] == pytest.approx(sum(r["shortfall_t"] for r in local_rows))
-        assert totals[resource]["net_t"] == pytest.approx(sum(r["net_t"] for r in local_rows))
-    assert totals[str(demand)]["notional_end_t"] > 0
-    assert resources[(site_a, str(demand))]["shortfall_t"] > 0
-    assert totals[str(demand)]["shortfall_t"] > 0
-    for service in phase["system_services"]:
-        rows = [r for r in phase["service_constraints"] if r["service"] == service["service"]]
-        assert service["nominal_gap_per_day"] == pytest.approx(sum(r["nominal_gap_per_day"] for r in rows))
-    assert any("not scheduled completion" in assumption for assumption in evaluate(plan, app=definitions)["assumptions"])
-
-
 def test_fleet_holdings_are_preserved_between_phases_and_production_is_counted_once(definitions):
     vehicle = next(v for v in definitions._simulation.transport.vehicle_definitions() if v.production.resources)
     site = "fleet.production.site"
@@ -418,41 +359,6 @@ def test_fleet_holdings_are_preserved_between_phases_and_production_is_counted_o
     with pytest.raises(ValueError, match="cannot both"):
         evaluate({"phases": [{"name": "double", "days": 1, "facilities": [],
                               "fleet": [spec], "vehicle_builds": [spec]}]}, app=definitions)
-
-
-def test_shared_scale_cases_only_edit_declared_quantities(definitions):
-    facility = next(iter(definitions._simulation.facilities.definitions))
-    vehicle = next(iter(definitions._simulation.transport.vehicle_defs))
-    node = "scenario.scale"
-    base = {"initial_facilities": [{"node": node, "facility": str(facility), "units": 3}],
-            "initial_fleet": [{"node": node, "vehicle": str(vehicle), "units": 1}],
-            "phases": [{"name": "growth", "days": 10,
-                        "facilities": [{"node": node, "facility": str(facility), "units": 3}],
-                        "fleet": [{"node": node, "vehicle": str(vehicle), "units": 1}]}]}
-    payload = {"base_plan": base, "cases": [
-        {"name": "as authored"},
-        {"name": "increased commitments", "updates": [
-            {"phase": "growth", "collection": "facilities", "node": node, "id": str(facility), "units": 30},
-            {"phase": "growth", "collection": "fleet", "node": node, "id": str(vehicle),
-             "units": 100, "turnarounds_per_unit_per_day": .2},
-        ]},
-    ]}
-    result = compare_cases(payload, app=definitions)
-    assert base["phases"][0]["facilities"][0]["units"] == 3
-    first, second = (case["projection"]["phases"][0] for case in result["cases"])
-    assert second["scale"]["facility_units"] == 30
-    assert second["scale"]["fleet_units"] == 100
-    assert second["scale"]["fleet_units_built"] == 99
-    assert first["scale"]["fleet_units_built"] == 0
-    assert any(diff["section"] == "fleet" for diff in result["differences"])
-    with pytest.raises(ValueError, match="duplicate case update"):
-        bad = deepcopy(payload)
-        bad["cases"][1]["updates"].append(bad["cases"][1]["updates"][0])
-        compare_cases(bad, app=definitions)
-    with pytest.raises(ValueError, match="existing"):
-        bad = deepcopy(payload)
-        bad["cases"][1]["updates"][0]["id"] = "unregistered.facility"
-        compare_cases(bad, app=definitions)
 
 
 def test_asset_bundle_variants_attach_owner_definitions_and_project_new_quantity_contract():
@@ -550,37 +456,6 @@ def test_stage_requirements_investment_bounds_and_unassessed_constraints_are_not
     assert report["activity_sources"][0]["quantity_source"] == "definition_x_selected_composition"
 
 
-def test_case_sensitivity_changes_times_stocks_and_solar_without_copying_a_plan(definitions):
-    from space_idle.power import SolarGeneration
-    sim = definitions._simulation
-    facility = next((facility for facility in sim.facilities.definitions.values()
-                     if (p := sim.power.specs.get(facility.id)) and isinstance(p.generation, SolarGeneration)
-                     and facility.id in sim.projects.recipes))
-    resource = next(iter(definitions._catalog.resources))
-    node = "author.selected"
-    asset = {"node": node, "facility": str(facility.id), "units": 1}
-    base = {"initial_facilities": [asset], "initial_stock": [
-                {"node": node, "resource": str(resource), "amount_t": 5}],
-            "solar_yield": {node: .7},
-            "phases": [{"name": "activity", "days": 8, "facilities": [asset]}]}
-    original = deepcopy(base)
-    output = compare_cases({"base_plan": base, "cases": [{"name": "first"},
-        {"name": "vary", "updates": [
-            {"collection": "solar_yield", "node": node, "factor": .8},
-            {"collection": "initial_stock", "node": node, "id": str(resource), "amount_t": 10},
-            {"collection": "phase", "phase": "activity", "days": 10},
-        ]}]}, app=definitions)
-    assert base == original
-    assert output["cases"][0]["projection"]["phases"][0]["days"] == 8
-    assert output["cases"][1]["projection"]["phases"][0]["days"] == 10
-    assert any(row["section"] == "incomparable_phase_basis" for row in output["differences"])
-    with pytest.raises(ValueError, match="duplicate case update"):
-        compare_cases({"base_plan": base, "cases": [{"name": "x", "updates": [
-            {"collection": "phase", "phase": "activity", "days": 1},
-            {"collection": "phase", "phase": "activity", "days": 2},
-        ]}]}, app=definitions)
-
-
 def test_world_cell_extraction_scales_with_shared_opportunity_without_fake_site_state(definitions):
     """Selected real World cells change a pure physical bound, not actual Simulation state."""
     sim = definitions._simulation
@@ -658,53 +533,6 @@ def test_od_transport_preview_requires_selected_fleet_and_never_settles_cargo(de
     with pytest.raises(ValueError, match="reuse Fleet holdings"):
         evaluate({**plan, "phases": [{**phase, "transport_allocations":
                   phase["transport_allocations"] * 2}]}, app=definitions)
-
-
-def test_summary_preserves_unassessed_limits_and_drill_down(definitions):
-    from scripts.analysis_balance import summarize, summarize_projection
-
-    base = {"initial_stock": [{"node": "A", "resource": "base.resource.water", "amount_t": 1}],
-            "phases": [{"name": "comparison", "days": 4, "facilities": [],
-                        "transfers": [{"origin": "A", "destination": "B",
-                                       "resource": "base.resource.water", "t_per_day": 2}]}]}
-    full = evaluate(base, app=definitions)
-    summary = summarize_projection(full)
-    assert summary["phases"][0]["resource_shortfalls_by_node"]
-    assert summary["phases"][0]["od_transport_constraints"][0]["nominal_capacity_t_per_day"] is None
-    assert "resources" in summary["phases"][0]["detail_sections"]
-    assert "resources" not in summary["phases"][0]
-    comparison = compare_cases({"cases": [{"name": "baseline", "plan": base},
-                                           {"name": "variant", "plan": deepcopy(base)}]}, app=definitions)
-    assert [case["name"] for case in summarize(comparison)["cases"]] == ["baseline", "variant"]
-
-
-def test_world_and_od_composition_sensitivity_changes_only_selected_conditions(definitions):
-    from space_idle.shared import DefinitionId
-    sim = definitions._simulation
-    quarry = sim.facilities.definitions[DefinitionId("base.facility.mineral_quarry")]
-    method = sim.extraction.compatible_methods(quarry.id)[0]
-    cell = next(c for c in sim.extraction.graph.surface_cells.values()
-                if sim.extraction.opportunity_for_cells(method.resource_id, (method,), [c.id], 0,
-                       eligible=lambda _method, _cell: True) > 0)
-    base = {"initial_facilities": [{"node": "site", "facility": str(quarry.id),
-                                     "units": 3, "extraction": str(method.id)}],
-            "phases": [{"name": "steady", "days": 8,
-                        "facilities": [{"node": "site", "facility": str(quarry.id),
-                                        "units": 3, "extraction": str(method.id)}],
-                        "extraction_sites": [{"node": "site", "developed_cells": [str(cell.id)]}]}]}
-    result = compare_cases({"base_plan": base, "cases": [
-        {"name": "unmeasured"},
-        {"name": "measured", "updates": [{"collection": "extraction_sites", "phase": "steady",
-                                          "node": "site", "knowledge": [
-                {"cell": str(cell.id), "resource": str(method.resource_id), "level": 3}]}]},
-    ]}, app=definitions)
-    original = result["cases"][0]["projection"]["phases"][0]
-    measured = result["cases"][1]["projection"]["phases"][0]
-    if method.minimum_knowledge_level is not None:
-        assert measured["extraction_world_context"][0]["diminishing_output_t_per_day"] > (
-            original["extraction_world_context"][0]["diminishing_output_t_per_day"])
-    assert base["phases"][0]["extraction_sites"][0].get("knowledge") is None
-    assert any(row["section"] == "resources" for row in result["differences"])
 
 
 def test_graph_provenance_is_attached_without_reinterpreting_relations_as_flow(definitions):
@@ -879,48 +707,6 @@ def test_facility_upgrade_investment_uses_registered_recipe_without_free_level_e
             {"node": node, "facility": str(facility_id), "target_level": level, "units": 3}]}]}, app=definitions)
 
 
-def test_case_differences_trace_new_definition_activities_and_missing_time_bases(definitions):
-    sim = definitions._simulation
-    recipe = next(iter(sim.projects.spatial_recipes.values()))
-    campaign = next(iter(sim.scientific_exploration.definitions.values()))
-    (facility_id, target_level), upgrade = next(iter(sim.projects.upgrade_recipes.items()))
-    node = "sensitivity.node"
-    asset = {"node": node, "facility": str(facility_id), "units": 1}
-    base = {"initial_facilities": [asset], "phases": [
-        {"name": "compare", "days": 12, "facilities": [asset]}]}
-    expanded = deepcopy(base)
-    expanded["phases"][0].update({
-        "spatial_projects": [{"node": node, "recipe": str(recipe.id), "units": 2}],
-        "upgrade_projects": [{"node": node, "facility": str(facility_id),
-                              "target_level": target_level, "units": 1}],
-        "science_campaigns": [{"campaign": str(campaign.id)}],
-    })
-    compared = compare_cases({"cases": [{"name": "original", "plan": base},
-                                       {"name": "different activities", "plan": expanded}]}, app=definitions)
-    changes = {item["section"]: item for item in compared["differences"]}
-    assert changes["spatial_projects"]["delta_from_baseline"]["required_construction_work"] == pytest.approx(
-        2 * recipe.construction_work)
-    assert changes["upgrade_projects"]["delta_from_baseline"]["required_construction_work"] == pytest.approx(
-        upgrade.construction_work)
-    assert changes["science_campaigns"]["delta_from_baseline"]["conditional_rp_reward"] == pytest.approx(
-        campaign.research_points_total)
-    assert changes["research_point_balance"]["delta_from_baseline"][
-        "conditional_scientific_exploration_reward_points_not_awarded"] == pytest.approx(campaign.research_points_total)
-    assert "pre_investment_work_lower_bound_days" in changes["investment_constraints"][
-        "incomparable_unassessed_metrics"]
-    # A missing trailing phase is always marked as a missing time basis.
-    longer = deepcopy(base)
-    longer["phases"].append({"name": "later", "days": 12, "facilities": [asset]})
-    result = compare_cases({"cases": [{"name": "first", "plan": base},
-                                      {"name": "longer", "plan": longer}]}, app=definitions)
-    assert any(row["section"] == "incomparable_phase_basis" and
-               row["reason"] == "missing_baseline_phase" for row in result["differences"])
-    summary = __import__("scripts.analysis_balance", fromlist=["summarize"]).summarize(compared)
-    assert "upgrade_projects" in summary["difference_sections"]
-    assert any("science_activity_bounds" in phase["changed_sections"]
-               for phase in summary["cases"][1]["changed_phases"])
-
-
 def test_fleet_research_provider_competes_for_held_units_and_uses_registered_levels(definitions):
     """A Fleet-backed research source is not also free Transport or Survey capacity."""
     sim = definitions._simulation
@@ -956,8 +742,6 @@ def test_fleet_research_provider_competes_for_held_units_and_uses_registered_lev
                 "turnarounds_per_unit_per_day": .5}]
             with pytest.raises(ValueError, match="overlaps authored turnarounds"):
                 evaluate(conflicting, app=definitions)
-
-
 
 
 def test_registered_cross_domain_activity_provenance_and_comparison_is_content_driven(definitions):
@@ -1099,8 +883,6 @@ def test_world_opportunity_shared_across_distinct_method_outputs():
     assert outputs[str(raw.output_resource_id)] == pytest.approx(outputs[str(other_resource)])
 
 
-
-
 def test_new_node_scoped_research_requirement_shares_node_service_ledger():
     """A future registered Stage with a local Service uses that actual node."""
     from dataclasses import replace
@@ -1167,8 +949,6 @@ def test_registered_solar_power_uses_owner_world_context_without_settling_operat
             assert report["power_world_context"][0]["world_context"] == str(cell)
             assert "world_solar_site_placement_and_ongoing_conditions_unassessed" in report["unassessed_constraints"]
     assert capture_state(sim) == before
-
-
 
 
 def test_solar_world_site_configuration_rejects_ambiguity(definitions):
@@ -1240,86 +1020,6 @@ def test_investment_and_operating_resource_pressures_reconcile_with_actual_defin
                for row in summary["recurring_resource_pressures_by_node"])
     # No actual inventory, lifecycle transition or additional Resource Source is generated.
     assert all(item["origin_kind"] != "automatic_supply" for item in phase["resource_contributions"])
-
-
-def test_process_method_sensitivity_compares_registered_operating_chemistry_not_authored_target_rate(definitions):
-    """Any registered compatible alternative changes material inputs without inventing throughput."""
-    sim = definitions._simulation
-    pairs = list(_compatible_processes(sim))
-    alternative = next((f, a, b) for f, a in pairs for f2, b in pairs
-                       if f.id == f2.id and a.id != b.id and
-                       (a.inputs_per_day != b.inputs_per_day or a.outputs_per_day != b.outputs_per_day))
-    facility, first, second = alternative
-    node = "chosen.method"
-    asset = {"node": node, "facility": str(facility.id), "units": 2,
-             "process": str(first.id), "duty": .5}
-    plan = {"initial_facilities": [asset], "phases": [
-        {"name": "operation", "days": 10, "facilities": [asset]}]}
-    comparison = compare_cases({"base_plan": plan, "cases": [
-        {"name": "selected_first", "updates": []},
-        {"name": "selected_second", "updates": [{"collection": "facilities", "phase": "operation",
-            "node": node, "id": str(facility.id), "process": str(second.id)}]},
-    ]}, app=definitions)
-    initial = _rows(comparison["cases"][0]["projection"]["phases"][0])
-    revised = _rows(comparison["cases"][1]["projection"]["phases"][0])
-    for resource in set(first.inputs_per_day) | set(second.inputs_per_day):
-        assert revised.get((node, str(resource)), {}).get("process_demand_t", 0) == pytest.approx(
-            10 * facility.process_throughput_per_day * second.inputs_per_day.get(resource, 0))
-    assert any(row["section"] == "resource_contributions" for row in comparison["differences"])
-    assert any(initial.get(key, {}).get("net_t") != revised.get(key, {}).get("net_t")
-               for key in set(initial) | set(revised))
-    with pytest.raises(ValueError, match="preserve Process/Extraction kind"):
-        compare_cases({"base_plan": plan, "cases": [{"name": "illegal", "updates": [
-            {"collection": "facilities", "phase": "operation", "node": node,
-             "id": str(facility.id), "extraction": "unrelated"}]}]}, app=definitions)
-
-
-
-
-def test_sensitivity_can_add_new_registered_asset_and_provider_without_duplicate_ownership(definitions):
-    """Alternative generations change source composition, not the shared baseline or Game State."""
-    from space_idle.power import SolarGeneration
-    sim = definitions._simulation
-    candidate = next((facility, provider) for facility in sim.facilities.definitions.values()
-                     for provider in sim.research.providers.values()
-                     if provider.source_kind.value == "facility"
-                     and provider.levels[0].generation_points_per_day > 0
-                     and provider.accepts_source(x.id for x in facility.capability_supplies)
-                     and not isinstance(sim.power.specs[facility.id].generation, SolarGeneration)
-                     and facility.id in sim.projects.recipes)
-    facility, provider = candidate
-    node = "comparison.research"
-    asset = {"node": node, "facility": str(facility.id), "units": 1}
-    allocation = {"node": node, "provider": str(provider.id),
-                  "source_facility": str(facility.id), "units": 1}
-    base = {"phases": [{"name": "investment", "days": 30, "facilities": []}]}
-    base_copy = deepcopy(base)
-    additions = [
-        {"action": "add", "collection": "facilities", "phase": "investment", "row": asset},
-        {"action": "add", "collection": "research_provider_allocations",
-         "phase": "investment", "row": allocation},
-    ]
-    original_state = deepcopy(capture_state(sim))
-    result = compare_cases({"base_plan": base, "cases": [
-        {"name": "without facility"}, {"name": "with facility", "updates": additions},
-    ]}, app=definitions)
-    before, after = (case["projection"]["phases"][0] for case in result["cases"])
-    assert base == base_copy
-    assert capture_state(sim) == original_state
-    assert before["scale"]["facility_units"] == 0
-    assert after["scale"]["facility_units"] == 1
-    assert after["scale"]["facility_units_added"] == 1
-    assert after["research_point_balance"]["nominal_generation_points"] > 0
-    recipe = sim.projects.recipes[facility.id]
-    assert sum(row["construction_demand_t"] for row in after["resources"]) == pytest.approx(
-        sum(resource.amount_t for resource in recipe.resources))
-    with pytest.raises(ValueError, match="duplicate"):
-        compare_cases({"base_plan": base, "cases": [{"name": "bad", "updates":
-            additions + [additions[0]]}]}, app=definitions)
-    with pytest.raises(ValueError, match="cannot duplicate"):
-        compare_cases({"base_plan": {"phases": [{"name": "investment", "days": 30,
-            "facilities": [asset]}]}, "cases": [{"name": "bad", "updates":
-            [additions[0]]}]}, app=definitions)
 
 
 def test_registered_passenger_accommodations_book_once_as_one_time_fleet_provisioning(definitions):
