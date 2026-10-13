@@ -253,6 +253,27 @@ class TransportServiceLeg:
 
 
 @dataclass(frozen=True)
+class TransportPhysicalCycleCoefficients:
+    """One reusable Fleet unit's physical cycle, before eligibility/allocation.
+
+    Shared by runtime Transport Service and Content physical-context inspection.
+    No Fleet, Cargo, or Resource State is allocated here.
+    """
+    legs: tuple[TransportServiceLeg, ...]
+    forward_days: int
+    reverse_days: int
+    cycle_days: float
+    forward_payload_t: float
+    reverse_payload_t: float
+    nominal_per_unit: DirectionalCapacity
+    resource_t_per_full_utilization_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    servicing_units_per_full_utilization_day: float
+    resource_t_per_empty_cycle_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    resource_t_per_forward_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+    resource_t_per_reverse_payload_increment_day: tuple[tuple[SpatialNodeId, DefinitionId, float], ...]
+
+
+@dataclass(frozen=True)
 class TransportServicePlan:
     allocation_id: EntityId
     vehicle_definition_id: DefinitionId

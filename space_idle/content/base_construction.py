@@ -6,10 +6,7 @@ from . import base_requirements as req
 
 
 def build_construction_resource_providers() -> dict:
-    # Opening construction must scale with industrial equipment stock rather
-    # than lag several early research projects behind a single new workshop.
-    # Installed yards remain a separately acquired source of work.
-    return {ids.CONSTRUCTION_EQUIPMENT: ConstructionResourceProviderSpec(ids.CONSTRUCTION_EQUIPMENT, 0.15)}
+    return {ids.CONSTRUCTION_EQUIPMENT: ConstructionResourceProviderSpec(ids.CONSTRUCTION_EQUIPMENT, 0.05)}
 
 
 def procurement_wait_days() -> dict[str, int]:

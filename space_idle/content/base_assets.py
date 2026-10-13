@@ -666,28 +666,6 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
             power=PowerSpec(FixedGeneration(2.0), 0.05),
         ),
-        # Multi-core surface reactor station couples high-output thermal rejection
-        # and graded radiation shielding to common manufacturing stock. Unlike
-        # portable 2 MW fission units, it requires a developed materials chain.
-        FacilityAsset(
-            definition=FacilityDef(
-                ids.INDUSTRIAL_FISSION_STATION,
-                "多炉心統合・閉ループ放熱産業用核分裂電源所",
-                req._capabilities("industrial_power", "fission_reactor_control_instrumentation"),
-                surface, surface, maintenance_fraction_per_year=0.07,
-            ),
-            construction=ConstructionRecipe(
-                ids.INDUSTRIAL_FISSION_STATION,
-                (req._structure_resource(32.0),
-                 BuildResourceRequirement(ids.THERMAL_CONTROL_ASSEMBLIES, 8.0),
-                 BuildResourceRequirement(ids.RADIATION_SHIELDING_PANELS, 6.0)),
-                220.0, req.SURFACE_SITE,
-                frozenset({ids.research_id("FP-REACTOR-POWER-04"),
-                           ids.research_id("TH-THERMAL-TRANSPORT-03"),
-                           ids.research_id("HB-HABITATION-PROTECTION-04")}),
-            ),
-            power=PowerSpec(FixedGeneration(12.0), 0.60, standby_load_mw=0.20),
-        ),
         # CONSTRUCTION_YARD
         FacilityAsset(
             definition=FacilityDef(ids.CONSTRUCTION_YARD, "建設ヤード", req._capabilities("construction_yard"), surface, surface),

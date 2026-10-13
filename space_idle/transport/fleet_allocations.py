@@ -30,6 +30,7 @@ from .models import (
     TransportCapacitySnapshot,
     TransportServiceLeg,
     TransportServicePlan,
+    TransportPhysicalCycleCoefficients,
     TransportOperationUsageRequirements,
 )
 
@@ -672,6 +673,90 @@ class FleetAllocationMixin:
 
         return tuple(sorted(infrastructure, key=lambda row: (str(row[0]), row[1], row[2])))
 
+    def physical_cycle_coefficients(
+        self, vehicle_definition_id: DefinitionId,
+        forward_plans: tuple, reverse_plans: tuple,
+        *, anchor_context_id: SpatialNodeId,
+    ) -> TransportPhysicalCycleCoefficients:
+        """Physical cycle coefficients from Movement plans, without creating State.
+
+        A Fleet unit's return and any non-physical blockers must be examined by
+        the caller. Both the live Transport Service and design-time World study
+        use these *same* cycle/propellant/maintenance equations.
+        """
+        if not forward_plans:
+            raise ValueError('physical cycle requires a forward Movement')
+        definition = self.vehicle_defs[vehicle_definition_id]
+        forward_days = sum(self.performance_movement_transit_days(p, definition.performance)
+                           for p in forward_plans)
+        reverse_days = sum(self.performance_movement_transit_days(p, definition.performance)
+                           for p in reverse_plans)
+        forward_payload = min(definition.max_cargo_for_movement(p) for p in forward_plans)
+        reverse_payload = min((definition.max_cargo_for_movement(p) for p in reverse_plans), default=0.0)
+        cycle_days = float(forward_days + reverse_days) + max(0.0, definition.turnaround_days)
+        legs: list[TransportServiceLeg] = []
+        empty_resource_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
+        forward_increment_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
+        reverse_increment_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
+        for direction, plans, payload in (
+            ('forward', forward_plans, forward_payload),
+            ('reverse', reverse_plans, reverse_payload),
+        ):
+            for plan in plans:
+                empty_propellant = definition.propellant_t(plan, 0.0)
+                loaded_propellant = definition.propellant_t(plan, max(0.0, payload))
+                legs.append(TransportServiceLeg(
+                    plan.id, direction, True, max(0.0, payload),
+                    self.performance_movement_transit_days(plan, definition.performance), loaded_propellant,
+                ))
+                if definition.propellant_resource_id is None:
+                    continue
+                # Physical plans have no Operational Node. Treat their named
+                # World context as a physical sourcing *requirement*, never stock.
+                endpoint = plan.origin
+                context_id = (endpoint.operational_node_id
+                              if endpoint.operational_node_id is not None
+                              else endpoint.physical_target_cell_id
+                              if endpoint.physical_target_cell_id is not None
+                              else endpoint.physical_target_node_id)
+                if context_id is None:
+                    raise ValueError('Movement origin has no physical context')
+                key = (context_id, definition.propellant_resource_id)
+                empty_resource_per_cycle[key] = empty_resource_per_cycle.get(key, 0.0) + empty_propellant
+                increment = max(0.0, loaded_propellant - empty_propellant)
+                target = (forward_increment_per_cycle if direction == 'forward'
+                          else reverse_increment_per_cycle)
+                target[key] = target.get(key, 0.0) + increment
+        for resource_id, amount in definition.turnaround_resources:
+            key = (anchor_context_id, resource_id)
+            empty_resource_per_cycle[key] = empty_resource_per_cycle.get(key, 0.0) + amount
+        nominal = DirectionalCapacity(
+            0.0 if cycle_days <= 1e-12 else forward_payload / cycle_days,
+            0.0 if cycle_days <= 1e-12 else reverse_payload / cycle_days,
+        )
+
+        def _per_day(values):
+            if cycle_days <= 1e-12:
+                return ()
+            return tuple(sorted(
+                ((node, resource, amount / cycle_days)
+                 for (node, resource), amount in values.items() if amount > 1e-12),
+                key=lambda row: (str(row[0]), str(row[1])),
+            ))
+
+        full = dict(empty_resource_per_cycle)
+        for increments in (forward_increment_per_cycle, reverse_increment_per_cycle):
+            for key, amount in increments.items():
+                full[key] = full.get(key, 0.0) + amount
+        return TransportPhysicalCycleCoefficients(
+            tuple(legs), int(forward_days), int(reverse_days), cycle_days,
+            max(0.0, forward_payload), max(0.0, reverse_payload), nominal,
+            _per_day(full), 0.0 if cycle_days <= 1e-12 else 1.0 / cycle_days,
+            _per_day(empty_resource_per_cycle),
+            _per_day(forward_increment_per_cycle),
+            _per_day(reverse_increment_per_cycle),
+        )
+
     def derive_transport_service_plan(
         self, allocation_id: EntityId, day: int = 0
     ) -> TransportServicePlan:
@@ -810,75 +895,15 @@ class FleetAllocationMixin:
             except ValueError as exc:
                 blockers.append(f"return_path:{exc}")
 
-        operating_days = float(forward_days + reverse_days)
-        blockers.extend(definition.endurance_failures(operating_days))
-        cycle_days = operating_days + max(0.0, definition.turnaround_days)
-        if cycle_days <= 1e-12:
-            blockers.append("cycle_duration")
-
-        legs: list[TransportServiceLeg] = []
-        empty_resource_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        forward_increment_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        reverse_increment_per_cycle: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
-        for direction, movement_plans, service_payload in (
-            ("forward", forward_plans, forward_payload),
-            ("reverse", reverse_plans, reverse_payload),
-        ):
-            for movement_plan in movement_plans:
-                payload = max(0.0, service_payload)
-                empty_propellant = definition.propellant_t(movement_plan, 0.0)
-                loaded_propellant = definition.propellant_t(movement_plan, payload)
-                legs.append(
-                    TransportServiceLeg(
-                        movement_plan.id,
-                        direction,
-                        True,
-                        payload,
-                        self.performance_movement_transit_days(movement_plan, definition.performance),
-                        loaded_propellant,
-                    )
-                )
-                if definition.propellant_resource_id is not None:
-                    resource_key = (movement_plan.origin_id, definition.propellant_resource_id)
-                    empty_resource_per_cycle[resource_key] = (
-                        empty_resource_per_cycle.get(resource_key, 0.0) + empty_propellant
-                    )
-                    increment = max(0.0, loaded_propellant - empty_propellant)
-                    target = forward_increment_per_cycle if direction == "forward" else reverse_increment_per_cycle
-                    target[resource_key] = target.get(resource_key, 0.0) + increment
-
-        # Turnaround/maintenance resources are cycle-rate costs independent of
-        # which direction carries payload. They are therefore part of the empty
-        # cycle baseline rather than either directional payload increment.
-        for resource_id, amount in definition.turnaround_resources:
-            key = (allocation.anchor_node_id, resource_id)
-            empty_resource_per_cycle[key] = empty_resource_per_cycle.get(key, 0.0) + amount
-
-        nominal = DirectionalCapacity(
-            0.0 if cycle_days <= 1e-12 else forward_payload / cycle_days,
-            0.0 if cycle_days <= 1e-12 else reverse_payload / cycle_days,
+        physical = self.physical_cycle_coefficients(
+            allocation.vehicle_definition_id, forward_plans, reverse_plans,
+            anchor_context_id=allocation.anchor_node_id,
         )
-
-        def _per_day(values: dict[tuple[SpatialNodeId, DefinitionId], float]):
-            if cycle_days <= 1e-12:
-                return ()
-            return tuple(
-                sorted(
-                    ((location_id, resource_id, amount / cycle_days)
-                     for (location_id, resource_id), amount in values.items() if amount > 1e-12),
-                    key=lambda row: (str(row[0]), str(row[1])),
-                )
-            )
-
-        empty_resources = _per_day(empty_resource_per_cycle)
-        forward_increment_resources = _per_day(forward_increment_per_cycle)
-        reverse_increment_resources = _per_day(reverse_increment_per_cycle)
-        full_resource_per_cycle = dict(empty_resource_per_cycle)
-        for values in (forward_increment_per_cycle, reverse_increment_per_cycle):
-            for key, amount in values.items():
-                full_resource_per_cycle[key] = full_resource_per_cycle.get(key, 0.0) + amount
-        resources = _per_day(full_resource_per_cycle)
-        servicing = 0.0 if cycle_days <= 1e-12 else 1.0 / cycle_days
+        blockers.extend(definition.endurance_failures(physical.forward_days + physical.reverse_days))
+        if physical.cycle_days <= 1e-12:
+            blockers.append('cycle_duration')
+        resources = physical.resource_t_per_full_utilization_day
+        servicing = physical.servicing_units_per_full_utilization_day
 
         infrastructure_requirements = self._vehicle_path_infrastructure_requirements(
             definition,
@@ -894,21 +919,21 @@ class FleetAllocationMixin:
             allocation.destination_id,
             forward,
             reverse,
-            tuple(legs),
-            cycle_days,
+            physical.legs,
+            physical.cycle_days,
             max(0.0, definition.turnaround_days),
-            max(0.0, forward_payload),
-            max(0.0, reverse_payload),
-            int(forward_days),
-            None if not reverse else int(reverse_days),
-            nominal,
+            physical.forward_payload_t,
+            physical.reverse_payload_t,
+            physical.forward_days,
+            None if not reverse else physical.reverse_days,
+            physical.nominal_per_unit,
             resources,
             servicing,
             infrastructure_requirements,
             tuple(dict.fromkeys(blockers)),
-            empty_resources,
-            forward_increment_resources,
-            reverse_increment_resources,
+            physical.resource_t_per_empty_cycle_day,
+            physical.resource_t_per_forward_payload_increment_day,
+            physical.resource_t_per_reverse_payload_increment_day,
         )
 
     @staticmethod

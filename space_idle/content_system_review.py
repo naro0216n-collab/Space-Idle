@@ -47,7 +47,7 @@ def _environment_condition(condition) -> dict[str, Any]:
     return row
 
 
-def _execution_requirement(requirement) -> dict[str, Any]:
+def describe_execution_requirement(requirement) -> dict[str, Any]:
     row: dict[str, Any] = {"amount_per_execution": requirement.amount_per_execution}
     if isinstance(requirement, ResourceRequirement):
         row.update(kind="resource", resource_id=str(requirement.resource_id),
@@ -69,7 +69,7 @@ def _execution_requirement(requirement) -> dict[str, Any]:
     return row
 
 
-def _site(req) -> dict[str, Any]:
+def describe_site_requirements(req) -> dict[str, Any]:
     return {
         "classifications": sorted(str(row.classification.value) for row in req.spatial_classification_requirements),
         "capabilities": [
@@ -97,16 +97,16 @@ def _power(spec) -> dict[str, Any]:
 def _stage(spec) -> dict[str, Any]:
     row: dict[str, Any] = {"kind": spec.stage_type.value, "id": spec.stage_id}
     if hasattr(spec, "execution_requirements"):
-        row["execution_requirements"] = [_execution_requirement(req) for req in spec.execution_requirements]
+        row["execution_requirements"] = [describe_execution_requirement(req) for req in spec.execution_requirements]
     if isinstance(spec, ResearchTheoryStageSpec):
         row["rp"] = spec.research_point_cost
     elif isinstance(spec, ResearchPrototypeStageSpec):
         row["resources_t"] = _sorted_resources(spec.resources)
         row["work"] = spec.required_work
-        row["site"] = _site(spec.site_requirements)
+        row["site"] = describe_site_requirements(spec.site_requirements)
     elif isinstance(spec, ResearchDemonstrationStageSpec):
         row["work"] = spec.required_work
-        row["site"] = _site(spec.site_requirements)
+        row["site"] = describe_site_requirements(spec.site_requirements)
     elif isinstance(spec, ResearchOperationalExperienceStageSpec):
         row["experience"] = dict(sorted(spec.requirements.items()))
     return row
@@ -157,7 +157,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
             "construction": None if recipe is None else {
                 "resources_t": resource_inputs, "work": recipe.construction_work,
                 "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
-                "site": _site(recipe.site_requirements),
+                "site": describe_site_requirements(recipe.site_requirements),
             },
             "maintenance_fraction_per_year": definition.maintenance_fraction_per_year,
             "power": _power(sim.power.specs.get(fid)),
@@ -167,7 +167,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
                 "net_resources_t_per_person_day": _sorted_resources(definition.life_support.net_resources),
             },
             "research_provider": None if p is None else str(p.id),
-            "site": _site(definition.installation_requirements),
+            "site": describe_site_requirements(definition.installation_requirements),
         })
         if definition.life_support is not None:
             for rid, rate in definition.life_support.net_resources:
@@ -198,7 +198,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
                 "days_per_vehicle_nominal": vehicle.production.days,
                 "service": vehicle.production.service_type,
                 "prerequisite_technologies": sorted(map(str, vehicle.production.prerequisite_technologies)),
-                "site": _site(vehicle.production.site_requirements),
+                "site": describe_site_requirements(vehicle.production.site_requirements),
             },
             "turnaround_resources": _sorted_resources(vehicle.maintenance.resources),
             "seats": vehicle.passengers.seats,
@@ -271,8 +271,8 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
             "deployed_facilities": [str(row.facility_def_id) for row in recipe.deployed_facilities],
             "invested_resources_t": _sorted_resources(recipe.investment_totals()),
             "initial_inventory_t": _sorted_resources(recipe.initial_inventory_totals()),
-            "staging_site": _site(recipe.staging_requirements),
-            "target_site": _site(recipe.target_requirements),
+            "staging_site": describe_site_requirements(recipe.staging_requirements),
+            "target_site": describe_site_requirements(recipe.target_requirements),
         })
     location_development = []
     for recipe_id, recipe in sorted(sim.projects.spatial_recipes.items()):
@@ -285,7 +285,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
             "resources_t": _recipe_resources(recipe.resources),
             "construction_work": recipe.construction_work,
             "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
-            "site": _site(recipe.site_requirements),
+            "site": describe_site_requirements(recipe.site_requirements),
         })
 
     markets = []

@@ -8,7 +8,7 @@ from typing import Iterable
 from ..facilities import FacilityBook
 from ..shared import CelestialBodyId, DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
-from ..spatial import SpatialGraph
+from ..spatial import SpatialGraph, SpatialContextId
 from ..spatial import great_circle_distance_km
 from .endpoints import resolve_movement_endpoint
 from .models import (
@@ -128,6 +128,61 @@ class MovementResolver:
         self.surface_rules = surface_rules
         self.surface_access_rules = surface_access_rules
         self.spaceflight_rules = spaceflight_rules
+
+    def physical_context_plans(
+        self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId,
+    ) -> tuple[MovementPlan, ...]:
+        """Physical movement candidates between World contexts, without founding nodes.
+
+        These are *not* operational Transport Allocations. Surface interfaces,
+        Fleet ownership, installed infrastructure, and Cargo settlement cannot
+        be inferred from geography. This is the same Movement-rule derivation
+        used for established endpoints, with explicitly physical locators.
+        """
+        graph = self.graph
+        if origin_context_id == destination_context_id:
+            return ()
+
+        def endpoint(context_id: SpatialContextId) -> MovementEndpoint:
+            if context_id in graph.surface_cells:
+                return MovementEndpoint(physical_target_cell_id=context_id)
+            if context_id in graph.nodes:
+                return MovementEndpoint(physical_target_node_id=context_id)
+            raise KeyError(f"unknown physical movement context: {context_id}")
+
+        origin = endpoint(origin_context_id)
+        destination = endpoint(destination_context_id)
+        origin_cell = graph.surface_cells.get(origin_context_id)
+        destination_cell = graph.surface_cells.get(destination_context_id)
+        # Two surface Locations on the same body require actual surface
+        # interfaces for normal Transport; a static Cell pair is not a route.
+        if (origin_cell is not None and destination_cell is not None
+                and origin_cell.body_id == destination_cell.body_id):
+            return ()
+
+        origin_rules = (
+            self._access_rules_for_body(origin_cell.body_id)
+            if origin_cell is not None else (None,)
+        )
+        destination_rules = (
+            self._access_rules_for_body(destination_cell.body_id)
+            if destination_cell is not None else (None,)
+        )
+        require_spaceflight = self._requires_spaceflight(origin, destination)
+        rows = (
+            self._build_space_connected_plan(
+                origin, destination,
+                origin_rule=origin_rule,
+                destination_rule=destination_rule,
+                space_rule=space_rule,
+            )
+            for origin_rule in origin_rules
+            for destination_rule in destination_rules
+            for space_rule in self._spaceflight_rules_for(
+                origin, destination, require_spaceflight=require_spaceflight
+            )
+        )
+        return tuple(sorted(rows, key=lambda row: str(row.id)))
 
     def direct_plans(
         self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
