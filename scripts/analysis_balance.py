@@ -12,7 +12,7 @@ Usage: python scripts/analysis_balance.py plan.json > report.json
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import defaultdict
 from copy import deepcopy
 import json
 from math import isfinite
@@ -348,12 +348,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_phase_names = set()
     for phase in plan["phases"]:
         _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
-              {"name", "days", "facilities"}, "phase")
+              {"name", "days"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
         seen_phase_names.add(phase["name"])
         days = _integer(phase["days"], "phase days", positive=True)
-        assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
+        assets = _asset_rows(phase.get("facilities", ()), sim, nodes, label="facility")
         # Facility holdings are an analyst-authored opening snapshot, not a
         # simulated Construction Project transition. Earlier investment only
         # provides quantity evidence for a *conditional* acquired holding; it
@@ -2064,7 +2064,63 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
     return compare_projection_results(results)
 
 
-def compare_projection_results(results: list[dict]) -> dict:
+def _period_sensitivity(baseline: dict, alternative: dict) -> dict:
+    """Comparable dimensions for two distinct authored observation horizons.
+
+    Exposes *levels* and time-normalized flows, never differences between
+    cumulative demands at different horizons or a claimed completion date.
+    Different selected activities may also have different outcomes.
+    """
+    def quantities(phase):
+        rp = phase["research_point_balance"]
+        timing = phase["research_time_structure"]
+        return {
+            "days": phase["days"],
+            "research": {
+                "selected_stage_rp_points": rp["research_stage_demand_points"],
+                "nominal_generation_rp_per_day": rp["nominal_generation_points"] / phase["days"],
+                "nominal_execution_per_day": rp["nominal_execution_per_day"],
+                "nominal_pool_capacity_points": rp["nominal_storage_capacity_points"],
+                "conditional_known_capacity_lower_bound_days": timing["conditional_known_capacity_lower_bound_days"],
+                "unresolved_stage_service_capacity": timing["missing_stage_service_capacity"],
+                "experience_gates": timing["operational_experience_gates_not_elapsed_time"],
+                "missing_stages": timing["unselected_stages_in_technology"],
+                "external_prerequisites": timing["external_prerequisites"],
+            },
+            "resources": [{"node": row["node"], "resource": row["resource"],
+                           "one_time_investment_and_activity_demand_t": row["one_time_investment_and_activity_demand_t"],
+                           "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
+                           "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"],
+                           "production_t_per_day": row["production_t"] / phase["days"],
+                           "shortfall_at_horizon_t": row["shortfall_t"]}
+                          for row in phase["resources"] if (
+                              row["one_time_investment_and_activity_demand_t"] > 1e-12
+                              or abs(row["nominal_recurring_net_t_per_day"]) > 1e-12
+                              or row["shortfall_t"] > 1e-12)],
+            "constraints": [{"node": row["node"],
+                              "power_demand_mw": row["power_demand_nominal_mw"],
+                              "power_gap_mw": row["power_gap_mw"],
+                              "construction_work_required": row["construction_work_required"],
+                              "construction_capacity_work_per_day": (
+                                  row["construction_work_nominal_capacity"] / phase["days"])}
+                             for row in phase["constraints"] if (
+                                 row["power_demand_nominal_mw"] > 1e-12
+                                 or row["construction_work_required"] > 1e-12)],
+            "od_transport": [{"origin": row["origin"], "destination": row["destination"],
+                              "demand_t_per_day": row["demand_t_per_day"],
+                              "nominal_capacity_t_per_day": row["nominal_capacity_t_per_day"],
+                              "nominal_gap_t_per_day": row["nominal_gap_t_per_day"]}
+                             for row in phase["od_transport_constraints"]],
+            "unassessed_constraints": phase["unassessed_constraints"],
+        }
+    return {
+        "basis": "conditional_levels_and_rates_not_differences_of_cumulative_horizon_quantities",
+        "outcome_equivalence_not_assumed": True,
+        "baseline": quantities(baseline), "case": quantities(alternative),
+    }
+
+
+def compare_projection_results(results: list[dict], *, distinct_outcomes=False) -> dict:
     """Compare independently calculated Definition/World quantity projections.
 
     This is the *only* physical delta calculation for both composition and
@@ -2083,7 +2139,11 @@ def compare_projection_results(results: list[dict]) -> dict:
                 differences.append({"case": alternative["name"], "baseline_phase": left["name"],
                                     "phase": right["name"], "section": "incomparable_phase_basis",
                                     "baseline_days": left["days"], "case_days": right["days"]})
-                continue  # Different time bases cannot be compared as like quantities.
+                if left["name"] == right["name"]:
+                    differences.append({"case": alternative["name"], "phase": left["name"],
+                                        "section": "period_sensitivity",
+                                        "comparison": _period_sensitivity(left, right)})
+                continue  # Never subtract quantities with unlike duration bases.
             left_rp, right_rp = left["research_point_balance"], right["research_point_balance"]
             rp_delta = {key: right_rp[key] - left_rp[key] for key in left_rp
                         if isinstance(right_rp[key], (int, float)) and isinstance(left_rp[key], (int, float))
@@ -2215,6 +2275,14 @@ def compare_projection_results(results: list[dict]) -> dict:
                     return grouped
                 l, r = indexed(left[section]), indexed(right[section])
                 for key in sorted(set(l) | set(r)):
+                    if distinct_outcomes and (key not in l or key not in r):
+                        differences.append({"case": alternative["name"], "phase": left["name"],
+                                            "section": section, "identity": dict(zip(key_fields, key)),
+                                            "status": ("newly_selected_quantity" if key not in l else
+                                                       "no_longer_selected_quantity"),
+                                            "registered_quantities": (r.get(key) if key not in l else l.get(key)),
+                                            "absent_is_not_zero_cost": True})
+                        continue
                     delta = {}
                     incomparable = {}
                     for metric in metrics:
@@ -2341,13 +2409,38 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
     """
     if not isinstance(changes, list) or not changes or any(not isinstance(e, dict) for e in changes):
         raise ValueError("Content hypothesis requires a nonempty list of typed edits")
-    reference = _requested_reference(plan)
+    # For a newly introduced Technology/Asset/Process, the old Composition
+    # cannot resolve that ID. Compare two explicit selections of a common
+    # development goal instead of silently injecting the new ID into baseline
+    # or treating an absent capability as zero-cost.
+    distinct = "baseline_plan" in plan or "edited_plan" in plan
+    if distinct:
+        _keys(plan, {"baseline_plan", "edited_plan", "development_goal"},
+              {"baseline_plan", "edited_plan", "development_goal"}, "development comparison")
+        if not isinstance(plan["development_goal"], str) or not plan["development_goal"].strip():
+            raise ValueError("development comparison requires a meaningful shared goal")
+        before_plan, after_plan = plan["baseline_plan"], plan["edited_plan"]
+        if not isinstance(before_plan, dict) or not isinstance(after_plan, dict):
+            raise ValueError("development comparison needs two explicitly selected plans")
+        if "cases" in before_plan or "cases" in after_plan:
+            raise ValueError("development comparison needs one selected plan per Content side")
+        if _movement_reference(before_plan) != _movement_reference(after_plan):
+            raise ValueError("different Movement reference conditions")
+        initial_defaults = {"initial_stock": (), "initial_facilities": (), "initial_fleet": (),
+                            "initial_research_points": 0, "solar_yield": {}, "solar_sites": ()}
+        for key, default in initial_defaults.items():
+            if before_plan.get(key, default) != after_plan.get(key, default):
+                raise ValueError(f"development comparison needs identical initial conditions: {key}")
+        reference = _movement_reference(before_plan)
+    else:
+        reference = _requested_reference(plan)
     baseline = _new_reference_application(reference)
     variant = _new_reference_application(
         reference, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
     projections = []
     for label, application in (("baseline", baseline), ("edited_content", variant)):
-        projection = compare_cases(plan, app=application) if "cases" in plan else evaluate(plan, app=application)
+        selected_plan = (before_plan if label == "baseline" else after_plan) if distinct else plan
+        projection = compare_cases(selected_plan, app=application) if "cases" in selected_plan else evaluate(selected_plan, app=application)
         if "cases" in projection:
             projections.extend({"name": f"{label}:{case['name']}", "projection": case['projection']}
                                for case in projection["cases"])
@@ -2356,15 +2449,18 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
     # A case comparison with different inputs cannot be flattened into a
     # consecutive baseline/variant series (the first alternative must be
     # identical in authored scenario, not just position).
-    if "cases" in plan:
+    if "cases" in plan and not distinct:
         n = len(projections) // 2
         pairs = [compare_projection_results([projections[i], projections[i + n]])
                  for i in range(n)]
     else:
-        pairs = [compare_projection_results(projections)]
+        pairs = [compare_projection_results(projections, distinct_outcomes=distinct)]
     return {
         "model": "definition_content_impact_v1",
-        "comparison_basis": "identical_explicit_conditions_independent_registered_compositions",
+        "comparison_basis": ("same_initial_conditions_explicitly_distinct_development_choices"
+                             if distinct else "identical_explicit_conditions_independent_registered_compositions"),
+        **({"development_goal": plan["development_goal"],
+            "comparison_does_not_claim_equivalent_outcomes": True} if distinct else {}),
         "selected_definition_edits": changes,
         "comparisons": [
             {"baseline": record["baseline_case"],
@@ -2419,12 +2515,10 @@ def summarize_projection(projection: dict) -> dict:
             "scale": phase["scale"],
             "resource_shortfalls_by_node": [
                 {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"],
-                 "opening_investment_stock_shortfall_t": row["opening_investment_stock_shortfall_t"],
                  "one_time_investment_and_activity_demand_t": row["one_time_investment_and_activity_demand_t"],
                  "nominal_recurring_net_t_per_day": row["nominal_recurring_net_t_per_day"],
                  "conditional_stock_exhaustion_days_after_investment": row["conditional_stock_exhaustion_days_after_investment"],
-                 "shortfall_without_assumed_arrivals_t": row["shortfall_without_assumed_arrivals_t"],
-                 **resource_drivers(row)}
+                 "largest_activity_drivers": resource_drivers(row)["drivers"][:2]}
                 for row in phase["resources"] if row["shortfall_t"] > 1e-12
             ],
             "conditional_incoming_cargo_risks_by_node": [
@@ -2499,13 +2593,14 @@ def summarize_projection(projection: dict) -> dict:
             "market_provider_bounds": phase["market_provider_constraints"],
             "market_funds_condition": phase["market_funds_condition"],
             "unassessed_constraints": phase["unassessed_constraints"],
-            "system_coupling": network_overview(phase["system_network"]),
-            "detail_sections": [
-                "activity_sources", "system_network", "facility_investments", "vehicle_builds", "time_constraints", "shared_service_workloads", "research_time_structure", "facility_use_constraints", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
-                "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
-                "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
-            ],
         })
+        # Do not serialize empty catalogs as a checklist. All complete source
+        # rows, including zero-capacity and non-leading drivers, remain under
+        # the unabridged Projection selected with --details.
+        phases[-1] = {key: value for key, value in phases[-1].items()
+                      if not (isinstance(value, list) and not value)
+                      and (not isinstance(value, dict) or value)
+                      }
     return {"content_id": projection["content_id"], "world_definition_id": projection["world_definition_id"],
             "movement_reference": projection["movement_reference"],
             "model": "definition_quantity_summary_v1", "phases": phases}
@@ -2590,8 +2685,14 @@ def summarize(result: dict) -> dict:
             for lhs, rhs in zip(baseline_summary["phases"], summary["phases"])
         ):
             # Different durations/phase sets are not equivalent quantity bases.
-            case_overviews.append({"name": case["name"], "summary": summary,
-                                   "incomparable_phase_basis": True})
+            case_overviews.append({"name": case["name"], "incomparable_phase_basis": True,
+                                   "time_basis_comparisons": [
+                                       row for row in result["differences"]
+                                       if row["case"] == case["name"]
+                                       and row["section"] in {"period_sensitivity", "incomparable_phase_basis"}],
+                                   "nonmatching_phases": [
+                                       phase for phase in summary["phases"]
+                                       if phase["name"] not in {p["name"] for p in baseline_summary["phases"]}]})
             continue
         case_overviews.append({"name": case["name"], "relative_to_baseline": baseline["name"],
                                "unchanged_quantities_omitted": True,
@@ -2600,23 +2701,17 @@ def summarize(result: dict) -> dict:
                                    for base_phase, chosen_phase in zip(
                                        baseline_summary["phases"], summary["phases"])
                                    if base_phase != chosen_phase]})
-    differences_by_case = {case["name"]: Counter() for case in result["cases"][1:]}
-    for row in result["differences"]:
-        differences_by_case[row["case"]][row["section"]] += 1
     return {"model": "definition_quantity_comparison_summary_v1",
             "baseline_case": baseline["name"], "cases": case_overviews,
             "difference_sections": sorted({row["section"] for row in result["differences"]}),
-            "difference_counts_by_case_and_section": [
-                {"case": case["name"], "sections": dict(sorted(differences_by_case[case["name"]].items()))}
-                for case in result["cases"][1:]],
             "full_differences_detail_section": "differences"}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plan", type=Path,
                         help="JSON phases specifying selected activities, assets and demands")
-    parser.add_argument("--summary", action="store_true",
-                        help="show material, capacity, timing and assumptions without detailed coefficients")
+    parser.add_argument("--details", action="store_true",
+                        help="include unabridged Definition-derived quantity projections and provenance")
     parser.add_argument("--content-variant", type=Path, metavar="JSON",
                         help="evaluate a typed Definition edit against a selected plan")
     parser.add_argument("--content-impact", action="store_true",
@@ -2632,7 +2727,7 @@ def main():
         output = {
             "model": "definition_driven_adjustment_cycle_v1",
             "assumptions": "explicit_conditions_not_gameplay_or_a_required_balance_target",
-            "economic_comparison": compare_content_variant(payload, changes, summary=args.summary),
+            "economic_comparison": compare_content_variant(payload, changes, summary=not args.details),
         }
     else:
         app = None
@@ -2644,7 +2739,7 @@ def main():
                 _requested_reference(payload),
                 definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
         result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
-        output = summarize(result) if args.summary else result
+        output = result if args.details else summarize(result)
     json.dump(output, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
     print()
 

@@ -526,7 +526,7 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
             "research_ids": [research_id]}}]}), encoding="utf-8")
         inputs.append(path)
 
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]), "--summary"])
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0])])
     main()
     single = json.loads(capsys.readouterr().out)
     phase = single["phases"][0]
@@ -541,7 +541,7 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
         {"name": "first", "plan": json.loads(inputs[0].read_text(encoding="utf-8"))},
         {"name": "second", "plan": json.loads(inputs[1].read_text(encoding="utf-8"))},
     ]}), encoding="utf-8")
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(cases), "--summary"])
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(cases)])
     main()
     comparison = json.loads(capsys.readouterr().out)
     assert comparison["baseline_case"] == "first"
@@ -555,7 +555,7 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
         "value": stage.research_point_cost * 1.3,
     }]), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]),
-                                     "--summary", "--content-variant", str(changed)])
+                                     "--content-variant", str(changed)])
     main()
     adjusted = json.loads(capsys.readouterr().out)
     assert adjusted["phases"][0]["research_point_balance"]["research_stage_demand_points"] == pytest.approx(
@@ -1107,3 +1107,114 @@ def test_transport_capacity_can_use_explicit_scenario_network_without_replaying_
             {'name': 'known', 'projection': evaluate({**base, 'movement_reference': 'standard_scenario'})},
             {'name': 'unregistered', 'projection': evaluate(base)},
         ])
+
+
+def test_provider_level_content_hypothesis_uses_registered_research_capacity_and_same_ledger(definitions):
+    """Generation, admission and execution sensitivity share the investment/RP ledger."""
+    from scripts.analysis_balance import compare_content_variant
+    sim = definitions._simulation
+    provider = next(p for p in sim.research.providers.values()
+                    if p.source_kind.value == 'facility'
+                    and p.levels[0].generation_points_per_day > 0
+                    and p.levels[0].research_execution_per_day > 0)
+    source = next(f for f in sim.facilities.definitions.values()
+                  if provider.accepts_source(cap.id for cap in f.capability_supplies))
+    tech = next(t for t in sim.research.definitions.values()
+                if any(getattr(stage, 'research_point_cost', 0) > 0 for stage in t.stage_specs))
+    node = 'hypothetical.research'
+    asset = {'node': node, 'facility': str(source.id), 'units': 1}
+    plan = {'initial_facilities': [asset], 'phases': [
+        {'name': 'research_with_upkeep', 'days': 6, 'facilities': [asset],
+         'research_goal': {'node': node, 'research_ids': [str(tech.id)]},
+         'research_provider_allocations': [{
+             'node': node, 'provider': str(provider.id),
+             'source_facility': str(source.id), 'units': 1}]}
+    ]}
+    level = provider.levels[0]
+    edits = [{'kind': 'research_provider', 'id': str(provider.id), 'level': level.level,
+              'field': metric, 'value': value} for metric, value in (
+                  ('generation_points_per_day', level.generation_points_per_day * 1.5),
+                  ('storage_capacity_points', level.storage_capacity_points * 1.2),
+                  ('research_execution_per_day', level.research_execution_per_day * 1.3),
+              )]
+    before = deepcopy(capture_state(sim))
+    result = compare_content_variant(plan, edits)
+    baseline, altered = (entry['projection']['phases'][0]
+                         for entry in result['comparisons'][0]['cases'])
+    assert altered['research_point_balance']['nominal_generation_points'] == pytest.approx(
+        baseline['research_point_balance']['nominal_generation_points'] * 1.5)
+    assert altered['research_point_balance']['nominal_storage_capacity_points'] == pytest.approx(
+        baseline['research_point_balance']['nominal_storage_capacity_points'] * 1.2)
+    assert altered['research_point_balance']['nominal_execution_per_day'] == pytest.approx(
+        baseline['research_point_balance']['nominal_execution_per_day'] * 1.3)
+    assert altered['research_time_structure']['conditional_known_capacity_lower_bound_days'] <= (
+        baseline['research_time_structure']['conditional_known_capacity_lower_bound_days'])
+    assert altered['resources'] == baseline['resources']  # Provider performance does not mint physical inputs.
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match='unregistered Research Provider Level'):
+        compare_content_variant(plan, [{**edits[0], 'level': max(s.level for s in provider.levels) + 1}])
+
+
+def test_different_horizons_compare_rates_and_burdens_without_subtracting_total_stock(definitions):
+    from scripts.analysis_balance import summarize
+    facility, process = next((f, p) for f, p in _compatible_processes(definitions._simulation)
+                             if p.inputs_per_day and p.outputs_per_day)
+    asset = {'node': 'scale.node', 'facility': str(facility.id), 'units': 1,
+             'process': str(process.id)}
+    def plan(days):
+        return {'initial_facilities': [asset], 'phases': [
+            {'name': 'same_goal', 'days': days, 'facilities': [asset]}]}
+    result = compare_cases({'cases': [
+        {'name': 'short', 'plan': plan(4)}, {'name': 'long', 'plan': plan(40)}]}, app=definitions)
+    period = next(row['comparison'] for row in result['differences']
+                  if row['section'] == 'period_sensitivity')
+    first = {(r['node'], r['resource']): r for r in period['baseline']['resources']}
+    longer = {(r['node'], r['resource']): r for r in period['case']['resources']}
+    assert first.keys() == longer.keys()
+    for key in first:
+        assert first[key]['nominal_recurring_net_t_per_day'] == pytest.approx(
+            longer[key]['nominal_recurring_net_t_per_day'])
+        assert first[key]['production_t_per_day'] == pytest.approx(longer[key]['production_t_per_day'])
+    assert all(row['section'] not in {'resources', 'system_resources'} for row in result['differences'])
+    report = summarize(result)
+    assert report['cases'][1]['incomparable_phase_basis']
+    assert report['cases'][1]['time_basis_comparisons']
+    assert 'summary' not in report['cases'][1]  # avoid a second giant projection
+
+
+def test_new_process_content_compares_explicit_choices_without_zero_cost_technology(definitions):
+    from scripts.analysis_balance import compare_content_variant
+    sim = definitions._simulation
+    facility, process = next((f, p) for f, p in _compatible_processes(sim)
+                             if p.outputs_per_day and p.inputs_per_day)
+    output = next(iter(process.outputs_per_day))
+    node = 'common.goal.node'
+    new_id = 'evaluation.process.materials_route'
+    asset = {'node': node, 'facility': str(facility.id), 'units': 1}
+    def plan(method):
+        return {'initial_facilities': [asset], 'phases': [{
+            'name': 'material_capability', 'days': 7,
+            'facilities': [{**asset, 'process': method}]}]}
+    payload = {'development_goal': 'Compare intermediate-material capacity at the same site',
+               'baseline_plan': plan(str(process.id)), 'edited_plan': plan(new_id)}
+    edits = [{'operation': 'add', 'kind': 'process', 'id': new_id,
+              'definition': {'display_name': 'Alternative material conversion',
+                             'required_capabilities': sorted(process.required_capabilities),
+                             'inputs_per_day': {str(k): v for k, v in process.inputs_per_day.items()},
+                             'outputs_per_day': {str(k): (v * 1.3 if k == output else v)
+                                                 for k, v in process.outputs_per_day.items()},
+                             'prerequisite_technologies': [str(x) for x in process.prerequisite_technologies]}}]
+    before = deepcopy(capture_state(sim))
+    result = compare_content_variant(payload, edits)
+    assert result['comparison_does_not_claim_equivalent_outcomes']
+    assert any(row['status'] == 'newly_selected_quantity' and row['absent_is_not_zero_cost']
+               for row in result['comparisons'][0]['differences']
+               if row['section'] == 'resource_contributions' and 'status' in row)
+    baseline, variant = (r['projection']['phases'][0] for r in result['comparisons'][0]['cases'])
+    resource = str(output)
+    assert _rows(variant)[(node, resource)]['production_t'] > _rows(baseline)[(node, resource)]['production_t']
+    assert capture_state(sim) == before
+    invalid = deepcopy(payload)
+    invalid['edited_plan']['initial_stock'] = [{'node': node, 'resource': resource, 'amount_t': 100}]
+    with pytest.raises(ValueError, match='identical initial conditions'):
+        compare_content_variant(invalid, edits)

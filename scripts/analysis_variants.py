@@ -501,6 +501,25 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             sim.founding.deployment_recipes[definition_id] = replace(
                 definition, preparation_work=_finite_nonnegative(value),
             )
+        elif kind == "research_provider" and field_name in (
+            "generation_points_per_day", "storage_capacity_points", "research_execution_per_day"
+        ):
+            # Provider Tier and source selection remain registered Definition
+            # identity. Level performance is an actual Research-owned quantity,
+            # not a separately simulated analysis coefficient.
+            if sim.research is None or type(change.get("level")) is not int:
+                raise ValueError("research Provider performance edit requires a registered integer Level")
+            provider = sim.research.providers[definition_id]
+            level = change["level"]
+            if level not in {spec.level for spec in provider.levels}:
+                raise ValueError(f"unregistered Research Provider Level: {definition_id}/{level}")
+            amount = _finite_nonnegative(value)
+            sim.research.providers[definition_id] = replace(
+                provider, levels=tuple(
+                    replace(spec, **{field_name: amount}) if spec.level == level else spec
+                    for spec in provider.levels
+                ),
+            )
         elif kind == "research_provider" and field_name == "crew_person_days_per_research_point":
             if sim.research is None:
                 raise ValueError("Research Domain not available")
