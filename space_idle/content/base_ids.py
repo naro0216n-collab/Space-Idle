@@ -92,6 +92,7 @@ AUTONOMOUS_SURFACE_OUTPOST = DefinitionId("base.facility.autonomous_surface_outp
 AUTONOMOUS_ORBITAL_OUTPOST = DefinitionId("base.facility.autonomous_orbital_outpost")
 SURFACE_POWER_GRID = DefinitionId("base.facility.surface_solar_power_grid")
 INDUSTRIAL_POWER_BLOCK = DefinitionId("base.facility.fission_power_unit")
+INDUSTRIAL_FISSION_STATION = DefinitionId("base.facility.industrial_fission_station")
 CONSTRUCTION_YARD = DefinitionId("base.facility.construction_yard")
 AUTOMATED_CONSTRUCTION_YARD = DefinitionId("base.facility.automated_construction_yard")
 AUTOMATED_VEHICLE_ASSEMBLY = DefinitionId("base.facility.automated_vehicle_assembly")

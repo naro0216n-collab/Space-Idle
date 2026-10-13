@@ -12,6 +12,11 @@ from typing import Any
 
 from .catalog import GameCatalog
 from .construction.models import BuildResourceRequirement
+from .execution_requirements import (
+    ResourceRequirement, ServiceCapacityRequirement, PoolRequirement,
+    PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
+)
+from .site import RequiresFacet, FacetValueRange, AtmosphericPartialPressureRange
 from .power import FixedGeneration, SolarGeneration
 from .research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
@@ -30,11 +35,48 @@ def _recipe_resources(rows: tuple[BuildResourceRequirement, ...]) -> dict[str, f
     return _sorted_resources({row.resource_id: row.amount_t for row in rows})
 
 
+def _environment_condition(condition) -> dict[str, Any]:
+    row: dict[str, Any] = {"code": condition.code, "description": condition.description}
+    if isinstance(condition, (RequiresFacet, FacetValueRange)):
+        row["facet"] = condition.facet_type.__name__
+    if isinstance(condition, FacetValueRange):
+        row.update(attribute=condition.attribute, minimum=condition.minimum, maximum=condition.maximum)
+    if isinstance(condition, AtmosphericPartialPressureRange):
+        row.update(species_id=str(condition.species_id), minimum_pa=condition.minimum_pa,
+                   maximum_pa=condition.maximum_pa)
+    return row
+
+
+def _execution_requirement(requirement) -> dict[str, Any]:
+    row: dict[str, Any] = {"amount_per_execution": requirement.amount_per_execution}
+    if isinstance(requirement, ResourceRequirement):
+        row.update(kind="resource", resource_id=str(requirement.resource_id),
+                   constraint_node_id=None if requirement.constraint_node_id is None
+                   else str(requirement.constraint_node_id))
+    elif isinstance(requirement, ServiceCapacityRequirement):
+        row.update(kind="service", service_type=requirement.service_type,
+                   scope=requirement.scope.value, scope_id=requirement.scope_id,
+                   constraint_node_id=None if requirement.constraint_node_id is None
+                   else str(requirement.constraint_node_id))
+    elif isinstance(requirement, (PoolRequirement, PoolAdmissionRequirement, StockOrPoolAdmissionRequirement)):
+        row.update(kind=("pool" if isinstance(requirement, PoolRequirement) else
+                         "pool_admission" if isinstance(requirement, PoolAdmissionRequirement) else
+                         "stock_or_pool_admission"), pool_id=requirement.pool_id)
+        if not isinstance(requirement, StockOrPoolAdmissionRequirement):
+            row["scope_id"] = requirement.scope_id
+    else:
+        raise TypeError(f"Unsupported registered execution requirement: {type(requirement).__name__}")
+    return row
+
+
 def _site(req) -> dict[str, Any]:
     return {
         "classifications": sorted(str(row.classification.value) for row in req.spatial_classification_requirements),
-        "capabilities": sorted(row.capability_id for row in req.capability_requirements),
-        "environment": sorted(row.code for row in req.environment),
+        "capabilities": [
+            {"id": row.capability_id, "required_state": row.required_state.value}
+            for row in sorted(req.capability_requirements, key=lambda r: (r.capability_id, r.required_state.value))
+        ],
+        "environment": [_environment_condition(row) for row in sorted(req.environment, key=lambda r: r.code)],
     }
 
 
@@ -54,6 +96,8 @@ def _power(spec) -> dict[str, Any]:
 
 def _stage(spec) -> dict[str, Any]:
     row: dict[str, Any] = {"kind": spec.stage_type.value, "id": spec.stage_id}
+    if hasattr(spec, "execution_requirements"):
+        row["execution_requirements"] = [_execution_requirement(req) for req in spec.execution_requirements]
     if isinstance(spec, ResearchTheoryStageSpec):
         row["rp"] = spec.research_point_cost
     elif isinstance(spec, ResearchPrototypeStageSpec):
@@ -138,6 +182,14 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
         vehicles.append({
             "id": str(vid), "name": vehicle.display_name, "payload_t": vehicle.payload_t,
             "dry_mass_t": vehicle.dry_mass_t, "propellant_capacity_t": vehicle.propellant_capacity_t,
+            "turnaround_days_per_service_cycle": vehicle.turnaround_days,
+            "endurance_days": vehicle.performance.endurance_days,
+            "refueling_requirements": [
+                {"resource_id": str(req.resource_id),
+                 "infrastructure_capability_id": req.infrastructure_capability_id,
+                 "vehicle_capability_id": req.vehicle_capability_id}
+                for req in vehicle.performance.resource_support_requirements
+            ],
             "propellant_resource": None if vehicle.propellant_resource_id is None else str(vehicle.propellant_resource_id),
             "operation_types": sorted(cap.operation_type for cap in vehicle.performance.operation_capabilities),
             "capabilities": sorted(vehicle.generic_capabilities),
@@ -319,7 +371,11 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
     initial = {
         "scenario_id": scenario.id,
         "facilities": [{"node": str(row.operational_node_id), "id": str(row.definition_id),
-                        "level": row.level, "site_cell": None if row.site_cell_id is None else str(row.site_cell_id)}
+                        "level": row.level, "site_cell": None if row.site_cell_id is None else str(row.site_cell_id),
+                        "selected_process_id": None if row.selected_process_id is None else str(row.selected_process_id),
+                        "selected_extraction_method_id": None if row.selected_extraction_method_id is None
+                        else str(row.selected_extraction_method_id),
+                        "invested_resources_t": _sorted_resources(row.invested_resources)}
                        for row in scenario.facilities],
         "fleet": [{"node": str(row.operational_node_id), "id": str(row.vehicle_definition_id),
                    "units": row.units} for row in scenario.fleet],
@@ -328,110 +384,32 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
         "population": [{"node": str(row.operational_node_id), "people": row.count}
                        for row in scenario.initial_population],
         "researched": sorted(map(str, scenario.completed_technologies)),
+        "funds_balance_musd": scenario.funds_balance_musd,
+        "market_provider_ids": sorted(map(str, scenario.market_provider_ids)),
+        "market_interfaces": [
+            {"id": str(row.id), "node": str(row.operational_node_id),
+             "provider_id": str(row.provider_id), "enabled": row.enabled}
+            for row in scenario.market_interfaces
+        ],
+        "research_fleet_assignments": [
+            {"provider_definition_id": str(row.provider_definition_id),
+             "node": str(row.operational_node_id), "vehicle_id": str(row.vehicle_definition_id),
+             "units": row.units}
+            for row in scenario.research_fleet_assignments
+        ],
+        "survey_fleet_assignments": [
+            {"provider_definition_id": str(row.provider_definition_id),
+             "node": str(row.operational_node_id), "vehicle_id": str(row.vehicle_definition_id),
+             "units": row.units}
+            for row in scenario.survey_fleet_assignments
+        ],
+        "known_surface_resources": [
+            {"cell_id": str(cell_id), "resource_id": str(resource_id)}
+            for cell_id, resource_id in scenario.known_surface_resources
+        ],
         "established_nodes": sorted({str(row.operational_node_id) for row in scenario.surface_locations} |
                                     set(map(str, scenario.operational_node_ids))),
     }
-    # The initial Scenario is the only authored starting footprint. Provide the
-    # *nominal physical envelope* at each established node, not a simulated day.
-    # Process options compete for an installed Facility; for each individual
-    # Resource take the maximum compatible throughput at that Facility and do
-    # not imply that all Resource maxima can be produced simultaneously.
-    initial_envelopes = []
-    for node in initial["established_nodes"]:
-        initial_facilities = [f for f in scenario.facilities if str(f.operational_node_id) == node]
-        research_rp = research_execution = research_storage = construction_work = 0.0
-        power_gen = power_load = housing = life_support = 0.0
-        maintenance_by_resource: dict[str, float] = defaultdict(float)
-        options_by_resource: dict[str, float] = defaultdict(float)
-        for row in initial_facilities:
-            definition = sim.facilities.definitions[row.definition_id]
-            context = row.site_cell_id or row.operational_node_id
-            # A site-local physical calculation is provided by the Power Domain.
-            gen, load = sim.power.nominal_for_definition_at_context(row.definition_id, context, 0)
-            power_gen += gen
-            power_load += load
-            housing += definition.housing_at_level(row.level)
-            if definition.life_support is not None:
-                life_support += definition.life_support.capacity_at_level(row.level)
-            for resource, amount in row.invested_resources:
-                maintenance_by_resource[str(resource)] += amount * definition.maintenance_fraction_per_year
-            construction = sim.projects.construction_providers.get(row.definition_id)
-            if construction is not None:
-                construction_work += construction.work_per_day * row.level
-            provider = sim.research.facility_provider_for_definition(row.definition_id)
-            if provider is not None:
-                level = provider.level_spec(row.level)
-                research_rp += level.generation_points_per_day
-                research_execution += level.research_execution_per_day
-                research_storage += level.storage_capacity_points
-            per_facility: dict[str, float] = defaultdict(float)
-            capabilities = frozenset(cap.id for cap in definition.capability_supplies)
-            for process in sim.industry.processes.values():
-                if not process.required_capabilities <= capabilities:
-                    continue
-                if process.prerequisite_technologies - frozenset(scenario.completed_technologies):
-                    continue
-                for rid, quantity in process.outputs_per_day.items():
-                    resource = str(rid)
-                    per_facility[resource] = max(
-                        per_facility[resource], quantity * definition.process_throughput_per_day
-                    )
-            if sim.extraction is not None:
-                for method in sim.extraction.compatible_methods(row.definition_id):
-                    if method.prerequisite_technologies - frozenset(scenario.completed_technologies):
-                        continue
-                    resource = str(method.output_resource_id)
-                    per_facility[resource] = max(
-                        per_facility[resource],
-                        sim.extraction.nominal_capacity_for_level(row.definition_id, row.level),
-                    )
-            for rid, amount in per_facility.items():
-                options_by_resource[rid] += amount
-        for assignment in scenario.research_fleet_assignments:
-            if str(assignment.operational_node_id) != node:
-                continue
-            spec = sim.research.providers[assignment.provider_definition_id]
-            level = spec.levels[0]
-            research_rp += level.generation_points_per_day * assignment.units
-            research_execution += level.research_execution_per_day * assignment.units
-            research_storage += level.storage_capacity_points * assignment.units
-        stock_by_resource: dict[str, float] = defaultdict(float)
-        for stock in scenario.inventory_stock:
-            if str(stock.operational_node_id) == node:
-                stock_by_resource[str(stock.resource_id)] += stock.amount_t
-        resource_construction_work = sum(
-            stock_by_resource.get(str(rid), 0.0) * provider.work_per_t_per_day
-            for rid, provider in sim.projects.construction_resource_providers.items()
-        )
-        residents = sum(row.count for row in scenario.initial_population
-                        if str(row.operational_node_id) == node)
-        life_specs = {tuple(definition.life_support.net_resources)
-                      for row in initial_facilities
-                      for definition in (sim.facilities.definitions[row.definition_id],)
-                      if definition.life_support is not None}
-        # Only a *unique* authored net-demand coefficient can be shown without
-        # choosing among alternative Life Support technologies for the player.
-        resident_needs = (None if len(life_specs) != 1 else {
-            str(resource): float(rate) * residents
-            for resource, rate in next(iter(life_specs))
-        })
-        initial_envelopes.append({
-            "node": node,
-            "scenario_population_people": residents,
-            "conditional_resident_demand_t_per_day": resident_needs,
-            "nominal_power_at_day_0_mw": {"generation": power_gen, "load": power_load},
-            "nominal_research": {"rp_generation_per_day": research_rp,
-                                 "execution_per_day": research_execution,
-                                 "rp_storage": research_storage},
-            "nominal_installed_construction_work_per_day": construction_work,
-            "construction_work_per_day_from_initial_resource_stock": resource_construction_work,
-            "construction_stock_assumption": "nominal from authored stock, not current available/unreserved or allocated work",
-            "housing_people": housing,
-            "life_support_person_days_per_day": life_support,
-            "annual_maintenance_t_by_resource_from_actual_investment": dict(sorted(maintenance_by_resource.items())),
-            "per_resource_independent_production_upper_bound_t_per_day_before_geology": dict(sorted(options_by_resource.items())),
-        })
-
     for rid in links:
         for direction in ("sources", "uses"):
             links[rid][direction].sort(key=lambda row: (row["owner_kind"], row["owner_id"], row["basis"], row.get("facility_id", "")))
@@ -443,7 +421,6 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
             "interpretation": "no implicit facility counts, process operation, research completion, fleet commitment, or cargo settlement",
         },
         "initial": initial,
-        "initial_physical_envelopes": initial_envelopes,
         "resources": links,
         "facilities": facilities,
         "vehicles": vehicles,

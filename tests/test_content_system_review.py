@@ -74,18 +74,15 @@ def test_content_edits_change_evidence_without_stale_balancing_fixtures():
     assert all("mandatory_stage_cost" not in stage for stage in after["research"])
     assert all(row["id"] in sim.research.definitions for row in after["research"])
 
-    # Initial population size is an authored design parameter, not a frozen
-    # expected milestone or an allocation/survival calculation.
+    # An opening change must only change the authored scenario evidence,
+    # not silently recompute a per-resource attainable throughput envelope.
     larger_opening = replace(scenario, initial_population=tuple(
         replace(row, count=row.count + 1) for row in scenario.initial_population
     ))
     enlarged = review_content(sim, catalog, larger_opening)
-    original = {row["node"]: row for row in before["initial_physical_envelopes"]}
-    for row in enlarged["initial_physical_envelopes"]:
-        prior = original[row["node"]]
-        if prior["conditional_resident_demand_t_per_day"] and prior["scenario_population_people"]:
-            assert row["scenario_population_people"] == prior["scenario_population_people"] + 1
-            assert row["conditional_resident_demand_t_per_day"] != prior["conditional_resident_demand_t_per_day"]
+    assert enlarged["initial"]["population"] != before["initial"]["population"]
+    assert enlarged["processes"] == after["processes"]
+    assert "initial_physical_envelopes" not in enlarged
 
 
 def test_world_and_founding_contribute_to_the_same_resource_context():
@@ -108,3 +105,25 @@ def test_world_and_founding_contribute_to_the_same_resource_context():
     after_world = next(row for row in after["world"] if row["id"] == cell.body_id)
     assert before_world != after_world
     assert after["initial"] == before["initial"]
+
+
+def test_authored_stage_site_and_starting_conditions_preserve_physical_requirements():
+    sim, catalog, scenario = _assembled()
+    reviewed = review_content(sim, catalog, scenario)
+    assert reviewed["initial"]["funds_balance_musd"] == scenario.funds_balance_musd
+    assert len(reviewed["initial"]["market_interfaces"]) == len(scenario.market_interfaces)
+    assert len(reviewed["initial"]["research_fleet_assignments"]) == len(scenario.research_fleet_assignments)
+
+    # The registered ownership of active-vs-installed Capability and finite
+    # service demand may not be erased when inspected for Content design.
+    capability_sites = [row["construction"]["site"] for row in reviewed["facilities"]
+                        if row["construction"] and row["construction"]["site"]["capabilities"]]
+    assert capability_sites
+    assert all("required_state" in capability for site in capability_sites
+               for capability in site["capabilities"])
+    assert any(any("minimum_pa" in condition for condition in facility["site"]["environment"])
+               for facility in reviewed["facilities"])
+    assert any(stage.get("execution_requirements") for item in reviewed["research"]
+               for stage in item["stages"])
+    assert sim.facilities.facilities == {}
+    assert sim.research.active == {}

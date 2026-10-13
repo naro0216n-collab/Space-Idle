@@ -19,64 +19,39 @@ from space_idle.content_system_review import review_content
 
 
 def render(report: dict, stage: int | None = None) -> str:
-    def line(text=""):
-        lines.append(text)
-
-    lines: list[str] = []
-    line("# 全体系Content設計資料")
-    line("登録Definition / Worldと初期Scenarioからの読取。適切な施設台数・研究期間・攻略順・実操業は判定しない。")
+    """Brief entry point to authored conditions, not a balance scorecard."""
     initial = report["initial"]
-    line(f"\n## 初期構成（{initial['scenario_id']}）")
+    lines = ["# Content調整の入力資料", "構成・数量は調整対象。記載の資産は初期保有であり、同時稼働や将来取得を意味しない。",
+             f"\n## 開始条件: {initial['scenario_id']}",
+             f"Funds: {initial['funds_balance_musd']:g} MUSD"]
     for node in initial["established_nodes"]:
-        assets = [f["id"] for f in initial["facilities"] if f["node"] == node]
-        fleet = [f'{f["id"]}×{f["units"]}' for f in initial["fleet"] if f["node"] == node]
-        line(f"- {node}: Facility {', '.join(assets) or 'なし'}; Fleet {', '.join(fleet) or 'なし'}")
-
-    line("\n## 初期地球圏の名目能力と投資負担の起点")
-    for node in report["initial_physical_envelopes"]:
-        p = node["nominal_power_at_day_0_mw"]
-        r = node["nominal_research"]
-        line(f"- {node['node']}: 発電 {p['generation']:.3g} MW / 負荷 {p['load']:.3g} MW; RP {r['rp_generation_per_day']:.3g}/日 / 研究実行 {r['execution_per_day']:.3g}/日 / RP保管 {r['rp_storage']:.3g}; 設置設備の施工 {node['nominal_installed_construction_work_per_day']:.3g}/日 / 施工Resource由来 {node['construction_work_per_day_from_initial_resource_stock']:.3g}/日; Housing {node['housing_people']:g} 人 / Life Support {node['life_support_person_days_per_day']:g} 人日/日")
-        if node["conditional_resident_demand_t_per_day"] is not None:
-            for resource, demand in node["conditional_resident_demand_t_per_day"].items():
-                line(f"  - {resource}: {node['scenario_population_people']}人の条件付き居住負担 {demand:.3g} t/日（Allocation・供給成立を意味しない）")
-        for resource, rate in node["per_resource_independent_production_upper_bound_t_per_day_before_geology"].items():
-            line(f"  - {resource}: 条件付き生産上限 {rate:.3g} t/日（他Resourceとの同時達成は未評価）")
-        for resource, rate in node["annual_maintenance_t_by_resource_from_actual_investment"].items():
-            if rate:
-                line(f"  - {resource}: 初期保有に基づく年換算維持係数 {rate:.3g} t/年")
-
-    line("\n## 研究段階と設備・工程の接続")
-    stages = sorted({t["progression_stage"] for t in report["research"] if t["progression_stage"] is not None})
-    if stage is not None and stage not in stages:
-        raise ValueError(f"研究表示段階 {stage} は登録されていない: {stages}")
-    for number in stages:
-        if stage is not None and stage != number:
-            continue
-        members = [t for t in report["research"] if t["progression_stage"] == number]
-        theory = [sum(item.get("rp", 0) for item in t["stages"]) for t in members]
-        line(f"\n### 表示段階 {number}: {len(members)} Technology（全件履修を前提としない）")
-        line(f"- 単一TechnologyあたりTheory RP: {min(theory):g}–{max(theory):g}; 表示段階の合計RPは計算しない")
-        gated_facilities = [f["id"] for f in report["facilities"]
-                            if f["construction"] and set(f["construction"]["prerequisite_technologies"]) & {t["id"] for t in members}]
-        gated_vehicles = [v["id"] for v in report["vehicles"]
-                          if set(v["production"]["prerequisite_technologies"]) & {t["id"] for t in members}]
-        gated_processes = [p["id"] for p in report["processes"]
-                           if set(p["prerequisite_technologies"]) & {t["id"] for t in members}]
-        line(f"- この段階のTechnologyを前提に含む取得・工程: Facility {len(gated_facilities)}、Vehicle {len(gated_vehicles)}、Process {len(gated_processes)}（利用可能を意味しない）")
-        if stage is not None:
-            line("- 関係するFacility: " + (", ".join(gated_facilities) or "なし"))
-            line("- 関係するVehicle: " + (", ".join(gated_vehicles) or "なし"))
-            line("- 関係するProcess: " + (", ".join(gated_processes) or "なし"))
-            line("- 研究内容: " + (", ".join(t["id"] for t in members) or "なし"))
-
-    line("\n## Resourceの供給工程と全Domain取得・運用負担")
-    for rid, links in sorted(report["resources"].items()):
-        kinds = sorted({u["owner_kind"] for u in links["uses"]})
-        products = sorted({(s["owner_id"], s.get("facility_id", "")) for s in links["sources"]})
-        line(f"- {rid}: nominal source {len(products)} process/extraction×Facility combinations; use {', '.join(kinds) or 'なし'}")
-    line("\n各Resourceの具体的な数量・時間基準・取得元、各TechnologyのStage、全WorldのPotential範囲は `--json` で同じProjectionから取得する。")
-    line("産業供給源の数は実際の生産台数・稼働能力ではない。発展段階の設備・Fleet構成の妥当性を調べる際には、ここで判明した関係から設計仮説を作り直す。")
+        lines.append(f"\n### {node}")
+        assets = [f"{f['id']} (level {f['level']}, process {f['selected_process_id'] or '未選択'}, extraction {f['selected_extraction_method_id'] or '未選択'})"
+                  for f in initial["facilities"] if f["node"] == node]
+        lines.extend("- Facility: " + row for row in assets)
+        lines.extend(f"- Fleet: {f['id']} ×{f['units']}" for f in initial["fleet"] if f["node"] == node)
+        lines.extend(f"- Inventory: {f['resource']} {f['quantity_t']:g} t" for f in initial["inventory"] if f["node"] == node)
+        lines.extend(f"- Population: {f['people']}人" for f in initial["population"] if f["node"] == node)
+    lines.extend(f"- Market interface: {row['id']} at {row['node']} ({'enabled' if row['enabled'] else 'disabled'})"
+                 for row in initial["market_interfaces"])
+    lines.extend(f"- Research Fleet: {row['vehicle_id']} ×{row['units']} ({row['provider_definition_id']})"
+                 for row in initial["research_fleet_assignments"])
+    lines.extend(f"- Survey Fleet: {row['vehicle_id']} ×{row['units']} ({row['provider_definition_id']})"
+                 for row in initial["survey_fleet_assignments"])
+    if stage is not None:
+        members = [t for t in report["research"] if t["progression_stage"] == stage]
+        if not members:
+            raise ValueError(f"未登録の研究表示段階: {stage}")
+        lines.append(f"\n## 研究表示段階 {stage}（履修義務はない）")
+        for item in members:
+            lines.append(f"- {item['id']}: prerequisites={','.join(item['prerequisites']) or 'なし'}")
+            for spec in item["stages"]:
+                lines.append(f"  - {spec['id']} ({spec['kind']}): RP={spec.get('rp','-')} "
+                             f"resources={spec.get('resources_t',{})} work={spec.get('work','-')} "
+                             f"execution={spec.get('execution_requirements', [])}")
+    else:
+        lines.append("\n研究の前提と個別Stageは --stage N、全Definition係数は --json で参照する。")
+    lines.append("この出力にない実稼働率・実移動負担・技術取得結果は推定していない。")
     return "\n".join(lines)
 
 
