@@ -100,7 +100,10 @@ async function registerInputs() {
         batch.some((_, j) => rows[j+offset]?.status !== 'succeeded' ||
           !rows[j+offset].file_id || !rows[j+offset].library_file_id))
       throw Error('Temporary input registration failed');
-    batch.forEach((file,j) => {file.fileId = rows[j+offset].file_id;});
+    batch.forEach((file,j) => {
+      file.fileId = rows[j+offset].file_id;
+      file.libraryId = rows[j+offset].library_file_id;
+    });
     start += batch.length;
   }
 }
@@ -117,21 +120,43 @@ async function readInputs() {
       for (let i = 0; i < pending.length; i++) {
         const {file,index} = pending[i];
         const result = response.results?.[i];
-        if (result?.has_more === true || !Array.isArray(result?.content) ||
-            !result.content.every(part => typeof part === 'string')) {
-          next.push(pending[i]); continue;
+        const parts = result?.content;
+        const notVisible = !result || result.warnings?.some(w =>
+          typeof w === 'string' && /(?:not (?:currently |yet )?visible|reference is not currently visible)/i.test(w));
+        if (notVisible) {
+          next.push(pending[i]);
+          continue;
         }
-        let raw = result.content.join('');
-        // Files.read may omit a text file's final newline; defer correction until
-        // the trusted index supplies original sizes and fingerprints.
-        if (!raw.startsWith('{') || !raw.trimEnd().endsWith('}')) {
-          next.push(pending[i]); continue;
-        }
+        if (result.has_more === true || !Array.isArray(parts) ||
+            !parts.every(part => typeof part === 'string'))
+          throw Error('Temporary input incomplete or invalid: ' + file.name);
+        const raw = parts.join('');
+        // Files.read may omit a file's final newline. The trusted index alone
+        // authorizes its restoration and checks every packet before GitHub writes.
+        if (!raw.startsWith('{') || !raw.trimEnd().endsWith('}'))
+          throw Error('Temporary input truncated or malformed: ' + file.name);
         contents[index] = raw;
       }
       pending = next;
+      if (pending.length && attempt < 11) {
+        // Library registration can precede read visibility. A scoped lookup
+        // provides a separate round trip; use a visible backing ID if provided.
+        // Never re-upload, relax fingerprints, or retry malformed source data.
+        try {
+          const listing = await tools.files__list({surface:'library',library_path:'/temp',limit:250});
+          for (const {file} of pending) {
+            const found = listing.items?.find(item =>
+              item.kind === 'file' && item.library_file_id === file.libraryId &&
+              item.name === tempPrefix + file.name + '.json');
+            if (found?.file_id) file.fileId = found.file_id;
+          }
+        } catch (_) {
+          // A failed lookup does not invalidate the registration receipt.
+          // Retry its existing file ID, then fail closed if still invisible.
+        }
+      }
     }
-    if (pending.length) throw Error('Temporary file unreadable or truncated');
+    if (pending.length) throw Error('Temporary file registration not yet visible');
   }
   return contents;
 }

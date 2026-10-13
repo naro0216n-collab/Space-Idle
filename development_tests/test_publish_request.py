@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -147,7 +149,7 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
     summary = plan(repo, base, publish_head)
 
     assert summary["transport_chunk_bytes"] > 0
-    assert summary["payload_part_count"] > 8
+    assert 1 < summary["payload_part_count"] < 8
     assert summary["tree_call_count"] > 1
 
     state = connector_state(repo)
@@ -158,6 +160,8 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
     assert isinstance(chunks, list) and len(chunks) == summary["payload_part_count"]
     assert all(len(str(chunk["content"]).encode("utf-8")) <= summary["transport_chunk_bytes"]
                for chunk in chunks)
+    assert len(chunks[0]["content"]) > 32 * 1024  # no fixed small parts
+    assert "".join(str(chunk["content"]) for chunk in chunks) == prepared(repo)["payload_b64"]
 
     expected_paths = {str(chunk["path"]) for chunk in chunks}
     observed_paths: set[str] = set()
@@ -199,9 +203,13 @@ def test_transport_plan_handles_five_mib_source_without_exceeding_call_budget(tm
     run_request(repo, "prepare")
     summary = plan(repo, base, publish_head)
 
-    assert 0 < summary["payload_part_count"] <= PUBLISH_REQUEST.MAX_PAYLOAD_PARTS
-    assert summary["tree_call_count"] < summary["payload_part_count"]
+    assert 1 < summary["payload_part_count"] <= 12
+    assert summary["tree_call_count"] <= summary["payload_part_count"]
     assert max(summary["tree_call_bytes"]) <= PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES
+    chunks = connector_state(repo)["plan"]["chunks"]
+    assert chunks[0]["content"] and len(chunks[0]["content"]) > 32 * 1024
+    restored_bundle = base64.b64decode("".join(str(chunk["content"]) for chunk in chunks), validate=True)
+    assert hashlib.sha256(restored_bundle).hexdigest() == prepared(repo)["payload_sha256"]
     final_tree, packets = read_content_tree_plan(summary["tree_packets"], base_tree)
     assert final_tree == connector_state(repo)["plan"]["final_tree"]
     assert len(packets) == summary["tree_call_count"]
@@ -477,7 +485,7 @@ const tools = {
    return {results:read.map(({ref_id}) => {
      const attempt=(reads.get(ref_id)||0)+1;
      reads.set(ref_id,attempt);
-     if(mode==='unreadable'||attempt===1) return {warnings:['not yet visible'],content:['not visible'],has_more:false};
+     if(mode==='unreadable'||(mode==='lag'&&attempt===1)) return {warnings:['not yet visible'],content:['not visible'],has_more:false};
      const entry=registered.get(ref_id);
      if(!entry) throw Error('read deleted file');
      let value=fs.readFileSync(entry.path,'utf8');
@@ -534,6 +542,11 @@ def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Pa
     ok = _execute_original_packets(index_path)
     assert ok.returncode == 0, ok.stderr
     trimmed = _execute_original_packets(index_path, "trim-newline")
+    lag = _execute_original_packets(index_path, "lag")
+    assert lag.returncode == 0, lag.stderr
+    lag_actions = [event["type"] for event in json.loads(lag.stdout)]
+    assert lag_actions.count("list") >= 1
+    assert lag_actions.index("list") < lag_actions.index("tree")
     stale = _execute_original_packets(index_path, "stale")
     assert stale.returncode == 0, stale.stderr
     stale_actions = [event["type"] for event in json.loads(stale.stdout)]

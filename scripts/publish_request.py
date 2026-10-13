@@ -18,7 +18,6 @@ STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
 CONNECTOR_CALL_BUDGET_BYTES = 1024 * 1024
-TRANSPORT_CHUNK_BYTES = 32 * 1024
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
@@ -546,20 +545,32 @@ def _write_blob(repo: Path, content: str) -> str:
     return _require_hex_sha(result.stdout.decode("ascii").strip(), name="local transport blob OID")
 
 
+def _transport_part_capacity(*, target_branch: str) -> int:
+    """Use each tree call's verified byte budget, not an arbitrary fixed slice."""
+    path = f".publish/transport/{target_branch}/0000.b64"
+    empty = _tree_content_element(path, "")
+    # The base/tree SHA and numeric batch index have fixed widths. The Base64
+    # alphabet needs no JSON escaping, so each additional character adds one byte.
+    overhead = _connector_call_bytes(_tree_packet("0" * 40, [empty], 0))
+    capacity = CONNECTOR_CALL_BUDGET_BYTES - overhead
+    if capacity <= 0:
+        raise PublishStateError("Connector budget cannot hold one transport file")
+    return capacity
+
+
 def _payload_chunks(payload: str, *, target_branch: str) -> list[dict[str, object]]:
+    if not payload:
+        raise PublishStateError("publish payload is empty")
     slot = f".publish/transport/{target_branch}"
+    capacity = _transport_part_capacity(target_branch=target_branch)
     chunks: list[dict[str, object]] = []
-    for start in range(0, len(payload), TRANSPORT_CHUNK_BYTES):
+    for start in range(0, len(payload), capacity):
         index = len(chunks)
-        content = payload[start:start + TRANSPORT_CHUNK_BYTES]
-        path = f"{slot}/{index:04d}.b64"
         chunks.append({
             "chunk_index": index,
-            "path": path,
-            "content": content,
+            "path": f"{slot}/{index:04d}.b64",
+            "content": payload[start:start + capacity],
         })
-    if not chunks:
-        raise PublishStateError("publish payload is empty")
     if len(chunks) > MAX_PAYLOAD_PARTS:
         raise PublishStateError(
             f"publish payload needs {len(chunks)} transport files, exceeding limit {MAX_PAYLOAD_PARTS}"
@@ -657,7 +668,7 @@ def _build_transport_plan(
         "publish_head": publish_head,
         "publish_tree": publish_tree,
         "target_branch": prepared["target_branch"],
-        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
+        "transport_chunk_bytes": _transport_part_capacity(target_branch=str(prepared["target_branch"])),
         "payload_part_count": len(chunks),
         "chunks": chunks,
         "stale_transport_path_count": len(stale),
@@ -785,7 +796,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "request_id": prepared["request_id"],
         "strategy": "fixed-slot-tree-content-batches",
         "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
-        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
+        "transport_chunk_bytes": plan["transport_chunk_bytes"],
         "payload_part_count": plan["payload_part_count"],
         "tree_call_count": plan["tree_call_count"],
         "tree_packets": tree_packets,

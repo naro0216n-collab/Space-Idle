@@ -84,7 +84,9 @@ Publish Gateway workflowを変更する際は、Publish control maintenanceに�
 
 ### Connectorの一時ファイル管理
 
-通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。`execution_index`の親ディレクトリ名はpacket件数を、ファイル名はtransaction IDを示し、Executorは原本indexと全packetのパスを登録前に確定できる。ChatGPT Libraryの`/temp/`作成と原本入力の一括登録を同じ操作へ統合し、登録結果のIDで直接読取・原本照合する。検証済み入力は削除の成功応答を確認してからGitHubへ書き込む。Library上の削除はゴミ箱への移動である。
+通常publishのtransportデータは固定32 KiB分割を使わず、単一GitHub tool callの検証済み上限1 MiBに収まる最大の連続部分を各ファイルに保持する。上限を超えるpayloadは複数ファイルとし、GatewayがBase64順次連結で復元する。
+
+通常publishのConnector入力は、ローカルrepoの`.git/space-idle-publish-transaction/`に保持する。`connector-plan`が出力した`execution_index`を固定Launcherへ渡すと、Launcherが共有`develop`上のExecutorを呼び出す。`execution_index`の親ディレクトリ名はpacket件数を、ファイル名はtransaction IDを示し、Executorは原本indexと全packetのパスを登録前に確定できる。ChatGPT Libraryの`/temp/`作成と原本入力の一括登録を同じ操作へ統合し、登録結果のIDで直接読取・原本照合する。登録直後に参照が一時的に不可視の場合だけ、対象transactionのファイルを限定してLibrary参照を再取得し、有限回数の自動再読取を行う。不完全・変造された入力は再試行で通過させず、原本照合に失敗した場合もGitHubへ書き込まない。検証済み入力は削除の成功応答を確認してからGitHubへ書き込む。Library上の削除はゴミ箱への移動である。
 
 通常の成功経路でLibrary一覧や削除後の全件再列挙は行わない。再試行時の既存登録は同じtransactionの決定論的なパスだけ上書きし、登録・読取・削除の応答が失敗または不確定となった場合は、transactionに限定した一覧・回収を行い、回収を確認できなければGitHubへ書き込まない。無関係なLibraryファイルや別transactionのファイルを操作しない。
 
