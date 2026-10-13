@@ -704,3 +704,45 @@ def test_sensitivity_adds_future_facility_investment_not_instant_production(defi
     assert any(row["section"] == "facility_investments"
                and row["delta_from_baseline"]["units"] == 1
                for row in comparison["differences"])
+
+
+def test_vehicle_build_orders_are_not_usable_fleet_until_following_phase(definitions):
+    """Manufacturing Resource/Service cannot mint Research or Transport Fleet."""
+    sim = definitions._simulation
+    vehicle = next(v for v in sim.transport.vehicle_definitions() if v.production.resources)
+    node = "hypothetical.fleet.yard"
+    build = {"node": node, "vehicle": str(vehicle.id), "units": 2}
+    plan = {"phases": [
+        {"name": "production", "days": 9, "facilities": [], "vehicle_builds": [build]},
+        {"name": "available", "days": 15, "facilities": []},
+    ]}
+    before = deepcopy(capture_state(sim))
+    first, second = evaluate(plan, app=definitions)["phases"]
+    assert not first["fleet"]
+    assert first["scale"]["vehicle_units_ordered"] == 2
+    assert first["vehicle_builds"][0]["status"] == "vehicle_build_only_no_current_phase_fleet_use"
+    for resource, amount in vehicle.production.resources:
+        assert _rows(first)[node, str(resource)]["vehicle_build_demand_t"] == pytest.approx(2 * amount)
+    assert second["fleet"][0]["units"] == 2
+    assert second["scale"]["vehicle_units_ordered"] == 0
+    assert not second["vehicle_builds"]
+    assert capture_state(sim) == before
+    invented = deepcopy(plan)
+    invented["phases"][0]["fleet"] = [build]
+    with pytest.raises(ValueError, match="Fleet opening holdings"):
+        evaluate(invented, app=definitions)
+    invented = deepcopy(plan)
+    invented["phases"][0]["transport_allocations"] = [
+        {"origin": node, "destination": "hypothetical.transport", "vehicle": str(vehicle.id),
+         "units": 1}]
+    with pytest.raises(ValueError, match="reuse Fleet holdings"):
+        evaluate(invented, app=definitions)
+    compared = compare_cases({"base_plan": {"phases": [
+        {"name": "production", "days": 9, "facilities": []}]}, "cases": [
+        {"name": "without"}, {"name": "build", "updates": [{
+            "collection": "vehicle_builds", "phase": "production", "action": "add", "row": build,
+        }]}
+    ]}, app=definitions)
+    assert any(row["section"] == "vehicle_builds"
+               and row["delta_from_baseline"]["units"] == 2
+               for row in compared["differences"])

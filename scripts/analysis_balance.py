@@ -296,6 +296,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         plan.get("initial_fleet", ()), vehicles, nodes,
         label="initial Fleet", allow_turnarounds=False,
     ).items()}
+    pending_vehicle_builds = defaultdict(int)
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     # Cumulative authored receipts are conditional upon actual Cargo settlement.
     # This is an algebraic lower Stock-bound, not a second logistics scheduler.
@@ -706,29 +707,28 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         } for node, amount in sorted(work.items()) if amount > 0]
         if investment_constraints:
             unassessed.add("construction_material_delivery_and_ordering")
-        # Asset counts, unlike production work orders, persist across phases.
-        # An explicit Fleet composition describes the *whole* current holding;
-        # otherwise build orders accumulate on the existing holding.
-        if "fleet" in phase and phase.get("vehicle_builds"):
-            raise ValueError("fleet holdings and vehicle_builds cannot both specify acquisitions")
+        # Vehicles under assembly cannot run transport, exploration, research
+        # or maintenance turns in their acquisition interval. Finished Fleet
+        # is only conditionally held at the next explicit Phase boundary.
         fleet_spec = _fleet_rows(phase.get("fleet", ()), vehicles, nodes,
                                  label="Fleet", allow_turnarounds=True) if "fleet" in phase else None
-        builds = defaultdict(int)
+        expected_fleet = defaultdict(int, previous_fleet)
+        for key, units in pending_vehicle_builds.items():
+            expected_fleet[key] += units
+        current_fleet = ({key: units for key, (units, _cycles) in fleet_spec.items()}
+                         if fleet_spec is not None else dict(expected_fleet))
         if fleet_spec is not None:
-            current_fleet = {key: units for key, (units, _cycles) in fleet_spec.items()}
-            for key in set(previous_fleet) | set(current_fleet):
-                delta = current_fleet.get(key, 0) - previous_fleet.get(key, 0)
-                if delta < 0:
-                    raise ValueError(f"Fleet removal at {key} requires explicit retirement/relocation assumptions")
-                builds[key] = delta
-        else:
-            current_fleet = dict(previous_fleet)
-            for row in phase.get("vehicle_builds", ()):
-                _keys(row, {"node", "vehicle", "units"}, {"node", "vehicle", "units"}, "vehicle build")
-                key = (_identifier(row["node"], nodes, "node"),
-                       _identifier(row["vehicle"], vehicles, "vehicle"))
-                builds[key] += _integer(row["units"], "vehicle units", positive=True)
-                current_fleet[key] = current_fleet.get(key, 0) + row["units"]
+            for key in set(current_fleet) | set(expected_fleet):
+                if current_fleet.get(key, 0) != expected_fleet[key]:
+                    raise ValueError(f"Fleet opening holdings at {key} must equal prior installed units plus preceding Phase build orders: {expected_fleet[key]}")
+        builds = defaultdict(int)
+        for row in phase.get("vehicle_builds", ()):
+            _keys(row, {"node", "vehicle", "units"},
+                  {"node", "vehicle", "units"}, "Vehicle build")
+            key = (_identifier(row["node"], nodes, "node"),
+                   _identifier(row["vehicle"], vehicles, "vehicle"))
+            builds[key] += _integer(row["units"], "vehicle units", positive=True)
+        vehicle_build_details = []
         for (node, vehicle_id), added in sorted(builds.items()):
             vehicle = vehicles[vehicle_id]
             for res, amount in vehicle.production.resources:
@@ -737,6 +737,14 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if vehicle.production.service_type:
                 book_service(node, vehicle.production.service_type, added * vehicle.production.days / days,
                              "demand", "vehicle_manufacture", vehicle_id)
+            vehicle_build_details.append({
+                "node": node, "vehicle": vehicle_id, "units": added,
+                "production_work_days": vehicle.production.days * added,
+                "production_service": vehicle.production.service_type,
+                "resource_t": {str(resource): amount * added for resource, amount in vehicle.production.resources},
+                "status": "vehicle_build_only_no_current_phase_fleet_use",
+            })
+            unassessed.add("vehicle_assembly_completion_site_resource_and_commissioning_not_settled")
         for (node, vehicle_id), units in sorted(current_fleet.items()):
             if units == 0:
                 continue
@@ -758,7 +766,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if cycles_per_unit:
                 unassessed.add("fleet_turnarounds_without_movement_or_route_validation")
             fleet_report.append({"node": node, "vehicle": vehicle_id,
-                                 "units": units, "units_built": builds.get((node, vehicle_id), 0),
+                                 "units": units,
                                  "assumed_turnarounds": cycles})
         committed_fleet = defaultdict(int)
         # RP is an organization-owned quantity. Each Provider must reference an
@@ -901,6 +909,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         if committed_fleet:
             unassessed.add("transport_cycle_capacity_not_settled_cargo")
         previous_fleet = current_fleet
+        pending_vehicle_builds = builds
         # Scientific Exploration is a conditional *activity* with registered
         # inputs and potential RP outcome. No travel, Crew provisions, RP award,
         # or Mission state transition is simulated by this comparison.
@@ -1545,6 +1554,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
                        "facility_investments": facility_investment_details,
+                       "vehicle_builds": vehicle_build_details,
                        "research_stages": stage_details,
                        "research_goal": goal_details,
                        "research_service_constraints": research_services,
@@ -1582,7 +1592,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                        "scale": {"facility_units": sum(current.values()),
                                  "facility_units_added": facility_units_added,
                                  "fleet_units": sum(current_fleet.values()),
-                                 "fleet_units_built": sum(builds.values())},
+                                 "vehicle_units_ordered": sum(builds.values())},
                        "constraints": constraints, "service_constraints": service_constraints,
                        "storage": storage_constraints,
                        "extraction_projections_t": [dict(node=node, resource=res, nominal_t=q,
@@ -1676,7 +1686,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
                 "Facility acquisitions are explicit facility_investments; their Resource/work demand is booked during investment and no new Facility capability is available until a subsequent conditional Phase. Opening holdings must match previous holdings plus prior-phase investments.",
-                "Fleet holdings are assumed at phase start; new units incur production inputs and work, not scheduled completion.",
+                "Vehicle build orders debit registered production Resource/Service during the current Phase but do not provide Fleet capacity until the next Phase, conditioned on manufacturing completion. Explicit Fleet holdings cannot exceed previous holdings plus prior build orders.",
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
@@ -1706,13 +1716,13 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facility_investments", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
+            if collection not in {"facility_investments", "vehicle_builds", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
                 raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
                 raise ValueError("case addition row must be an object")
             identity_fields = ({"facility_investments": ("node", "facility"),
-                                "fleet": ("node", "vehicle"),
+                                "vehicle_builds": ("node", "vehicle"),
                                 "research_provider_allocations": ("node", "provider"),
                                 "passenger_transfers": ("origin", "destination", "vehicle"),
                                 "science_campaigns": ("campaign",),
@@ -1908,7 +1918,7 @@ def compare_projection_results(results: list[dict]) -> dict:
                        "construction_work_gap", "cargo_transfer_demand_t_per_day", "cargo_transfer_gap_t_per_day")),
                 ("od_transport_constraints", ("origin", "destination"),
                  ("demand_t_per_day", "nominal_capacity_t_per_day", "nominal_gap_t_per_day")),
-                ("fleet", ("node", "vehicle"), ("units", "units_built", "assumed_turnarounds")),
+                ("fleet", ("node", "vehicle"), ("units", "assumed_turnarounds")),
                 ("storage", ("node", "pool"), ("physical_capacity_t", "notional_occupied_t",
                        "capacity_excess_t")),
                 ("extraction_world_context", ("node", "resource", "output_resource"),
@@ -1919,6 +1929,7 @@ def compare_projection_results(results: list[dict]) -> dict:
                 ("investment_constraints", ("node",),
                  ("required_work", "pre_investment_work_per_day", "pre_investment_work_lower_bound_days")),
                 ("facility_investments", ("node", "facility"), ("units", "construction_work")),
+                ("vehicle_builds", ("node", "vehicle"), ("units", "production_work_days")),
                 ("spatial_projects", ("node", "recipe"), ("units", "required_construction_work")),
                 ("upgrade_projects", ("node", "facility", "target_level"),
                  ("units", "required_construction_work")),
@@ -2212,6 +2223,7 @@ def summarize_projection(projection: dict) -> dict:
             "research_service_constraints": phase["research_service_constraints"],
             "investment_constraints": phase["investment_constraints"],
             "facility_investments": phase["facility_investments"],
+            "vehicle_builds": phase["vehicle_builds"],
             "od_transport_constraints": phase["od_transport_constraints"],
             "extraction_world_context": phase["extraction_world_context"],
             "power_world_context": phase["power_world_context"],
@@ -2244,7 +2256,7 @@ def summarize_projection(projection: dict) -> dict:
             "unassessed_constraints": phase["unassessed_constraints"],
             "system_coupling": network_overview(phase["system_network"]),
             "detail_sections": [
-                "activity_sources", "system_network", "facility_investments", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
+                "activity_sources", "system_network", "facility_investments", "vehicle_builds", "upstream_supply_comparisons", "resources", "resource_contributions", "service_contributions", "service_constraints", "research_stages", "research_service_constraints", "power_world_context",
                 "transport_services", "transfer_requirements", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfer_requirements",
                 "market_buys", "market_provider_constraints", "market_funds_condition", "system_resources", "system_services",
             ],
