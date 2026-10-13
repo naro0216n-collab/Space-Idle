@@ -169,7 +169,7 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
         encoded_args = json.dumps(
             packet["action_args"], ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
-        assert len(encoded_args) <= 144 * 1024
+        assert len(encoded_args) <= PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES
         for entry in packet["action_args"]["tree_elements"]:
             if str(entry["path"]).endswith(".b64"):
                 assert "content" in entry
@@ -190,6 +190,21 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
         "sha": "<GitHub.create_commit returned SHA>",
         "force": False,
     }
+
+
+def test_transport_plan_handles_five_mib_source_without_exceeding_call_budget(tmp_path: Path) -> None:
+    repo, base, base_tree, publish_head, _ = init_repo(tmp_path)
+    (repo / "five_mib.bin").write_bytes(os.urandom(5 * 1024 * 1024))
+    commit_all(repo, "five MiB checkpoint")
+    run_request(repo, "prepare")
+    summary = plan(repo, base, publish_head)
+
+    assert 0 < summary["payload_part_count"] <= PUBLISH_REQUEST.MAX_PAYLOAD_PARTS
+    assert summary["tree_call_count"] < summary["payload_part_count"]
+    assert max(summary["tree_call_bytes"]) <= PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES
+    final_tree, packets = read_content_tree_plan(summary["tree_packets"], base_tree)
+    assert final_tree == connector_state(repo)["plan"]["final_tree"]
+    assert len(packets) == summary["tree_call_count"]
 
 
 def test_transport_plan_replaces_only_its_fixed_slot(tmp_path: Path) -> None:

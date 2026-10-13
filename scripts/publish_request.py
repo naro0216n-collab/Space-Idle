@@ -17,8 +17,8 @@ from urllib.parse import unquote, urlparse
 STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
-CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
-TRANSPORT_CHUNK_BYTES = 16 * 1024
+CONNECTOR_CALL_BUDGET_BYTES = 1024 * 1024
+TRANSPORT_CHUNK_BYTES = 32 * 1024
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
@@ -783,7 +783,7 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     summary = {
         "stage": state["stage"],
         "request_id": prepared["request_id"],
-        "strategy": "fixed-slot-16kib-tree-content-batches",
+        "strategy": "fixed-slot-tree-content-batches",
         "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
         "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
         "payload_part_count": plan["payload_part_count"],

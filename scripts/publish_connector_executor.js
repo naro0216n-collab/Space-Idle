@@ -154,7 +154,7 @@ try {
     const expectedName = i === packetCount - 1 ? 'create-transport-commit.json' :
       'tree-batch-' + String(i).padStart(3, '0') + '.json';
     if (row.name !== expectedName || !Number.isSafeInteger(row.size) || row.size <= 0 ||
-        row.size > 200000 || !Number.isSafeInteger(row.fnv32) || row.fnv32 < 0 || row.fnv32 > 0xffffffff)
+        row.size > 1200000 || !Number.isSafeInteger(row.fnv32) || row.fnv32 < 0 || row.fnv32 > 0xffffffff)
       throw Error('Invalid Connector packet descriptor; no GitHub write');
     let raw = contents[i+1];
     if (raw.length === row.size-1 && fingerprint(raw+'\n') === row.fnv32) raw += '\n';
@@ -166,7 +166,8 @@ try {
   let prior = index.publish_base_tree;
   for (let i = 0; i < packets.length - 1; i++) {
     const p = packets[i], a = p.action_args;
-    if (p.action !== 'GitHub.create_tree' || p.tree_batch_index !== i ||
+    if (JSON.stringify(a).length > 1024*1024 ||
+        p.action !== 'GitHub.create_tree' || p.tree_batch_index !== i ||
         a?.repository_full_name !== index.repository || a.base_tree_sha !== prior ||
         !Array.isArray(a.tree_elements) || !sha(p.expected_tree))
       throw Error('Invalid tree packet chain; no GitHub write');
