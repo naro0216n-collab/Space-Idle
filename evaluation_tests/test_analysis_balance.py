@@ -225,7 +225,6 @@ def test_registered_cross_domain_activity_provenance_and_comparison_is_content_d
     This contract does not depend on a checked-in Facility composition or a
     prescribed scale. New registered coefficients must change the same ledger.
     """
-    from scripts.analysis_balance_research import analyze_research_goal
     sim = definitions._simulation
     facility, process = next((f, p) for f, p in _compatible_processes(sim)
                              if p.inputs_per_day and p.outputs_per_day)
@@ -434,8 +433,8 @@ def test_spatial_investment_sensitivity_is_definition_derived_and_does_not_devel
 def test_research_and_economy_cli_share_one_composition_contract(definitions, tmp_path, monkeypatch, capsys):
     """Registered Technology goals and economic choices use one Phase ledger.
 
-    Standalone catalog alternatives remain descriptive; they cannot silently
-    override or re-bill the quantitative plan's selected Stage requirements.
+    Research goals and other activities share the Phase ledger; alternative
+    time horizons are explicitly marked incomparable for direct quantity deltas.
     """
     import json
     import sys
@@ -452,7 +451,7 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
     for name, days in (("first", 3), ("second", 15)):
         path = tmp_path / f"{name}.json"
         path.write_text(json.dumps({"phases": [{"name": "activity", "days": days,
-            "facilities": [], "research_goal": {"node": "portfolio.research.site",
+            "facilities": [], "research_goal": {"node": "comparison.research.site",
             "research_ids": [research_id]}}]}), encoding="utf-8")
         inputs.append(path)
 
@@ -464,33 +463,19 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
     assert phase["research_time_structure"]
     assert any(row["kind"] == "research_selected_workload" for row in phase["time_constraints"])
 
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", "--portfolio",
-                                     *(str(p) for p in inputs), "--summary"])
+    # Alternative research horizons belong in the same case-comparison entry,
+    # not a batch report that cannot justify cross-condition deltas.
+    cases = tmp_path / "alternatives.json"
+    cases.write_text(json.dumps({"cases": [
+        {"name": "first", "plan": json.loads(inputs[0].read_text(encoding="utf-8"))},
+        {"name": "second", "plan": json.loads(inputs[1].read_text(encoding="utf-8"))},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(cases), "--summary"])
     main()
-    portfolio = json.loads(capsys.readouterr().out)
-    assert "research_generation_economics" not in portfolio
-    assert [row["plan"] for row in portfolio["scenarios"]] == sorted(str(p) for p in inputs)
-    for scenario in portfolio["scenarios"]:
-        scenario_phase = scenario["cases"][0]["phases"][0]
-        assert scenario_phase["research_time_structure"]
-        assert scenario_phase["research_goal"]["included_technologies"] == [research_id]
-        if scenario["plan"] == str(inputs[0]):
-            assert scenario_phase["shared_service_workloads"] == phase["shared_service_workloads"]
-        assert any(row["kind"] == "research_selected_workload"
-                   for row in scenario_phase["time_constraints"])
-
-    # Selecting a Technology without a physical plan exposes registered
-    # alternatives, not an independent and misleading capacity calculator.
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", "--research-id", research_id,
-                                     "--summary"])
-    main()
-    catalog = json.loads(capsys.readouterr().out)
-    assert any(item["research"] == research_id for item in catalog["goal"]["research_items"])
-    monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]),
-                                     "--research-id", research_id])
-    with pytest.raises(SystemExit):
-        main()
-    assert "research_goal and Stage demands" in capsys.readouterr().err
+    comparison = json.loads(capsys.readouterr().out)
+    assert comparison["baseline_case"] == "first"
+    assert comparison["cases"][0]["summary"]["phases"][0] == phase
+    assert comparison["cases"][1]["incomparable_phase_basis"] is True
 
     changed = tmp_path / "definition_changes.json"
     changed.write_text(json.dumps([{
@@ -542,8 +527,6 @@ def test_registered_goal_closure_enters_the_physical_ledger_without_claiming_pro
 def test_content_impact_uses_composition_comparison_and_registered_stage_demand(definitions):
     """An edited registered Stage changes its research and resource accounting."""
     from scripts.analysis_balance import compare_content_variant
-    from scripts.analysis_balance_research import analyze_research_goal, research_goal_impact
-    from scripts.analysis_variants import apply_content_variant
     from space_idle.research_models import ResearchTheoryStageSpec
     sim = definitions._simulation
     tech = next(definition for definition in sim.research.definitions.values()
@@ -584,13 +567,6 @@ def test_content_impact_uses_composition_comparison_and_registered_stage_demand(
     assert any(r['section'] == 'time_constraints'
                and r['identity']['kind'] == 'research_selected_workload'
                for r in changes)
-    variant = build_game_application_for_load(
-        definition_transform=lambda simulation, catalog: apply_content_variant(
-            simulation, catalog, change))
-    observed = research_goal_impact(analyze_research_goal(research_ids=[str(tech.id)], app=definitions),
-                                    analyze_research_goal(research_ids=[str(tech.id)], app=variant))
-    assert observed["research_point_demand_delta"] == pytest.approx(delta)
-    assert observed["stage_changes"]
     assert capture_state(sim) == before
 
 

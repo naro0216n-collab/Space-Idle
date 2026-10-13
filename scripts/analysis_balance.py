@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, compare_research_generation_reports, summarize_research_goal, selected_research_time_structure
+from scripts.analysis_balance_research import research_goal_closure, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
     registered_material_links, trace_material_system,
@@ -2534,344 +2534,40 @@ def summarize(result: dict) -> dict:
                 for case in result["cases"][1:]],
             "full_differences_detail_section": "differences"}
 
-def _portfolio_phase_view(phase):
-    """Keep numerical vectors and their coupling without per-case Graph copies.
-
-    Activity provenance remains accessible in the single-plan report.
-    """
-    fields = (
-        "name", "days", "scale", "resources", "service_constraints", "constraints",
-        "research_point_balance", "research_service_constraints", "investment_constraints",
-        "research_time_structure", "time_constraints", "shared_service_workloads",
-        "facility_use_constraints", "facility_investments", "vehicle_builds", "research_goal",
-        "transport_services", "od_transport_constraints", "extraction_world_context",
-        "power_world_context", "market_provider_constraints", "market_funds_condition",
-        "unassessed_constraints", "system_network", "spatial_projects", "upgrade_projects",
-    )
-    # Long typed per-activity Graph evidence is not repeated in a portfolio.
-    # The original plan remains the reference for the exhaustive projection.
-    def strip_graph(value):
-        if isinstance(value, list):
-            return [strip_graph(item) for item in value]
-        if isinstance(value, dict):
-            return {key: strip_graph(item) for key, item in value.items()
-                    if key != "graph_evidence"}
-        return value
-    return strip_graph({field: phase[field] for field in fields})
-
-
-def _selected_composition_projections(plans: dict[str, dict], *, app, graph):
-    """Sole analysis dispatch for explicit economic compositions.
-
-    Registered Research goal stages belong in the same Plan phases as every
-    other activity. Catalog-only Research candidate descriptions are separate
-    from this capacity ledger and cannot be overlaid upon its quantities.
-    """
-    if not plans:
-        raise ValueError("at least one explicit composition is required")
-    for name, payload in sorted(plans.items()):
-        if not isinstance(name, str) or not name:
-            raise ValueError("composition names must be nonempty")
-        yield name, (compare_cases(payload, app=app, _definition_graph=graph)
-                     if "cases" in payload else evaluate(payload, app=app, _definition_graph=graph))
-
-
-def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
-    """Evaluate selected activity configurations against *one* registered World.
-
-    Different plans are independent conditions, NOT one cumulative schedule.
-    They are never added together or compared as equivalent time bases. A
-    typed registered material map accompanies selected, quantity-bearing paths.
-    """
-    if app is None:
-        app = build_game_application_for_load()
-    graph = build_definition_dependency_graph(app._simulation, app._catalog)
-    registered = registered_material_links(graph)
-    results = []
-    observed = defaultdict(list)
-    for name, comparison in _selected_composition_projections(plans, app=app, graph=graph):
-        cases = (comparison["cases"] if "cases" in comparison else
-                 [{"name": "selected_composition", "projection": comparison}])
-        results.append({"plan": name, "cases": [
-            {"name": case["name"], "phases": [
-                _portfolio_phase_view(phase) for phase in case["projection"]["phases"]]}
-            for case in cases],
-            "case_differences": comparison.get("differences", []),
-            "full_definition_evidence": "run_analysis_balance_on_original_plan_for_complete_activity_graph"})
-        for case in cases:
-            for phase in case["projection"]["phases"]:
-                for exposure in phase["system_network"]["pressure_exposures"]:
-                    observed[exposure["resource"]].append({
-                        "plan": name, "case": case["name"], "phase": phase["name"],
-                        "days": phase["days"], "node": exposure["node"],
-                        "condition": exposure["condition"],
-                        "direct_activity_kinds": sorted({v["activity_kind"] for v in exposure["direct_demand_activities"]}),
-                        "downstream_processes": exposure["active_downstream_processes"],
-                        "potentially_affected_outputs": exposure["potentially_affected_outputs"],
-                        "status": exposure["status"],
-                    })
-    return {
-        "model": "definition_quantity_portfolio_v1",
-        "content_id": app.content_id, "world_definition_id": app.world_definition_id,
-        "portfolio_conditions": "independent_explicit_compositions_not_gameplay_or_optimal_builds",
-        "registered_material_relations": registered,
-        "pressure_exposure_index": [
-            {"resource": resource, "conditions": records,
-             "registered_definition_links": registered.get(resource, {
-                 "potential_producers": [], "registered_consumers": []})}
-            for resource, records in sorted(observed.items())
-        ],
-        "evaluations": results,
-    }
-
-
-def summarize_portfolio(portfolio: dict) -> dict:
-    """System overview: keep dimensions and uncertainty, not repeated full ledgers."""
-    scenarios = []
-    for record in portfolio["evaluations"]:
-        unresolved = set()
-        per_case = []
-        for case in record["cases"]:
-            phases = []
-            for phase in case["phases"]:
-                network = phase["system_network"]
-                unresolved.update(phase["unassessed_constraints"])
-                phases.append({
-                    "name": phase["name"], "days": phase["days"], "scale": phase["scale"],
-                    "resource_pressures": [
-                        {"node": e["node"], "resource": e["resource"],
-                         "condition": e["condition"],
-                         "shortfall_without_assumed_arrivals_t": e["shortfall_without_assumed_arrivals_t"],
-                         "recurring_net_t_per_day": e["recurring_net_t_per_day"]}
-                        for e in network["pressure_exposures"]],
-                    "service_gaps": [
-                        {"node": e["node"], "service": e["service"],
-                         "nominal_gap_per_day": e["nominal_gap_per_day"]}
-                        for e in network["service_pressures"]],
-                    "power_gaps": [
-                        {"node": c["node"], "nominal_gap_mw": c["power_gap_mw"]}
-                        for c in phase["constraints"] if c["power_gap_mw"] > 1e-9],
-                    "inter_node_options": [{
-                        "origin": option["origin"], "destination": option["destination"],
-                        "resource": option["resource"],
-                        "resource_overlap_upper_bound_t": option["resource_overlap_upper_bound_t"],
-                        "transport_and_handling_upper_bound_t": option["transport_and_handling_upper_bound_t"],
-                        "blockers": option["blockers"],
-                    } for option in network["inter_node_resource_options"]],
-                    "od_transport": [
-                        {"origin": od["origin"], "destination": od["destination"],
-                         "demand_t_per_day": od["demand_t_per_day"],
-                         "nominal_capacity_t_per_day": od["nominal_capacity_t_per_day"],
-                         "nominal_gap_t_per_day": od["nominal_gap_t_per_day"],
-                         "status": od["status"], "blockers": od["blockers"]}
-                        for od in phase["od_transport_constraints"]],
-                    "unresolved_od_count": len(network["unresolved_transport_od"]),
-                    "research": {k: phase["research_point_balance"][k] for k in (
-                        "nominal_generation_points", "research_stage_demand_points", "point_shortfall",
-                        "nominal_storage_capacity_points", "nominal_execution_per_day",
-                        "total_execution_capacity_lower_bound_days")},
-                    "research_goal": phase["research_goal"],
-                    "research_time_structure": {k: phase["research_time_structure"][k] for k in (
-                        "serial_prerequisite_stage_service_lower_bound_days",
-                        "shared_rp_generation_lower_bound_days",
-                        "shared_research_execution_lower_bound_days",
-                        "conditional_known_capacity_lower_bound_days",
-                        "missing_stage_service_capacity",
-                        "operational_experience_gates_not_elapsed_time",
-                        "external_prerequisites")},
-                    "time_constraints": phase["time_constraints"],
-                    "shared_service_workloads": phase["shared_service_workloads"],
-                    "facility_use_pressures": [item for item in phase["facility_use_constraints"]
-                                               if item["nominal_shared_unit_duty_gap_per_day"] > 1e-12],
-                    "investment": {
-                        "facility_investments": phase["facility_investments"],
-                        "vehicle_builds": phase["vehicle_builds"],
-                    },
-                    "full_detail_section": "system_network",
-                })
-            if not per_case:
-                per_case.append({"case": case["name"], "phases": phases})
-            else:
-                baseline = per_case[0]["phases"]
-                if len(baseline) != len(phases) or any(
-                    left["name"] != right["name"] or left["days"] != right["days"]
-                    for left, right in zip(baseline, phases)
-                ):
-                    per_case.append({"case": case["name"], "phases": phases,
-                                     "incomparable_phase_basis": True})
-                else:
-                    per_case.append({"case": case["name"], "relative_to_baseline": per_case[0]["case"],
-                                     "unchanged_quantities_omitted": True,
-                                     "changed_phases": [_relative_phase_overview(left, right)
-                                                        for left, right in zip(baseline, phases)
-                                                        if left != right]})
-        scenarios.append({"plan": record["plan"], "cases": per_case,
-                          "unassessed_condition_types": sorted(unresolved)})
-    return {
-        "model": "definition_quantity_portfolio_summary_v1",
-        "content_id": portfolio["content_id"],
-        "world_definition_id": portfolio["world_definition_id"],
-        "portfolio_conditions": portfolio["portfolio_conditions"],
-        "registered_material_context": {
-            "resources": len(portfolio["registered_material_relations"]),
-            "note": "registered methods are potential relations, not satisfied demands or usable supply",
-            "full_detail_section": "registered_material_relations",
-        },
-        "pressure_exposure_index": [
-            {"resource": row["resource"], "number_of_explicit_conditions": len(row["conditions"]),
-             "plans_with_observed_pressure": sorted({e["plan"] for e in row["conditions"]}),
-             "downstream_output_resources_seen": sorted({output for entry in row["conditions"]
-                                                        for output in entry["potentially_affected_outputs"]}),
-             "full_detail_section": "pressure_exposure_index"}
-            for row in portfolio["pressure_exposure_index"]
-        ],
-        "scenarios": scenarios,
-        "full_detail_sections": ["evaluations", "registered_material_relations", "pressure_exposure_index"],
-    }
-
-
-def _selected_plan_files(plan, portfolio, parser) -> dict[str, dict]:
-    """One explicit composition input contract for research-led and other views."""
-    if plan is not None and portfolio:
-        parser.error("select either one plan or a portfolio of plans")
-    if plan is not None and plan.is_dir():
-        parser.error("a plan must be one JSON file; use --portfolio for multiple files")
-    paths = []
-    for path in ([plan] if plan is not None else portfolio or []):
-        if path.is_dir():
-            paths.extend(sorted(path.glob("*.json")))
-        elif path.is_file():
-            paths.append(path)
-        else:
-            parser.error(f"no comparison plans at {path}")
-    if len(paths) != len({str(p.resolve()) for p in paths}):
-        parser.error("comparison requires distinct JSON plans")
-    return {str(path): json.loads(path.read_text(encoding="utf-8")) for path in paths}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plan", nargs="?", type=Path, help="JSON phases specifying activities, assets and demands")
-    parser.add_argument("--portfolio", nargs="+", type=Path, metavar="PATH",
-                        help="compare independent selected activity plans from files or directories as one system")
-    parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
+    parser.add_argument("plan", type=Path,
+                        help="JSON phases specifying selected activities, assets and demands")
+    parser.add_argument("--summary", action="store_true",
+                        help="show material, capacity, timing and assumptions without detailed coefficients")
     parser.add_argument("--content-variant", type=Path, metavar="JSON",
-                        help="apply explicit typed Definition edits in a fresh Composition for the same quantitative analysis")
+                        help="evaluate a typed Definition edit against a selected plan")
     parser.add_argument("--content-impact", action="store_true",
-                        help="compare edited Definitions against baseline using the identical selected conditions")
-    parser.add_argument("--adjustment-note", type=Path, metavar="JSON",
-                        help="analyst-authored question, expected trade-off, risks and adoption decision for the comparison")
-    parser.add_argument("--research-generations", action="store_true", help="trace all registered research display generations to research-source time, upkeep and upstream industry")
-    parser.add_argument("--research-stage", type=int, metavar="N", help="trace one registered research display generation")
-    parser.add_argument("--research-id", action="append", dest="research_ids", help="trace selected Technology ID (repeatable)")
-    parser.add_argument("--research-science", action="append", metavar="CAMPAIGN_ID", default=[],
-                        help="optional one-time finite RP contribution from a selected registered Science Campaign")
-    parser.add_argument("--research-horizons", nargs="+", type=float, metavar="DAYS", default=[],
-                        help="optional comparison horizons in game days, not target completion dates")
-    parser.add_argument("--research-provider-units", type=int, default=1,
-                        help="selected independent research-source count for comparison, not a target fleet or facility count")
-    parser.add_argument("--research-compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"),
-                        help="diff two registered-generation summary reports after Content adjustment")
-    parser.add_argument("--research-production-methods", type=Path, metavar="JSON",
-                        help="optional mapping from Resource ID to selected Process ID for conditional upstream bill")
-    parser.add_argument("--research-include-prerequisites", action="store_true", help="expand actual Technology DAG prerequisites for selected Research IDs")
+                        help="compare baseline and edited Definitions on identical selected conditions")
     args = parser.parse_args()
-    research_mode = args.research_generations or args.research_stage is not None or bool(args.research_ids)
     if args.content_impact and not args.content_variant:
         parser.error("--content-impact requires --content-variant")
-    if args.adjustment_note and not args.content_impact:
-        parser.error("--adjustment-note requires --content-impact")
-    if args.research_compare and args.content_variant:
-        parser.error("--content-variant requires an analysis goal or economic composition")
-    if args.research_compare and (research_mode or args.portfolio or args.plan):
-        parser.error("--research-compare cannot be combined with a Content analysis operation")
-    if sum([bool(args.research_generations), args.research_stage is not None, bool(args.research_ids)]) > 1:
-        parser.error("select one research-goal mode")
-    if not research_mode and not args.research_compare and (args.research_science or args.research_horizons or args.research_production_methods or args.research_include_prerequisites or args.research_provider_units != 1):
-        parser.error("research sensitivity arguments require a research goal")
-    selected_methods = (json.loads(args.research_production_methods.read_text(encoding='utf-8'))
-                        if args.research_production_methods else {})
-    selected_plans = _selected_plan_files(args.plan, args.portfolio, parser)
-    if research_mode and selected_plans:
-        parser.error("an explicit Plan owns its research_goal and Stage demands; use Plan phases for quantitative projection or select standalone --research-id for registered alternatives")
-    if args.research_compare and selected_plans:
-        parser.error("--research-compare compares two completed reports, not new economic conditions")
-    if args.portfolio and not selected_plans:
-        parser.error("a portfolio needs at least one explicit composition")
-    if args.content_impact and (args.research_generations or args.research_compare):
-        parser.error("compare explicitly selected goals and activities, not catalog-wide generation totals")
-    if args.content_impact and not (selected_plans or research_mode):
-        parser.error("content impact requires a selected plan or Research goal")
-    note = None
-    if args.adjustment_note:
-        note = json.loads(args.adjustment_note.read_text(encoding="utf-8"))
-        _keys(note, {"question", "player_decision", "hypothesized_constraint_change",
-                     "potential_side_effects", "assessment", "decision"},
-              {"question", "player_decision", "hypothesized_constraint_change",
-               "potential_side_effects"}, "adjustment note")
-        if not all(isinstance(value, str) and value.strip() for value in note.values()):
-            parser.error("adjustment note values must be nonempty strings")
-    if args.content_variant:
-        changes = json.loads(args.content_variant.read_text(encoding='utf-8'))
+    payload = json.loads(args.plan.read_text(encoding="utf-8"))
+    if args.content_impact:
+        changes = json.loads(args.content_variant.read_text(encoding="utf-8"))
         if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
-            parser.error('--content-variant must contain a nonempty JSON list of typed Definition edits')
-        app = build_game_application_for_load(
-            definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
+            parser.error("--content-variant must contain a nonempty JSON list of typed Definition edits")
+        output = {
+            "model": "definition_driven_adjustment_cycle_v1",
+            "assumptions": "explicit_conditions_not_gameplay_or_a_required_balance_target",
+            "economic_comparison": compare_content_variant(payload, changes, summary=args.summary),
+        }
     else:
         app = None
-    if args.content_impact:
-        output = {"model": "definition_driven_adjustment_cycle_v1",
-                  "analyst_context": note,
-                  "assumptions": "explicit_conditions_not_gameplay_or_a_required_balance_target"}
-        if selected_plans:
-            output["economic_comparisons"] = {
-                name: compare_content_variant(payload, changes, summary=args.summary)
-                for name, payload in selected_plans.items()
-            }
-        if research_mode:
-            from scripts.analysis_balance_research import research_goal_impact
-            before = analyze_research_goal(progression_stage=args.research_stage,
-                research_ids=args.research_ids or (), provider_units=args.research_provider_units,
-                include_prerequisites=args.research_include_prerequisites,
-                horizon_days=args.research_horizons,
-                selected_science_campaigns=args.research_science,
-                production_methods=selected_methods)
-            after = analyze_research_goal(progression_stage=args.research_stage,
-                research_ids=args.research_ids or (), provider_units=args.research_provider_units,
-                include_prerequisites=args.research_include_prerequisites,
-                horizon_days=args.research_horizons,
-                selected_science_campaigns=args.research_science,
-                production_methods=selected_methods, app=app)
-            output["research_comparison"] = research_goal_impact(before, after,
-                summary=args.summary)
-    elif args.research_compare:
-        before, after = [json.loads(path.read_text(encoding='utf-8')) for path in args.research_compare]
-        output = compare_research_generation_reports(before, after)
-    elif research_mode:
-        if args.research_generations:
-            result = evaluate_research_generations(horizon_days=args.research_horizons,
-                                                    production_methods=selected_methods, app=app)
-            output = summarize_research_generations(result) if args.summary else result
-        else:
-            result = analyze_research_goal(progression_stage=args.research_stage,
-                                           research_ids=args.research_ids or (),
-                                           provider_units=args.research_provider_units,
-                                           include_prerequisites=args.research_include_prerequisites,
-                                           horizon_days=args.research_horizons,
-                                           selected_science_campaigns=args.research_science,
-                                           production_methods=selected_methods, app=app)
-            output = summarize_research_goal(result) if args.summary else result
-    elif args.portfolio:
-        result = evaluate_portfolio(selected_plans, app=app)
-        output = summarize_portfolio(result) if args.summary else result
-    else:
-        if not selected_plans:
-            parser.error("select registered research goals or explicit economic compositions")
-        payload = next(iter(selected_plans.values()))
+        if args.content_variant:
+            changes = json.loads(args.content_variant.read_text(encoding="utf-8"))
+            if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
+                parser.error("--content-variant must contain a nonempty JSON list of typed Definition edits")
+            app = build_game_application_for_load(
+                definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
         result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
         output = summarize(result) if args.summary else result
-    json.dump(output, sys.stdout,
-              ensure_ascii=False, indent=2, allow_nan=False)
+    json.dump(output, sys.stdout, ensure_ascii=False, indent=2, allow_nan=False)
     print()
 
 
