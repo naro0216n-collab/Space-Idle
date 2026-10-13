@@ -7,12 +7,13 @@ never inferred from these static physical coefficients.
 from __future__ import annotations
 
 from typing import Any
+from math import ceil, isfinite
 
-from .content_system_review import describe_site_requirements
-from .site import evaluate_physical_site_requirements
-from .spatial import IlluminationField, SpatialContextId
-from .shared import DefinitionId
-from .simulation import Simulation
+from .catalog import describe_site_requirements
+from space_idle.site import evaluate_physical_site_requirements
+from space_idle.spatial import IlluminationField, SpatialContextId
+from space_idle.shared import DefinitionId
+from space_idle.simulation import Simulation
 
 
 def _physical_failures(sim: Simulation, requirements, context_id, day: int) -> list[dict[str, str]]:
@@ -27,6 +28,7 @@ def _physical_failures(sim: Simulation, requirements, context_id, day: int) -> l
 def site_evidence(
     sim: Simulation, context_id: SpatialContextId, facility_id: DefinitionId,
     *, method_id: DefinitionId | None = None, level: int = 1, day: int = 0,
+    window_days: float = 1,
 ) -> dict[str, Any]:
     """One equipment choice at one physical context, independently of ownership.
 
@@ -43,10 +45,18 @@ def site_evidence(
         raise ValueError("level must be a positive integer")
     if type(day) is not int or day < 0:
         raise ValueError("day must be a non-negative integer")
+    if (isinstance(window_days, bool) or not isinstance(window_days, (int, float))
+            or not isfinite(window_days) or window_days <= 0):
+        raise ValueError("window_days must be finite and positive")
     definition = sim.facilities.definitions[facility_id]
     recipe = sim.projects.recipes.get(facility_id)
     illumination = sim.facilities.environment.get(context_id, IlluminationField, day)
     generation, load = sim.power.nominal_for_definition_at_context(facility_id, context_id, day)
+    # Sample physical Power coefficients at the owning Power Domain. A sub-day
+    # remainder weights its calendar day; no operational simulation is run.
+    samples = [(sim.power.nominal_for_definition_at_context(facility_id, context_id, day + offset)[0],
+                min(1.0, window_days - offset)) for offset in range(ceil(window_days))]
+    average_generation = sum(value * weight for value, weight in samples) / window_days
     result: dict[str, Any] = {
         "context_id": str(context_id), "day": day, "facility_id": str(facility_id), "level": level,
         "assumptions": "physical context only; neither Location nor Facility is installed; no Knowledge or Allocation",
@@ -55,7 +65,11 @@ def site_evidence(
             "availability": illumination.availability,
         },
         "power": {"generation_mw_per_facility": generation, "active_load_mw_per_facility": load,
-                  "basis": "PowerService.nominal_for_definition_at_context (unmaintained)"},
+                  "window_start_day": day, "window_days": window_days,
+                  "mean_generation_mw_per_facility": average_generation,
+                  "minimum_generation_mw_per_facility": min(value for value, _ in samples),
+                  "maximum_generation_mw_per_facility": max(value for value, _ in samples),
+                  "basis": "PowerService.nominal_for_definition_at_context (unmaintained); sampled over the stated days"},
         "construction": None if recipe is None else {
             "resources_t_per_facility": {str(row.resource_id): row.amount_t for row in recipe.resources},
             "work_per_facility": recipe.construction_work,

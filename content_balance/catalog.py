@@ -10,21 +10,21 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from .catalog import GameCatalog
-from .construction.models import BuildResourceRequirement
-from .execution_requirements import (
+from space_idle.catalog import GameCatalog
+from space_idle.construction.models import BuildResourceRequirement
+from space_idle.execution_requirements import (
     ResourceRequirement, ServiceCapacityRequirement, PoolRequirement,
     PoolAdmissionRequirement, StockOrPoolAdmissionRequirement,
 )
-from .site import RequiresFacet, FacetValueRange, AtmosphericPartialPressureRange
-from .power import FixedGeneration, SolarGeneration
-from .research_models import (
+from space_idle.site import RequiresFacet, FacetValueRange, AtmosphericPartialPressureRange
+from space_idle.power import FixedGeneration, SolarGeneration
+from space_idle.research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec,
     ResearchDemonstrationStageSpec, ResearchOperationalExperienceStageSpec,
 )
-from .research_models import ResearchProviderSourceKind
-from .scenario import ScenarioDefinition
-from .simulation import Simulation
+from space_idle.research_models import ResearchProviderSourceKind
+from space_idle.scenario import ScenarioDefinition
+from space_idle.simulation import Simulation
 
 
 def _sorted_resources(amounts: dict | tuple) -> dict[str, float]:
@@ -145,6 +145,22 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
                 link(resource, "uses", owner_kind="facility_maintenance", owner_id=fid,
                      quantity=amount * definition.maintenance_fraction_per_year,
                      basis="t_per_year_per_new_facility_at_recipe_investment")
+        upgrades = []
+        for (upgrade_id, target_level), upgrade in sorted(sim.projects.upgrade_recipes.items()):
+            if upgrade_id != fid:
+                continue
+            upgrade_resources = _recipe_resources(upgrade.resources)
+            for resource, amount in upgrade_resources.items():
+                link(resource, "uses", owner_kind="facility_upgrade", owner_id=fid,
+                     quantity=amount, basis="t_per_level_transition", target_level=target_level)
+                if definition.maintenance_fraction_per_year:
+                    link(resource, "uses", owner_kind="facility_upgrade_maintenance_increment", owner_id=fid,
+                         quantity=amount * definition.maintenance_fraction_per_year,
+                         basis="t_per_year_per_upgrade_transition", target_level=target_level)
+            upgrades.append({"target_level": target_level, "resources_t": upgrade_resources,
+                             "work": upgrade.construction_work,
+                             "prerequisite_technologies": sorted(map(str, upgrade.prerequisite_technologies)),
+                             "site": describe_site_requirements(upgrade.site_requirements)})
         p = sim.research.facility_provider_for_definition(fid) if sim.research is not None else None
         facilities.append({
             "id": str(fid), "name": definition.display_name,
@@ -159,6 +175,7 @@ def review_content(sim: Simulation, catalog: GameCatalog, scenario: ScenarioDefi
                 "prerequisite_technologies": sorted(map(str, recipe.prerequisite_technologies)),
                 "site": describe_site_requirements(recipe.site_requirements),
             },
+            "upgrades": upgrades,
             "maintenance_fraction_per_year": definition.maintenance_fraction_per_year,
             "power": _power(sim.power.specs.get(fid)),
             "housing_people": definition.housing_capacity,

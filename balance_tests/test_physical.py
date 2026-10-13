@@ -4,7 +4,7 @@ from dataclasses import replace
 from space_idle.content.base_catalog import build_base_catalog
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.composition.base_simulation import build_base_simulation
-from space_idle.content_physical_evidence import movement_evidence, site_evidence
+from content_balance.physical import movement_evidence, site_evidence
 
 
 def _assembled():
@@ -68,3 +68,22 @@ def test_movement_physics_reuses_world_and_vehicle_contracts_without_endpoints()
     assert sim.graph.operational_node_states == {}
     assert sim.transport.transport_allocations == {}
     assert sim.transport.fleet_pools == {}
+
+
+def test_window_power_coefficients_sample_owner_per_day_without_running_game():
+    sim = _assembled()
+    from space_idle.power import SolarGeneration
+    fid = next(fid for fid, spec in sim.power.specs.items()
+               if isinstance(spec.generation, SolarGeneration))
+    context = next(iter(sim.graph.nodes))
+    window = 12.5
+    result = site_evidence(sim, context, fid, day=9, window_days=window)
+    values = [sim.power.nominal_for_definition_at_context(fid, context, 9 + i)[0]
+              for i in range(13)]
+    expected = (sum(values[:12]) + 0.5 * values[12]) / window
+    assert abs(result['power']['mean_generation_mw_per_facility'] - expected) < 1e-9
+    assert result['power']['minimum_generation_mw_per_facility'] == min(values)
+    assert result['power']['maximum_generation_mw_per_facility'] == max(values)
+    assert result['power']['generation_mw_per_facility'] == values[0]
+    assert sim.graph.locations == {}
+    assert sim.facilities.facilities == {}

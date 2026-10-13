@@ -10,13 +10,13 @@ from collections import defaultdict
 from math import isfinite
 from typing import Any
 
-from .content_system_review import describe_execution_requirement
-from .research_models import ResearchProviderSourceKind
-from .content_physical_evidence import site_evidence
-from .research_models import (
+from .catalog import describe_execution_requirement
+from space_idle.research_models import ResearchProviderSourceKind
+from .physical import site_evidence
+from space_idle.research_models import (
     ResearchTheoryStageSpec, ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec,
 )
-from .simulation import Simulation
+from space_idle.simulation import Simulation
 
 
 def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dict[str, Any]]) -> dict[str, Any]:
@@ -160,6 +160,17 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             for requirement in recipe.resources:
                 resource(requirement.resource_id, requirement.amount_t * count, 'demand', 'Construction investment once')
             service('construction_work', recipe.construction_work * count, 'demand')
+        elif kind == 'facility_upgrade':
+            fid, count = item['id'], number(item, 'count', whole=True)
+            target_level = number(item, 'target_level', whole=True)
+            recipe = sim.projects.upgrade_recipes[(fid, target_level)]
+            for requirement in recipe.resources:
+                resource(requirement.resource_id, requirement.amount_t * count, 'demand',
+                         'Facility level transition investment once')
+            service('construction_work', recipe.construction_work * count, 'demand')
+            measurements.append({'measure': 'facility_upgrade_level', 'target_level': target_level,
+                                 'prerequisite_technologies': sorted(map(str, recipe.prerequisite_technologies)),
+                                 'interpretation': 'one specified level transition, not a free completed upgrade'})
         elif kind == 'vehicle_production':
             vid, count = item['id'], number(item, 'count', whole=True)
             spec = sim.transport.vehicle_defs[vid].production
@@ -173,17 +184,20 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             fid, count = item['id'], number(item, 'count', whole=True)
             definition = sim.facilities.definitions[fid]
             context = item['context_id']
-            gen, load = sim.power.nominal_for_definition_at_context(fid, context, int(item.get('day', 0)))
             site = site_evidence(sim, context, fid,
-                level=int(item.get('level', 1)), day=int(item.get('day', 0)))
+                level=int(item.get('level', 1)), day=int(item.get('day', 0)),
+                window_days=period_days)
+            gen = site['power']['mean_generation_mw_per_facility']
+            load = site['power']['active_load_mw_per_facility']
             measurements.append({'measure': 'site_environment',
                 'installation': site['installation'], 'construction': site['construction'],
+                'power_window': site['power'],
                 'interpretation': 'not an installed Facility or a legality preflight'})
             power[node]['nominal_generation_mw'] += gen * count
             power[node]['nominal_active_load_mw'] += load * count
             measurements.append({'measure': 'power', 'generation_mw': gen * count,
                                  'active_load_mw': load * count, 'context_id': str(context),
-                                 'basis': 'PowerService.nominal_for_definition_at_context; no fulfillment'})
+                                 'basis': 'PowerService.nominal_for_definition_at_context; window mean, no fulfillment'})
             for cap in definition.service_capacity_supplies:
                 service(cap.service_type, cap.nominal_rate * count * period_days,
                         'supply', scope=cap.scope.value)
@@ -215,10 +229,22 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                                      'interpretation': 'before site opportunity, Knowledge and allocation'})
             recipe = sim.projects.recipes.get(fid)
             if recipe is not None:
-                invested = {req.resource_id: req.amount_t * count for req in recipe.resources}
+                invested = defaultdict(float)
+                for req in recipe.resources:
+                    invested[req.resource_id] += req.amount_t * count
+                # A hypothetical level > 1 includes actual registered transitions.
+                # Missing transitions cannot be treated as free equipment.
+                level = number(item, 'level', whole=True) if 'level' in item else 1
+                for next_level in range(2, level + 1):
+                    upgrade = sim.projects.upgrade_recipes[(fid, next_level)]
+                    for req in upgrade.resources:
+                        invested[req.resource_id] += req.amount_t * count
                 for rid, rate in sim.facilities.maintenance_requirements_for_investment(fid, invested).items():
                     resource(rid, rate * period_days, 'demand',
-                             'MaintenanceService investment-based daily coefficient')
+                             'MaintenanceService cumulative build and level-transition investment')
+                measurements.append({'measure': 'facility_investment_for_maintenance',
+                                     'level': level, 'resources_t': {str(k): v for k, v in sorted(invested.items())},
+                                     'interpretation': 'assumed assets acquired; investment is not counted again as new construction'})
             provider = sim.research.facility_provider_for_definition(fid)
             if provider is not None:
                 lev = provider.level_spec(int(item.get('level', 1)))
@@ -308,6 +334,21 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 raise ValueError('origin-returning Movement cannot also have a physical reverse')
             cycle = sim.transport.physical_cycle_coefficients(vehicle_id, tuple(forward), tuple(reverse),
                 anchor_context_id=origin)
+            target_forward = number(item, 'target_forward_t_per_day') if 'target_forward_t_per_day' in item else None
+            target_reverse = number(item, 'target_reverse_t_per_day') if 'target_reverse_t_per_day' in item else None
+            if target_forward is not None or target_reverse is not None:
+                from space_idle.transport.models import DirectionalCapacity
+                requested = DirectionalCapacity(target_forward or 0.0, target_reverse or 0.0)
+                required_units = sim.transport.required_units_for_capacity(requested, cycle.nominal_per_unit)
+                measurements.append({'measure': 'transport_od_demand',
+                                     'origin_node': node, 'destination_node': str(destination_node),
+                                     'target_forward_t_per_day': requested.forward_t_per_day,
+                                     'target_reverse_t_per_day': requested.reverse_t_per_day,
+                                     'required_units_from_owner_physical_capacity': required_units,
+                                     'assumed_fleet_units': units,
+                                     'nominal_capacity_covers_target': units >= required_units,
+                                     'basis': 'TransportDomain.required_units_for_capacity on physical cycle; '
+                                              'not a Fleet reservation or a delivered Resource'})
             for context, rid, rate in cycle.resource_t_per_full_utilization_day:
                 site_node = node if context == origin else destination_node if context == destination else None
                 if site_node is None:
@@ -325,7 +366,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 'reverse_t_per_day': cycle.nominal_per_unit.reverse_t_per_day * units,
                 'interpretation': 'full-cycle nominal loads; no Supply, installed infrastructure, Fleet acquisition or Cargo admission'})
         elif kind == 'movement':
-            from .content_physical_evidence import movement_evidence
+            from .physical import movement_evidence
             count = number(item, 'count', whole=True)
             cargo = number(item, 'cargo_t')
             origin, destination, vehicle_id = item['origin_context_id'], item['destination_context_id'], item['id']

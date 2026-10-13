@@ -58,7 +58,7 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合を実行する。全体系Content調整はゲーム本体の契約テストとは別の**設計・数量評価作業**であり、固定Scenarioや比較値のための独立suiteを維持しない。開発用のContent読取処理がある場合、契約として必要な最小範囲を通常テストで確かめる。
+通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合だけを実行する。全体系Content調整は別の設計・数量評価作業とし、読取・数量整理コードを`content_balance/`、その専用検証を`balance_tests/`に分離する。調整基盤を変更した場合は`python scripts/local_test_run.py start -- balance_tests`で明示実行し、run IDを同runnerの`status`に渡して終了結果を確認する。`pytest`既定収集、Fast CI、Full Validationの通常unit jobには`balance_tests/`を含めない。Domain契約の検証は引き続き`tests/`で行い、調整用の暫定Content値や特定発展仮説をCore仕様として固定しない。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 
@@ -176,7 +176,9 @@ Maintenanceのpacket実行・照合に失敗した場合は、同じtransaction�
 
 全体系バランス調整は通常pytest/Fast CIの合否判定ではなく、`docs/design.md` §22と`docs/architecture.md` §17.1に基づくContent設計作業とする。分析者は地球中心の初期Scenario、登録技術体系と設備・Vehicle・工程・Worldの物理条件を調べ、初期・研究段階後・複数天体進出・中期物流ネットワーク等の**発展構成を調整仮説として**検討する。Facility・Fleet台数、World値、研究日数、初期配置、世代区分はすべて調整候補であり、特定の配置・攻略順・数値を正解として固定しない。発展に必要な研究、製造、投資、輸送、運転と維持の負担を辿り、工学的役割と量的拡張のつながりを吟味した上でContentの追加・統廃合・数量調整を行う。
 
-登録Contentの基礎資料は`python scripts/content_system_review.py`で取得する。初期拠点の設備・Fleet、表示研究段階、実Research Stage、取得Recipe、製造要求、ProcessとExtractionのResource係数、Life Support、Power、World Potentialを共通Definitionから参照できる。`--stage 1`等は研究**表示分類の閲覧範囲**を絞るだけで、分類内の研究をすべて完了させたりFacility取得・建設・輸送を自動仮定しない。`--json`は係数と出典を調べる必要がある時にのみ用い、全文出力やスコアを調整結論としない。各数量には単位と負担主体を保持し、工程の名目能力と実生産、採掘Potentialと実採掘、初期保有と将来取得を混同しない。
+調整専用の登録Content読取・数量資料は`python scripts/content_system_review.py`で取得する。`--site CONTEXT --facility FACILITY --window-days N`は対象期間のPower係数（単日の値・期間平均・範囲）を所有Domainから取得し、`--route ORIGIN DEST --vehicle VEHICLE`は物理Movement・往復Fleet係数を取得する。`--ledger worksheet.json`は期間とNodeを明記したResource・Power・Service・Research・輸送需要を一緒に照合する。FacilityのUpgradeは建設と区別し、追加投資・施工・累積維持負担を取得する。Transport cycleは指定OD需要から所有Domainの名目必要Fleet単位数を得るが、実Fleet割当やCargo配送を成立させない。
+
+登録Contentの基礎資料は同CLIで取得する。初期拠点の設備・Fleet、表示研究段階、実Research Stage、取得Recipe、製造要求、ProcessとExtractionのResource係数、Life Support、Power、World Potentialを共通Definitionから参照できる。`--stage 1`等は研究**表示分類の閲覧範囲**を絞るだけで、分類内の研究をすべて完了させたりFacility取得・建設・輸送を自動仮定しない。`--json`は係数と出典を調べる必要がある時にのみ用い、全文出力やスコアを調整結論としない。各数量には単位と負担主体を保持し、工程の名目能力と実生産、採掘Potentialと実採掘、初期保有と将来取得を混同しない。
 
 設計時に研究段階の終わりの設備・Vehicle・産業・物流の状況を仮定するなら、初期Scenarioからの研究・取得投資・操業によって生じ得る規模かを**その仮定自体を含めて**吟味する。現行Contentの不足が明らかになった場合、比較機能を追加して不足を表示するのではなく、Content体系・実物理係数・World条件を見直す。Playerの最適Buildや単一の経路を探さず、分析専用の第二のGame State・自動日次Simulation・Save必須化・条件付き不足警告の網羅化を行わない。必要な機能的な疑義は所有Domain／Applicationの短い契約検証で調べる。
 

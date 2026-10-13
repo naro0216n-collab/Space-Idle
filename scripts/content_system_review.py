@@ -1,7 +1,7 @@
 """Produce source-grounded material for design of the *whole Content system*.
 
 Usage: python scripts/content_system_review.py [--json] [--stage N]
-       python scripts/content_system_review.py --site CONTEXT --facility FACILITY [--method METHOD]
+       python scripts/content_system_review.py --site CONTEXT --facility FACILITY [--method METHOD] [--window-days N]
        python scripts/content_system_review.py --route FROM TO --vehicle VEHICLE
        python scripts/content_system_review.py --ledger worksheet.json
 
@@ -12,6 +12,7 @@ All rows require `node` (explicit accounting label) and `kind`. Other kinds and 
     selected_extraction_method_id, level, day
   extraction: id (method), facility_id, facility_units, context_id, rate_t_per_day
   facility_construction / vehicle_production / founding / spatial_development: id, count
+  facility_upgrade: id (facility), target_level, count
   research_stage: id (technology), stage_id, count
   research_fleet_provider: id (provider), vehicle_id, units
   survey_provider: id (provider), source_id (facility/vehicle), mode_id, units
@@ -20,7 +21,8 @@ All rows require `node` (explicit accounting label) and `kind`. Other kinds and 
   movement: id (vehicle), origin_context_id, destination_context_id,
     movement_plan_id, cargo_t, count
   transport_cycle: id (vehicle), units, origin_context_id, destination_context_id,
-    destination_node, forward_plan_id, optional reverse_plan_id
+    destination_node, forward_plan_id, optional reverse_plan_id,
+    optional target_forward_t_per_day / target_reverse_t_per_day for nominal Fleet requirement
   market_trade: id (resource), provider_id, direction (buy/sell), quantity_t
 All physical quantities are conditional hypotheses; no registered operational
 State, Cargo, Funds, Research, or Game time is advanced. No cases, scoring,
@@ -38,9 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from space_idle.content.base_catalog import build_base_catalog
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.composition.base_simulation import build_base_simulation
-from space_idle.content_system_review import review_content
-from space_idle.content_physical_evidence import site_evidence, movement_evidence
-from space_idle.content_quantity_ledger import quantity_ledger
+from content_balance.catalog import review_content
+from content_balance.physical import site_evidence, movement_evidence
+from content_balance.ledger import quantity_ledger
 
 
 def render(report: dict, stage: int | None = None) -> str:
@@ -93,9 +95,13 @@ def main() -> None:
                         help="physical World contexts, not active Transport endpoints")
     parser.add_argument("--vehicle", help="Vehicle id (required with --route)")
     parser.add_argument("--cargo-t", type=float, default=0.0, help="specified one-way mass in tonnes")
-    parser.add_argument("--day", type=int, default=0, help="day to sample Environment coefficients")
+    parser.add_argument("--day", type=int, default=0, help="first day to sample Environment coefficients")
+    parser.add_argument("--window-days", type=float, default=1,
+                        help="duration for Power sampling with --site (not a Simulation)")
     args = parser.parse_args()
     physical_site = args.site is not None or args.facility is not None or args.method is not None
+    if args.window_days != 1 and not physical_site:
+        parser.error("--window-days requires --site and --facility")
     physical_route = args.route is not None or args.vehicle is not None
     if args.ledger is not None and (physical_site or physical_route or args.stage is not None):
         parser.error("--ledger is a separate quantity worksheet")
@@ -121,7 +127,8 @@ def main() -> None:
         return
     if physical_site:
         print(json.dumps(site_evidence(sim, args.site, args.facility,
-                                       method_id=args.method, level=args.level, day=args.day),
+                                       method_id=args.method, level=args.level, day=args.day,
+                                       window_days=args.window_days),
                          ensure_ascii=False, indent=2))
         return
     if physical_route:

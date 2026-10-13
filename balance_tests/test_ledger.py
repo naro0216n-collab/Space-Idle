@@ -4,7 +4,7 @@ import math
 from space_idle.content.base_catalog import build_base_catalog
 from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.composition.base_simulation import build_base_simulation
-from space_idle.content_quantity_ledger import quantity_ledger
+from content_balance.ledger import quantity_ledger
 
 
 def _sim():
@@ -201,3 +201,62 @@ def test_survey_provider_and_location_development_are_inputs_not_advancement():
         assert row['supply_t_per_day'] == 0
     assert sim.survey.campaigns == {}
     assert sim.graph.locations == {}
+
+
+def test_upgrade_investment_is_separate_from_cumulative_operating_maintenance():
+    sim = _sim()
+    (fid, level), upgrade = next(iter(sim.projects.upgrade_recipes.items()))
+    construction = sim.projects.recipes[fid]
+    cell = next(iter(sim.graph.surface_cells))
+    result = quantity_ledger(sim, period_days=25, activities=[
+        {'kind': 'facility_upgrade', 'node': 'industrial', 'id': fid,
+         'target_level': level, 'count': 2},
+        {'kind': 'facility_operation', 'node': 'research', 'id': fid,
+         'count': 2, 'level': level, 'context_id': cell},
+    ])
+    spent = {str(row.resource_id): row.amount_t * 2 for row in upgrade.resources}
+    for rid, amount in spent.items():
+        row = next(row for row in result['resource_by_node']
+                   if row['node'] == 'industrial' and row['resource_id'] == rid)
+        assert math.isclose(row['demand_t_per_day'], amount / 25)
+        assert row['supply_t_per_day'] == 0
+    investments = {str(req.resource_id): req.amount_t * 2 for req in construction.resources}
+    for next_level in range(2, level + 1):
+        for req in sim.projects.upgrade_recipes[(fid, next_level)].resources:
+            investments[str(req.resource_id)] = investments.get(str(req.resource_id), 0) + 2 * req.amount_t
+    upkeep = sim.facilities.maintenance_requirements_for_investment(fid, investments)
+    for rid, rate in upkeep.items():
+        row = next(row for row in result['resource_by_node']
+                   if row['node'] == 'research' and row['resource_id'] == str(rid))
+        assert math.isclose(row['demand_t_per_day'], rate)
+    assert sim.projects.projects == {}
+    assert sim.facilities.facilities == {}
+
+
+def test_transport_demand_couples_owner_required_fleet_to_explicit_od_without_cargo_settlement():
+    sim = _sim()
+    origin, destination = tuple(sim.graph.nodes)[:2]
+    forward = sim.transport.movement_resolver().physical_context_plans(origin, destination)
+    reverse = sim.transport.movement_resolver().physical_context_plans(destination, origin)
+    from space_idle.transport.models import OperationAssetDisposition, DirectionalCapacity
+    vid = next(vid for vid, definition in sim.transport.vehicle_defs.items()
+        if definition.movement_asset_disposition(forward[0]) is OperationAssetDisposition.DESTINATION)
+    cycle = sim.transport.physical_cycle_coefficients(vid, (forward[0],), (reverse[0],),
+                                                      anchor_context_id=origin)
+    demand = DirectionalCapacity(cycle.nominal_per_unit.forward_t_per_day * 2.1,
+                                 cycle.nominal_per_unit.reverse_t_per_day * 0.7)
+    result = quantity_ledger(sim, period_days=28, activities=[
+        {'kind': 'transport_cycle', 'node': 'one', 'destination_node': 'two', 'id': vid,
+         'units': 2, 'origin_context_id': origin, 'destination_context_id': destination,
+         'forward_plan_id': str(forward[0].id), 'reverse_plan_id': str(reverse[0].id),
+         'target_forward_t_per_day': demand.forward_t_per_day,
+         'target_reverse_t_per_day': demand.reverse_t_per_day},
+    ])
+    measurement = next(row for row in result['activity_evidence'][0]['evidence']
+                       if row['measure'] == 'transport_od_demand')
+    assert measurement['required_units_from_owner_physical_capacity'] == sim.transport.required_units_for_capacity(
+        demand, cycle.nominal_per_unit)
+    assert not measurement['nominal_capacity_covers_target']
+    assert measurement['origin_node'] == 'one' and measurement['destination_node'] == 'two'
+    assert all(row['supply_t_per_day'] == 0 for row in result['resource_by_node'])
+    assert sim.transport.transport_allocations == {}
