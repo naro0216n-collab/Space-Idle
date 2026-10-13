@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from stock_support import add_preexisting_stock
+from stock_support import service_target_for_test_units, add_preexisting_stock
 
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -241,7 +241,8 @@ def test_exploration_assignment_owns_fleet_and_partial_inputs_until_unassigned()
     required_units = _row(app).required_units
     assert committed.exploration_units == required_units > 0
 
-    capacity = sim.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
         committed.total_units, day=sim.day,
     )

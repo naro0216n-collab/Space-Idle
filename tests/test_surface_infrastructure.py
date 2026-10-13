@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle import (
@@ -307,7 +309,8 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     sim.transport.invalidate_movement_plans()
     allocation_id = sim.transport.create_transport_allocation(
         ids.SURFACE_CARGO_HAULER, a, b,
-        target_capacity=sim.transport.transport_capacity_for_units(
+        target_capacity=service_target_for_test_units(
+            sim.transport,
             ids.SURFACE_CARGO_HAULER, a, b, 1, day=sim.day
         ),
         day=sim.day,

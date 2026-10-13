@@ -231,8 +231,7 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
         assert payload["revision"] == 1
 
         # Exercise nested command decoding through the real HTTP boundary.
-        # Generic founding no longer hardcodes a Resource Knowledge requirement;
-        # a typed surface target should therefore reach the application contract.
+        # Founding uses a typed target and a shared Application command contract.
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {
@@ -299,7 +298,7 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
         assert campaign["priority"] == 4
         assert campaign["projected_provider_definition_id"] == str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)
         assert campaign["projected_provider_display_name"]
-        assert "base." not in campaign["projected_provider_display_name"]
+        assert campaign["projected_provider_display_name"] != campaign["projected_provider_definition_id"]
 
         status, _, payload = _request(port, "GET", preview_path)
         assert status == 200

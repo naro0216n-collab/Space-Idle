@@ -19,16 +19,28 @@ def test_map_layout_scales_without_overlapping_hit_targets_or_registration_order
         document:{addEventListener:()=>{}},
       };
       vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
-      const nodes=Array.from({length:36},(_,i)=>({
-        id:`stress.node.${i}`,body_id:`stress.body.${Math.floor(i/12)}`,kind:'surface'
+      const bodies=Array.from({length:3},(_,i)=>({
+        id:`stress.body.${i}`, parent_body_id:null,
+        heliocentric_semimajor_axis_au:i+1,
       }));
-      const layout=context.window.SpaceIdleSystemMap.positionsFor(nodes);
-      const reversed=context.window.SpaceIdleSystemMap.positionsFor([...nodes].reverse());
+      const nodes=Array.from({length:42},(_,i)=>({
+        id:`stress.node.${i}`,
+        body_id:i<36?`stress.body.${Math.floor(i/12)}`:'unknown.body',
+        kind:'surface',
+      }));
+      const project=context.window.SpaceIdleSystemMap.worldPositionsFor;
+      const layout=project(bodies,nodes);
+      const reversed=project([...bodies].reverse(),[...nodes].reverse());
       const points=Object.values(layout.positions);
       if(JSON.stringify(layout)!==JSON.stringify(reversed))throw Error('registration order');
       if(points.length!==nodes.length||layout.height<=420)throw Error('map does not expand');
+      if(!points.every((p)=>p[0]>0&&p[0]<layout.width&&p[1]>0&&p[1]<layout.height))
+        throw Error('node outside map viewport');
+      // Coordinates must leave enough space for the node's rendered shell.
       if(!points.every((p,i)=>points.every((q,j)=>i===j||
-        Math.abs(p[0]-q[0])>=142||Math.abs(p[1]-q[1])>=132)))throw Error('overlapping targets');
+        Math.abs(p[0]-q[0])>=142||Math.abs(p[1]-q[1])>=68)))throw Error('overlapping touch targets');
+      const emptyWorld=project([],nodes);
+      if(Object.keys(emptyWorld.positions).length!==nodes.length)throw Error('unattached nodes lost');
     """
     result = subprocess.run(
         [node, "-e", script, str(source)],

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle import (
@@ -186,7 +188,8 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert not selected.selection_required
     del sim.industry.processes[alternate_process_id]
 
-    capacity = sim.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
     )
     app.execute(CreateTransportAllocation(

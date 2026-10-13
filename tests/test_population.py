@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from stock_support import add_preexisting_stock
+from stock_support import service_target_for_test_units, add_preexisting_stock
 
 from datetime import datetime, timezone
 
@@ -26,7 +26,8 @@ def _prepare_leo_passenger_service(sim, *, supplies=2.0, with_service=True):
         add_preexisting_stock(sim, ids.LEO, resource, supplies)
     if not with_service:
         return None
-    capacity = sim.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=sim.day,
     )
     allocation = sim.transport.create_transport_allocation(

@@ -19,3 +19,19 @@ def add_preexisting_stock(sim, node_id, resource_id, amount):
             sim.storage.set_infrastructure_capacity(node_id, pool, existing + shortfall)
             sim.refresh_storage()
     sim.inventory.add(node_id, resource_id, amount)
+
+
+def service_target_for_test_units(
+    transport, vehicle_definition_id, origin_id, destination_id, units,
+    *, day=0, movement_hard_constraint=None,
+):
+    """Create a numeric target fixture from the same physical plan as the real Query.
+
+    Unit counts only choose test magnitudes; Transport Allocation never receives
+    a unit-count control or persists it as Player intent.
+    """
+    plan = transport.transport_service_plan_for(
+        vehicle_definition_id, origin_id, destination_id,
+        day=day, movement_hard_constraint=movement_hard_constraint,
+    )
+    return transport.capacity_for_service_units(plan.nominal_per_unit, units)

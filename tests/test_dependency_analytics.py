@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle import (
@@ -138,7 +140,8 @@ def test_current_authorized_transport_projects_boundary_flow_consumption_and_par
     )
     allocation_id = sim.transport.create_transport_allocation(
         ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO,
-        target_capacity=sim.transport.transport_capacity_for_units(
+        target_capacity=service_target_for_test_units(
+            sim.transport,
             ids.REUSABLE_LAUNCH_VEHICLE, EARTH, LEO, 1, day=sim.day
         ),
         day=sim.day,

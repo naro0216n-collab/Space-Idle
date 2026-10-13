@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle.catalog import ResourceDef
@@ -126,7 +128,8 @@ def test_boundary_settlement_resources_feed_the_next_physical_snapshot_allocatio
     sim.inventory.stock[(ids.LEO, ids.STRUCTURAL_COMPONENTS)] = 0.0
     sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 100.0)
 
-    target_capacity = sim.transport.transport_capacity_for_units(
+    target_capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
     )
     sim.transport.create_transport_allocation(

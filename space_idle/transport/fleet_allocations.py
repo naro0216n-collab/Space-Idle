@@ -933,7 +933,7 @@ class FleetAllocationMixin:
     ) -> DirectionalCapacity:
         """Scale an already-derived service capacity without re-deriving its route."""
         if units < 0:
-            raise ValueError("transport unit convenience input must be non-negative")
+            raise ValueError("service unit quantity must be non-negative")
         return DirectionalCapacity(
             nominal_per_unit.forward_t_per_day * units,
             nominal_per_unit.reverse_t_per_day * units,
@@ -943,55 +943,6 @@ class FleetAllocationMixin:
         allocation = self.transport_allocations[allocation_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
         return self.required_units_for_capacity(allocation.target_capacity, plan.nominal_per_unit)
-
-    def transport_required_units_for_target(
-        self,
-        vehicle_definition_id: DefinitionId,
-        anchor_node_id: SpatialNodeId,
-        destination_id: SpatialNodeId,
-        target_capacity: DirectionalCapacity,
-        *,
-        day: int = 0,
-        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
-    ) -> int:
-        """Derive Fleet units required by a hypothetical capacity target.
-
-        This is a projection helper only. The authoritative Transport Allocation
-        state remains the directional capacity target.
-        """
-        plan = self.transport_service_plan_for(
-            vehicle_definition_id,
-            anchor_node_id,
-            destination_id,
-            day=day,
-            movement_hard_constraint=movement_hard_constraint,
-        )
-        return self.required_units_for_capacity(target_capacity, plan.nominal_per_unit)
-
-    def transport_capacity_for_units(
-        self,
-        vehicle_definition_id: DefinitionId,
-        anchor_node_id: SpatialNodeId,
-        destination_id: SpatialNodeId,
-        units: int,
-        *,
-        day: int = 0,
-        movement_hard_constraint: tuple[MovementPlanId, ...] | None = None,
-    ) -> DirectionalCapacity:
-        """Convert a unit-count convenience input into the authoritative capacity target.
-
-        The returned value is derived from the currently selected Transport Service
-        Plan and is never stored as a unit target. Callers may use it for previews or
-        input assistance while Transport Allocation state remains capacity-only.
-        """
-        plan = self.transport_service_plan_for(
-            vehicle_definition_id,
-            anchor_node_id,
-            destination_id,
-            day=day,
-            movement_hard_constraint=movement_hard_constraint,
-        )
-        return self.capacity_for_service_units(plan.nominal_per_unit, units)
 
     def create_transport_allocation(
         self,

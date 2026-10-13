@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from stock_support import add_preexisting_stock
+from stock_support import service_target_for_test_units, add_preexisting_stock
 
 import pytest
 from unittest.mock import patch
@@ -56,7 +56,8 @@ from space_idle.transport.movement import MovementResolver
 
 
 def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
-    capacity = app._simulation.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        app._simulation.transport,
         vehicle_definition_id, source_id, destination_id, units, day=app._simulation.day
     )
     return {
@@ -346,7 +347,8 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
     assert option.fleet_free_units <= option.fleet_total_units
     assert option.fleet_total_units >= 0
 
-    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    two_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
     )
     preview = app.query(GetTransportAllocationPreview(
@@ -362,7 +364,8 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
     assert preview.achievable_capacity.forward_t_per_day <= preview.target_capacity.forward_t_per_day
     assert preview.available_units >= 0
 
-    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    two_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
     )
     allocation_id = app.execute(CreateTransportAllocation(
@@ -395,7 +398,8 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
     assert constrained.movement_hard_constraint == option.forward_path
     assert constrained.selected_forward_path == option.forward_path
 
-    one_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    one_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
         day=app._simulation.day,
         movement_hard_constraint=tuple(

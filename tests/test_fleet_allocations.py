@@ -1,4 +1,4 @@
-from stock_support import add_preexisting_stock
+from stock_support import service_target_for_test_units, add_preexisting_stock
 
 import math
 
@@ -32,7 +32,8 @@ def _capacity_for_units(
     transport, vehicle_definition_id, source_id, destination_id, units, *, day=0,
     movement_hard_constraint=None,
 ):
-    return transport.transport_capacity_for_units(
+    return service_target_for_test_units(
+        transport,
         vehicle_definition_id, source_id, destination_id, units,
         day=day, movement_hard_constraint=movement_hard_constraint,
     )
@@ -360,26 +361,28 @@ def test_transport_capacity_is_authoritative_and_required_units_are_derived():
         capacity_allocation_id, day=capacity_sim.day
     ).required_units == expected
 
-    convenience_sim = _fleet_sim(3)
-    convenience_transport = convenience_sim.transport
-    five_unit_capacity = convenience_transport.transport_capacity_for_units(
+    target_sim = _fleet_sim(3)
+    target_transport = target_sim.transport
+    five_unit_capacity = service_target_for_test_units(
+        target_transport,
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, 5,
-        day=convenience_sim.day,
+        day=target_sim.day,
     )
-    convenience_id = convenience_transport.create_transport_allocation(
+    target_allocation_id = target_transport.create_transport_allocation(
         ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT,
-        target_capacity=five_unit_capacity, day=convenience_sim.day,
+        target_capacity=five_unit_capacity, day=target_sim.day,
     )
-    allocation = convenience_transport.transport_allocations[convenience_id]
+    allocation = target_transport.transport_allocations[target_allocation_id]
     assert allocation.target_capacity == five_unit_capacity
-    assert convenience_transport.allocation_required_units(
-        convenience_id, convenience_sim.day
+    assert target_transport.allocation_required_units(
+        target_allocation_id, target_sim.day
     ) == 5
-    assert convenience_transport.transport_active_units(convenience_id) == 3
+    assert target_transport.transport_active_units(target_allocation_id) == 3
     with pytest.raises(ValueError, match="non-negative"):
-        convenience_transport.transport_capacity_for_units(
+        service_target_for_test_units(
+            target_transport,
             ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LEO, ids.LUNAR_ORBIT, -1,
-            day=convenience_sim.day,
+            day=target_sim.day,
         )
 
     auto_plan = capacity_transport.derive_transport_service_plan(

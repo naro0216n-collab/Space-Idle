@@ -39,38 +39,9 @@
     if(target.operational_node_id)selectedNodes.add(target.operational_node_id);
     return {selectedAllocations,selectedNodes};
   }
-  function positionsFor(nodes){
-    // A diagrammatic, extendable plane. Nodes are given real hit-target space,
-    // not squeezed into a fixed percentage band as the number of nodes grows.
-    const groups=new Map();
-    for(const node of nodes){
-      const key=node.body_id||`context:${node.id}`;
-      if(!groups.has(key))groups.set(key,[]);
-      groups.get(key).push(node);
-    }
-    const keys=[...groups.keys()].sort((a,b)=>a.localeCompare(b));
-    const positions={};
-    // Use a common logical coordinate space independent of the width of the
-    // Overview/Transport host and the current device orientation.
-    const width=Math.max(720,keys.length*188+56);
-    const maxRows=Math.max(1,...[...groups.values()].map((items)=>items.length));
-    const height=Math.max(420,maxRows*140+44);
-    keys.forEach((key,groupIndex)=>{
-      const group=groups.get(key).slice().sort((a,b)=>
-        String(a.kind||'').localeCompare(String(b.kind||''))||String(a.id).localeCompare(String(b.id)));
-      const x=(groupIndex+.5)*width/keys.length;
-      group.forEach((node,index)=>{
-        const y=(index+.5)*height/group.length;
-        positions[node.id]=[x,y];
-      });
-    });
-    return {positions,width,height};
-  }
-
   function worldPositionsFor(bodies,nodes){
     // Body hierarchy is catalog data; only its presentation coordinates are calculated here.
     // Operational Nodes have their own column and are the only valid allocation endpoints.
-    if(!bodies.length)return {...positionsFor(nodes),bodyPositions:{},parentLines:[]};
     const byId=new Map(bodies.map((body)=>[body.id,body]));
     const roots=bodies.filter((body)=>!body.parent_body_id||!byId.has(body.parent_body_id))
       .sort((a,b)=>(a.heliocentric_semimajor_axis_au??Infinity)-(b.heliocentric_semimajor_axis_au??Infinity)
@@ -97,7 +68,7 @@
       if(rootId&&nodeGroups.has(rootId))nodeGroups.get(rootId).push(node);
       else detached.push(node);
     }
-    const width=Math.max(720,groups.length*342+detached.length*164+40);
+    const width=Math.max(720,groups.length*342+detached.length*164+120);
     const height=Math.max(420,...groups.map((group)=>180+Math.max(group.satellites.length, nodeGroups.get(group.root.id).length)*142));
     const bodyPositions={};
     const positions={};
@@ -309,5 +280,5 @@
     viewport.x=dragging.ox+event.clientX-dragging.x;viewport.y=dragging.oy+event.clientY-dragging.y;applyViewport();
   });
   for(const type of ['pointerup','pointercancel'])document.addEventListener(type,(event)=>{if(dragging?.id===event.pointerId)dragging=null;});
-  window.SpaceIdleSystemMap={detach,render,positionsFor,worldPositionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
+  window.SpaceIdleSystemMap={detach,render,worldPositionsFor,allocationPairs,contextRelations,focusNode,onSelect:()=>{}};
 })();

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 from dataclasses import dataclass
 
 import pytest
@@ -60,7 +62,8 @@ def _requirement(
 
 
 def _capacity_for_units(sim, vehicle_definition_id, source_id, destination_id, units):
-    return sim.transport.transport_capacity_for_units(
+    return service_target_for_test_units(
+        sim.transport,
         vehicle_definition_id, source_id, destination_id, units, day=sim.day
     )
 
