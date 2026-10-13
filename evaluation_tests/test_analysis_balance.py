@@ -610,8 +610,8 @@ def test_research_and_economy_cli_share_one_composition_contract(definitions, tm
 
     changed = tmp_path / "definition_changes.json"
     changed.write_text(json.dumps([{
-        "kind": "research_theory_stage", "id": research_id,
-        "stage_id": stage.stage_id, "field": "research_point_cost",
+        "kind": "research", "id": research_id,
+        "selector": {"stage_id": stage.stage_id}, "field": "stage_specs.research_point_cost",
         "value": stage.research_point_cost * 1.3,
     }]), encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["analysis_balance.py", str(inputs[0]),
@@ -664,8 +664,8 @@ def test_content_impact_uses_composition_comparison_and_registered_stage_demand(
                 if any(isinstance(spec, ResearchTheoryStageSpec) for spec in definition.stage_specs))
     stage = next(s for s in tech.stage_specs if isinstance(s, ResearchTheoryStageSpec))
     delta = max(1.0, stage.research_point_cost * .23)
-    change = [{"kind": "research_theory_stage", "id": str(tech.id),
-               "stage_id": stage.stage_id, "field": "research_point_cost",
+    change = [{"kind": "research", "id": str(tech.id),
+               "selector": {"stage_id": stage.stage_id}, "field": "stage_specs.research_point_cost",
                "value": stage.research_point_cost + delta}]
     provider, facility = next((provider, facility)
                               for provider in sim.research.providers.values()
@@ -708,8 +708,8 @@ def test_content_impact_handles_independent_alternative_cases(definitions):
                 if any(isinstance(s, ResearchTheoryStageSpec) for s in v.stage_specs))
     stage = next(s for s in tech.stage_specs if isinstance(s, ResearchTheoryStageSpec))
     delta = max(1.0, stage.research_point_cost / 10)
-    edit = [{"kind": "research_theory_stage", "id": str(tech.id),
-             "stage_id": stage.stage_id, "field": "research_point_cost",
+    edit = [{"kind": "research", "id": str(tech.id),
+             "selector": {"stage_id": stage.stage_id}, "field": "stage_specs.research_point_cost",
              "value": stage.research_point_cost + delta}]
     plan = {"cases": [{"name": "industry-only", "plan": {
         "phases": [{"name": "operation", "days": 17, "facilities": []}]}},
@@ -1237,8 +1237,8 @@ def test_provider_level_content_hypothesis_uses_registered_research_capacity_and
              'source_facility': str(source.id), 'units': 1}]}
     ]}
     level = provider.levels[0]
-    edits = [{'kind': 'research_provider', 'id': str(provider.id), 'level': level.level,
-              'field': metric, 'value': value} for metric, value in (
+    edits = [{'kind': 'research_provider', 'id': str(provider.id),
+              'selector': {'level': level.level}, 'field': 'levels.' + metric, 'value': value} for metric, value in (
                   ('generation_points_per_day', level.generation_points_per_day * 1.5),
                   ('storage_capacity_points', level.storage_capacity_points * 1.2),
                   ('research_execution_per_day', level.research_execution_per_day * 1.3),
@@ -1257,8 +1257,8 @@ def test_provider_level_content_hypothesis_uses_registered_research_capacity_and
         baseline['research_time_structure']['conditional_known_capacity_lower_bound_days'])
     assert altered['resources'] == baseline['resources']  # Provider performance does not mint physical inputs.
     assert capture_state(sim) == before
-    with pytest.raises(ValueError, match='unregistered Research Provider Level'):
-        compare_content_variant(plan, [{**edits[0], 'level': max(s.level for s in provider.levels) + 1}])
+    with pytest.raises(ValueError, match='tuple selector'):
+        compare_content_variant(plan, [{**edits[0], 'selector': {'level': max(s.level for s in provider.levels) + 1}}])
 
 
 def test_different_horizons_compare_rates_and_burdens_without_subtracting_total_stock(definitions):
@@ -1346,7 +1346,7 @@ def test_case_changes_research_dag_and_conditionally_acquired_assets_without_pla
         {'collection': 'vehicle_builds', 'action': 'add', 'phase': 'investment', 'row': fleet},
         {'collection': 'facilities', 'action': 'add', 'phase': 'operation', 'row': asset},
         {'collection': 'fleet', 'action': 'add', 'phase': 'operation', 'row': fleet},
-        {'collection': 'research_goal', 'phase': 'operation', 'research_ids': [str(b)]},
+        {'collection': 'research_goal', 'phase': 'operation', 'set': {'research_ids': [str(b)]}},
     ]
     before = deepcopy(capture_state(sim))
     compared = compare_cases({'base_plan': base, 'cases': [
@@ -1520,3 +1520,208 @@ def test_world_parameters_are_content_variables_in_the_same_site_and_development
         with pytest.raises(ValueError, match=message):
             build_game_application_for_load(
                 definition_transform=lambda instance, catalog: apply_content_variant(instance, catalog, [invalid]))
+
+
+def test_selected_balancing_inputs_do_not_have_a_fixed_activity_allowlist(definitions):
+    """The same authored case patch mechanism covers every Plan-owned activity.
+
+    Changing the list of activities is a player/analyst selection, not an
+    instruction for the evaluator to synthesize missing acquisitions or routes.
+    """
+    from scripts.analysis_balance import _apply_case_updates
+    sim = definitions._simulation
+    resource = str(next(iter(definitions._catalog.resources)))
+    node = "parameterized.node"
+    plan = {"initial_stock": [{"node": node, "resource": resource, "amount_t": 7}],
+            "solar_yield": {node: .6}, "initial_research_points": 12,
+            "phases": [{"name": "investment", "days": 10,
+                        "external_rates": [{"node": node, "resource": resource, "net_t_per_day": 2}],
+                        "market_buys": []}]}
+    changes = [
+        {"collection": "initial_research_points", "value": 18},
+        {"collection": "initial_stock", "match": {"node": node, "resource": resource},
+         "set": {"amount_t": 11}},
+        {"collection": "solar_yield", "match": {"node": node}, "value": .9},
+        {"collection": "phase", "phase": "investment", "set": {"days": 20}},
+        {"collection": "external_rates", "phase": "investment",
+         "match": {"node": node, "resource": resource}, "set": {"net_t_per_day": 3}},
+        {"collection": "external_rates", "phase": "investment", "action": "add",
+         "row": {"node": "other.node", "resource": resource, "net_t_per_day": 1}},
+    ]
+    modified = _apply_case_updates(plan, changes)
+    assert plan["initial_stock"][0]["amount_t"] == 7
+    before = evaluate(plan, app=definitions)["phases"][0]
+    after = evaluate(modified, app=definitions)["phases"][0]
+    assert _rows(after)[(node, resource)]["notional_end_t"] == pytest.approx(11 + 3 * 20)
+    assert _rows(before)[(node, resource)]["notional_end_t"] == pytest.approx(7 + 2 * 10)
+    assert _rows(after)[("other.node", resource)]["external_net_t"] == 20
+    assert modified["initial_research_points"] == 18
+    assert modified["solar_yield"][node] == .9
+    added_yield = _apply_case_updates(modified, [
+        {"collection": "solar_yield", "match": {"node": "other.node"}, "action": "add", "value": .5}])
+    assert added_yield["solar_yield"]["other.node"] == .5
+    removed_yield = _apply_case_updates(added_yield, [
+        {"collection": "solar_yield", "match": {"node": node}, "action": "remove"}])
+    assert node not in removed_yield["solar_yield"]
+    with pytest.raises(ValueError, match="not uniquely selected"):
+        _apply_case_updates(plan, [{"collection": "initial_stock", "match": {"node": "absent"},
+                                   "set": {"amount_t": 30}}])
+    with pytest.raises(ValueError, match="already|distinct"):
+        _apply_case_updates(plan, [{"collection": "initial_stock", "action": "add",
+                                   "row": plan["initial_stock"][0]}])
+
+
+def test_registered_numeric_parameter_edits_carry_through_owned_definitions_and_projections(definitions):
+    """Balance edits span nested real Domain data rather than a selected ID allowlist."""
+    from scripts.analysis_variants import apply_content_variant
+    from space_idle.bootstrap import build_game_application_for_load
+    sim = definitions._simulation
+    power_id, solar = next((id_, spec.generation) for id_, spec in sim.power.specs.items()
+                           if hasattr(spec.generation, "reference_flux_w_m2"))
+    facility_id, service = next((facility.id, supply)
+                                for facility in sim.facilities.definitions.values()
+                                for supply in facility.service_capacity_supplies)
+    tech_id, stage = next((definition.id, stage)
+                          for definition in sim.research.definitions.values()
+                          for stage in definition.stage_specs
+                          if hasattr(stage, "research_point_cost"))
+    vehicle_id, vehicle = next(iter(sim.transport.vehicle_defs.items()))
+    science_id, science = next(iter(sim.scientific_exploration.definitions.items()))
+    edits = [
+        {"kind": "power", "id": str(power_id), "field": "generation.reference_flux_w_m2",
+         "value": solar.reference_flux_w_m2 * 2},
+        {"kind": "facility", "id": str(facility_id),
+         "field": "service_capacity_supplies.nominal_rate",
+         "selector": {"service_type": service.service_type}, "value": service.nominal_rate * 1.5},
+        {"kind": "research", "id": str(tech_id), "field": "stage_specs.research_point_cost",
+         "selector": {"stage_id": stage.stage_id}, "value": stage.research_point_cost * 1.2},
+        {"kind": "vehicle", "id": str(vehicle_id), "field": "production.days",
+         "value": vehicle.production.days + 2},
+        {"kind": "scientific_exploration", "id": str(science_id), "field": "required_crew",
+         "value": science.required_crew + 1},
+    ]
+    before = deepcopy(capture_state(sim))
+    edited = build_game_application_for_load(
+        definition_transform=lambda target, catalog: apply_content_variant(target, catalog, edits))
+    assert edited._simulation.power.specs[power_id].generation.reference_flux_w_m2 == pytest.approx(solar.reference_flux_w_m2 * 2)
+    result = edited._simulation.facilities.definitions[facility_id]
+    assert next(row.nominal_rate for row in result.service_capacity_supplies
+                if row.service_type == service.service_type) == pytest.approx(service.nominal_rate * 1.5)
+    spec = edited._simulation.research.definitions[tech_id]
+    assert next(row.research_point_cost for row in spec.stage_specs
+                if row.stage_id == stage.stage_id) == pytest.approx(stage.research_point_cost * 1.2)
+    assert edited._simulation.transport.vehicle_defs[vehicle_id].production.days == vehicle.production.days + 2
+    assert edited._simulation.scientific_exploration.definitions[science_id].required_crew == science.required_crew + 1
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match="tuple selector"):
+        build_game_application_for_load(definition_transform=lambda target, catalog: apply_content_variant(
+            target, catalog, [{**edits[1], "selector": {"service_type": "nonexistent"}}]))
+    with pytest.raises(ValueError, match="integer"):
+        build_game_application_for_load(definition_transform=lambda target, catalog: apply_content_variant(
+            target, catalog, [{**edits[-1], "value": 1.5}]))
+    with pytest.raises(ValueError, match="identity"):
+        build_game_application_for_load(definition_transform=lambda target, catalog: apply_content_variant(
+            target, catalog, [{"kind": "vehicle", "id": str(vehicle_id), "field": "id", "value": 2}]))
+
+
+def test_world_reference_time_and_funding_are_selected_comparison_conditions(definitions):
+    """A World time origin or reference sample is not a hardcoded day zero.
+
+    Phase boundaries change the reference time without simulating a World's
+    continuous evolution or turning conditional asset holdings into Game State.
+    """
+    from scripts.analysis_balance import _apply_case_updates, compare_cases, summarize_projection
+    from space_idle.power import SolarGeneration
+    sim = definitions._simulation
+    generator = next(ident for ident, spec in sim.power.specs.items()
+                     if isinstance(spec.generation, SolarGeneration))
+    context = str(next(iter(sim.graph.surface_cells)))
+    node = "time.sample.node"
+    asset = {"node": node, "facility": str(generator), "units": 1}
+    plan = {
+        "start_day": 13,
+        "initial_facilities": [asset],
+        "solar_sites": [{"node": node, "facility": str(generator), "context": context}],
+        "phases": [
+            {"name": "build", "days": 4, "facilities": [asset]},
+            {"name": "operate", "days": 7, "facilities": [asset]},
+        ],
+    }
+    previous = deepcopy(capture_state(sim))
+    projected = evaluate(plan, app=definitions)
+    assert [p["world_reference_day"] for p in projected["phases"]] == [13, 17]
+    assert [p["power_world_context"][0]["world_reference_day"] for p in projected["phases"]] == [13, 17]
+    assert summarize_projection(projected)["phases"][1]["world_reference_day"] == 17
+    updates = [
+        {"collection": "start_day", "value": 25},
+        {"collection": "phase", "phase": "operate", "set": {"reference_day": 80, "assumed_funds_musd": 500}},
+    ]
+    changed = _apply_case_updates(plan, updates)
+    assert [p["world_reference_day"] for p in evaluate(changed, app=definitions)["phases"]] == [25, 80]
+    compared = compare_cases({"base_plan": plan, "cases": [
+        {"name": "original"}, {"name": "changed_origin", "updates": updates}]}, app=definitions)
+    assert {d["phase"] for d in compared["differences"] if d["section"] == "world_reference_conditions"} == {"build", "operate"}
+    explicit = deepcopy(plan)
+    explicit["solar_sites"][0]["day"] = 29
+    assert [p["power_world_context"][0]["world_reference_day"]
+            for p in evaluate(explicit, app=definitions)["phases"]] == [29, 29]
+    assert capture_state(sim) == previous
+
+
+def test_phase_comparison_keeps_named_interval_identity_when_paths_branch(definitions):
+    """Different development paths do not turn a new Phase into a false delta.
+
+    Activity order remains an explicit comparison condition, while selected
+    common phases are aligned by their identity rather than list positions.
+    """
+    from scripts.analysis_balance import summarize
+    node = "branching.path"
+    resource = str(next(iter(definitions._catalog.resources)))
+    a = {"name": "research", "days": 3,
+         "external_rates": [{"node": node, "resource": resource, "net_t_per_day": -1}]}
+    b = {"name": "expansion", "days": 6,
+         "external_rates": [{"node": node, "resource": resource, "net_t_per_day": 2}]}
+    c = {"name": "survey", "days": 4}
+    base = {"phases": [a, b]}
+    alternative = {"phases": [c, deepcopy(a), deepcopy(b)]}
+    report = compare_cases({"cases": [{"name": "base", "plan": base},
+                                     {"name": "alternative", "plan": alternative}]}, app=definitions)
+    structural = [row for row in report["differences"]
+                  if row["section"] in {"incomparable_phase_basis", "phase_sequence_conditions"}]
+    assert any(row["section"] == "phase_sequence_conditions" for row in structural)
+    assert [(row["phase"], row.get("reason")) for row in structural
+            if row["section"] == "incomparable_phase_basis"] == [("survey", "missing_baseline_phase")]
+    assert not any(row.get("phase") in {"research", "expansion"} and
+                   row["section"] == "incomparable_phase_basis" for row in report["differences"])
+    overview = summarize(report)["cases"][1]
+    assert overview["incomparable_phase_basis"]
+    assert any(row["section"] == "phase_sequence_conditions"
+               for row in overview["time_basis_comparisons"])
+
+
+def test_movement_definition_parameters_share_the_content_numeric_edit_path(definitions):
+    """Movement assumptions are editable registered parameters, not fixed routes."""
+    from scripts.analysis_variants import apply_content_variant
+    from space_idle.bootstrap import build_game_application_for_load
+    sim = definitions._simulation
+    surface = sim.transport.surface_movement_rules[0]
+    flight = sim.transport.spaceflight_movement_rules[0]
+    changes = [
+        {"kind": "surface_movement_rule", "id": str(surface.id),
+         "field": "transit_days", "value": surface.transit_days + 2},
+        {"kind": "spaceflight_movement_rule", "id": str(flight.id),
+         "field": "characteristic_speed_km_per_day",
+         "value": flight.characteristic_speed_km_per_day * .75},
+    ]
+    snapshot = deepcopy(capture_state(sim))
+    changed = build_game_application_for_load(
+        definition_transform=lambda target, catalog: apply_content_variant(target, catalog, changes))
+    assert next(rule.transit_days for rule in changed._simulation.transport.surface_movement_rules
+                if rule.id == surface.id) == surface.transit_days + 2
+    assert next(rule.characteristic_speed_km_per_day
+                for rule in changed._simulation.transport.spaceflight_movement_rules
+                if rule.id == flight.id) == pytest.approx(flight.characteristic_speed_km_per_day * .75)
+    assert capture_state(sim) == snapshot
+    with pytest.raises(ValueError, match="positive"):
+        build_game_application_for_load(definition_transform=lambda target, catalog: apply_content_variant(
+            target, catalog, [{**changes[1], "value": 0}]))

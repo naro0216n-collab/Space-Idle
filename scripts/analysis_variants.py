@@ -5,7 +5,7 @@ The owning Domain and normal Composition validators remain authoritative.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import replace, is_dataclass
 from math import isfinite
 from typing import Mapping, Sequence
 
@@ -498,6 +498,112 @@ def _change_world_definition(sim: Simulation, catalog: GameCatalog, change: Mapp
         raise ValueError(f"unsupported World Definition kind: {kind}")
 
 
+def _edit_registered_numeric_parameter(sim: Simulation, change: Mapping) -> bool:
+    """Edit a numeric leaf in a *real owning Domain Definition*.
+
+    This is deliberately not an analysis coefficient table. Dataclass
+    constructors and the standard Composition validators check the edited
+    Definition, and nested specifications retain their real types. Identities,
+    collections, State and Resource amounts cannot be mutated by this route.
+    """
+    kind = change.get("kind")
+    collections = {
+        "facility": sim.facilities.definitions,
+        "vehicle": sim.transport.vehicle_defs,
+        "process": sim.industry.processes,
+        "construction": sim.projects.recipes,
+        "decommission": sim.projects.decommission_recipes,
+        "power": sim.power.specs,
+        "storage_provider": sim.storage.providers,
+        "market_provider": sim.market.provider_defs,
+        "spatial_development": sim.projects.spatial_recipes,
+        "construction_resource_provider": sim.projects.construction_resource_providers,
+    }
+    collections.update({key: owner for key, (owner, _identity) in _owned_definition_collections(sim).items()})
+    if sim.research is not None:
+        collections["research"] = sim.research.definitions
+    movement_rules = {
+        "surface_movement_rule": "surface_movement_rules",
+        "surface_access_movement_rule": "surface_access_movement_rules",
+        "spaceflight_movement_rule": "spaceflight_movement_rules",
+    }
+    movement_attr = movement_rules.get(kind)
+    if movement_attr is not None:
+        collections[kind] = {rule.id: rule for rule in getattr(sim.transport, movement_attr)}
+    if kind not in collections:
+        return False
+    field_path = change.get("field")
+    if not isinstance(field_path, str) or not field_path or ".." in field_path:
+        return False
+    definition_id = DefinitionId(str(change.get("id")))
+    definitions = collections[kind]
+    if definition_id not in definitions:
+        raise ValueError(f"unknown {kind} Definition: {definition_id}")
+    definition = definitions[definition_id]
+    parts = field_path.split(".")
+    selector = change.get("selector")
+    if selector is not None and (not isinstance(selector, dict) or not selector
+                                 or any(not isinstance(key, str) or not key for key in selector)):
+        raise ValueError("numeric entry selector must match named Definition fields")
+    selected_entries = 0
+
+    def edit(current, remaining):
+        nonlocal selected_entries
+        if not remaining:
+            if type(current) not in (int, float):
+                raise ValueError("selected Definition field is not a numeric scalar")
+            amount = change.get("value")
+            if type(amount) not in (int, float) or not isfinite(amount):
+                raise ValueError("Definition numeric parameter must be finite")
+            if type(current) is int and type(amount) is not int:
+                raise ValueError("integer Definition parameter needs an integer")
+            if amount < 0:
+                raise ValueError("Definition numeric parameter must be nonnegative")
+            if kind == "power" and field_path == "generation.reference_flux_w_m2" and amount == 0:
+                raise ValueError("solar reference flux must be positive")
+            return amount if type(current) is int else float(amount)
+        if not is_dataclass(current) or remaining[0] not in current.__dataclass_fields__ or remaining[0].startswith("_"):
+            raise ValueError(f"unsupported typed numeric Definition field: {kind}.{field_path}")
+        field_name = remaining[0]
+        if not remaining[1:] and field_name in {"id", "level", "stage_id"}:
+            raise ValueError("registered Definition identity cannot be edited as a quantity")
+        child = getattr(current, field_name)
+        if isinstance(child, tuple):
+            if selector is None or not remaining[1:]:
+                raise ValueError("Definition tuple entries need a selector and numeric member")
+            matched = [i for i, element in enumerate(child)
+                       if is_dataclass(element) and all(getattr(element, key, object()) == value
+                                                        for key, value in selector.items())]
+            if len(matched) != 1:
+                raise ValueError("Definition tuple selector must identify one registered entry")
+            selected_entries += 1
+            index = matched[0]
+            elements = list(child)
+            elements[index] = edit(elements[index], remaining[1:])
+            child = tuple(elements)
+        else:
+            child = edit(child, remaining[1:])
+        return replace(current, **{field_name: child})
+
+    try:
+        result = edit(definition, parts)
+    except ValueError as exc:
+        if "unsupported typed numeric Definition field" in str(exc):
+            return False
+        raise
+    if selector is not None and selected_entries != 1:
+        raise ValueError("Definition numeric selector must select one registered entry")
+    if movement_attr is not None:
+        setattr(sim.transport, movement_attr, tuple(
+            result if rule.id == definition_id else rule
+            for rule in getattr(sim.transport, movement_attr)))
+    else:
+        definitions[definition_id] = result
+    if kind == "vehicle" or movement_attr is not None:
+        sim.transport.invalidate_movement_plans()
+    return True
+
+
 def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequence[Mapping]) -> None:
     """Edit typed method attributes before validation, without Core ID branching.
 
@@ -548,17 +654,6 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             else:
                 vehicle = replace(vehicle, maintenance=replace(vehicle.maintenance, resources=requirements))
             sim.transport.vehicle_defs[definition_id] = vehicle
-        elif kind == "facility" and field_name in (
-            "maintenance_fraction_per_year", "process_throughput_per_day",
-            "extraction_capacity_t_per_day", "housing_capacity"
-        ):
-            definition = sim.facilities.definitions[definition_id]
-            if field_name == "housing_capacity":
-                if type(value) is not int or value < 0:
-                    raise ValueError("housing_capacity must be a nonnegative integer")
-            else:
-                value = _finite_nonnegative(value)
-            sim.facilities.definitions[definition_id] = replace(definition, **{field_name: value})
         elif kind == "facility" and field_name == "capability_supplies":
             from space_idle.facilities import CapabilitySupply
             if not isinstance(value, list) or any(not isinstance(cap, str) or not cap for cap in value):
@@ -584,120 +679,12 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
                 vehicle, performance=replace(vehicle.performance, generic_capabilities=tuple(sorted(capabilities))),
             )
             sim.transport.invalidate_movement_plans()
-        elif kind == "vehicle" and field_name in (
-            "production_days", "retirement_work_days_per_unit", "payload_t",
-        ):
-            vehicle = sim.transport.vehicle_defs[definition_id]
-            amount = _finite_nonnegative(value)
-            if field_name == "production_days":
-                vehicle = replace(vehicle, production=replace(vehicle.production, days=amount))
-            elif field_name == "retirement_work_days_per_unit":
-                vehicle = replace(vehicle, retirement=replace(vehicle.retirement, work_days_per_unit=amount))
-            else:
-                vehicle = replace(vehicle, performance=replace(vehicle.performance, payload_t=amount))
-            sim.transport.vehicle_defs[definition_id] = vehicle
-            sim.transport.invalidate_movement_plans()
-        elif kind == "market_provider" and field_name == "lead_time_days":
-            if type(value) is not int or value < 0:
-                raise ValueError("market lead time must be a nonnegative integer")
-            provider = sim.market.provider_defs[definition_id]
-            sim.market.provider_defs[definition_id] = replace(provider, lead_time_days=value)
-        elif kind == "scientific_exploration" and field_name in (
-            "duration_days", "research_points_total",
-        ):
-            amount = _finite_nonnegative(value)
-            if amount <= 0:
-                raise ValueError(f"scientific exploration {field_name} must be positive")
-            definition = sim.scientific_exploration.definitions[definition_id]
-            sim.scientific_exploration.definitions[definition_id] = replace(
-                definition, **{field_name: amount},
-            )
-        elif kind == "founding" and field_name == "preparation_work":
-            definition = sim.founding.deployment_recipes[definition_id]
-            sim.founding.deployment_recipes[definition_id] = replace(
-                definition, preparation_work=_finite_nonnegative(value),
-            )
-        elif kind == "research_provider" and field_name in (
-            "generation_points_per_day", "storage_capacity_points", "research_execution_per_day"
-        ):
-            # Provider Tier and source selection remain registered Definition
-            # identity. Level performance is an actual Research-owned quantity,
-            # not a separately simulated analysis coefficient.
-            if sim.research is None or type(change.get("level")) is not int:
-                raise ValueError("research Provider performance edit requires a registered integer Level")
-            provider = sim.research.providers[definition_id]
-            level = change["level"]
-            if level not in {spec.level for spec in provider.levels}:
-                raise ValueError(f"unregistered Research Provider Level: {definition_id}/{level}")
-            amount = _finite_nonnegative(value)
-            sim.research.providers[definition_id] = replace(
-                provider, levels=tuple(
-                    replace(spec, **{field_name: amount}) if spec.level == level else spec
-                    for spec in provider.levels
-                ),
-            )
-        elif kind == "research_provider" and field_name == "crew_person_days_per_research_point":
-            if sim.research is None:
-                raise ValueError("Research Domain not available")
-            provider = sim.research.providers[definition_id]
-            sim.research.providers[definition_id] = replace(
-                provider, crew_person_days_per_research_point=_finite_nonnegative(value),
-            )
-        elif kind == "survey_provider" and field_name == "capacity_units_per_source_per_day":
-            if sim.survey is None:
-                raise ValueError("Survey Domain not available")
-            amount = _finite_nonnegative(value)
-            if amount <= 0:
-                raise ValueError("survey provider capacity must be positive")
-            provider = sim.survey.providers[definition_id]
-            sim.survey.providers[definition_id] = replace(provider, capacity_units_per_source_per_day=amount)
-        elif kind in ("construction", "decommission") and field_name == "construction_work":
-            amount = _finite_nonnegative(value)
-            if amount <= 0:
-                raise ValueError("construction work must be positive")
-            recipes = (sim.projects.recipes if kind == "construction"
-                       else sim.projects.decommission_recipes)
-            recipes[definition_id] = replace(recipes[definition_id], construction_work=amount)
-        elif kind == "power" and field_name in ("load_mw", "standby_load_mw", "generation_mw"):
-            spec = sim.power.specs[definition_id]
-            amount = _finite_nonnegative(value)
-            if field_name == "generation_mw":
-                from space_idle.power import FixedGeneration, SolarGeneration
-                model = spec.generation
-                if isinstance(model, FixedGeneration):
-                    spec = replace(spec, generation=replace(model, mw=amount))
-                elif isinstance(model, SolarGeneration):
-                    spec = replace(spec, generation=replace(model, rated_mw_at_reference_flux=amount))
-                else:
-                    raise ValueError("selected Power definition does not generate power")
-            else:
-                spec = replace(spec, **{field_name: amount})
-            sim.power.specs[definition_id] = spec
         elif kind == "storage_provider" and field_name == "capacity_t_by_pool":
             spec = sim.storage.providers[definition_id]
             key = str(change["pool_key"])
             amounts = dict(spec.capacity_t_by_pool)
             amounts[key] = _finite_nonnegative(value)
             sim.storage.providers[definition_id] = replace(spec, capacity_t_by_pool=amounts)
-        elif kind == "research_theory_stage" and field_name == "research_point_cost":
-            from space_idle.research_models import ResearchTheoryStageSpec
-            if sim.research is None:
-                raise ValueError("Research Domain not available")
-            definition = sim.research.definitions[definition_id]
-            stage_id = str(change["stage_id"])
-            amount = _finite_nonnegative(value)
-            stages = []
-            found = False
-            for stage in definition.stage_specs:
-                if stage.stage_id == stage_id:
-                    if not isinstance(stage, ResearchTheoryStageSpec):
-                        raise ValueError("research cost variant requires a Theory stage")
-                    stage = replace(stage, research_point_cost=amount)
-                    found = True
-                stages.append(stage)
-            if not found:
-                raise ValueError("unrecognized Research stage ID")
-            sim.research.definitions[definition_id] = replace(definition, stage_specs=tuple(stages))
         elif kind == "extraction" and field_name in ("resource_id", "output_resource_id"):
             if not isinstance(value, str) or not value:
                 raise ValueError("extraction Resource reference must be a nonempty Definition ID")
@@ -730,43 +717,8 @@ def apply_content_variant(sim: Simulation, catalog: GameCatalog, changes: Sequen
             else:
                 domain = sim.projects.recipes
                 domain[definition_id] = replace(domain[definition_id], prerequisite_technologies=prerequisites)
-        elif kind == "surface_access_movement_rule" and field_name in (
-            "transit_days", "gateway_capability_id",
-        ):
-            if field_name == "transit_days":
-                if type(value) is not int or value <= 0:
-                    raise ValueError("surface access transit_days must be a positive integer")
-            elif not isinstance(value, str) or not value:
-                raise ValueError("surface access gateway capability must be a nonempty string")
-            found = False
-            rules = []
-            for rule in sim.transport.surface_access_movement_rules:
-                if rule.id == definition_id:
-                    found = True
-                    rule = replace(rule, **{field_name: value})
-                rules.append(rule)
-            if not found:
-                raise ValueError(f"unknown surface access rule {definition_id}")
-            sim.transport.surface_access_movement_rules = tuple(rules)
-            sim.transport.invalidate_movement_plans()
-        elif kind == "spaceflight_movement_rule" and field_name in (
-            "minimum_transit_days", "characteristic_speed_km_per_day"
-        ):
-            if field_name == "minimum_transit_days" and (type(value) is not int or value <= 0):
-                raise ValueError("minimum_transit_days must be a positive integer")
-            if field_name != "minimum_transit_days" and _finite_nonnegative(value) <= 0:
-                raise ValueError("characteristic speed must be positive")
-            found = False
-            rules = []
-            for rule in sim.transport.spaceflight_movement_rules:
-                if rule.id == definition_id:
-                    found = True
-                    rule = replace(rule, **{field_name: value})
-                rules.append(rule)
-            if not found:
-                raise ValueError(f"unknown spaceflight movement rule {definition_id}")
-            sim.transport.spaceflight_movement_rules = tuple(rules)
-            sim.transport.invalidate_movement_plans()
+        elif _edit_registered_numeric_parameter(sim, change):
+            pass
         else:
             raise ValueError(f"unsupported typed Content variant: {kind}.{field_name}")
 

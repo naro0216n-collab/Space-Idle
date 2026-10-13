@@ -142,7 +142,7 @@ def _aggregate_by_dimension(rows, dimension, fields):
             for name, values in sorted(grouped.items())]
 
 
-def _extraction_contexts(rows, sim, nodes, known_resource):
+def _extraction_contexts(rows, sim, nodes, known_resource, reference_day):
     """Read selected World cells without adding hypothetical Game State.
 
     Knowledge values here are *scenario claims*, never resolved Survey State.
@@ -184,7 +184,7 @@ def _extraction_contexts(rows, sim, nodes, known_resource):
             if key in knowledge:
                 raise ValueError(f"duplicate Knowledge assumption: {key}")
             knowledge[key] = level
-        day = _integer(row.get("day", 0), "World opportunity reference day")
+        day = _integer(row.get("day", reference_day), "World opportunity reference day")
         contexts[node] = {"cells": tuple(cells), "knowledge": knowledge,
                           "body": str(cell_defs[0].body_id), "day": day}
     return contexts
@@ -246,7 +246,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference", "start_day"}, {"phases"}, "plan")
     reference = _movement_reference(plan)
     if app is None:
         app = _new_reference_application(reference)
@@ -319,7 +319,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         key = (node, facility_id)
         if key in solar_sites:
             raise ValueError(f"duplicate solar World site: {key}")
-        solar_sites[key] = context, _integer(row.get("day", 0), "solar World reference day")
+        solar_sites[key] = context, (_integer(row["day"], "solar World reference day")
+                                     if "day" in row else None)
 
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
     initial_facility_units = defaultdict(int)
@@ -344,13 +345,17 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_research_stages = set()
     seen_science_campaigns = set()
     seen_phase_names = set()
+    opening_reference_day = _integer(plan.get("start_day", 0), "initial World reference day")
     for phase in plan["phases"]:
-        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
+        _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd", "reference_day"},
               {"name", "days"}, "phase")
         if not isinstance(phase["name"], str) or not phase["name"] or phase["name"] in seen_phase_names:
             raise ValueError("phase names must be unique and nonempty")
         seen_phase_names.add(phase["name"])
         days = _integer(phase["days"], "phase days", positive=True)
+        reference_day = _integer(phase.get("reference_day", opening_reference_day),
+                                 "phase World reference day")
+        opening_reference_day += days
         assets = _asset_rows(phase.get("facilities", ()), sim, nodes, label="facility")
         # Facility holdings are an analyst-authored opening snapshot, not a
         # simulated Construction Project transition. Earlier investment only
@@ -381,7 +386,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     raise ValueError(f"Facility Level {threshold} opening holdings at "
                                      f"{node}/{facility} exceed initial Level and prior upgrades")
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
-                                                    sim, nodes, known_resource)
+                                                    sim, nodes, known_resource, reference_day)
         current = defaultdict(int)
         produced = defaultdict(float)
         process_inputs = defaultdict(float)
@@ -519,11 +524,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 elif isinstance(spec.generation, SolarGeneration):
                     selected_site = solar_sites.get((node, name))
                     if selected_site is not None:
-                        context, reference_day = selected_site
+                        context, site_reference_day = selected_site
+                        site_reference_day = reference_day if site_reference_day is None else site_reference_day
                         # A missing environmental field is unknown, not zero
                         # generation. The Power owner calculates the quantity;
                         # the evaluator only guards scenario interpretation.
-                        if sim.power.environment.get(context, IlluminationField, reference_day) is None:
+                        if sim.power.environment.get(context, IlluminationField, site_reference_day) is None:
                             raise ValueError(f"World solar illumination unassessed for {context}")
                         extraction_context = extraction_contexts.get(node)
                         if extraction_context is not None:
@@ -534,12 +540,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                             if context not in extraction_context["cells"]:
                                 unassessed.add("intra_location_power_distribution_between_cells_unassessed")
                         per_unit_mw, _load = sim.power.nominal_for_definition_at_context(
-                            DefinitionId(name), context, reference_day,
+                            DefinitionId(name), context, site_reference_day,
                         )
                         power_supply[node] += per_unit_mw * mult
                         power_world_context_report.append({
                             "node": node, "facility": name, "world_context": context,
-                            "world_reference_day": reference_day,
+                            "world_reference_day": site_reference_day,
                             "nominal_unallocated_generation_mw": per_unit_mw * mult,
                             "basis": "power_domain_world_environment_x_selected_facility_and_duty",
                             "status": "prospective_site_placement_and_operation_unassessed",
@@ -914,7 +920,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             duty = _number(row.get("duty", 1.0), "transport operating duty")
             if duty > 1:
                 raise ValueError("transport operating duty cannot exceed 1")
-            day = _integer(row.get("day", 0), "transport World reference day")
+            day = _integer(row.get("day", reference_day), "transport World reference day")
             reserve_fleet(origin, vehicle_id, units, "Transport")
             try:
                 plan_preview = sim.transport.transport_service_plan_for(
@@ -1710,6 +1716,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             "required_per_day", "nominal_capacity_per_day", "nominal_gap_per_day",
         ))
         report.append({"name": phase["name"], "days": days,
+                       "world_reference_day": reference_day,
                        "activity_sources": activity_sources,
                        "unassessed_constraints": sorted(unassessed),
                        "investment_constraints": investment_constraints,
@@ -1891,176 +1898,113 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
 
 
 def _apply_case_updates(base: dict, updates: list) -> dict:
-    """Apply bounded, identity-addressed sensitivity changes to one shared case.
+    """Vary any explicitly selected Plan condition without a Domain-specific allowlist.
 
-    Existing entries can be changed, and new explicitly selected asset/source
-    rows can be added; neither operation selects a programme, routes Cargo,
-    acquires assets nor settles an action on the user's behalf.
+    A patch identifies one authored row by its *existing* fields, not by a
+    guessed Facility/Vehicle/Location identity. The ordinary evaluator is the
+    sole validator of selected assets, duration, research, transport and flows.
+    Adding a row does not produce, acquire, deliver or commission anything.
     """
-    if not isinstance(updates, list):
-        raise ValueError("case updates must be a list")
+    if not isinstance(base, dict) or not isinstance(updates, list):
+        raise ValueError("case updates require a base Plan and list of changes")
     plan = deepcopy(base)
-    seen = set()
+    changed = set()
     for change in updates:
-        if not isinstance(change, dict):
-            raise ValueError("case update must be an object")
-        collection = change.get("collection")
-        if change.get("action") == "add":
-            # Cases can select *additional* real assets and activities, rather
-            # than copying every phase to compare a new capability.
-            # This changes only the comparison composition. No acquisition,
-            # provider eligibility or actual Game State is inferred here.
-            _keys(change, {"collection", "phase", "action", "row"},
-                  {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facilities", "fleet", "facility_investments", "vehicle_builds",
-                                  "research_provider_allocations", "passenger_transfers", "science_campaigns",
-                                  "spatial_projects", "upgrade_projects"}:
-                raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
-            row = change["row"]
-            if not isinstance(row, dict):
-                raise ValueError("case addition row must be an object")
-            identity_fields = ({"facilities": ("node", "facility"),
-                                "fleet": ("node", "vehicle"),
-                                "facility_investments": ("node", "facility"),
-                                "vehicle_builds": ("node", "vehicle"),
-                                "research_provider_allocations": ("node", "provider"),
-                                "passenger_transfers": ("origin", "destination", "vehicle"),
-                                "science_campaigns": ("campaign",),
-                                "spatial_projects": ("node", "recipe"),
-                                "upgrade_projects": ("node", "facility", "target_level")})[collection]
-            if any(not isinstance(row.get(key), str) or not row[key] for key in identity_fields
-                   if key != "target_level") or (collection == "upgrade_projects" and
-                                                (type(row.get("target_level")) is not int or
-                                                 row["target_level"] <= 0)):
-                raise ValueError("case addition requires explicit activity identity and Definition ID")
-            phases = [phase for phase in plan["phases"] if phase["name"] == change["phase"]]
-            if len(phases) != 1:
-                raise ValueError("case addition requires exactly one existing phase")
-            rows = phases[0].setdefault(collection, [])
-            def addition_key(item):
-                key = tuple(item.get(field) for field in identity_fields)
-                if collection == "research_provider_allocations":
-                    key += (item.get("level", 1),)
-                if collection == "facilities":
-                    key += (item.get("level", 1), item.get("process"), item.get("extraction"))
-                return key
-            if any(addition_key(existing) == addition_key(row) for existing in rows):
-                raise ValueError("case addition cannot duplicate a selected source or activity")
-            identity = (collection, change["phase"], *addition_key(row))
-            if identity in seen:
-                raise ValueError(f"duplicate case update: {identity}")
-            seen.add(identity)
-            rows.append(deepcopy(row))
-            continue
-        if collection == "research_goal":
-            _keys(change, {"collection", "phase", "research_ids", "include_prerequisites", "node"},
-                  {"collection", "phase", "research_ids"}, "research goal choice")
-            phases = [row for row in plan["phases"] if row["name"] == change["phase"]]
-            if len(phases) != 1:
-                raise ValueError("research choice needs exactly one existing phase")
-            existing = phases[0].get("research_goal", {})
-            node = change.get("node", existing.get("node"))
-            if not isinstance(node, str) or not node:
-                raise ValueError("research choice requires an explicit Research node")
-            ids = change["research_ids"]
-            if not isinstance(ids, list) or not ids or any(not isinstance(v, str) or not v for v in ids):
-                raise ValueError("research choice requires nonempty Research IDs")
-            if len(ids) != len(set(ids)):
-                raise ValueError("research choice cannot duplicate Research IDs")
-            include = change.get("include_prerequisites", existing.get("include_prerequisites", False))
-            if type(include) is not bool:
-                raise ValueError("research choice include_prerequisites must be boolean")
-            identity = (collection, change["phase"])
-            if identity in seen:
-                raise ValueError(f"duplicate case update: {identity}")
-            seen.add(identity)
-            phases[0]["research_goal"] = {"node": node, "research_ids": ids,
-                                          "include_prerequisites": include}
-            continue
-        if collection == "phase":
-            _keys(change, {"collection", "phase", "days"}, {"collection", "phase", "days"}, "case update")
-            candidates = [row for row in plan["phases"] if row["name"] == change["phase"]]
-            edits = {"days": change["days"]}
-            identity = (collection, change["phase"])
-        elif collection == "solar_yield":
-            _keys(change, {"collection", "node", "factor"}, {"collection", "node", "factor"}, "case update")
-            if change["node"] not in plan.get("solar_yield", {}):
-                raise ValueError("solar sensitivity requires an existing declared site factor")
-            candidates = [plan["solar_yield"]]
-            edits = {change["node"]: change["factor"]}
-            identity = (collection, change["node"])
-        elif collection == "solar_sites":
-            _keys(change, {"collection", "node", "id", "context", "day"},
-                  {"collection", "node", "id"}, "case update")
-            edits = {key: change[key] for key in ("context", "day") if key in change}
-            candidates = [row for row in plan.get("solar_sites", ())
-                          if row["node"] == change["node"] and row["facility"] == change["id"]]
-            identity = (collection, change["node"], change["id"])
-            if not edits:
-                raise ValueError("empty World solar site sensitivity")
-        elif collection == "initial_stock":
-            _keys(change, {"collection", "node", "id", "amount_t"},
-                  {"collection", "node", "id", "amount_t"}, "case update")
-            candidates = [row for row in plan.get("initial_stock", ())
-                          if row["node"] == change["node"] and row["resource"] == change["id"]]
-            edits = {"amount_t": change["amount_t"]}
-            identity = (collection, change["node"], change["id"])
-        elif collection == "extraction_sites":
-            _keys(change, {"collection", "phase", "node", "developed_cells", "knowledge", "day"},
-                  {"collection", "phase", "node"}, "case update")
-            edits = {key: change[key] for key in ("developed_cells", "knowledge", "day") if key in change}
-            candidates = [row for phase in plan["phases"] if phase["name"] == change["phase"]
-                          for row in phase.get("extraction_sites", ()) if row["node"] == change["node"]]
-            identity = (collection, change["phase"], change["node"])
-            if not edits:
-                raise ValueError("empty extraction site sensitivity")
-        elif collection == "transport_allocations":
-            _keys(change, {"collection", "phase", "origin", "destination", "id", "units", "duty", "day"},
-                  {"collection", "phase", "origin", "destination", "id"}, "case update")
-            edits = {key: change[key] for key in ("units", "duty", "day") if key in change}
-            candidates = [row for phase in plan["phases"] if phase["name"] == change["phase"]
-                          for row in phase.get("transport_allocations", ())
-                          if row["origin"] == change["origin"] and row["destination"] == change["destination"]
-                          and row["vehicle"] == change["id"]]
-            identity = (collection, change["phase"], change["origin"], change["destination"], change["id"])
-            if not edits:
-                raise ValueError("empty transport allocation sensitivity")
-        elif collection in ("facilities", "fleet", "research_provider_allocations"):
-            _keys(change, {"phase", "collection", "node", "id", "units", "duty",
-                           "turnarounds_per_unit_per_day", "level", "process", "extraction",
-                           "supported_person_days_per_day", "extraction_yield_fraction"},
-                  {"phase", "collection", "node", "id"}, "case update")
-            allowed = ({"units", "level", "duty", "process", "extraction",
-                        "supported_person_days_per_day", "extraction_yield_fraction"}
-                       if collection == "facilities" else
-                       {"units", "turnarounds_per_unit_per_day"} if collection == "fleet" else
-                       {"units", "duty", "level"})
-            edits = {k: v for k, v in change.items() if k in allowed}
-            if not edits or (set(change) - {"phase", "collection", "node", "id"}) - allowed:
-                raise ValueError("invalid asset sensitivity fields")
-            phases = [p for p in plan["phases"] if p["name"] == change["phase"]]
-            key = ("facility" if collection == "facilities" else
-                   "vehicle" if collection == "fleet" else "provider")
-            candidates = [row for phase in phases for row in phase.get(collection, ())
-                          if row["node"] == change["node"] and row[key] == change["id"]]
-            identity = (collection, change["phase"], change["node"], change["id"])
-            if collection == "facilities" and ("process" in edits or "extraction" in edits):
-                if len(candidates) != 1 or not ("process" in candidates[0] or "extraction" in candidates[0]):
-                    raise ValueError("method sensitivity requires exactly one existing operating Facility")
-                # The analyst may select a different registered method, never
-                # introduce a new simultaneous Process/Extraction assignment.
-                if ("process" in edits) != ("process" in candidates[0]):
-                    raise ValueError("method sensitivity must preserve Process/Extraction kind")
-                if ("extraction" in edits) != ("extraction" in candidates[0]):
-                    raise ValueError("method sensitivity must preserve Process/Extraction kind")
+        _keys(change, {"collection", "phase", "match", "set", "action", "row", "value"},
+              {"collection"}, "case update")
+        collection = change["collection"]
+        phase_name = change.get("phase")
+        if phase_name is None:
+            target = plan
         else:
-            raise ValueError(f"unsupported sensitivity collection: {collection!r}")
-        if identity in seen:
-            raise ValueError(f"duplicate case update: {identity}")
-        seen.add(identity)
-        if len(candidates) != 1:
-            raise ValueError(f"case update requires exactly one existing target: {identity}")
-        candidates[0].update(edits)
+            phases = [phase for phase in plan.get("phases", ()) if phase.get("name") == phase_name]
+            if len(phases) != 1:
+                raise ValueError(f"case update needs one existing phase: {phase_name}")
+            target = phases[0]
+        if collection == "phase":
+            if phase_name is None or set(change) != {"collection", "phase", "set"}:
+                raise ValueError("phase sensitivity requires phase and set")
+            destination = target
+            match = None
+        elif collection in {"initial_research_points", "start_day"}:
+            if phase_name is not None or set(change) != {"collection", "value"}:
+                raise ValueError("initial condition sensitivity requires only a value")
+            destination = plan
+            match = None
+        elif collection == "solar_yield":
+            match = change.get("match")
+            if phase_name is not None or not isinstance(match, dict) or set(match) != {"node"}:
+                raise ValueError("solar factor change requires a selected Node")
+            node = match["node"]
+            selected_yields = plan.setdefault("solar_yield", {})
+            if change.get("action") == "add":
+                if set(change) != {"collection", "match", "action", "value"} or node in selected_yields:
+                    raise ValueError("solar factor addition requires an unselected Node and value")
+                selected_yields[node] = deepcopy(change["value"])
+                continue
+            if change.get("action") == "remove":
+                if set(change) != {"collection", "match", "action"} or node not in selected_yields:
+                    raise ValueError("solar factor removal requires a selected Node")
+                del selected_yields[node]
+                continue
+            if set(change) != {"collection", "match", "value"} or node not in selected_yields:
+                raise ValueError("solar factor edit requires one previously selected Node and value")
+            destination = selected_yields
+        elif collection == "research_goal":
+            if phase_name is None or set(change) != {"collection", "phase", "set"}:
+                raise ValueError("research goal sensitivity requires a selected phase and set")
+            destination = target.setdefault("research_goal", {})
+            match = None
+        else:
+            if collection not in target or not isinstance(target[collection], list):
+                if change.get("action") != "add":
+                    raise ValueError(f"case change needs an existing selected collection: {collection}")
+                # Phase and Plan schemas are validated by evaluate(); no
+                # second content/operation-type registry lives here.
+                target[collection] = []
+            rows = target[collection]
+            if change.get("action") == "add":
+                if set(change) != ({"collection", "phase", "action", "row"} if phase_name is not None
+                                   else {"collection", "action", "row"}):
+                    raise ValueError("case addition requires one complete selected row")
+                if not isinstance(change["row"], dict) or change["row"] in rows:
+                    raise ValueError("case addition requires a distinct selected row")
+                rows.append(deepcopy(change["row"]))
+                continue
+            match = change.get("match")
+            if not isinstance(match, dict) or not match or any(not isinstance(key, str) for key in match):
+                raise ValueError("case row change requires an explicit nonempty field match")
+            selected = [row for row in rows if isinstance(row, dict) and all(row.get(k) == v for k, v in match.items())]
+            if len(selected) != 1:
+                raise ValueError(f"case row change is not uniquely selected: {collection}/{match}")
+            destination = selected[0]
+        if collection in {"initial_research_points", "start_day", "solar_yield"}:
+            if "set" in change or "action" in change:
+                raise ValueError("scalar sensitivity cannot use row edits")
+            key = collection if collection != "solar_yield" else match["node"]
+            identity = (phase_name, collection, str(key))
+            if identity in changed:
+                raise ValueError(f"duplicate case change: {identity}")
+            changed.add(identity)
+            destination[key] = deepcopy(change["value"])
+            continue
+        identity = (phase_name, collection, repr(sorted(match.items())) if match else None)
+        if identity in changed:
+            raise ValueError(f"duplicate case change: {identity}")
+        changed.add(identity)
+        if change.get("action") == "remove":
+            if set(change) != ({"collection", "phase", "match", "action"} if phase_name is not None
+                               else {"collection", "match", "action"}):
+                raise ValueError("case removal requires an existing exact row selection")
+            target[collection].remove(destination)
+            continue
+        if "action" in change or "row" in change or "value" in change or not isinstance(change.get("set"), dict) or not change["set"]:
+            raise ValueError("case update requires a nonempty set of Plan fields")
+        if collection == "phase" and (set(change["set"]) - {"days", "reference_day", "assumed_funds_musd"}):
+            raise ValueError("phase comparison may change time or assumed funds, not its identity")
+        if collection != "research_goal" and collection != "phase" and "name" in change["set"]:
+            raise ValueError("case updates must not rename selected phases")
+        destination.update(deepcopy(change["set"]))
     return plan
 
 
@@ -2251,7 +2195,25 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
         alternative_phases = alternative["projection"]["phases"]
-        for index, (left, right) in enumerate(zip(baseline, alternative_phases)):
+        by_phase_name = {phase["name"]: phase for phase in alternative_phases}
+        baseline_names = {phase["name"] for phase in baseline}
+        if [phase["name"] for phase in baseline] != [phase["name"] for phase in alternative_phases]:
+            differences.append({"case": alternative["name"], "phase": None,
+                                "section": "phase_sequence_conditions",
+                                "baseline_sequence": [phase["name"] for phase in baseline],
+                                "case_sequence": [phase["name"] for phase in alternative_phases]})
+        for left in baseline:
+            right = by_phase_name.get(left["name"])
+            if right is None:
+                differences.append({"case": alternative["name"], "baseline_phase": left["name"],
+                                    "phase": None, "section": "incomparable_phase_basis",
+                                    "reason": "missing_case_phase"})
+                continue
+            if left["world_reference_day"] != right["world_reference_day"]:
+                differences.append({"case": alternative["name"], "phase": right["name"],
+                                    "section": "world_reference_conditions",
+                                    "baseline_reference_day": left["world_reference_day"],
+                                    "case_reference_day": right["world_reference_day"]})
             if left["name"] != right["name"] or left["days"] != right["days"]:
                 differences.append({"case": alternative["name"], "baseline_phase": left["name"],
                                     "phase": right["name"], "section": "incomparable_phase_basis",
@@ -2504,14 +2466,11 @@ def compare_projection_results(results: list[dict], *, distinct_outcomes=False) 
                         differences.append(existing)
                     existing["condition_change"] = {"baseline": prior.get(key, []),
                                                     "case": selected.get(key, [])}
-        for unmatched in baseline[len(alternative_phases):]:
-            differences.append({"case": alternative["name"], "baseline_phase": unmatched["name"],
-                                "phase": None, "section": "incomparable_phase_basis",
-                                "reason": "missing_case_phase"})
-        for unmatched in alternative_phases[len(baseline):]:
-            differences.append({"case": alternative["name"], "baseline_phase": None,
-                                "phase": unmatched["name"], "section": "incomparable_phase_basis",
-                                "reason": "missing_baseline_phase"})
+        for unmatched in alternative_phases:
+            if unmatched["name"] not in baseline_names:
+                differences.append({"case": alternative["name"], "baseline_phase": None,
+                                    "phase": unmatched["name"], "section": "incomparable_phase_basis",
+                                    "reason": "missing_baseline_phase"})
     return {"model": "definition_quantity_comparison_v1", "baseline_case": results[0]["name"],
             "cases": results, "differences": differences}
 
@@ -2570,7 +2529,7 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
         if _movement_reference(before_plan) != _movement_reference(after_plan):
             raise ValueError("different Movement reference conditions")
         initial_defaults = {"initial_stock": (), "initial_facilities": (), "initial_fleet": (),
-                            "initial_research_points": 0, "solar_yield": {}, "solar_sites": ()}
+                            "initial_research_points": 0, "solar_yield": {}, "solar_sites": (), "start_day": 0}
         for key, default in initial_defaults.items():
             if before_plan.get(key, default) != after_plan.get(key, default):
                 raise ValueError(f"development comparison needs identical initial conditions: {key}")
@@ -2658,6 +2617,7 @@ def summarize_projection(projection: dict) -> dict:
                         for item in phase["research_time_structure"]["selected_stage_service_bounds"]}
         phases.append({
             "name": phase["name"], "days": phase["days"],
+            "world_reference_day": phase["world_reference_day"],
             "scale": phase["scale"],
             "resource_shortfalls_by_node": [
                 {"node": row["node"], "resource": row["resource"], "shortfall_t": row["shortfall_t"],
@@ -2889,7 +2849,7 @@ def summarize(result: dict) -> dict:
                                         if row["section"] == "period_sensitivity" else row)
                                        for row in result["differences"]
                                        if row["case"] == case["name"]
-                                       and row["section"] in {"period_sensitivity", "incomparable_phase_basis"}],
+                                       and row["section"] in {"period_sensitivity", "incomparable_phase_basis", "phase_sequence_conditions"}],
                                    "nonmatching_phases": [
                                        phase for phase in summary["phases"]
                                        if phase["name"] not in {p["name"] for p in baseline_summary["phases"]}]})
