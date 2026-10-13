@@ -808,6 +808,18 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                                  "units": units,
                                  "assumed_turnarounds": cycles})
         committed_fleet = defaultdict(int)
+        def reserve_fleet(node, vehicle, units, activity):
+            # One Fleet physical unit has one selected assignment for a Phase.
+            # Authored independent turnaround cycles also occupy that Fleet;
+            # do not book them in parallel with a Research, Survey, Transport,
+            # Scientific Exploration, Founding or Passenger commitment.
+            key = (node, vehicle)
+            if fleet_spec is not None and fleet_spec.get(key, (0, 0))[1] > 0:
+                raise ValueError(f"{activity} Fleet commitment overlaps authored turnarounds: {key}")
+            committed_fleet[key] += units
+            if committed_fleet[key] > current_fleet.get(key, 0):
+                raise ValueError(f"{activity} would reuse Fleet holdings: {key}")
+
         # RP is an organization-owned quantity. Each Provider must reference an
         # explicitly held compatible Facility or Fleet source. Fleet Providers
         # reserve those units across research, Survey, Transport and science.
@@ -815,16 +827,18 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         research_storage_nominal = 0.0
         research_execution_per_day = 0.0
         research_crew_demand_per_day = 0.0
-        assigned_source_units = defaultdict(int)
-        # The same Facility cannot offer its entire nameplate to processing
-        # and to Research. Compare their explicitly requested duty against a
-        # single installed-unit budget; leave the nominal demands visible
+        assigned_source_units = defaultdict(int)  # (Node, Facility) shared across Provider and Survey
+        # The same Facility cannot offer its entire nameplate to industry,
+        # Research and Survey. Compare selected duty against one installed-unit
+        # budget; preserve nominal demands without simulating Allocation.
         # rather than implying both flows have been allocated successfully.
         facility_activity_duty = defaultdict(float)
         for source_node, source_id, units, process_id, extraction_id, duty, _yield, _people, _level in assets:
             if process_id or extraction_id:
                 facility_activity_duty[(source_node, source_id)] += units * duty
         facility_research_duty = defaultdict(float)
+        facility_survey_duty = defaultdict(float)
+        assigned_level_source_units = defaultdict(int)
         for row in phase.get("research_provider_allocations", ()):
             _keys(row, {"node", "provider", "source_facility", "source_vehicle", "units", "level", "duty"},
                   {"node", "provider", "units"}, "research provider")
@@ -847,11 +861,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 source = _identifier(row["source_vehicle"], vehicles, "research source Vehicle")
                 if not provider.accepts_source(vehicles[source].performance.generic_capabilities):
                     raise ValueError("research provider not compatible with source Vehicle")
-                committed_fleet[(node, source)] += units
-                if committed_fleet[(node, source)] > current_fleet.get((node, source), 0):
-                    raise ValueError("research provider reuses Fleet holdings")
-                if fleet_spec is not None and fleet_spec.get((node, source), (0, 0))[1] > 0:
-                    raise ValueError("Fleet Research Provider overlaps authored turnarounds")
+                reserve_fleet(node, source, units, "Research Provider")
             level = _integer(row.get("level", 1), "research provider level", positive=True)
             level_spec = next((candidate for candidate in provider.levels if candidate.level == level), None)
             if level_spec is None:
@@ -859,10 +869,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if provider.source_kind.value == "fleet" and level != 1:
                 raise ValueError("Fleet-backed research source has no Facility-style Level upgrade")
             if provider.source_kind.value == "facility":
-                assigned_source_units[(node, source, level)] += units
-                if assigned_source_units[(node, source, level)] > installed_by_level[
-                    (node, source, level)
-                ]:
+                assigned_source_units[(node, source)] += units
+                if assigned_source_units[(node, source)] > current[(node, source)]:
+                    raise ValueError("Research and Survey Provider allocations reuse Facility holdings")
+                # An installed Level is a physical source qualification, not
+                # another independent pool of Facility units.
+                assigned_level_source_units[(node, source, level)] += units
+                if assigned_level_source_units[(node, source, level)] > installed_by_level[(node, source, level)]:
                     raise ValueError("research provider needs installed Facilities at its selected Level")
             duty = _number(row.get("duty", 1), "research provider duty")
             if duty > 1:
@@ -885,21 +898,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             research_storage_nominal += units * level_spec.storage_capacity_points
             research_crew_demand_per_day += (units * duty * level_spec.generation_points_per_day
                                               * provider.crew_person_days_per_research_point)
-        facility_use_constraints = []
-        for source_key in sorted(set(facility_activity_duty) | set(facility_research_duty)):
-            use = facility_activity_duty[source_key] + facility_research_duty[source_key]
-            installed_units = current[source_key]
-            excess = max(0.0, use - installed_units)
-            facility_use_constraints.append({
-                "node": source_key[0], "facility": source_key[1],
-                "installed_unit_duty_per_day": float(installed_units),
-                "selected_industry_unit_duty_per_day": facility_activity_duty[source_key],
-                "selected_research_unit_duty_per_day": facility_research_duty[source_key],
-                "nominal_shared_unit_duty_gap_per_day": excess,
-                "status": "conditional_shared_facility_duty_not_allocated",
-            })
-            if excess > 1e-12:
-                unassessed.add("industry_and_research_exceed_shared_facility_operating_duty")
         # Selected Fleet is reserved once across authored OD services. The
         # Transport owner's read-only preview supplies paths, cycle, payload,
         # propellant, servicing, infrastructure and blockers. This tool does
@@ -917,12 +915,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             if duty > 1:
                 raise ValueError("transport operating duty cannot exceed 1")
             day = _integer(row.get("day", 0), "transport World reference day")
-            committed_fleet[(origin, vehicle_id)] += units
-            available = current_fleet.get((origin, vehicle_id), 0)
-            if committed_fleet[(origin, vehicle_id)] > available:
-                raise ValueError(f"transport allocations reuse Fleet holdings: {(origin, vehicle_id)}")
-            if fleet_spec is not None and fleet_spec.get((origin, vehicle_id), (0, 0))[1] > 0:
-                raise ValueError("transport service cycles and authored Fleet turnarounds overlap")
+            reserve_fleet(origin, vehicle_id, units, "Transport")
             try:
                 plan_preview = sim.transport.transport_service_plan_for(
                     DefinitionId(vehicle_id), SpatialNodeId(origin), SpatialNodeId(destination), day=day,
@@ -995,9 +988,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             assigned_vehicle = row.get("vehicle")
             if assigned_vehicle is not None:
                 vehicle_id = _identifier(assigned_vehicle, vehicles, "Scientific Exploration Vehicle")
-                committed_fleet[(origin, vehicle_id)] += campaign.required_units
-                if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
-                    raise ValueError("Scientific Exploration reuses Fleet holdings committed to other activities")
+                reserve_fleet(origin, vehicle_id, campaign.required_units, "Scientific Exploration")
             # Mission requirements and onboard survival are distinct registered
             # inputs.  The owning Scientific Exploration Domain provisions the
             # *entire* on-site activity when the target has no established Node.
@@ -1077,10 +1068,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 assigned_source_units[(node, source)] += units
                 if assigned_source_units[(node, source)] > current[(node, source)]:
                     raise ValueError("Survey and Research reuse Facility source units")
+                facility_survey_duty[(node, source)] += units
             else:
-                committed_fleet[(node, source)] += units
-                if committed_fleet[(node, source)] > current_fleet.get((node, source), 0):
-                    raise ValueError("Survey reuses Fleet held for transport or science")
+                reserve_fleet(node, source, units, "Survey")
             cell_id = _identifier(row["cell"], sim.extraction.graph.surface_cells, "Survey Cell")
             resource = _identifier(row["resource"], known_resource, "Survey Resource")
             target = sim.survey.targets.get((SurfaceCellId(cell_id), DefinitionId(resource)))
@@ -1108,6 +1098,23 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 unassessed.add("survey_starting_progress_not_assumed")
             if source_kind == "facility":
                 unassessed.add("survey_and_other_facility_services_compete_for_power_crew")
+        facility_use_constraints = []
+        for source_key in sorted(set(facility_activity_duty) | set(facility_research_duty) | set(facility_survey_duty)):
+            use = (facility_activity_duty[source_key] + facility_research_duty[source_key]
+                   + facility_survey_duty[source_key])
+            installed_units = current[source_key]
+            excess = max(0.0, use - installed_units)
+            facility_use_constraints.append({
+                "node": source_key[0], "facility": source_key[1],
+                "installed_unit_duty_per_day": float(installed_units),
+                "selected_industry_unit_duty_per_day": facility_activity_duty[source_key],
+                "selected_research_unit_duty_per_day": facility_research_duty[source_key],
+                "selected_survey_unit_duty_per_day": facility_survey_duty[source_key],
+                "nominal_shared_unit_duty_gap_per_day": excess,
+                "status": "conditional_shared_facility_duty_not_allocated",
+            })
+            if excess > 1e-12:
+                unassessed.add("selected_activities_exceed_shared_facility_operating_duty")
         # Founding pays for the registered deployment package and preparation.
         # The payload is not credited to an unestablished destination Node.
         # Target and Movement eligibility stay with the owning Domains.
@@ -1128,9 +1135,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             vehicle_id = None
             if "vehicle" in row:
                 vehicle_id = _identifier(row["vehicle"], vehicles, "Founding Vehicle")
-                committed_fleet[(origin, vehicle_id)] += recipe.required_units
-                if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
-                    raise ValueError("Founding reuses Fleet holdings committed to other activities")
+                reserve_fleet(origin, vehicle_id, recipe.required_units, "Founding")
             resources = {str(r.resource_id): r.amount_t for r in recipe.payload_resources}
             for resource, amount in resources.items():
                 book(founding_inputs, "founding_payload_demand_t", origin, resource,
@@ -1285,11 +1290,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             units = _integer(row["units"], "passenger Fleet units", positive=True)
             people = _integer(row["people"], "passenger count", positive=True)
             onboard_days = _number(row["assumed_onboard_days"], "assumed onboard days", strictly_positive=True)
-            committed_fleet[(origin, vehicle_id)] += units
-            if committed_fleet[(origin, vehicle_id)] > current_fleet.get((origin, vehicle_id), 0):
-                raise ValueError("passenger transfer reuses Fleet holdings committed to other activities")
-            if fleet_spec is not None and fleet_spec.get((origin, vehicle_id), (0, 0))[1] > 0:
-                raise ValueError("dedicated passenger transfer cannot overlap authored Fleet turnarounds")
+            reserve_fleet(origin, vehicle_id, units, "Passenger")
             provisions = accommodation.required_provisions(people, onboard_days)
             loaded_mass = accommodation.loaded_payload_mass(people, provisions)
             for resource, quantity in provisions.items():
@@ -1798,7 +1799,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             idle_facility_rates = {
                 facility: max(0.0, current[(node, facility)]
                     - facility_activity_duty[(node, facility)]
-                    - facility_research_duty[(node, facility)])
+                    - facility_research_duty[(node, facility)]
+                    - facility_survey_duty[(node, facility)])
                     * sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
                 for site, facility, *_ in assets if site == node
             }
@@ -1817,7 +1819,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 compatible_assets_by_facility = {facility for facility, *_ in compatible}
                 available_rate = sum(max(0.0, current[(node, facility)]
                     - facility_activity_duty[(node, facility)]
-                    - facility_research_duty[(node, facility)]) *
+                    - facility_research_duty[(node, facility)]
+                    - facility_survey_duty[(node, facility)]) *
                     sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
                     for facility in compatible_assets_by_facility)
                 required_runs = process.get("process_run_days_at_unit_throughput")
@@ -1829,7 +1832,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 capacity_context.append({
                     "process": process_id,
                     "separately_available_selected_facility_process_runs_per_day": available_rate,
-                    "shared_research_and_industry_source_duty_included": True,
+                    "shared_industry_research_and_survey_source_duty_included": True,
                     "required_incremental_process_runs": required_runs,
                     "independent_capacity_only_lower_bound_days": (
                         required_runs / available_rate if required_runs is not None and available_rate > 0
@@ -1909,12 +1912,16 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facility_investments", "vehicle_builds", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects", "upgrade_projects"}:
+            if collection not in {"facilities", "fleet", "facility_investments", "vehicle_builds",
+                                  "research_provider_allocations", "passenger_transfers", "science_campaigns",
+                                  "spatial_projects", "upgrade_projects"}:
                 raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
                 raise ValueError("case addition row must be an object")
-            identity_fields = ({"facility_investments": ("node", "facility"),
+            identity_fields = ({"facilities": ("node", "facility"),
+                                "fleet": ("node", "vehicle"),
+                                "facility_investments": ("node", "facility"),
                                 "vehicle_builds": ("node", "vehicle"),
                                 "research_provider_allocations": ("node", "provider"),
                                 "passenger_transfers": ("origin", "destination", "vehicle"),
@@ -1934,6 +1941,8 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                 key = tuple(item.get(field) for field in identity_fields)
                 if collection == "research_provider_allocations":
                     key += (item.get("level", 1),)
+                if collection == "facilities":
+                    key += (item.get("level", 1), item.get("process"), item.get("extraction"))
                 return key
             if any(addition_key(existing) == addition_key(row) for existing in rows):
                 raise ValueError("case addition cannot duplicate a selected source or activity")
@@ -1942,6 +1951,31 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                 raise ValueError(f"duplicate case update: {identity}")
             seen.add(identity)
             rows.append(deepcopy(row))
+            continue
+        if collection == "research_goal":
+            _keys(change, {"collection", "phase", "research_ids", "include_prerequisites", "node"},
+                  {"collection", "phase", "research_ids"}, "research goal choice")
+            phases = [row for row in plan["phases"] if row["name"] == change["phase"]]
+            if len(phases) != 1:
+                raise ValueError("research choice needs exactly one existing phase")
+            existing = phases[0].get("research_goal", {})
+            node = change.get("node", existing.get("node"))
+            if not isinstance(node, str) or not node:
+                raise ValueError("research choice requires an explicit Research node")
+            ids = change["research_ids"]
+            if not isinstance(ids, list) or not ids or any(not isinstance(v, str) or not v for v in ids):
+                raise ValueError("research choice requires nonempty Research IDs")
+            if len(ids) != len(set(ids)):
+                raise ValueError("research choice cannot duplicate Research IDs")
+            include = change.get("include_prerequisites", existing.get("include_prerequisites", False))
+            if type(include) is not bool:
+                raise ValueError("research choice include_prerequisites must be boolean")
+            identity = (collection, change["phase"])
+            if identity in seen:
+                raise ValueError(f"duplicate case update: {identity}")
+            seen.add(identity)
+            phases[0]["research_goal"] = {"node": node, "research_ids": ids,
+                                          "include_prerequisites": include}
             continue
         if collection == "phase":
             _keys(change, {"collection", "phase", "days"}, {"collection", "phase", "days"}, "case update")
@@ -2566,8 +2600,13 @@ def summarize_projection(projection: dict) -> dict:
                                         if key != "selected_stage_service_bounds"},
             "time_constraints": phase["time_constraints"],
             "shared_service_workloads": phase["shared_service_workloads"],
-            "facility_use_pressures": [row for row in phase["facility_use_constraints"]
-                                      if row["nominal_shared_unit_duty_gap_per_day"] > 1e-12],
+            # Only activities competing for the same Facility, or physically
+            # overcommitting its duty, are actionable at this decision point.
+            "shared_facility_activity_capacity": [row for row in phase["facility_use_constraints"]
+                if row["nominal_shared_unit_duty_gap_per_day"] > 1e-12
+                or sum(row[key] > 1e-12 for key in (
+                    "selected_industry_unit_duty_per_day", "selected_research_unit_duty_per_day",
+                    "selected_survey_unit_duty_per_day")) > 1],
             "investment_constraints": phase["investment_constraints"],
             "facility_investments": phase["facility_investments"],
             "vehicle_builds": phase["vehicle_builds"],
@@ -2623,6 +2662,7 @@ _SUMMARY_ROW_IDENTITY = {
     "selected_research_stage_requirements": ("research", "stage"),
     "conditional_incoming_cargo_risks_by_node": ("node", "resource"),
     "service_shortfalls_by_node": ("node", "service"),
+    "shared_facility_activity_capacity": ("node", "facility"),
     "power_and_population_by_node": ("node",),
     "od_transport_constraints": ("origin", "destination"),
     "extraction_world_context": ("node", "resource", "output_resource"),
@@ -2675,6 +2715,42 @@ def _relative_phase_overview(baseline: dict, chosen: dict) -> dict:
             "changed_sections": changed}
 
 
+def _summarize_period_sensitivity(record: dict) -> dict:
+    """Display only changed horizons/conditions from the full rate comparison.
+
+    This does not calculate a second balance or subtract unlike cumulative
+    quantities. --details retains both complete time-normalized projections.
+    """
+    comparison = record["comparison"]
+    before, after = comparison["baseline"], comparison["case"]
+    result = {"section": "period_sensitivity", "case": record["case"],
+              "phase": record["phase"], "basis": comparison["basis"],
+              "baseline_days": before["days"], "case_days": after["days"],
+              "unchanged_rates_and_conditions_omitted": True}
+    if before["research"] != after["research"]:
+        result["research"] = {"baseline": before["research"], "case": after["research"]}
+    for section, identity_fields in (("resources", ("node", "resource")),
+                                     ("constraints", ("node",)),
+                                     ("od_transport", ("origin", "destination"))):
+        def index(rows):
+            return {tuple(row[field] for field in identity_fields): row for row in rows}
+        initial, selected = index(before[section]), index(after[section])
+        changed = [{"identity": dict(zip(identity_fields, key)),
+                    "baseline": initial.get(key), "case": selected.get(key)}
+                   for key in sorted(set(initial) | set(selected))
+                   if initial.get(key) != selected.get(key)]
+        if changed:
+            result[section] = changed
+    before_unassessed = set(before["unassessed_constraints"])
+    after_unassessed = set(after["unassessed_constraints"])
+    if before_unassessed != after_unassessed:
+        result["unassessed_constraints"] = {
+            "new": sorted(after_unassessed - before_unassessed),
+            "no_longer_listed": sorted(before_unassessed - after_unassessed),
+        }
+    return result
+
+
 def summarize(result: dict) -> dict:
     """A complete baseline and explicit *changes* for each alternative.
 
@@ -2696,7 +2772,9 @@ def summarize(result: dict) -> dict:
             # Different durations/phase sets are not equivalent quantity bases.
             case_overviews.append({"name": case["name"], "incomparable_phase_basis": True,
                                    "time_basis_comparisons": [
-                                       row for row in result["differences"]
+                                       (_summarize_period_sensitivity(row)
+                                        if row["section"] == "period_sensitivity" else row)
+                                       for row in result["differences"]
                                        if row["case"] == case["name"]
                                        and row["section"] in {"period_sensitivity", "incomparable_phase_basis"}],
                                    "nonmatching_phases": [

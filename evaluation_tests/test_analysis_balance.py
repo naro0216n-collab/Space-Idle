@@ -219,6 +219,59 @@ def test_fleet_research_provider_competes_for_held_units_and_uses_registered_lev
                 evaluate(conflicting, app=definitions)
 
 
+def test_one_fleet_budget_covers_science_survey_founding_passenger_and_cargo(definitions):
+    """Selected Fleet turnarounds cannot be reused by any other owner-specific activity."""
+    sim = definitions._simulation
+    vehicles = list(sim.transport.vehicle_definitions())
+    cell, resource = next(iter(sim.survey.targets))
+    scenarios = []
+    for campaign in sim.scientific_exploration.definitions.values():
+        if campaign.required_units and vehicles:
+            vehicle = vehicles[0]
+            scenarios.append((str(campaign.origin_id), str(vehicle.id), campaign.required_units,
+                              {"science_campaigns": [{"campaign": str(campaign.id),
+                                                       "vehicle": str(vehicle.id)}]}))
+            break
+    for provider in sim.survey.providers.values():
+        if provider.source_kind.value != "fleet":
+            continue
+        compatible = next(((v, mode) for v in vehicles for mode in provider.observation_modes
+                           if sim.survey.source_supports_mode(provider, mode, v.id)), None)
+        if compatible is not None:
+            vehicle, mode = compatible
+            node = "survey.vehicle.source"
+            scenarios.append((node, str(vehicle.id), mode.minimum_source_units,
+                              {"survey_activities": [{
+                                  "node": node, "provider": str(provider.id),
+                                  "source": str(vehicle.id), "mode": str(mode.id),
+                                  "units": mode.minimum_source_units,
+                                  "cell": str(cell), "resource": str(resource),
+                              }]}))
+            break
+    if sim.founding.deployment_recipes and vehicles:
+        recipe = next(iter(sim.founding.deployment_recipes.values()))
+        vehicle = vehicles[0]
+        scenarios.append(("founding.vehicle.source", str(vehicle.id), recipe.required_units,
+                          {"founding_projects": [{"staging_node": "founding.vehicle.source",
+                                                  "recipe": str(recipe.id),
+                                                  "target_cell": str(cell),
+                                                  "vehicle": str(vehicle.id)}]}))
+    passenger_vehicle = next((vehicle for vehicle in vehicles if vehicle.passengers.seats), None)
+    if passenger_vehicle is not None:
+        scenarios.append(("passenger.vehicle.source", str(passenger_vehicle.id), 1,
+                          {"passenger_transfers": [{
+                              "origin": "passenger.vehicle.source", "destination": "passenger.destination",
+                              "vehicle": str(passenger_vehicle.id), "units": 1,
+                              "people": 1, "assumed_onboard_days": 2,
+                          }]}))
+    for node, vehicle, units, activity in scenarios:
+        fleet = {"node": node, "vehicle": vehicle, "units": units}
+        phase = {"name": "parallel", "days": 5, "facilities": [],
+                 "fleet": [{**fleet, "turnarounds_per_unit_per_day": .2}], **activity}
+        with pytest.raises(ValueError, match="overlaps authored turnarounds"):
+            evaluate({"initial_fleet": [fleet], "phases": [phase]}, app=definitions)
+
+
 def test_research_upgrade_investment_and_actual_selected_level_share_one_phase_ledger(definitions):
     """An upgrade is paid before, not inferred as, a higher installed Provider Level."""
     sim = definitions._simulation
@@ -872,7 +925,7 @@ def test_shared_facility_use_and_upstream_supply_expose_one_operating_budget(def
     overloaded_use, = overloaded['facility_use_constraints']
     assert within_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(0)
     assert overloaded_use['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(1)
-    assert 'industry_and_research_exceed_shared_facility_operating_duty' in overloaded['unassessed_constraints']
+    assert 'selected_activities_exceed_shared_facility_operating_duty' in overloaded['unassessed_constraints']
     candidate, = within['upstream_supply_comparisons'][0]['existing_capacity_options']
     assert candidate['separately_available_selected_facility_process_runs_per_day'] == pytest.approx(
         .25 * facility.process_throughput_per_day)
@@ -883,6 +936,52 @@ def test_shared_facility_use_and_upstream_supply_expose_one_operating_budget(def
     assert any(item['section'] == 'facility_use_constraints'
                and item['delta_from_baseline']['nominal_shared_unit_duty_gap_per_day'] == pytest.approx(1)
                for item in compared['differences'])
+
+
+def test_shared_source_reservation_and_duty_include_research_and_survey(definitions):
+    """A registered Facility is not duplicated between Research, Survey and Process capacities."""
+    sim = definitions._simulation
+    provider, survey, facility, mode = next(
+        (research, survey, facility, mode)
+        for facility in sim.facilities.definitions.values()
+        for research in sim.research.providers.values()
+        if research.source_kind.value == "facility"
+        and research.accepts_source(cap.id for cap in facility.capability_supplies)
+        for survey in sim.survey.providers.values()
+        if survey.source_kind.value == "facility"
+        for mode in survey.observation_modes
+        if sim.survey.source_supports_mode(survey, mode, facility.id)
+    )
+    cell, resource = next(iter(sim.survey.targets))
+    node = "source.shared.research.survey"
+    def chosen(units, research_units=1):
+        asset = {"node": node, "facility": str(facility.id), "units": units}
+        return {"initial_facilities": [asset], "solar_yield": {node: 1.0}, "phases": [{
+            "name": "parallel", "days": 7, "facilities": [asset],
+            "research_provider_allocations": [{
+                "node": node, "provider": str(provider.id),
+                "source_facility": str(facility.id), "units": research_units,
+            }],
+            "survey_activities": [{
+                "node": node, "provider": str(survey.id), "source": str(facility.id),
+                "mode": str(mode.id), "units": 1, "cell": str(cell), "resource": str(resource),
+            }],
+        }]}
+    with pytest.raises(ValueError, match="reuse Facility source units"):
+        evaluate(chosen(1), app=definitions)
+    projection = evaluate(chosen(2), app=definitions)
+    shared = projection["phases"][0]
+    use, = shared["facility_use_constraints"]
+    assert use["installed_unit_duty_per_day"] == 2
+    assert use["selected_survey_unit_duty_per_day"] == 1
+    assert use["selected_research_unit_duty_per_day"] == 1
+    assert use["nominal_shared_unit_duty_gap_per_day"] == 0
+    from scripts.analysis_balance import summarize_projection
+    shown, = summarize_projection(projection)["phases"][0]["shared_facility_activity_capacity"]
+    assert shown["selected_survey_unit_duty_per_day"] == 1
+    # The first two physical units are already selected for Research+Survey;
+    # neither appears as idle upstream Process throughput.
+    assert "selected_activities_exceed_shared_facility_operating_duty" not in shared["unassessed_constraints"]
 
 
 def test_phase_time_structure_respects_stage_order_and_investment_commissioning(definitions):
@@ -1223,3 +1322,45 @@ def test_new_process_content_compares_explicit_choices_without_zero_cost_technol
     invalid['edited_plan']['initial_stock'] = [{'node': node, 'resource': resource, 'amount_t': 100}]
     with pytest.raises(ValueError, match='identical initial conditions'):
         compare_content_variant(invalid, edits)
+
+
+def test_case_changes_research_dag_and_conditionally_acquired_assets_without_plan_copies(definitions):
+    """An alternative authors selected activities; investment must precede use."""
+    sim = definitions._simulation
+    a, b = list(sim.research.definitions)[:2]
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if f.id in sim.projects.recipes and sim.projects.recipes[f.id].resources)
+    vehicle = next(v for v in sim.transport.vehicle_definitions() if v.production.resources)
+    node = 'conditional.development'
+    asset = {'node': node, 'facility': str(facility.id), 'units': 1}
+    fleet = {'node': node, 'vehicle': str(vehicle.id), 'units': 1}
+    base = {'phases': [
+        {'name': 'investment', 'days': 12},
+        {'name': 'operation', 'days': 20,
+         'research_goal': {'node': node, 'research_ids': [str(a)]}},
+    ]}
+    additions = [
+        {'collection': 'facility_investments', 'action': 'add', 'phase': 'investment', 'row': asset},
+        {'collection': 'vehicle_builds', 'action': 'add', 'phase': 'investment', 'row': fleet},
+        {'collection': 'facilities', 'action': 'add', 'phase': 'operation', 'row': asset},
+        {'collection': 'fleet', 'action': 'add', 'phase': 'operation', 'row': fleet},
+        {'collection': 'research_goal', 'phase': 'operation', 'research_ids': [str(b)]},
+    ]
+    before = deepcopy(capture_state(sim))
+    compared = compare_cases({'base_plan': base, 'cases': [
+        {'name': 'no_investment'}, {'name': 'alternative', 'updates': additions}]}, app=definitions)
+    old, new = (record['projection']['phases'] for record in compared['cases'])
+    assert not old[0]['facility_investments'] and not old[0]['vehicle_builds']
+    assert old[1]['scale']['facility_units'] == 0 and not old[1]['fleet']
+    assert new[0]['facility_investments'] and new[0]['vehicle_builds']
+    assert new[0]['scale']['facility_units'] == 0 and not new[0]['fleet']
+    assert new[1]['scale']['facility_units'] == 1 and new[1]['fleet']
+    assert new[1]['research_goal']['requested_technologies'] == [str(b)]
+    assert old[1]['research_goal']['requested_technologies'] == [str(a)]
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match='opening holdings'):
+        compare_cases({'base_plan': base, 'cases': [
+            {'name': 'unsupported', 'updates': [additions[2]]}]}, app=definitions)
+    with pytest.raises(ValueError, match='Fleet opening holdings'):
+        compare_cases({'base_plan': base, 'cases': [
+            {'name': 'unsupported', 'updates': [additions[3]]}]}, app=definitions)
