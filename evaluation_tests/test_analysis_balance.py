@@ -1566,3 +1566,107 @@ def test_scientific_exploration_crew_site_resources_are_registered_lower_bounds(
                 nominal + extra.get(resource, 0))
         assert "scientific_crew_transit_and_return_provisions_not_assessed" in report["unassessed_constraints"]
     assert capture_state(sim) == initial_state
+
+
+def test_spatial_investment_sensitivity_is_definition_derived_and_does_not_develop_a_cell(definitions):
+    """Changing prospective World opportunity also carries its *separate* development bill.
+
+    A cell's eligibility and project completion remain unassessed; neither is
+    made into State by adding the registered one-time construction burden.
+    """
+    from scripts.analysis_balance import compare_cases
+
+    sim = definitions._simulation
+    recipe = next(iter(sim.projects.spatial_recipes.values()))
+    node = "hypothetical.surface"
+    base = {"phases": [{"name": "invest", "days": 60, "facilities": []}]}
+    addition = {"collection": "spatial_projects", "action": "add", "phase": "invest",
+                "row": {"node": node, "recipe": str(recipe.id), "units": 2}}
+    before = deepcopy(capture_state(sim))
+    results = compare_cases({"base_plan": base, "cases": [
+        {"name": "without development"},
+        {"name": "with registered development", "updates": [addition]},
+    ]}, app=definitions)
+    left = results["cases"][0]["projection"]["phases"][0]
+    right = results["cases"][1]["projection"]["phases"][0]
+    item, = right["spatial_projects"]
+    assert item["required_construction_work"] == pytest.approx(recipe.construction_work * 2)
+    assert item["status"] == "project_and_cell_eligibility_unassessed"
+    assert right["investment_constraints"][0]["pre_investment_work_lower_bound_days"] is None
+    assert "spatial_target_site_cell_knowledge_and_finite_construction_allocation" in right["unassessed_constraints"]
+    for resource in recipe.resources:
+        row = _rows(right)[(node, str(resource.resource_id))]
+        assert row["construction_demand_t"] == pytest.approx(resource.amount_t * 2)
+        assert any(source["origin_kind"] == "spatial_development" and
+                   source["origin_definition"] == str(recipe.id)
+                   for source in right["resource_contributions"])
+    assert not left["spatial_projects"]
+    assert any(row["section"] == "spatial_projects" for row in results["differences"])
+    with pytest.raises(ValueError, match="duplicate|existing"):
+        compare_cases({"base_plan": base, "cases": [
+            {"name": "duplicated", "updates": [addition, addition]}]}, app=definitions)
+    assert capture_state(sim) == before
+
+
+def test_operating_industrial_scale_portfolio_compares_shared_opportunity_and_distinct_obligations(definitions):
+    """The scaling portfolio exercises operating Definitions, not passive asset counts.
+
+    Comparisons are conditional nameplate projections, not preferred Facility
+    counts, a decided Cargo route, or a canonical-day progression.
+    """
+    import json
+    from pathlib import Path
+    from scripts.analysis_balance import compare_cases
+
+    data = json.loads((Path(__file__).resolve().parent.parent / "evaluation_plans" /
+                       "industrial_fleet_scale_comparison.json").read_text())
+    before = deepcopy(capture_state(definitions._simulation))
+    result = compare_cases(data, app=definitions)
+    by_name = {case["name"]: case["projection"]["phases"][-1]
+               for case in result["cases"]}
+    base = by_name["installed_asset_group"]
+    growth = by_name["expanded_industrial_and_fleet_group"]
+    area = by_name["developed_cell_instead_of_additional_extraction_machinery"]
+    industrial = by_name["industrial_capacity_growth_without_fleet_growth"]
+    fleet = by_name["fleet_growth_without_industrial_capacity_growth"]
+    utilization = by_name["reduced_industrial_utilization_same_assets"]
+    combined = by_name["expanded_industry_with_developed_resource_area"]
+    # Both asset families expand, while independent sensitivities isolate their costs.
+    assert growth["scale"]["facility_units"] > base["scale"]["facility_units"]
+    assert growth["scale"]["fleet_units"] > base["scale"]["fleet_units"]
+    assert industrial["scale"]["fleet_units"] == base["scale"]["fleet_units"]
+    assert fleet["scale"]["facility_units"] == base["scale"]["facility_units"]
+    assert utilization["scale"] == base["scale"]
+    assert area["scale"] == base["scale"]
+    # Same World opportunity saturates as installed mine capacity grows. Area
+    # development changes the available geology without duplicating the mine.
+    def world(phase):
+        return {(row["node"], row["resource"]): row for row in phase["extraction_world_context"]}
+    b, g, a, c = map(world, (base, growth, area, combined))
+    assert b.keys() == g.keys() == a.keys() == c.keys()
+    for key in b:
+        assert g[key]["diminishing_output_t_per_day"] >= b[key]["diminishing_output_t_per_day"]
+        assert g[key]["diminishing_output_t_per_day"] <= (
+            b[key]["diminishing_output_t_per_day"] *
+            g[key]["adjusted_installed_capacity_t_per_day"] /
+            b[key]["adjusted_installed_capacity_t_per_day"] + 1e-9)
+        assert a[key]["diminishing_output_t_per_day"] >= b[key]["diminishing_output_t_per_day"]
+        assert c[key]["diminishing_output_t_per_day"] >= g[key]["diminishing_output_t_per_day"]
+    assert any(row["required_construction_work"] > 0 for row in area["spatial_projects"])
+    assert not base["spatial_projects"]
+    # Actual activities, not construction count alone, drive the Resource and
+    # Service ledger, and the stage uses the already assigned research equipment.
+    kinds = {row["origin_kind"] for row in base["resource_contributions"]}
+    assert {"process", "extraction_opportunity", "facility_construction", "vehicle_manufacture"} <= (
+        kinds | {row["origin_kind"] for row in result["cases"][0]["projection"]["phases"][0]["resource_contributions"]})
+    assert base["research_point_balance"]["nominal_execution_per_day"] > 0
+    assert growth["research_point_balance"]["nominal_execution_per_day"] > (
+        base["research_point_balance"]["nominal_execution_per_day"])
+    assert any(row["production_t"] > 0 and row["process_demand_t"] > 0
+               for row in base["system_resources"])
+    assert all(row["status"] in {"fleet_route_unassessed", "blocked_nominal_capacity_only",
+                                      "conditional_capacity_not_cargo_settlement"}
+               for row in growth["od_transport_constraints"])
+    assert any(row["shortfall_without_assumed_arrivals_t"] >= row["shortfall_t"]
+               for row in growth["resources"])
+    assert capture_state(definitions._simulation) == before

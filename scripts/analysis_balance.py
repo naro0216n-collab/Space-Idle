@@ -1552,7 +1552,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
             # provider eligibility or actual Game State is inferred here.
             _keys(change, {"collection", "phase", "action", "row"},
                   {"collection", "phase", "action", "row"}, "case addition")
-            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns"}:
+            if collection not in {"facilities", "fleet", "research_provider_allocations", "passenger_transfers", "science_campaigns", "spatial_projects"}:
                 raise ValueError("case addition requires an asset, Research Provider or explicitly selected activity collection")
             row = change["row"]
             if not isinstance(row, dict):
@@ -1561,9 +1561,10 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                                 "fleet": ("node", "vehicle"),
                                 "research_provider_allocations": ("node", "provider"),
                                 "passenger_transfers": ("origin", "destination", "vehicle"),
-                                "science_campaigns": ("campaign",)})[collection]
+                                "science_campaigns": ("campaign",),
+                                "spatial_projects": ("node", "recipe")})[collection]
             if any(not isinstance(row.get(key), str) or not row[key] for key in identity_fields):
-                raise ValueError("case addition requires explicit node endpoints and Definition ID")
+                raise ValueError("case addition requires explicit activity identity and Definition ID")
             phases = [phase for phase in plan["phases"] if phase["name"] == change["phase"]]
             if len(phases) != 1:
                 raise ValueError("case addition requires exactly one existing phase")
