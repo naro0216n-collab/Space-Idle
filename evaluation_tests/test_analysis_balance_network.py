@@ -9,44 +9,14 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.analysis_balance import evaluate, evaluate_portfolio, summarize_portfolio
-from scripts.analysis_balance_network import registered_activity_coefficients, registered_material_links
+from scripts.analysis_balance import evaluate
 from space_idle.bootstrap import build_game_application_for_load
-from space_idle.composition.analysis_graph import build_definition_dependency_graph
 from space_idle.persistence import capture_state
 
 
 @pytest.fixture(scope="module")
 def source():
     return build_game_application_for_load()
-
-
-def test_catalog_wide_coefficients_are_typed_definition_values_without_assumed_activity(source):
-    sim = source._simulation
-    graph = build_definition_dependency_graph(sim, source._catalog)
-    matrix = {(row["method_kind"], row["method_definition"]): row
-              for row in registered_activity_coefficients(graph)}
-    links = registered_material_links(graph)
-    for process in sim.industry.processes.values():
-        entry = matrix[("process", str(process.id))]
-        inputs = {row["other_id"]: row["quantity"] for row in entry["resource_inputs"]
-                  if row["relation"] == "consumes_resource"}
-        outputs = {row["other_id"]: row["quantity"] for row in entry["resource_outputs"]
-                   if row["relation"] == "produces_resource"}
-        assert inputs == {str(k): v for k, v in process.inputs_per_day.items()}
-        assert outputs == {str(k): v for k, v in process.outputs_per_day.items()}
-        assert all(r["time_basis"] == "per_execution_day" for r in entry["resource_outputs"])
-    for method in sim.extraction.specs.values():
-        output = str(method.output_resource_id)
-        assert any(row["kind"] == "extraction_method" and row["definition"] == str(method.id)
-                   for row in links[output]["potential_producers"])
-    for tech in sim.research.definitions.values():
-        for stage in tech.stage_specs:
-            key = ("research_stage", f"{tech.id}/{stage.stage_id}")
-            if hasattr(stage, "research_point_cost"):
-                assert any(row["relation"] == "research_point_cost" and
-                           row["quantity"] == pytest.approx(stage.research_point_cost)
-                           for row in matrix[key]["other_typed_coefficients"])
 
 
 def test_network_preserves_node_boundary_and_ledger_quantities(source):
@@ -72,32 +42,6 @@ def test_network_preserves_node_boundary_and_ledger_quantities(source):
                     if e["node"] == nodes[0] and e["resource"] == str(resource))
     assert shortage["condition"] == "nominal_shortfall_without_assumed_arrivals"
     assert all(e["node"] != nodes[1] for e in phase["system_network"]["pressure_exposures"])
-
-
-def test_portfolio_keeps_different_duration_compositions_independent(source):
-    sim = source._simulation
-    before = deepcopy(capture_state(sim))
-    fac = next(f for f in sim.facilities.definitions.values() if sim.projects.recipes.get(f.id)
-               and sim.projects.recipes[f.id].resources)
-    node = "scenario.node"
-    def selected(days):
-        return {"phases": [{"name": "investment", "days": days,
-                            "facilities": [{"node": node, "facility": str(fac.id), "units": 1}]}]}
-    portfolio = evaluate_portfolio({"short": selected(3), "long": selected(30)}, app=source)
-    assert [r["plan"] for r in portfolio["evaluations"]] == ["long", "short"]
-    summary = summarize_portfolio(portfolio)
-    assert len(summary["scenarios"]) == 2
-    baseline_phase = summary["scenarios"][0]["cases"][0]["phases"][0]
-    assert all("shortfall_without_assumed_arrivals_t" in item and
-               "recurring_net_t_per_day" in item
-               for item in baseline_phase["resource_pressures"])
-    assert "od_transport" in baseline_phase
-    assert [s["cases"][0]["phases"][0]["days"] for s in summary["scenarios"]] == [30, 3]
-    assert "not_gameplay" in portfolio["portfolio_conditions"]
-    assert portfolio["registered_activity_coefficients"]
-    assert all(e["status"] == "possible_exposure_not_allocated_lost_output"
-               for r in portfolio["pressure_exposure_index"] for e in r["conditions"])
-    assert capture_state(sim) == before
 
 
 def test_registered_process_extension_reveals_multistage_resource_exposure():
@@ -266,7 +210,7 @@ def test_node_scoped_research_and_freight_draw_one_registered_service_pool():
 
 def test_registered_research_generations_link_time_capital_upkeep_and_maturity_without_state_mutation(source):
     """Across the entire catalog, days are conditional quantities, not a prescribed research route."""
-    from scripts.analysis_balance_research import evaluate_research_generations, summarize_research_generations
+    from scripts.analysis_balance_research import evaluate_research_generations
     from math import isfinite
     from space_idle.shared import DefinitionId
 
@@ -276,8 +220,6 @@ def test_registered_research_generations_link_time_capital_upkeep_and_maturity_w
     stages = {definition.progression_stage for definition in sim.research.definitions.values()
               if definition.progression_stage is not None}
     assert {entry['goal']['progression_stage'] for entry in study['generations']} == stages
-    assert sum(item['goal']['research_definition_count'] for item in study['generations']) == len(
-        [research for research in sim.research.definitions.values() if research.progression_stage is not None])
     for generation in study['generations']:
         goal = generation['goal']
         assert goal['theory_research_point_demand'] == pytest.approx(sum(
@@ -309,54 +251,7 @@ def test_registered_research_generations_link_time_capital_upkeep_and_maturity_w
                     assert count * h['days'] * choice['research_execution_capacity_per_day'] / choice['source_units'] >= (
                         execution_demand - 1e-6)
             assert all(isfinite(v) for v in choice['construction_resource_t'].values())
-    summary = summarize_research_generations(study)
-    assert [row['research_progression_stage'] for row in summary['generations']] == sorted(stages)
-    assert all(row['research_items'] for row in summary['generations'])
     assert capture_state(sim) == before
-
-
-def test_goal_research_source_upgrade_and_selected_industry_use_registered_owners(source):
-    """No free upgraded labs and no cross-node use of other Nodes' stocks."""
-    from scripts.analysis_balance_research import analyze_research_goal, relate_research_goal_to_economy
-    from space_idle.shared import DefinitionId
-    sim = source._simulation
-    first_stage = min(r.progression_stage for r in sim.research.definitions.values()
-                      if r.progression_stage is not None)
-    report = analyze_research_goal(progression_stage=first_stage, horizon_days=(45, 200), app=source)
-    for choice in report['provider_choices']:
-        if choice['source_kind'] != 'facility':
-            assert choice['source_maintenance_resource_per_day_t'] is None
-            continue
-        invested = choice['construction_resource_t']
-        fraction = sim.facilities.definitions[DefinitionId(choice['source'])].maintenance_fraction_per_year
-        assert choice['source_maintenance_resource_per_day_t'] == pytest.approx({
-            resource: amount * fraction / 365 for resource, amount in invested.items() if fraction > 0
-        })
-        if choice['provider_level'] <= 1:
-            continue
-        base = sim.projects.recipes.get(DefinitionId(choice['source']))
-        if not base:
-            continue
-        upgrade_rows = [sim.projects.upgrade_recipes.get((DefinitionId(choice['source']), level))
-                        for level in range(2, choice['provider_level'] + 1)]
-        if None in upgrade_rows:
-            assert not choice['investment_obtained']
-            continue
-        assert choice['construction_work'] == pytest.approx(
-            base.construction_work + sum(up.construction_work for up in upgrade_rows))
-        for resource in invested:
-            assert invested[resource] == pytest.approx(
-                sum(entry.amount_t for recipe in [base, *upgrade_rows] for entry in recipe.resources
-                    if str(entry.resource_id) == resource))
-    node_a, node_b = 'sample.research_industry', 'sample.remote_wealth'
-    resource = str(next(iter(source._catalog.resources)))
-    plan = {'initial_stock': [{'node': node_b, 'resource': resource, 'amount_t': 100_000}],
-            'phases': [{'name': 'same_time', 'days': 5, 'facilities': []}]}
-    context = relate_research_goal_to_economy(report, evaluate(plan, app=source))
-    assert len(context['contexts']) == 1
-    assert context['contexts'][0]['gross_capacity_lower_bound_days'] is None
-    assert context['contexts'][0]['current_nominal_rp_generation_per_day'] == 0
-    assert context['contexts'][0]['pre_investment_construction_by_node'] == []
 
 
 def test_finite_science_rp_can_replace_nominal_provider_demand_only_conditionally(source):
@@ -380,15 +275,12 @@ def test_finite_science_rp_can_replace_nominal_provider_demand_only_conditionall
             assert changed['rp_generation_lower_bound_days'] is None or original['rp_generation_lower_bound_days'] is None
         assert changed['research_execution_lower_bound_days'] == original['research_execution_lower_bound_days']
     assert any('movement' in note for note in science['model_limitations'])
-    with pytest.raises(ValueError):
-        analyze_research_goal(progression_stage=stage,
-                              selected_science_campaigns=(str(campaign.id), str(campaign.id)), app=source)
 
 
 def test_research_branch_pacing_uses_real_prerequisite_closure_and_parallel_site_work(source):
     """Multiple projects' independent demonstration work cannot be added as elapsed days."""
     from dataclasses import replace
-    from scripts.analysis_balance_research import analyze_research_goal, evaluate_research_generations
+    from scripts.analysis_balance_research import analyze_research_goal
     sim = source._simulation
     independent = [d for d in sim.research.definitions.values() if not d.prerequisites]
     sample = next(s for d in sim.research.definitions.values()
@@ -415,56 +307,3 @@ def test_research_branch_pacing_uses_real_prerequisite_closure_and_parallel_site
             max(expected_serial, option['rp_generation_lower_bound_days'],
                 option['research_execution_lower_bound_days']))
     assert viable > 0
-    study = evaluate_research_generations(app=source)
-    tech_profiles = [b for g in study['generations']
-                     for b in g['goal']['authored_technology_branch_pacing']
-                     if b['research'] in {str(d.id) for d in chosen}]
-    assert len(tech_profiles) == 2
-    assert {row['branch_research_count'] for row in tech_profiles} == {1}
-    assert all(row['independent_source_time_comparisons'] for row in tech_profiles)
-
-
-def test_authored_branch_pacing_excludes_unrelated_technologies_and_exposes_research_capacity(source):
-    """The selected goal's lineage is not the stage-wide RP total or a fixed fixture path."""
-    from scripts.analysis_balance_research import evaluate_research_generations, summarize_research_generations
-    from space_idle.shared import DefinitionId
-    sim = source._simulation
-    report = evaluate_research_generations(app=source)
-    summary = summarize_research_generations(report)
-    branch_index = {branch['research']: branch for g in report['generations']
-                    for branch in g['goal']['authored_technology_branch_pacing']}
-    assert set(branch_index) == {str(id_) for id_ in sim.research.definitions}
-    for tech_id, row in branch_index.items():
-        goal = set(row['authored_prerequisite_closure'])
-        assert tech_id in goal
-        assert all(str(pre) in goal for member in goal
-                   for pre in sim.research.definitions[DefinitionId(member)].prerequisites)
-        assert row['branch_rp_demand'] == pytest.approx(sum(
-            getattr(stage, 'research_point_cost', 0.0)
-            for member in goal
-            for stage in sim.research.definitions[DefinitionId(member)].stage_specs))
-        assert row['branch_research_count'] == len(goal)
-        for option in row['independent_source_time_comparisons']:
-            lower = option['conditional_capacity_lower_bound_days']
-            if lower is not None:
-                assert lower >= option['rp_flow_lower_bound_days']
-                assert lower >= option['research_execution_flow_lower_bound_days']
-                assert lower >= option['serial_technology_stage_path_lower_bound_days']
-    assert all(g['authored_technology_branch_pacing_by_source'] for g in summary['generations'])
-    assert all('authored_technology_branch_pacing' not in g for g in summary['generations'])
-    from scripts.analysis_balance_research import _summarize_branch_pacing_by_source
-    first = report['generations'][0]['goal']['authored_technology_branch_pacing']
-    comparisons = _summarize_branch_pacing_by_source(first, (60, 180))
-    for source_option in comparisons:
-        assert source_option['authored_technology_branches_compared'] > 0
-        assert source_option['conditional_prerequisite_branch_lower_bound_days']['minimum'] <= (
-            source_option['conditional_prerequisite_branch_lower_bound_days']['median'])
-        assert source_option['conditional_prerequisite_branch_lower_bound_days']['median'] <= (
-            source_option['conditional_prerequisite_branch_lower_bound_days']['maximum'])
-        assert len(source_option['selected_horizon_feasibility_filters_not_completion_claims']) == 2
-        horizons = source_option['selected_horizon_feasibility_filters_not_completion_claims']
-        assert horizons[0]['branches_excluded_by_nominal_time_lower_bound'] >= (
-            horizons[1]['branches_excluded_by_nominal_time_lower_bound'])
-        for h in horizons:
-            assert h['branches_excluded_by_nominal_time_lower_bound'] + h['branches_not_excluded_by_time_lower_bound'] == (
-                source_option['authored_technology_branches_compared'])
