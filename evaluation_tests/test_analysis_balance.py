@@ -219,6 +219,77 @@ def test_fleet_research_provider_competes_for_held_units_and_uses_registered_lev
                 evaluate(conflicting, app=definitions)
 
 
+def test_research_upgrade_investment_and_actual_selected_level_share_one_phase_ledger(definitions):
+    """An upgrade is paid before, not inferred as, a higher installed Provider Level."""
+    sim = definitions._simulation
+    provider = next(p for p in sim.research.providers.values()
+                    if p.source_kind.value == "facility" and len(p.levels) > 1)
+    facility = next(f for f in sim.facilities.definitions.values()
+                    if provider.accepts_source(cap.id for cap in f.capability_supplies)
+                    and (f.id, 2) in sim.projects.upgrade_recipes)
+    node = "research.level.test"
+    base = {"node": node, "facility": str(facility.id), "units": 1}
+
+    def research(level):
+        return [{"node": node, "provider": str(provider.id), "source_facility": str(facility.id),
+                 "units": 1, "level": level}]
+
+    def plan(after_level=2):
+        later = {**base, "level": after_level}
+        return {"initial_facilities": [base], "phases": [
+            {"name": "investment", "days": 5, "facilities": [base],
+             "upgrade_projects": [{"node": node, "facility": str(facility.id),
+                                   "target_level": 2, "units": 1}],
+             "research_provider_allocations": research(1)},
+            {"name": "operations", "days": 10, "facilities": [later],
+             "research_provider_allocations": research(after_level)},
+        ]}
+
+    base_result, enhanced = (evaluate(plan(level), app=definitions)["phases"]
+                             for level in (1, 2))
+    invested, operations = enhanced
+    assert invested["research_point_balance"]["nominal_generation_points"] == pytest.approx(
+        provider.level_spec(1).generation_points_per_day * 5)
+    assert operations["research_point_balance"]["nominal_generation_points"] == pytest.approx(
+        provider.level_spec(2).generation_points_per_day * 10)
+    assert operations["research_point_balance"]["nominal_storage_capacity_points"] == pytest.approx(
+        provider.level_spec(2).storage_capacity_points)
+    assert operations["research_point_balance"]["nominal_execution_per_day"] == pytest.approx(
+        provider.level_spec(2).research_execution_per_day)
+    recipe = sim.projects.upgrade_recipes[(facility.id, 2)]
+    for req in recipe.resources:
+        invested_resources = {(row["node"], row["resource"]): row
+                              for row in invested["resources"]}
+        assert invested_resources[(node, str(req.resource_id))]["construction_demand_t"] >= req.amount_t
+    unupgraded_maintenance = sum(row["maintenance_demand_t"] for row in base_result[1]["resources"])
+    upgraded_maintenance = sum(row["maintenance_demand_t"] for row in operations["resources"])
+    expected_upkeep = sim.facilities.maintenance_requirements_for_investment(
+        facility.id, {req.resource_id: req.amount_t for req in recipe.resources})
+    assert upgraded_maintenance - unupgraded_maintenance == pytest.approx(
+        10 * sum(expected_upkeep.values()))
+
+    premature = plan()
+    premature["phases"][0]["facilities"] = [{**base, "level": 2}]
+    with pytest.raises(ValueError, match="prior upgrades"):
+        evaluate(premature, app=definitions)
+    missing = plan()
+    missing["phases"][0].pop("upgrade_projects")
+    with pytest.raises(ValueError, match="prior upgrades"):
+        evaluate(missing, app=definitions)
+    unselected = plan()
+    unselected["phases"][1]["research_provider_allocations"] = research(1)
+    with pytest.raises(ValueError, match="at its selected Level"):
+        evaluate(unselected, app=definitions)
+
+    # The same upgraded holdings may instead be explicitly present initially:
+    # no artificial construction phase is required for a sunk starting asset.
+    initial = {"initial_facilities": [{**base, "level": 2}], "phases": [
+        {"name": "already_owned", "days": 10, "facilities": [{**base, "level": 2}],
+         "research_provider_allocations": research(2)}]}
+    assert evaluate(initial, app=definitions)["phases"][0]["research_point_balance"][
+        "nominal_generation_points"] == pytest.approx(provider.level_spec(2).generation_points_per_day * 10)
+
+
 def test_registered_cross_domain_activity_provenance_and_comparison_is_content_driven(definitions):
     """The same ledger follows active Process, research, Vehicle investment and upkeep.
 

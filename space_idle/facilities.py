@@ -66,6 +66,10 @@ class LifeSupportSpec:
         if any(not math.isfinite(rate) or rate < 0 for _, rate in self.net_resources):
             raise ValueError('invalid net life support Resource rate')
 
+    def capacity_at_level(self, level: int) -> float:
+        """Physical Life Support throughput at the selected installed Level."""
+        return self.person_days_per_day * level
+
 
 @dataclass(frozen=True)
 class FacilityDef:
@@ -100,6 +104,9 @@ class FacilityDef:
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
         if not 0.0 <= self.decommission_recovery_fraction <= 1.0:
             raise ValueError("facility decommission recovery fraction must be within 0..1")
+
+    def housing_at_level(self, level: int) -> int:
+        return self.housing_capacity * level
 
 
 @dataclass

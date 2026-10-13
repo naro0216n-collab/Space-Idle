@@ -71,11 +71,15 @@ def _asset_rows(rows, sim, nodes, *, label):
     """One method per Facility block; sum units by definition for construction."""
     result = []
     for row in rows:
-        _keys(row, {"node", "facility", "units", "process", "extraction", "duty", "extraction_yield_fraction", "supported_person_days_per_day"},
+        _keys(row, {"node", "facility", "units", "level", "process", "extraction", "duty", "extraction_yield_fraction", "supported_person_days_per_day"},
               {"node", "facility", "units"}, label)
         node = _identifier(row["node"], nodes, "node")
         name = _identifier(row["facility"], sim.facilities.definitions, "facility")
         units = _integer(row["units"], "facility units", positive=True)
+        level = _integer(row.get("level", 1), "facility level", positive=True)
+        if level > 1 and any((DefinitionId(name), step) not in sim.projects.upgrade_recipes
+                             for step in range(2, level + 1)):
+            raise ValueError(f"unregistered Facility Level investment path: {name}/{level}")
         duty = _number(row.get("duty", 1.0), "duty")
         if duty > 1:
             raise ValueError("duty cannot exceed 1")
@@ -92,7 +96,7 @@ def _asset_rows(rows, sim, nodes, *, label):
         support = definition.life_support
         if people > 0 and support is None:
             raise ValueError(f"facility {name} has no Life Support capability")
-        if support is not None and people > units * support.person_days_per_day:
+        if support is not None and people > units * support.capacity_at_level(level):
             raise ValueError("assigned Life Support exceeds nominal person-days")
         if process_id and extraction_id:
             raise ValueError("one Facility block cannot run a Process and Extraction simultaneously")
@@ -106,7 +110,7 @@ def _asset_rows(rows, sim, nodes, *, label):
             method_id = _identifier(extraction_id, sim.extraction.specs, "extraction method")
             if not sim.extraction.specs[DefinitionId(method_id)].required_capabilities <= capabilities:
                 raise ValueError(f"extraction {method_id} incompatible with facility {name}")
-        result.append((node, name, units, process_id, extraction_id, duty, yield_factor, people))
+        result.append((node, name, units, process_id, extraction_id, duty, yield_factor, people, level))
     return sorted(result)
 
 
@@ -321,9 +325,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
 
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
     initial_facility_units = defaultdict(int)
-    for node, name, units, _p, _e, _d, _y, _people in initial:
+    initial_level_units = defaultdict(int)
+    for node, name, units, _p, _e, _d, _y, _people, level in initial:
         initial_facility_units[(node, name)] += units
+        initial_level_units[(node, name, level)] += units
     cumulative_facility_investments = defaultdict(int)
+    cumulative_upgrade_units = defaultdict(int)
     vehicles = {str(vehicle.id): vehicle for vehicle in sim.transport.vehicle_definitions()}
     initial_fleet_units = {key: units for key, (units, _cycles) in _fleet_rows(
         plan.get("initial_fleet", ()), vehicles, nodes,
@@ -352,13 +359,29 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # provides quantity evidence for a *conditional* acquired holding; it
         # cannot commission assets or accelerate its own Phase's production.
         installed = defaultdict(int)
-        for node, facility, units, *_ in assets:
+        installed_by_level = defaultdict(int)
+        for node, facility, units, *_rest in assets:
             installed[(node, facility)] += units
+            installed_by_level[(node, facility, _rest[-1])] += units
         for key, units in installed.items():
             documented = initial_facility_units[key] + cumulative_facility_investments[key]
             if units > documented:
                 raise ValueError(f"Facility opening holdings at {key} exceed explicitly "
                                  f"authored initial holdings and prior investment: {documented}")
+        # These are conditional opening holdings, not upgrade completions. A
+        # Level cannot appear from an investment booked in this same Phase.
+        for (node, facility, level), units in installed_by_level.items():
+            if level <= 1:
+                continue
+            for threshold in range(2, level + 1):
+                projected = sum(q for (n, f, l), q in installed_by_level.items()
+                                if (n, f) == (node, facility) and l >= threshold)
+                already = sum(q for (n, f, l), q in initial_level_units.items()
+                              if (n, f) == (node, facility) and l >= threshold)
+                documented = already + cumulative_upgrade_units[(node, facility, threshold)]
+                if projected > documented:
+                    raise ValueError(f"Facility Level {threshold} opening holdings at "
+                                     f"{node}/{facility} exceed initial Level and prior upgrades")
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
                                                     sim, nodes, known_resource)
         current = defaultdict(int)
@@ -424,13 +447,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         extraction_context_report = []
         power_world_context_report = []
         # Everything here is a request or nominal nameplate, never settled flow.
-        for node, name, units, process_id, extraction_id, duty, yield_factor, people in assets:
+        for node, name, units, process_id, extraction_id, duty, yield_factor, people, level in assets:
             current[(node, name)] += units
             facility = sim.facilities.definitions[DefinitionId(name)]
             mult = units * duty
             activity_sources.append({
                 "kind": "facility", "node": node, "definition": name,
-                "units": units, "duty": duty, "process": process_id, "extraction": extraction_id,
+                "units": units, "level": level, "duty": duty, "process": process_id, "extraction": extraction_id,
                 "quantity_source": "definition_x_selected_composition",
                 "graph_evidence": _graph_evidence(
                     graph_nodes, relation_index, (("facility", name),)
@@ -442,9 +465,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 unassessed.add("shared_power_service_and_resource_allocation")
             # Housing is a physical installed capacity; it is not an
             # operating-process rate and cannot be multiplied by duty.
-            housing_nominal[node] += facility.housing_capacity * units
+            housing_nominal[node] += facility.housing_at_level(level) * units
             if facility.life_support is not None:
-                life_support_supplied[node] += facility.life_support.person_days_per_day * mult
+                life_support_supplied[node] += facility.life_support.capacity_at_level(level) * mult
                 life_support_committed[node] += people
                 for resource_id, amount in facility.life_support.net_resources:
                     book(life_support_inputs, "life_support_demand_t", node, resource_id,
@@ -461,7 +484,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                          "process", process_id)
             if extraction_id:
                 method = sim.extraction.specs[DefinitionId(extraction_id)]
-                nominal = mult * facility.extraction_capacity_t_per_day
+                nominal = mult * sim.extraction.nominal_capacity_for_level(DefinitionId(name), level)
                 key = (node, str(method.output_resource_id))
                 extraction_nominal[key] += nominal * days
                 extraction_groups[(node, str(method.resource_id))].append((method, nominal))
@@ -539,12 +562,17 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 # Base recipe investment is an explicit assumption for the
                 # already-installed assets, not an inspected Facility State.
                 base_investment = {req.resource_id: req.amount_t * units for req in recipe.resources}
+                for next_level in range(2, level + 1):
+                    increment = sim.projects.upgrade_recipes[(facility.id, next_level)]
+                    for req in increment.resources:
+                        base_investment[req.resource_id] = (base_investment.get(req.resource_id, 0)
+                                                            + req.amount_t * units)
                 for resource_id, rate in sim.facilities.maintenance_requirements_for_investment(
                     facility.id, base_investment,
                 ).items():
                     book(maintenance, "maintenance_demand_t", node, resource_id,
                          rate * days, "facility_maintenance", name,
-                         "base_construction_recipe_assumed_investment")
+                         "registered_construction_and_level_investment_assumed")
         for (node, resource), group in sorted(extraction_groups.items()):
             context = extraction_contexts.get(node)
             if context is None:
@@ -656,6 +684,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # Requested upgrades do not alter installed Levels or production here:
         # their completion/order must still be checked by the owning Domain.
         upgraded = defaultdict(int)
+        upgraded_by_level = defaultdict(int)
         for row in phase.get("upgrade_projects", ()):
             _keys(row, {"node", "facility", "target_level", "units"},
                   {"node", "facility", "target_level", "units"}, "Facility Upgrade")
@@ -669,6 +698,13 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             upgraded[(node, facility_id)] += units
             if upgraded[(node, facility_id)] > current[(node, facility_id)]:
                 raise ValueError("upgrade projects exceed selected installed Facility units")
+            if target_level == 1:
+                raise ValueError("Facility Upgrade requires a target Level above 1")
+            upgraded_by_level[(node, facility_id, target_level)] += units
+            if upgraded_by_level[(node, facility_id, target_level)] > installed_by_level[
+                (node, facility_id, target_level - 1)
+            ]:
+                raise ValueError("Facility Upgrade needs matching current opening Level units")
             for req in recipe.resources:
                 book(construction, "construction_demand_t", node, req.resource_id,
                      req.amount_t * units, "facility_upgrade", f"{facility_id}/level:{target_level}")
@@ -681,35 +717,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             post_upgrade_maintenance = sim.facilities.maintenance_requirements_for_investment(
                 DefinitionId(facility_id), upgrade_investment,
             )
-            # Registered Provider levels are capabilities *after* a valid
-            # upgrade, not free capacity in the investment phase. Report
-            # their differences alongside material/work/maintenance burdens.
-            facility_def = sim.facilities.definitions[DefinitionId(facility_id)]
-            compatible_provider_changes = []
-            for provider in sim.research.providers.values():
-                if provider.source_kind.value != "facility" or not provider.accepts_source(
-                    cap.id for cap in facility_def.capability_supplies
-                ):
-                    continue
-                previous_level = next((level for level in provider.levels
-                                       if level.level == target_level - 1), None)
-                next_level = next((level for level in provider.levels
-                                   if level.level == target_level), None)
-                if previous_level is None or next_level is None:
-                    continue
-                compatible_provider_changes.append({
-                    "provider": str(provider.id), "assumed_current_level": target_level - 1,
-                    "generation_points_per_day_before": previous_level.generation_points_per_day * units,
-                    "generation_points_per_day_after": next_level.generation_points_per_day * units,
-                    "research_execution_per_day_before": previous_level.research_execution_per_day * units,
-                    "research_execution_per_day_after": next_level.research_execution_per_day * units,
-                    "storage_capacity_points_before": previous_level.storage_capacity_points * units,
-                    "storage_capacity_points_after": next_level.storage_capacity_points * units,
-                    "status": "conditional_post_upgrade_provider_capacity_not_allocated",
-                })
             upgrade_activity_details.append({
                 "node": node, "facility": facility_id, "target_level": target_level,
-                "conditional_research_provider_changes": compatible_provider_changes,
                 "units": units, "required_construction_work": recipe.construction_work * units,
                 "resources_t": {str(req.resource_id): req.amount_t * units for req in recipe.resources},
                 "conditional_additional_maintenance_t_per_day": {
@@ -725,7 +734,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # Only explicitly authored opening Facilities provide construction
         # capacity; an investment order does not supply its own work.
         existing_construction = defaultdict(float)
-        for node, name, units, _p, _e, duty, _y, _people in assets:
+        for node, name, units, _p, _e, duty, _y, _people, _level in assets:
             provider = sim.projects.construction_providers.get(DefinitionId(name))
             if provider:
                 existing_construction[node] += provider.work_per_day * units * duty
@@ -814,7 +823,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         # single installed-unit budget; leave the nominal demands visible
         # rather than implying both flows have been allocated successfully.
         facility_activity_duty = defaultdict(float)
-        for source_node, source_id, units, process_id, extraction_id, duty, _yield, _people in assets:
+        for source_node, source_id, units, process_id, extraction_id, duty, _yield, _people, _level in assets:
             if process_id or extraction_id:
                 facility_activity_duty[(source_node, source_id)] += units * duty
         facility_research_duty = defaultdict(float)
@@ -834,9 +843,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 facility = sim.facilities.definitions[DefinitionId(source)]
                 if not provider.accepts_source(cap.id for cap in facility.capability_supplies):
                     raise ValueError("research provider not compatible with source Facility")
-                assigned_source_units[(node, source)] += units
-                if assigned_source_units[(node, source)] > current[(node, source)]:
-                    raise ValueError("research provider requires more installed Facilities")
             else:
                 if "source_vehicle" not in row:
                     raise ValueError("Fleet Research Provider requires a source Vehicle")
@@ -854,8 +860,12 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 raise ValueError(f"unknown research provider level: {name}/{level}")
             if provider.source_kind.value == "fleet" and level != 1:
                 raise ValueError("Fleet-backed research source has no Facility-style Level upgrade")
-            if provider.source_kind.value == "facility" and level > 1:
-                unassessed.add("research_source_facility_level_and_upgrade_investment_unassessed")
+            if provider.source_kind.value == "facility":
+                assigned_source_units[(node, source, level)] += units
+                if assigned_source_units[(node, source, level)] > installed_by_level[
+                    (node, source, level)
+                ]:
+                    raise ValueError("research provider needs installed Facilities at its selected Level")
             duty = _number(row.get("duty", 1), "research provider duty")
             if duty > 1:
                 raise ValueError("research provider duty cannot exceed 1")
@@ -870,7 +880,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             unassessed.add("research_source_site_technology_crew_power_and_finite_allocation")
             if provider.source_kind.value == "facility" and any(
                 n == node and f == source and (proc or extraction)
-                for n, f, _u, proc, extraction, _d, _y, _people in assets):
+                for n, f, _u, proc, extraction, _d, _y, _people, _level in assets):
                 unassessed.add("research_and_industry_share_facility_sources")
             research_generation_per_day += units * duty * level_spec.generation_points_per_day
             research_execution_per_day += units * duty * level_spec.research_execution_per_day
@@ -970,6 +980,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         previous_fleet = current_fleet
         for key, units in builds.items():
             cumulative_vehicle_builds[key] += units
+        for key, units in upgraded_by_level.items():
+            cumulative_upgrade_units[key] += units
         # Scientific Exploration is a conditional *activity* with registered
         # inputs and potential RP outcome. No travel, Crew provisions, RP award,
         # or Mission state transition is simulated by this comparison.
@@ -1798,7 +1810,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 definition = sim.industry.processes[DefinitionId(process_id)]
                 compatible = [
                     (facility, units, duty, active_proc)
-                    for site, facility, units, active_proc, _extraction, duty, _yield, _people in assets
+                    for site, facility, units, active_proc, _extraction, duty, _yield, _people, _level in assets
                     if site == node and definition.required_capabilities <=
                         {cap.id for cap in sim.facilities.definitions[DefinitionId(facility)].capability_supplies}
                 ]
@@ -1855,7 +1867,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
                 "Opening Facility compositions are explicitly authored and their prior investment only bounds conditional availability; construction never operates in the investment phase.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
-                "Facility Upgrade projects consume registered materials and work, without Level transition, completion sequencing, or updated provider capability.",
+                "Facility upgrades consume materials and work; a higher Level contributes only in a later Phase whose opening holdings explicitly select that Level, bounded by prior investments.",
                 "Scientific Exploration campaigns include registered resources and potential RP rewards; for selected crewed trips to unestablished physical targets, onboard Resource demand covers only the registered site-duration lower bound, not unknown travel or return. No mission or Population progression is executed.",
                 "Survey is a conditional Provider/Mode/Target capacity comparison; no Survey State, reach, eligibility, or progress is executed.",
                 "Founding projects consume registered deployment payloads and preparation service; they do not found Nodes, transfer cargo, or build Facilities in-place.",
@@ -1874,7 +1886,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
-                "Maintenance approximates invested material using base construction recipe; Upgrade investment is accounted separately without Level transition, salvage is not simulated.",
+                "Facility upkeep uses registered base and Level investment recipes for explicitly held equipment; completion, salvage and commissioning are not simulated.",
             ], "phases": report}
 
 
@@ -1987,7 +1999,7 @@ def _apply_case_updates(base: dict, updates: list) -> dict:
                            "turnarounds_per_unit_per_day", "level", "process", "extraction",
                            "supported_person_days_per_day", "extraction_yield_fraction"},
                   {"phase", "collection", "node", "id"}, "case update")
-            allowed = ({"units", "duty", "process", "extraction",
+            allowed = ({"units", "level", "duty", "process", "extraction",
                         "supported_person_days_per_day", "extraction_yield_fraction"}
                        if collection == "facilities" else
                        {"units", "turnarounds_per_unit_per_day"} if collection == "fleet" else

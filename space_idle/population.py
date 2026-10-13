@@ -243,7 +243,7 @@ class PopulationService:
             definition = facilities.definitions[facility.definition_id]
             if definition.life_support is None:
                 continue
-            amount = definition.life_support.person_days_per_day * facility.level
+            amount = definition.life_support.capacity_at_level(facility.level)
             nominal += amount
             if not facilities.is_active_and_compatible(facility, day):
                 continue
@@ -312,7 +312,7 @@ class PopulationService:
             for facility, definition in self._facilities_at(node_id, day)
             if definition.life_support is not None
         ]
-        provider_capacity = sum(spec.person_days_per_day * facility.level for facility, spec in providers)
+        provider_capacity = sum(spec.capacity_at_level(facility.level) for facility, spec in providers)
         upper = min(requested, max(0, housing - existing),
                     max(0, math.floor(provider_capacity + 1e-9) - existing))
         if upper == 0:
@@ -328,7 +328,7 @@ class PopulationService:
             }
             for facility, spec in providers:
                 capacities[pool_constraint('life_support_provider', scope_id=str(facility.id))] = (
-                    spec.person_days_per_day * facility.level
+                    spec.capacity_at_level(facility.level)
                 )
                 for resource, _ in spec.net_resources:
                     capacities[resource_constraint(node_id, resource)] = self.inventory.amount(node_id, resource)
@@ -1350,14 +1350,14 @@ class PopulationService:
             yield facility, self.facilities.definitions[facility.definition_id]
 
     def housing_capacity(self, node_id: SpatialNodeId, day: int, *, active: bool = True) -> int:
-        return sum(definition.housing_capacity * facility.level
+        return sum(definition.housing_at_level(facility.level)
                    for facility, definition in self._facilities_at(node_id, day, active=active))
 
     def facility_decommission_blockers(self, facility_id: EntityId) -> tuple[FacilityLifecycleBlocker, ...]:
         facility = self.facilities.facilities.get(facility_id)
         if facility is None:
             return ()
-        removed = self.facilities.definitions[facility.definition_id].housing_capacity * facility.level
+        removed = self.facilities.definitions[facility.definition_id].housing_at_level(facility.level)
         if removed == 0:
             return ()
         node_id = facility.operational_node_id
@@ -1413,7 +1413,7 @@ class PopulationService:
             for facility, definition in self._facilities_at(node_id, day):
                 if definition.life_support is not None:
                     capacities[pool_constraint('life_support_provider', scope_id=str(facility.id))] = (
-                        definition.life_support.person_days_per_day * facility.level
+                        definition.life_support.capacity_at_level(facility.level)
                     )
         return capacities
 
@@ -1437,7 +1437,7 @@ class PopulationService:
                 id=self._provider_bundle_id(facility.id),
                 owner_kind='population', owner_id=facility.id,
                 purpose='life_support', operational_node_id=node_id,
-                requested_execution=min(people, spec.person_days_per_day * facility.level),
+                requested_execution=min(people, spec.capacity_at_level(facility.level)),
                 priority=ActivityPriority(5), requirements=requirements,
             ))
         return tuple(rows)
@@ -1463,7 +1463,7 @@ class PopulationService:
                 for facility, definition in self._facilities_at(current_id, day)
                 if definition.life_support is not None
             ]
-            total_capacity = sum(spec.person_days_per_day * facility.level for facility, spec in providers)
+            total_capacity = sum(spec.capacity_at_level(facility.level) for facility, spec in providers)
             if not total_capacity:
                 continue
             # One need pool is shared across all providers. Forecast its total
@@ -1471,8 +1471,8 @@ class PopulationService:
             ratio = min(1.0, people / total_capacity)
             future_ratio = min(1.0, (people + incoming) / total_capacity)
             for facility, spec in providers:
-                demand = spec.person_days_per_day * facility.level * ratio
-                future_demand = spec.person_days_per_day * facility.level * future_ratio
+                demand = spec.capacity_at_level(facility.level) * ratio
+                future_demand = spec.capacity_at_level(facility.level) * future_ratio
                 for resource, rate in spec.net_resources:
                     if demand * rate > 1e-12:
                         rows.append(SupplyRequirement(

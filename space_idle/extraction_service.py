@@ -130,7 +130,13 @@ class ExtractionService:
         return ()
 
     def nominal_capacity(self, facility: FacilityState) -> float:
-        return self.facility_definitions[facility.definition_id].extraction_capacity_t_per_day * facility.level
+        return self.nominal_capacity_for_level(facility.definition_id, facility.level)
+
+    def nominal_capacity_for_level(self, definition_id: DefinitionId, level: int) -> float:
+        """Installed extraction nameplate, shared by stateful and hypothetical callers."""
+        if type(level) is not int or level < 1:
+            raise ValueError("facility level must be a positive integer")
+        return self.facility_definitions[definition_id].extraction_capacity_t_per_day * level
 
     @classmethod
     def service_type(cls, resource_id: DefinitionId) -> str:
