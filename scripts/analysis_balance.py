@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.analysis_balance_research import research_goal_closure, evaluate_research_generations, analyze_research_goal, summarize_research_generations, compare_research_generation_reports, summarize_research_goal, selected_research_time_structure
 from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
-    registered_material_links, registered_activity_coefficients, trace_material_system,
+    registered_material_links, trace_material_system,
     network_overview, producer_catalog, conditional_material_paths,
 )
 from space_idle.bootstrap import build_game_application_for_load
@@ -288,15 +288,17 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         solar_sites[key] = context, _integer(row.get("day", 0), "solar World reference day")
 
     initial = _asset_rows(plan.get("initial_facilities", ()), sim, nodes, label="initial facility")
-    previous = defaultdict(int)
+    initial_facility_units = defaultdict(int)
     for node, name, units, _p, _e, _d, _y, _people in initial:
-        previous[(node, name)] += units
+        initial_facility_units[(node, name)] += units
+    cumulative_facility_investments = defaultdict(int)
     vehicles = {str(vehicle.id): vehicle for vehicle in sim.transport.vehicle_definitions()}
-    previous_fleet = {key: units for key, (units, _cycles) in _fleet_rows(
+    initial_fleet_units = {key: units for key, (units, _cycles) in _fleet_rows(
         plan.get("initial_fleet", ()), vehicles, nodes,
         label="initial Fleet", allow_turnarounds=False,
     ).items()}
-    pending_vehicle_builds = defaultdict(int)
+    previous_fleet = dict(initial_fleet_units)
+    cumulative_vehicle_builds = defaultdict(int)
     stored_research_points = _number(plan.get("initial_research_points", 0), "initial_research_points")
     # Cumulative authored receipts are conditional upon actual Cargo settlement.
     # This is an algebraic lower Stock-bound, not a second logistics scheduler.
@@ -305,8 +307,6 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     seen_research_stages = set()
     seen_science_campaigns = set()
     seen_phase_names = set()
-    previous_assets = initial
-    pending_facility_investments = defaultdict(int)
     for phase in plan["phases"]:
         _keys(phase, {"name", "days", "facilities", "facility_investments", "external_rates", "transfers", "vehicle_builds", "fleet", "research_stages", "research_goal", "upstream_supply_choices", "research_provider_allocations", "extraction_sites", "transport_allocations", "spatial_projects", "upgrade_projects", "science_campaigns", "survey_activities", "founding_projects", "passenger_transfers", "market_buys", "assumed_funds_musd"},
               {"name", "days", "facilities"}, "phase")
@@ -315,17 +315,18 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         seen_phase_names.add(phase["name"])
         days = _integer(phase["days"], "phase days", positive=True)
         assets = _asset_rows(phase["facilities"], sim, nodes, label="facility")
-        # Facility rows are the available opening composition. Investments
-        # from the preceding Phase may be assumed commissioned at this
-        # boundary, but an investment in this Phase has no operating supply.
+        # Facility holdings are an analyst-authored opening snapshot, not a
+        # simulated Construction Project transition. Earlier investment only
+        # provides quantity evidence for a *conditional* acquired holding; it
+        # cannot commission assets or accelerate its own Phase's production.
         installed = defaultdict(int)
         for node, facility, units, *_ in assets:
             installed[(node, facility)] += units
-        for key in set(installed) | set(previous) | set(pending_facility_investments):
-            expected = previous[key] + pending_facility_investments[key]
-            if installed[key] != expected:
-                raise ValueError(f"Facility opening holdings at {key} must equal prior installed units plus explicitly invested units from preceding Phase: {expected}")
-        pending_facility_investments = defaultdict(int)
+        for key, units in installed.items():
+            documented = initial_facility_units[key] + cumulative_facility_investments[key]
+            if units > documented:
+                raise ValueError(f"Facility opening holdings at {key} exceed explicitly "
+                                 f"authored initial holdings and prior investment: {documented}")
         extraction_contexts = _extraction_contexts(phase.get("extraction_sites", ()),
                                                     sim, nodes, known_resource)
         current = defaultdict(int)
@@ -576,7 +577,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             facility_id = _identifier(row["facility"], sim.facilities.definitions,
                                       "facility investment definition")
             units = _integer(row["units"], "facility investment units", positive=True)
-            pending_facility_investments[(node, facility_id)] += units
+            cumulative_facility_investments[(node, facility_id)] += units
             recipe = sim.projects.recipes.get(DefinitionId(facility_id))
             if recipe is None:
                 raise ValueError(f"no construction recipe for {facility_id}")
@@ -688,11 +689,9 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "status": "level_transition_site_and_construction_completion_unassessed",
             })
             unassessed.add("facility_upgrade_level_eligibility_and_sequencing")
-        facility_units_added = sum(pending_facility_investments.values())
-        previous = current
-        # The opening composition, not the preceding Phase's composition,
-        # supplies acquisition work. Prior Phase investments can only be used
-        # once explicitly commissioned at this opening boundary.
+        facility_units_added = sum(row["units"] for row in facility_investment_details)
+        # Only explicitly authored opening Facilities provide construction
+        # capacity; an investment order does not supply its own work.
         existing_construction = defaultdict(float)
         for node, name, units, _p, _e, duty, _y, _people in assets:
             provider = sim.projects.construction_providers.get(DefinitionId(name))
@@ -709,19 +708,19 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         if investment_constraints:
             unassessed.add("construction_material_delivery_and_ordering")
         # Vehicles under assembly cannot run transport, exploration, research
-        # or maintenance turns in their acquisition interval. Finished Fleet
-        # is only conditionally held at the next explicit Phase boundary.
+        # or maintenance during acquisition. A later selected Fleet holding
+        # is a conditional assumption, never a manufactured State transition.
         fleet_spec = _fleet_rows(phase.get("fleet", ()), vehicles, nodes,
                                  label="Fleet", allow_turnarounds=True) if "fleet" in phase else None
-        expected_fleet = defaultdict(int, previous_fleet)
-        for key, units in pending_vehicle_builds.items():
-            expected_fleet[key] += units
+        # Omitting the Fleet snapshot carries only the previously *authored*
+        # holdings. Vehicle build orders never mint Fleet automatically.
         current_fleet = ({key: units for key, (units, _cycles) in fleet_spec.items()}
-                         if fleet_spec is not None else dict(expected_fleet))
-        if fleet_spec is not None:
-            for key in set(current_fleet) | set(expected_fleet):
-                if current_fleet.get(key, 0) != expected_fleet[key]:
-                    raise ValueError(f"Fleet opening holdings at {key} must equal prior installed units plus preceding Phase build orders: {expected_fleet[key]}")
+                         if fleet_spec is not None else dict(previous_fleet))
+        for key, units in current_fleet.items():
+            documented = (initial_fleet_units.get(key, 0) + cumulative_vehicle_builds[key])
+            if units > documented:
+                raise ValueError(f"Fleet opening holdings at {key} exceed explicitly "
+                                 f"authored initial holdings and prior build orders: {documented}")
         builds = defaultdict(int)
         for row in phase.get("vehicle_builds", ()):
             _keys(row, {"node", "vehicle", "units"},
@@ -936,7 +935,8 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
         if committed_fleet:
             unassessed.add("transport_cycle_capacity_not_settled_cargo")
         previous_fleet = current_fleet
-        pending_vehicle_builds = builds
+        for key, units in builds.items():
+            cumulative_vehicle_builds[key] += units
         # Scientific Exploration is a conditional *activity* with registered
         # inputs and potential RP outcome. No travel, Crew provisions, RP award,
         # or Mission state transition is simulated by this comparison.
@@ -1789,12 +1789,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                              "existing_capacity_options": capacity_context,
                              "status": "unmet_demand_conditional_supply_strategy_not_booked_or_delivered"})
         report[-1]["upstream_supply_comparisons"] = upstream
-        previous_assets = assets
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
-                "Only pre-existing or explicitly assumed previously commissioned Facilities operate at each phase opening; construction never operates in the investment phase.",
+                "Opening Facility compositions are explicitly authored and their prior investment only bounds conditional availability; construction never operates in the investment phase.",
                 "Spatial Development projects consume registered inputs and work, but do not create developed Cells or establish Nodes.",
                 "Facility Upgrade projects consume registered materials and work, without Level transition, completion sequencing, or updated provider capability.",
                 "Scientific Exploration campaigns include registered resources and potential RP rewards; for selected crewed trips to unestablished physical targets, onboard Resource demand covers only the registered site-duration lower bound, not unknown travel or return. No mission or Population progression is executed.",
@@ -1807,11 +1806,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                 "Extraction with no explicit yield fraction credits no production and records unassessed geology/Knowledge; an explicit fraction is only an authored assumption.",
                 "Selected upstream Process chains are conditional additions for unfilled local demand, not automatically booked production; each Process capacity option is independent of competing choices.",
                 "Research stages contribute typed RP, work, experience, execution requirements, and physical inputs. RP supply requires an authored compatible Facility or Fleet provider assignment, without technology/site/crew availability validation.",
-                "Facility investments are acquired during their selected Phase and have no operating capacity until explicitly included in a subsequent Phase; assumed commissioning is conditional on unexecuted construction and Site eligibility.",
+                "Facility investment requests book Resource/work in their Phase but do not acquire or commission assets; later explicitly selected installed holdings remain conditional on construction and Site eligibility.",
                 "Life Support resource demand uses explicitly assigned person-days and registered per-person rates, not population planning. Installed Housing is compared to that authored conditional resident count, not an admission or occupancy calculation.",
                 "Authored transfer arrivals omit travel time and Fleet operation requirements; capacities are compared only. Conditional end Stock has a separate no-arrivals lower bound retaining all prior unverified receipts.",
-                "Facility acquisitions are explicit facility_investments; their Resource/work demand is booked during investment and no new Facility capability is available until a subsequent conditional Phase. Opening holdings must match previous holdings plus prior-phase investments.",
-                "Vehicle build orders debit registered production Resource/Service during the current Phase but do not provide Fleet capacity until the next Phase, conditioned on manufacturing completion. Explicit Fleet holdings cannot exceed previous holdings plus prior build orders.",
+                "Selected Facility holdings cannot exceed initial holdings plus earlier investment quantities. Investments are cumulative evidence for a hypothetical opening composition, not an automatic Project completion or a required next-Phase transition.",
+                "Vehicle build orders debit Resource/Service without modifying Fleet holdings. Only explicitly authored later Fleet compositions may include earlier ordered units, conditionally on manufacturing completion; no Fleet is auto-commissioned.",
                 "Fleet turnaround frequency without an OD plan is an explicit activity assumption; routed OD services use Transport-owned cycle, payload, propellant and maintenance quantities as conditional upper bounds.",
                 "System totals preserve resource and Service types and sum local shortfalls without transferring excess capacity between nodes.",
                 "Solar yield is an authored site flux/availability ratio to reference flux, not a dynamically resolved environment.",
@@ -2538,8 +2537,7 @@ def summarize(result: dict) -> dict:
 def _portfolio_phase_view(phase):
     """Keep numerical vectors and their coupling without per-case Graph copies.
 
-    Activity coefficient provenance remains accessible in the single-plan
-    report and in the once-per-portfolio registered coefficient matrix.
+    Activity provenance remains accessible in the single-plan report.
     """
     fields = (
         "name", "days", "scale", "resources", "service_constraints", "constraints",
@@ -2617,7 +2615,6 @@ def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
         "content_id": app.content_id, "world_definition_id": app.world_definition_id,
         "portfolio_conditions": "independent_explicit_compositions_not_gameplay_or_optimal_builds",
         "registered_material_relations": registered,
-        "registered_activity_coefficients": registered_activity_coefficients(graph),
         "pressure_exposure_index": [
             {"resource": resource, "conditions": records,
              "registered_definition_links": registered.get(resource, {
@@ -2720,11 +2717,6 @@ def summarize_portfolio(portfolio: dict) -> dict:
             "note": "registered methods are potential relations, not satisfied demands or usable supply",
             "full_detail_section": "registered_material_relations",
         },
-        "registered_activity_coefficients": {
-            "methods_with_typed_numeric_coefficients": len(portfolio["registered_activity_coefficients"]),
-            "note": "direct Definition coefficients including research and investment, without invented activity volumes",
-            "full_detail_section": "registered_activity_coefficients",
-        },
         "pressure_exposure_index": [
             {"resource": row["resource"], "number_of_explicit_conditions": len(row["conditions"]),
              "plans_with_observed_pressure": sorted({e["plan"] for e in row["conditions"]}),
@@ -2734,7 +2726,7 @@ def summarize_portfolio(portfolio: dict) -> dict:
             for row in portfolio["pressure_exposure_index"]
         ],
         "scenarios": scenarios,
-        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index"],
+        "full_detail_sections": ["evaluations", "registered_material_relations", "pressure_exposure_index"],
     }
 
 

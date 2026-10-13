@@ -691,6 +691,13 @@ def test_facility_investment_and_next_phase_operation_do_not_overlap(definitions
         assert _rows(second)[site, str(resource)]["production_t"] == pytest.approx(
             per_day * facility.process_throughput_per_day * 20)
     assert capture_state(sim) == original
+    # Investment has no automatic Project completion deadline. The analyst
+    # may assume the same acquisition becomes available later than one Phase.
+    postponed = deepcopy(plan)
+    postponed["phases"].insert(1, {"name": "uncommissioned", "days": 7, "facilities": []})
+    intermediate = evaluate(postponed, app=definitions)["phases"][1]
+    assert not intermediate["facility_investments"]
+    assert sum(row["production_t"] for row in intermediate["resources"]) == 0
     forbidden = deepcopy(plan)
     forbidden["phases"][0]["facilities"] = [installed]
     with pytest.raises(ValueError, match="opening holdings"):
@@ -739,7 +746,18 @@ def test_vehicle_build_orders_are_not_usable_fleet_until_following_phase(definit
     assert first["vehicle_builds"][0]["status"] == "vehicle_build_only_no_current_phase_fleet_use"
     for resource, amount in vehicle.production.resources:
         assert _rows(first)[node, str(resource)]["vehicle_build_demand_t"] == pytest.approx(2 * amount)
-    assert second["fleet"][0]["units"] == 2
+    # A build request is not a completed asset transaction. No implicit
+    # Fleet is minted merely because the next comparison period begins.
+    assert not second["fleet"]
+    selected = deepcopy(plan)
+    selected["phases"][1]["fleet"] = [build]
+    conditionally_held = evaluate(selected, app=definitions)["phases"][1]
+    assert conditionally_held["fleet"][0]["units"] == 2
+    postponed = deepcopy(plan)
+    postponed["phases"].append({"name": "later", "days": 6,
+                                 "facilities": [], "fleet": [build]})
+    later = evaluate(postponed, app=definitions)["phases"][-1]
+    assert later["fleet"][0]["units"] == 2
     assert second["scale"]["vehicle_units_ordered"] == 0
     assert not second["vehicle_builds"]
     assert capture_state(sim) == before

@@ -524,7 +524,6 @@ def analyze_research_goal(*, progression_stage=None, research_ids=(), provider_u
                  'research_stage_direct_material_t': aggregate_material(research_requirements.items()),
                  'research_stage_service_work': services,
                  'experience_requirements': dict(sorted(experience.items())),
-                 'direct_registered_unlocks': [],
                  'registered_stages': stages,
                  'individual_research': individual_research},
         'provider_choices': providers,
@@ -557,12 +556,6 @@ def evaluate_research_generations(*, app=None, horizon_days=(), production_metho
     if app is None:
         app = build_game_application_for_load()
     sim = app._simulation
-    from space_idle.composition.analysis_graph import build_definition_dependency_graph
-    graph = build_definition_dependency_graph(sim, app._catalog)
-    unlocks = defaultdict(list)
-    for relation in graph.relations:
-        if relation.kind == 'unlocks_method' and relation.source.kind == 'technology':
-            unlocks[relation.source.id].append({'kind': relation.target.kind, 'definition': relation.target.id})
     generations = []
     for stage in sorted({d.progression_stage for d in sim.research.definitions.values()
                          if d.progression_stage is not None}):
@@ -570,10 +563,6 @@ def evaluate_research_generations(*, app=None, horizon_days=(), production_metho
             progression_stage=stage, provider_units=1, horizon_days=horizon_days,
             production_methods=production_methods or {}, app=app)
         ids = analysis['goal']['research_ids']
-        analysis['goal']['direct_registered_unlocks'] = [
-            {'research': research_id, 'methods': sorted(unlocks.get(research_id, []),
-                                                        key=lambda row: (row['kind'], row['definition']))}
-            for research_id in ids if unlocks.get(research_id)]
         analysis['goal']['authored_technology_branch_pacing'] = _registered_branch_pacing(
             sim, ids, analysis['provider_choices'])
         analysis['goal']['category_distribution'] = {
@@ -699,7 +688,6 @@ def summarize_research_generations(report):
                 'upstream_primary_requirements_t': row['upstream_material_dependencies']['gross_resource_requirements_t'],
                 'selected_upstream_processes': [p['process'] for p in row['upstream_material_dependencies']['selected_processes']],
             })
-        unlock_by_research = {item['research']: item['methods'] for item in goal['direct_registered_unlocks']}
         result.append({
             'research_progression_stage': goal['progression_stage'],
             'registered_research_count': goal['research_definition_count'],
@@ -712,10 +700,8 @@ def summarize_research_generations(report):
             'research_service_work': goal['research_stage_service_work'],
             'authored_technology_branch_pacing_by_source': _summarize_branch_pacing_by_source(
                 goal.get('authored_technology_branch_pacing', []), report['horizon_days']),
-            'research_items': [{**row, 'unlock_methods': unlock_by_research.get(row['research'], [])}
-                               for row in goal['individual_research']],
+            'research_items': goal['individual_research'],
             'prerequisites_outside_generation': goal['external_direct_prerequisites_not_in_selection'],
-            'technology_method_unlocks': goal['direct_registered_unlocks'],
             'provider_options_not_additive': options,
         })
     return {

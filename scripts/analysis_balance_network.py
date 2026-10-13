@@ -270,50 +270,6 @@ def network_overview(network):
     }
 
 
-def registered_activity_coefficients(graph):
-    """Source-preserving coefficient matrix for the entire registered activity catalog.
-
-    Raw typed coefficients are intentionally not multiplied by imaginary
-    Facilities, completed Projects or research decisions. Time bases may not
-    be added across rows. Existing Definition Graph owns every relation.
-    """
-    methods = defaultdict(lambda: {"resource_inputs": [], "resource_outputs": [],
-                                   "other_typed_coefficients": []})
-    for relation in graph.relations:
-        if relation.quantity is None:
-            continue
-        if relation.kind in {"consumes_resource", "invests_resource"} and relation.source.kind == "resource":
-            method, group, counterpart = relation.target, "resource_inputs", relation.source
-        elif relation.kind in {"produces_resource", "extracts_resource"} and relation.target.kind == "resource":
-            method, group, counterpart = relation.source, "resource_outputs", relation.target
-        elif relation.kind == "research_point_cost" and relation.target.kind == "research_stage":
-            method, group, counterpart = relation.target, "other_typed_coefficients", relation.source
-        elif relation.kind == "research_work" and relation.source.kind == "research_stage":
-            method, group, counterpart = relation.source, "other_typed_coefficients", relation.target
-        elif relation.source.kind in {"resource", "capacity_pool", "research_point_pool", "service_capacity"}:
-            method, group, counterpart = relation.target, "other_typed_coefficients", relation.source
-        else:
-            method, group, counterpart = relation.source, "other_typed_coefficients", relation.target
-        if method.kind in {"resource", "capacity_pool", "research_point_pool", "service_capacity",
-                           "site_condition", "opportunity_factor", "body", "surface_cell",
-                           "spatial_node", "research_point_pool"}:
-            continue
-        methods[(method.kind, method.id)][group].append({
-            "relation": relation.kind, "other_kind": counterpart.kind,
-            "other_id": counterpart.id, "quantity": relation.quantity,
-            "unit": relation.unit, "time_basis": relation.time_basis,
-            "condition": relation.condition, "provenance": relation.provenance,
-        })
-    return [
-        {"method_kind": kind, "method_definition": definition,
-         **{category: sorted(rows, key=lambda r: (r["relation"], r["other_kind"],
-                                                   r["other_id"], r["provenance"]))
-            for category, rows in categories.items()},
-         "status": "registered_coefficient_not_scheduled_or_allocated"}
-        for (kind, definition), categories in sorted(methods.items())
-    ]
-
-
 # Shared Definition-derived upstream accounting for all activity origins.
 def aggregate_material(items):
     result = defaultdict(float)
