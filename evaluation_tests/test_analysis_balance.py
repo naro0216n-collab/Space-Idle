@@ -918,3 +918,121 @@ def test_phase_time_structure_respects_stage_order_and_investment_commissioning(
     assert any(item['section'] == 'shared_service_workloads'
                and item['delta_from_baseline']['required_work'] == pytest.approx(vehicle_b.production.days)
                for item in comparison['differences'])
+
+
+def test_selected_upstream_processes_compete_for_one_idle_facility_pool(definitions):
+    """Several valid independent conversion paths must not reuse the same idle throughput."""
+    sim = definitions._simulation
+    facility, first, second, output_one, output_two = next(
+        (facility, first, second, resource_one, resource_two)
+        for facility in sim.facilities.definitions.values()
+        if facility.process_throughput_per_day > 0
+        for first in sim.industry.processes.values()
+        if first.required_capabilities <= {cap.id for cap in facility.capability_supplies}
+        for second in sim.industry.processes.values()
+        if second.id != first.id and second.required_capabilities <=
+           {cap.id for cap in facility.capability_supplies}
+        for resource_one in first.outputs_per_day
+        for resource_two in second.outputs_per_day
+        if resource_one != resource_two
+    )
+    quantity_one, quantity_two = first.outputs_per_day[output_one], second.outputs_per_day[output_two]
+    node = 'compare.process.pool'
+    duration = 2
+    requested_runs_each = facility.process_throughput_per_day * duration * 0.6
+
+    def selected_plan(units):
+        asset = {'node': node, 'facility': str(facility.id), 'units': units, 'duty': 0}
+        return {'initial_facilities': [asset], 'phases': [{
+            'name': 'competing_supply', 'days': duration, 'facilities': [asset],
+            'external_rates': [
+                {'node': node, 'resource': str(output_one),
+                 'net_t_per_day': -quantity_one * requested_runs_each / duration},
+                {'node': node, 'resource': str(output_two),
+                 'net_t_per_day': -quantity_two * requested_runs_each / duration},
+            ],
+            'upstream_supply_choices': [
+                {'node': node, 'resource': str(output_one), 'process': str(first.id)},
+                {'node': node, 'resource': str(output_two), 'process': str(second.id)},
+            ],
+        }]}
+
+    comparison = compare_cases({'cases': [
+        {'name': 'one_workshop', 'plan': selected_plan(1)},
+        {'name': 'two_workshops', 'plan': selected_plan(2)},
+    ]}, app=definitions)
+    initial, expanded = (item['projection']['phases'][0] for item in comparison['cases'])
+    single = initial['upstream_supply_comparisons'][0]
+    doubled = expanded['upstream_supply_comparisons'][0]
+    # Each candidate appears individually within the available Phase time,
+    # but their aggregate work exceeds the one shared idle equipment budget.
+    assert all(item['independent_capacity_only_lower_bound_days'] <= duration
+               for item in single['existing_capacity_options'])
+    constrained, = single['shared_idle_throughput_constraints']
+    available, = doubled['shared_idle_throughput_constraints']
+    assert set(constrained['competing_processes']) == {str(first.id), str(second.id)}
+    assert constrained['nominal_process_run_gap_in_phase'] > 0
+    assert available['nominal_process_run_gap_in_phase'] == pytest.approx(0)
+    assert constrained['conditional_shared_capacity_lower_bound_days'] > duration
+    assert available['conditional_shared_capacity_lower_bound_days'] <= duration
+    assert any(row['section'] == 'time_constraints'
+               and row['identity']['kind'] == 'upstream_selected_process_workload'
+               and row['delta_from_baseline']['conditional_lower_bound_days'] < 0
+               for row in comparison['differences'])
+    # These are counterfactual demands, never physically booked output.
+    assert initial['resources'] != []
+    assert all(item['production_t'] == 0 for item in initial['resources'])
+
+
+def test_transport_capacity_can_use_explicit_scenario_network_without_replaying_state():
+    """A selected real initial Movement network yields physical bounds via Transport."""
+    from space_idle.bootstrap import build_game_application
+    source = build_game_application()
+    sim = source._simulation
+    candidate = next(
+        (vehicle, origin, destination)
+        for vehicle in sim.transport.vehicle_definitions()
+        for origin in sim.graph.nodes
+        for destination in sim.graph.nodes
+        if origin != destination and any(
+            plan.forward_path and not plan.blockers
+            for plan in [sim.transport.transport_service_plan_for(
+                vehicle.id, origin, destination)]
+        )
+    )
+    vehicle, origin, destination = candidate
+    resource = str(next(iter(source._catalog.resources)))
+    base = {'initial_fleet': [{'node': str(origin), 'vehicle': str(vehicle.id), 'units': 1}],
+            'phases': [{'name': 'directional_freight', 'days': 16, 'facilities': [],
+                        'fleet': [{'node': str(origin), 'vehicle': str(vehicle.id), 'units': 1}],
+                        'transport_allocations': [{'origin': str(origin), 'destination': str(destination),
+                                                   'vehicle': str(vehicle.id), 'units': 1}],
+                        'transfers': [{'origin': str(origin), 'destination': str(destination),
+                                       'resource': resource, 't_per_day': 0.2}]}]}
+    before = deepcopy(capture_state(sim))
+    registered = evaluate({**base, 'movement_reference': 'standard_scenario'})['phases'][0]
+    without_network = evaluate(base)['phases'][0]
+    trip, = registered['transport_services']
+    assert trip['forward_capacity_t_per_day'] > 0
+    assert trip['cycle_days'] > 0
+    assert trip['forward_latency_days'] is not None
+    assert trip['movement_reference'] == 'standard_scenario'
+    assert without_network['od_transport_constraints'][0]['nominal_capacity_t_per_day'] is None
+    assert registered['time_constraints'][0]['kind'] == 'transport_volume'
+    assert registered['time_constraints'][0]['one_way_latency_lower_bound_days'] is not None
+    assert registered['transfer_requirements'][0]['status'] == 'cargo_arrival_unassessed'
+    assert capture_state(sim) == before
+    with pytest.raises(ValueError, match='different Movement reference'):
+        compare_cases({'cases': [{'name': 'known', 'plan': {
+            **base, 'movement_reference': 'standard_scenario'}},
+            {'name': 'unknown', 'plan': base}]})
+    from space_idle.bootstrap import build_game_application_for_load
+    with pytest.raises(ValueError, match='applied Scenario'):
+        evaluate({**base, 'movement_reference': 'standard_scenario'},
+                 app=build_game_application_for_load())
+    from scripts.analysis_balance import compare_projection_results
+    with pytest.raises(ValueError, match='different Movement reference'):
+        compare_projection_results([
+            {'name': 'known', 'projection': evaluate({**base, 'movement_reference': 'standard_scenario'})},
+            {'name': 'unregistered', 'projection': evaluate(base)},
+        ])

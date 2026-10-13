@@ -325,6 +325,44 @@ def producer_catalog(sim):
     return production, extraction
 
 
+def shared_upstream_capacity_bounds(selected_processes, idle_facility_rates, phase_days):
+    """Necessary cumulative throughput bounds for analyst-selected upstream work.
+
+    All processes within a compatible-Facility subset compete for the *same*
+    unused process-run capacity. A subset bound is necessary, never an
+    assignment or a promise of future production. Its one rate includes each
+    installed Facility definition only once. Missing run quantities (cycles)
+    cannot be silently interpreted as zero work.
+    """
+    tasks = []
+    unresolved = []
+    for entry in selected_processes:
+        amount = entry.get("process_run_days_at_unit_throughput")
+        if amount is None:
+            unresolved.append(entry["process"])
+            continue
+        compatible = frozenset(entry["compatible_installed_facilities"])
+        tasks.append((entry["process"], compatible, amount))
+    groups = []
+    for candidate_pool in sorted({compatible for _, compatible, _ in tasks},
+                                 key=lambda pool: (len(pool), tuple(sorted(pool)))):
+        affected = [(process, required) for process, compatible, required in tasks
+                    if compatible <= candidate_pool]
+        total = sum(amount for _, amount in affected)
+        if total <= 1e-12:
+            continue
+        rate = sum(idle_facility_rates[facility] for facility in candidate_pool)
+        groups.append({
+            "compatible_facilities": sorted(candidate_pool),
+            "competing_processes": sorted(process for process, _ in affected),
+            "required_process_runs": total,
+            "available_process_runs_per_day": rate,
+            "conditional_shared_capacity_lower_bound_days": (total / rate if rate > 0 else None),
+            "nominal_process_run_gap_in_phase": max(0.0, total - rate * phase_days),
+            "status": "necessary_shared_idle_throughput_bound_not_an_allocation",
+        })
+    return {"constraints": groups, "unquantified_processes": sorted(unresolved)}
+
 def conditional_material_paths(resources, sim, production, extraction, selected_methods):
     """Build a selected-input chain and evidence for every unchosen alternative.
 
@@ -440,13 +478,24 @@ def conditional_material_paths(resources, sim, production, extraction, selected_
             invested, work, technologies, source = source_investment(sim, 'facility', str(facility.id))
             # Quantity of processing work is in full-utilization Facility-days;
             # daily simultaneous capacity is not implied.
+            # Equipment alternatives must expose their actual acquisition and
+            # recurring burdens, not merely faster output. The Facility Domain
+            # owns Maintenance scaling; Power supplies the installed nameplate.
+            maintenance = sim.facilities.maintenance_requirements_for_investment(
+                facility.id, {DefinitionId(resource): quantity
+                              for resource, quantity in invested.items()}) if work is not None else {}
+            power = sim.power.specs.get(facility.id)
             equipment_rows.append({
                 'facility': str(facility.id),
                 'required_full_duty_facility_days': runs / facility.process_throughput_per_day,
                 'capital_resource_per_facility_t': invested,
                 'construction_work_per_facility': work,
+                'maintenance_resource_per_day_for_one_acquired_facility_t':
+                    aggregate_material(maintenance.items()),
+                'power_rated_active_load_mw_per_facility': power.load_mw if power else None,
+                'power_rated_standby_load_mw_per_facility': power.standby_load_mw if power else None,
                 'required_technologies': technologies,
-                'status': 'eligible_facility_day_option_not_allocated_or_built',
+                'status': 'conditional_equipment_option_not_selected_or_acquired',
             })
         processes.append({
             'process': method, 'selected_output_demands_t': {k: required[k] for k in sorted(chosen_outputs)},

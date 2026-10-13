@@ -181,6 +181,8 @@ Maintenanceのpacket実行・照合に失敗した場合は、同じtransaction�
 
 設備・稼働・立地・輸送・時間の代替構成は、同じPlan条件を持つ`cases`で比較する。登録Definition変更の仮説を比較する場合は`--content-variant <changes.json> --content-impact --summary`を指定し、同じ初期条件・活動・期間で変更前後の独立Compositionを比較する。変更仮説、Player判断、結果の副作用、採否と未判定条件は比較結果を根拠に分析者が判断・記録する。CLIは記録した文章をそのまま転記する機構を持たない。最適攻略順、世代の理想研究日数、必須施設数を設けない。`--content-variant`のみを指定すると変更後条件の単独評価となる。Planとcaseの概要は同じ数量Projectionから導出する。
 
+輸送容量・往復Cycle・片道Latencyの比較で標準Scenarioの初期Networkを根拠とする場合、Planのトップレベルへ`"movement_reference": "standard_scenario"`を指定する。未指定の`definitions_only`は初期Movement Stateを構築しないため、登録Definitionだけでは未成立となる経路に容量を与えない。前者は独立した初期ScenarioのTransport Domain previewを参照するだけで、実Cargoを着荷させず、Player操作・時刻進行・初期Stockの暗黙採用も行わない。Case比較・Content変更前後のMovement参照基準は共通にし、実際の別拠点への着荷や将来のInfrastructure獲得は条件付きのまま扱う。
+
 数量評価はGame State/実Allocationではない。`evaluation_tests/`は台帳の保存則、Definition反映、研究前提、未充足・非二重計上等の汎用契約を検証する。機能上の疑義は所有DomainやApplicationの通常契約テストで短く検証する。Game Commandを自動投入する独立ReplayやPareto比較をバランス評価の別経路として保持しない。
 
 Browser E2Eは`playwright/run_suite.py <scenario...>`へ対象Scenarioを明示して実行する。各Scenarioは独立したBrowserContext、GameRuntime、保存用一時ディレクトリ、HTTP serverを使用し、状態を共有しない。

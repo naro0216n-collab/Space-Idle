@@ -26,8 +26,11 @@ from scripts.analysis_variants import apply_content_variant
 from scripts.analysis_balance_network import (
     registered_material_links, trace_material_system,
     network_overview, producer_catalog, conditional_material_paths,
+    shared_upstream_capacity_bounds,
 )
-from space_idle.bootstrap import build_game_application_for_load
+from space_idle.bootstrap import (build_game_application_for_load, build_game_application,
+                                  build_game_application_for_scenario)
+from space_idle.content.base_scenario import build_standard_scenario_definition
 from space_idle.power import FixedGeneration, SolarGeneration
 from space_idle.transport import MovementEndpoint
 from space_idle.spatial import IlluminationField
@@ -207,6 +210,31 @@ def _graph_evidence(graph_nodes, relation_index, roots) -> dict:
     }
 
 
+def _movement_reference(plan):
+    reference = plan.get("movement_reference", "definitions_only")
+    if reference not in ("definitions_only", "standard_scenario"):
+        raise ValueError("movement_reference must be definitions_only or standard_scenario")
+    return reference
+
+
+def _requested_reference(payload):
+    """All cases of one quantitative comparison need the same World baseline."""
+    if "cases" not in payload:
+        return _movement_reference(payload)
+    references = {_movement_reference(case.get("plan", payload.get("base_plan", {})))
+                  for case in payload["cases"]}
+    if len(references) != 1:
+        raise ValueError("case comparison cannot mix different Movement reference conditions")
+    return references.pop()
+
+
+def _new_reference_application(reference, definition_transform=None):
+    if reference == "standard_scenario":
+        return (build_game_application() if definition_transform is None else
+                build_game_application_for_scenario(build_standard_scenario_definition(),
+                                                    definition_transform=definition_transform))
+    return build_game_application_for_load(definition_transform=definition_transform)
+
 def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     """Compute a multi-phase, multi-node notional balance from actual Definitions.
 
@@ -215,10 +243,14 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
     A selected World site uses the Power owner's context formula instead.
     This is a quantity *demand* model, not a second Game Simulation.
     """
-    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites"}, {"phases"}, "plan")
+    _keys(plan, {"initial_stock", "initial_facilities", "initial_fleet", "initial_research_points", "phases", "solar_yield", "solar_sites", "movement_reference"}, {"phases"}, "plan")
+    reference = _movement_reference(plan)
     if app is None:
-        app = build_game_application_for_load()
+        app = _new_reference_application(reference)
     sim, catalog = app._simulation, app._catalog
+    if reference == "standard_scenario" and not any(sim.graph.operational_nodes()):
+        raise ValueError("standard_scenario Movement reference needs an applied Scenario, "
+                         "not a definitions-only supplied Application")
     graph = (_definition_graph if _definition_graph is not None else
              build_definition_dependency_graph(sim, catalog))
     graph_nodes = frozenset(graph.nodes)
@@ -928,6 +960,7 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                                                 for requirement in plan_preview.infrastructure_requirements] if plan_preview else [],
                 "blockers": blockers,
                 "quantity_source": "transport_domain_plan_x_selected_fleet",
+                "movement_reference": reference,
                 "status": "conditional_capacity_upper_bound" if not blockers and forward_capacity is not None
                           else "blockers_or_route_unassessed",
             })
@@ -1752,6 +1785,14 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
             dependencies = conditional_material_paths(outstanding, sim, production_catalog,
                                            extraction_catalog, methods)
             capacity_context = []
+            selected_capacity_work = []
+            idle_facility_rates = {
+                facility: max(0.0, current[(node, facility)]
+                    - facility_activity_duty[(node, facility)]
+                    - facility_research_duty[(node, facility)])
+                    * sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
+                for site, facility, *_ in assets if site == node
+            }
             for process in dependencies["selected_processes"]:
                 process_id = process["process"]
                 definition = sim.industry.processes[DefinitionId(process_id)]
@@ -1771,6 +1812,11 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                     sim.facilities.definitions[DefinitionId(facility)].process_throughput_per_day
                     for facility in compatible_assets_by_facility)
                 required_runs = process.get("process_run_days_at_unit_throughput")
+                selected_capacity_work.append({
+                    "process": process_id,
+                    "process_run_days_at_unit_throughput": required_runs,
+                    "compatible_installed_facilities": sorted(compatible_assets_by_facility),
+                })
                 capacity_context.append({
                     "process": process_id,
                     "separately_available_selected_facility_process_runs_per_day": available_rate,
@@ -1783,14 +1829,28 @@ def evaluate(plan: dict, *, app=None, _definition_graph=None) -> dict:
                                                                      if active_proc and active_proc != process_id}),
                     "status": "independent_candidate_existing_idle_throughput_not_a_shared_allocation",
                 })
+            shared_capacity = shared_upstream_capacity_bounds(
+                selected_capacity_work, idle_facility_rates, days)
+            for bound in shared_capacity["constraints"]:
+                report[-1]["time_constraints"].append({
+                    "kind": "upstream_selected_process_workload", "node": node,
+                    "subject": f'{node}/{",".join(bound["compatible_facilities"])}',
+                    "unit": "process_runs", "required_quantity": bound["required_process_runs"],
+                    "available_rate_per_day": bound["available_process_runs_per_day"],
+                    "conditional_lower_bound_days": bound["conditional_shared_capacity_lower_bound_days"],
+                    "status": bound["status"],
+                })
             upstream.append({"node": node, "selected_methods": methods,
                              "unmet_local_resource_demand_t": outstanding,
                              "conditional_material_paths": dependencies,
                              "existing_capacity_options": capacity_context,
+                             "shared_idle_throughput_constraints": shared_capacity["constraints"],
+                             "unquantified_shared_process_work": shared_capacity["unquantified_processes"],
                              "status": "unmet_demand_conditional_supply_strategy_not_booked_or_delivered"})
         report[-1]["upstream_supply_comparisons"] = upstream
     return {"model": "definition_quantity_projection_v1", "content_id": app.content_id,
             "world_definition_id": app.world_definition_id,
+            "movement_reference": reference,
             "assumptions": [
                 "Requested production, maintenance, construction and transport are not settled Game flow.",
                 "Opening Facility compositions are explicitly authored and their prior investment only bounds conditional availability; construction never operates in the investment phase.",
@@ -1971,8 +2031,9 @@ def compare_cases(payload: dict, *, app=None, _definition_graph=None) -> dict:
     cases = payload["cases"]
     if not isinstance(cases, list) or not cases:
         raise ValueError("comparison requires cases")
+    reference = _requested_reference(payload)
     if app is None:
-        app = build_game_application_for_load()
+        app = _new_reference_application(reference)
     graph = (_definition_graph if _definition_graph is not None else
              build_definition_dependency_graph(app._simulation, app._catalog))
     results = []
@@ -1999,6 +2060,8 @@ def compare_projection_results(results: list[dict]) -> dict:
     """
     if not results:
         raise ValueError("comparison requires at least one projection")
+    if len({item["projection"]["movement_reference"] for item in results}) != 1:
+        raise ValueError("comparison cannot mix different Movement reference conditions")
     differences = []
     baseline = results[0]["projection"]["phases"]
     for alternative in results[1:]:
@@ -2266,9 +2329,10 @@ def compare_content_variant(plan: dict, changes: list[dict], *, summary=False) -
     """
     if not isinstance(changes, list) or not changes or any(not isinstance(e, dict) for e in changes):
         raise ValueError("Content hypothesis requires a nonempty list of typed edits")
-    baseline = build_game_application_for_load()
-    variant = build_game_application_for_load(
-        definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
+    reference = _requested_reference(plan)
+    baseline = _new_reference_application(reference)
+    variant = _new_reference_application(
+        reference, definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
     projections = []
     for label, application in (("baseline", baseline), ("edited_content", variant)):
         projection = compare_cases(plan, app=application) if "cases" in plan else evaluate(plan, app=application)
@@ -2431,6 +2495,7 @@ def summarize_projection(projection: dict) -> dict:
             ],
         })
     return {"content_id": projection["content_id"], "world_definition_id": projection["world_definition_id"],
+            "movement_reference": projection["movement_reference"],
             "model": "definition_quantity_summary_v1", "phases": phases}
 
 
@@ -2563,7 +2628,8 @@ def main():
             changes = json.loads(args.content_variant.read_text(encoding="utf-8"))
             if not isinstance(changes, list) or not changes or any(not isinstance(edit, dict) for edit in changes):
                 parser.error("--content-variant must contain a nonempty JSON list of typed Definition edits")
-            app = build_game_application_for_load(
+            app = _new_reference_application(
+                _requested_reference(payload),
                 definition_transform=lambda sim, catalog: apply_content_variant(sim, catalog, changes))
         result = compare_cases(payload, app=app) if "cases" in payload else evaluate(payload, app=app)
         output = summarize(result) if args.summary else result
