@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.analysis_balance_research import evaluate_research_generations, analyze_research_goal, summarize_research_generations, relate_research_goal_to_economy, compare_research_generation_reports, summarize_research_goal, research_generations_portfolio_overview, summarize_research_economy_context
 from scripts.analysis_balance_network import registered_material_links, registered_activity_coefficients, trace_material_system, network_overview
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.power import FixedGeneration, SolarGeneration
@@ -2197,6 +2198,7 @@ def evaluate_portfolio(plans: dict[str, dict], *, app=None) -> dict:
             for resource, records in sorted(observed.items())
         ],
         "evaluations": results,
+        "research_generation_economics": evaluate_research_generations(app=app),
     }
 
 
@@ -2289,7 +2291,8 @@ def summarize_portfolio(portfolio: dict) -> dict:
             for row in portfolio["pressure_exposure_index"]
         ],
         "scenarios": scenarios,
-        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index"],
+        "research_generation_economics": research_generations_portfolio_overview(portfolio["research_generation_economics"]),
+        "full_detail_sections": ["evaluations", "registered_material_relations", "registered_activity_coefficients", "pressure_exposure_index", "research_generation_economics"],
     }
 
 
@@ -2299,8 +2302,58 @@ def main():
     parser.add_argument("--portfolio", nargs="+", type=Path, metavar="PATH",
                         help="compare independent selected activity plans from files or directories as one system")
     parser.add_argument("--summary", action="store_true", help="show gaps, capacity bounds and assumptions without expanding every coefficient")
+    parser.add_argument("--research-generations", action="store_true", help="trace all registered research display generations to research-source time, upkeep and upstream industry")
+    parser.add_argument("--research-stage", type=int, metavar="N", help="trace one registered research display generation")
+    parser.add_argument("--research-id", action="append", dest="research_ids", help="trace selected Technology ID (repeatable)")
+    parser.add_argument("--research-science", action="append", metavar="CAMPAIGN_ID", default=[],
+                        help="optional one-time finite RP contribution from a selected registered Science Campaign")
+    parser.add_argument("--research-horizons", nargs="+", type=float, metavar="DAYS", default=[],
+                        help="optional comparison horizons in game days, not target completion dates")
+    parser.add_argument("--research-provider-units", type=int, default=1,
+                        help="selected independent research-source count for comparison, not a target fleet or facility count")
+    parser.add_argument("--research-compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"),
+                        help="diff two registered-generation summary reports after Content adjustment")
+    parser.add_argument("--research-context", type=Path, metavar="PLAN",
+                        help="compare research time and upstream obligations with each selected economic composition in a balance plan")
+    parser.add_argument("--research-production-methods", type=Path, metavar="JSON",
+                        help="optional mapping from Resource ID to selected Process ID for conditional upstream bill")
+    parser.add_argument("--research-include-prerequisites", action="store_true", help="expand actual Technology DAG prerequisites for selected Research IDs")
     args = parser.parse_args()
-    if args.portfolio:
+    research_mode = args.research_generations or args.research_stage is not None or bool(args.research_ids)
+    if args.research_compare and (research_mode or args.portfolio or args.plan):
+        parser.error("--research-compare cannot be combined with a Content analysis operation")
+    if sum([bool(args.research_generations), args.research_stage is not None, bool(args.research_ids)]) > 1:
+        parser.error("select one research-goal mode")
+    if research_mode and (args.portfolio or args.plan):
+        parser.error("research goal and explicit activity plan are alternative entrypoints")
+    if not research_mode and not args.research_compare and (args.research_science or args.research_horizons or args.research_production_methods or args.research_include_prerequisites or args.research_provider_units != 1 or args.research_context):
+        parser.error("research sensitivity arguments require a research goal")
+    selected_methods = (json.loads(args.research_production_methods.read_text(encoding='utf-8'))
+                        if args.research_production_methods else {})
+    if args.research_compare:
+        before, after = [json.loads(path.read_text(encoding='utf-8')) for path in args.research_compare]
+        output = compare_research_generation_reports(before, after)
+    elif research_mode:
+        if args.research_generations and args.research_context:
+            parser.error("--research-context requires one selected Research goal, not all generations")
+        if args.research_generations:
+            result = evaluate_research_generations(horizon_days=args.research_horizons,
+                                                    production_methods=selected_methods)
+            output = summarize_research_generations(result) if args.summary else result
+        else:
+            result = analyze_research_goal(progression_stage=args.research_stage,
+                                           research_ids=args.research_ids or (),
+                                           provider_units=args.research_provider_units,
+                                           include_prerequisites=args.research_include_prerequisites,
+                                           horizon_days=args.research_horizons,
+                                           selected_science_campaigns=args.research_science,
+                                           production_methods=selected_methods)
+            output = summarize_research_goal(result) if args.summary else result
+            if args.research_context:
+                payload = json.loads(args.research_context.read_text(encoding='utf-8'))
+                context = compare_cases(payload) if 'cases' in payload else evaluate(payload)
+                output = {**output, 'selected_economy': (summarize_research_economy_context(relate_research_goal_to_economy(result, context)) if args.summary else relate_research_goal_to_economy(result, context))}
+    elif args.portfolio:
         if args.plan is not None:
             parser.error("a positional plan cannot be combined with --portfolio")
         paths = []
