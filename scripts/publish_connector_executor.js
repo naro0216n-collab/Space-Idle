@@ -6,7 +6,9 @@ const match = /(?:^|[\\/])inputs-([0-9]{3})[\\/]execution-index-([a-f0-9]{32})\.
 if (!match) throw Error('Invalid transaction index path; no GitHub write');
 const [, encodedCount, requestId] = match;
 const packetCount = Number(encodedCount);
-if (packetCount < 2 || packetCount > 300) throw Error('Invalid packet count; no GitHub write');
+if (packetCount < 2 || packetCount > 11) throw Error('Invalid packet count: at most 10 create_tree calls; no GitHub write');
+const segmentPath = /(?:^|[\\/])segments[\\/]segment-([0-9]{3})[\\/]inputs-[0-9]{3}[\\/]execution-index-[a-f0-9]{32}\.json$/.exec(INDEX_PATH);
+const segmentNumber = segmentPath ? Number(segmentPath[1]) : null;
 const tempPrefix = 'space-idle-publish-' + requestId + '-';
 const tempPattern = new RegExp('^' + tempPrefix + '(?:index|[0-9]+)\\.json$');
 const fingerprint = value => {
@@ -169,11 +171,31 @@ try {
   // Source files may have their final newline removed by Files.read. Restore
   // the sole allowed normalization and check each payload against the index.
   index = JSON.parse(contents[0]);
-  if (index.version !== 1 || index.request_id !== requestId ||
+  const segmented = index.version === 2;
+  if ((index.version !== 1 && !segmented) || index.request_id !== requestId ||
       index.repository !== 'naro0216n-collab/Space-Idle' ||
       !sha(index.develop_head) || !sha(index.publish_base_head) || !sha(index.publish_base_tree) ||
       !Array.isArray(index.packets) || index.packets.length !== packetCount)
     throw Error('Invalid Connector execution index; no GitHub write');
+  const firstIndex = segmented ? index.first_tree_index : 0;
+  const treeCount = packetCount - 1;
+  if (segmented && (segmentNumber === null || !Number.isSafeInteger(firstIndex) ||
+      firstIndex !== segmentNumber * 10 || !Number.isSafeInteger(index.total_tree_count) ||
+      index.total_tree_count <= 10 || index.total_tree_count > 256 ||
+      firstIndex >= index.total_tree_count || treeCount !== Math.min(10, index.total_tree_count - firstIndex) ||
+      !sha(index.start_tree) || !sha(index.end_tree) || !sha(index.final_tree) ||
+      typeof index.next_execution_index !== (firstIndex + treeCount < index.total_tree_count ? 'string' : 'object') ||
+      (index.next_execution_index === null) !== (firstIndex + treeCount === index.total_tree_count)))
+    throw Error('Invalid segmented Connector execution index; no GitHub write');
+  if (!segmented && segmentNumber !== null)
+    throw Error('Legacy execution index cannot be a segment');
+  if (segmented && index.next_execution_index) {
+    const nextSegment = String(segmentNumber + 1).padStart(3, '0');
+    const suffix = new RegExp('(?:^|[\\/])segments[\\/]segment-' + nextSegment +
+      '[\\/]inputs-[0-9]{3}[\\/]execution-index-' + requestId + '\\.json$');
+    if (!suffix.test(index.next_execution_index))
+      throw Error('Segment continuation index path mismatch; no GitHub write');
+  }
   for (let i = 0; i < packetCount; i++) {
     const row = index.packets[i];
     const expectedName = i === packetCount - 1 ? 'create-transport-commit.json' :
@@ -188,20 +210,22 @@ try {
     contents[i+1] = raw;
   }
   packets = contents.slice(1).map(raw => JSON.parse(raw));
-  let prior = index.publish_base_tree;
+  let prior = segmented ? index.start_tree : index.publish_base_tree;
   for (let i = 0; i < packets.length - 1; i++) {
     const p = packets[i], a = p.action_args;
     if (JSON.stringify(a).length > 1024*1024 ||
-        p.action !== 'GitHub.create_tree' || p.tree_batch_index !== i ||
+        p.action !== 'GitHub.create_tree' || p.tree_batch_index !== firstIndex + i ||
         a?.repository_full_name !== index.repository || a.base_tree_sha !== prior ||
         !Array.isArray(a.tree_elements) || !sha(p.expected_tree))
       throw Error('Invalid tree packet chain; no GitHub write');
     prior = p.expected_tree;
   }
+  if (segmented && prior !== index.end_tree)
+    throw Error('Segment end tree mismatch; no GitHub write');
   const last = packets[packets.length - 1];
   commit = last.action_args;
   if (last.action !== 'GitHub.create_commit' || commit?.repository_full_name !== index.repository ||
-      commit.tree_sha !== prior || commit.parent_sha !== index.publish_base_head ||
+      commit.tree_sha !== (segmented ? index.final_tree : prior) || commit.parent_sha !== index.publish_base_head ||
       commit.message !== 'Publish transport ' + index.request_id)
     throw Error('Invalid commit packet; no GitHub write');
   verified = true;
@@ -220,12 +244,18 @@ for (let i = 0; i < packets.length - 1; i++) {
   const result = await tools.mcp__GitHub__create_tree(packets[i].action_args);
   if (result.result?.sha !== packets[i].expected_tree)
     throw Error('GitHub tree SHA mismatch: transaction stopped');
-  text(JSON.stringify({stage:'tree-established',index:i,sha:result.result.sha}));
 }
-const created = await tools.mcp__GitHub__create_commit(commit);
-if (!sha(created.result?.sha)) throw Error('GitHub commit SHA missing');
-const updated = await tools.mcp__GitHub__update_ref({
-  repository_full_name:index.repository, branch_name:'publish',sha:created.result.sha,force:false,
-});
-if (updated.result?.success !== true) throw Error('Publish ref update failed');
-text(JSON.stringify({stage:'transport-ref-updated',transport_commit:created.result.sha}));
+if (index.version === 2 && index.next_execution_index) {
+  // Persisted Git tree objects are the checkpoint. Only the next immutable index
+  // changes; no user-managed SHA, new upload route, or intermediate ref update.
+  text(JSON.stringify({stage:'continue',trees_completed:index.first_tree_index + packetCount - 1,
+    tree_sha:index.end_tree,next_execution_index:index.next_execution_index}));
+} else {
+  const created = await tools.mcp__GitHub__create_commit(commit);
+  if (!sha(created.result?.sha)) throw Error('GitHub commit SHA missing');
+  const updated = await tools.mcp__GitHub__update_ref({
+    repository_full_name:index.repository, branch_name:'publish',sha:created.result.sha,force:false,
+  });
+  if (updated.result?.success !== true) throw Error('Publish ref update failed');
+  text(JSON.stringify({stage:'transport-ref-updated',transport_commit:created.result.sha}));
+}

@@ -18,6 +18,7 @@ STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
 CONNECTOR_CALL_BUDGET_BYTES = 1024 * 1024
+MAX_TREE_CALLS_PER_EXECUTION = 10
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
@@ -791,6 +792,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     state["commit_packet"] = commit_packet
     _write_connector_state(repo, state)
     execution_index = _write_execution_index(repo, state)
+    execution_segments = _write_execution_segments(repo, state, execution_index)
+    execution_index = execution_segments[0]
     summary = {
         "stage": state["stage"],
         "request_id": prepared["request_id"],
@@ -804,6 +807,8 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         "tree_expected_shas": [batch["expected_tree"] for batch in plan["batches"]],
         "commit_packet": commit_packet,
         "execution_index": execution_index,
+        "execution_segment_count": len(execution_segments),
+        "max_tree_calls_per_execution": MAX_TREE_CALLS_PER_EXECUTION,
         "stale_transport_path_count": plan["stale_transport_path_count"],
         "normal_pre_ref_helper_round_trips": 0,
         "normal_pre_ref_verification_reads": 0,
@@ -816,8 +821,9 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
         },
         "next": (
             "Run the fixed scripts/publish_connector_launch.js in functions.exec using execution_index. "
-            "It reads the exact packets by temporary Library registration, verifies and trashes all before "
-            "GitHub writes, checks each returned tree SHA, then commits and non-force updates publish. "
+            "It verifies and clears each segment’s temporary Library inputs before GitHub writes, "
+            "runs at most 10 create_tree calls, and returns the next execution_index when needed. "
+            "Repeat the same fixed Launcher with that index until the final commit and ref update. "
             "After Gateway success call record with the run evidence."
         ),
         "verified": True,
@@ -909,6 +915,97 @@ def _write_execution_index(repo: Path, state: dict[str, object]) -> str:
     if not path.exists():
         path.write_text(encoded, encoding="ascii")
     return str(path)
+
+
+
+def _write_execution_segments(
+    repo: Path, state: dict[str, object], original_index: str,
+) -> list[str]:
+    """Prepare self-contained <=10-tree-call executions from one verified plan.
+
+    Short plans keep the original immutable index. The next index path is embedded
+    in each longer segment, so an operator only repeats the same fixed launcher.
+    No source commit, gateway packet or tree action is rewritten.
+    """
+    packets = _verified_execution_packets(repo, state)
+    trees = packets[:-1]
+    if len(trees) <= MAX_TREE_CALLS_PER_EXECUTION:
+        return [original_index]
+
+    base = _connector_dir(repo) / "segments"
+    count = (len(trees) + MAX_TREE_CALLS_PER_EXECUTION - 1) // MAX_TREE_CALLS_PER_EXECUTION
+    targets: list[tuple[Path, list[dict[str, object]], int, int]] = []
+    for segment in range(count):
+        first = segment * MAX_TREE_CALLS_PER_EXECUTION
+        end = min(first + MAX_TREE_CALLS_PER_EXECUTION, len(trees))
+        segment_dir = base / f"segment-{segment:03d}" / f"inputs-{end - first + 1:03d}"
+        segment_dir.mkdir(parents=True, exist_ok=True)
+        rows: list[dict[str, object]] = []
+        for local_index, tree in enumerate(trees[first:end]):
+            source = Path(str(state["tree_packets"][first + local_index]))
+            filename = f"tree-batch-{local_index:03d}.json"
+            destination = segment_dir / filename
+            raw = source.read_bytes()
+            raw.decode("ascii")
+            if destination.exists() and destination.read_bytes() != raw:
+                raise PublishStateError("segmented Connector packet differs from verified plan")
+            if not destination.exists():
+                destination.write_bytes(raw)
+            rows.append({"name": filename, "size": len(raw),
+                         "fnv32": _tool_call_fingerprint(raw.decode("ascii"))})
+        destination = segment_dir / "create-transport-commit.json"
+        raw = Path(str(state["commit_packet"])).read_bytes()
+        raw.decode("ascii")
+        if destination.exists() and destination.read_bytes() != raw:
+            raise PublishStateError("segmented Connector commit packet differs from verified plan")
+        if not destination.exists():
+            destination.write_bytes(raw)
+        rows.append({"name": "create-transport-commit.json", "size": len(raw),
+                     "fnv32": _tool_call_fingerprint(raw.decode("ascii"))})
+        targets.append((segment_dir, rows, first, end))
+
+    indices: list[str] = []
+    for segment, (directory, rows, first, end) in enumerate(targets):
+        next_path = (targets[segment + 1][0] / f"execution-index-{state['request_id']}.json") if segment + 1 < count else None
+        data = {
+            "version": 2,
+            "request_id": state["request_id"],
+            "repository": GITHUB_REPOSITORY,
+            "develop_head": state["develop_head"],
+            "publish_base_head": state["publish_base_head"],
+            "publish_base_tree": state["publish_base_tree"],
+            "first_tree_index": first,
+            "total_tree_count": len(trees),
+            "start_tree": trees[first]["action_args"]["base_tree_sha"],
+            "end_tree": trees[end-1]["expected_tree"],
+            "final_tree": state["plan"]["final_tree"],
+            "next_execution_index": str(next_path) if next_path else None,
+            "packets": rows,
+        }
+        path = directory / f"execution-index-{state['request_id']}.json"
+        encoded = json.dumps(data, indent=2, sort_keys=True) + "\n"
+        if path.exists() and path.read_text(encoding="ascii") != encoded:
+            raise PublishStateError("segmented Connector index differs from verified plan")
+        if not path.exists():
+            path.write_text(encoded, encoding="ascii")
+        indices.append(str(path))
+    return indices
+
+
+
+def cmd_connector_segments(_: argparse.Namespace) -> int:
+    """Recover a previously planned large transaction without reauthoring it."""
+    repo = _repo_from_cwd()
+    state = _read_connector_state(repo)
+    _verify_prepared_request(repo, _manifest_path(repo))
+    if state["manifest_sha256"] != _manifest_sha256(_manifest_path(repo)):
+        raise PublishStateError("prepared publish request changed after connector-plan")
+    original_index = _write_execution_index(repo, state)
+    indices = _write_execution_segments(repo, state, original_index)
+    print(json.dumps({"execution_index": indices[0],
+                      "execution_segment_count": len(indices),
+                      "max_tree_calls_per_execution": MAX_TREE_CALLS_PER_EXECUTION}, indent=2))
+    return 0
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:
@@ -1015,6 +1112,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--develop-head", required=True)
     plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
+    sub.add_parser(
+        "connector-segments", help="recover a previously planned large transaction as <=10-tree-call executions",
+    ).set_defaults(func=cmd_connector_segments)
 
     cancel = sub.add_parser("cancel", help="cancel a pre-ref active transaction after one combined ref observation")
     cancel.add_argument("--develop-head", required=True)

@@ -215,6 +215,125 @@ def test_transport_plan_handles_five_mib_source_without_exceeding_call_budget(tm
     assert len(packets) == summary["tree_call_count"]
 
 
+def test_large_publish_plan_generates_self_contained_ten_tree_call_segments(tmp_path: Path) -> None:
+    repo, base, base_tree, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    state = connector_state(repo)
+    # A 14-call plan exercises the transport executor's boundary without a
+    # permanent 10 MiB/20-second test in the ordinary development suite.
+    prior = base_tree
+    batches = []
+    for i in range(14):
+        expected = f"{i + 1:040x}"
+        batches.append({
+            "batch_index": i, "base_tree": prior, "expected_tree": expected,
+            "elements": [{"path": f".publish/transport/develop/{i:04d}.b64",
+                          "mode": "100644", "type": "blob", "content": "Zg=="}],
+        })
+        prior = expected
+    state["plan"]["batches"] = batches
+    state["plan"]["final_tree"] = prior
+    trees, _, commit = PUBLISH_REQUEST._write_execution_packets(repo, state)
+    state["tree_packets"] = trees
+    state["commit_packet"] = commit
+    PUBLISH_REQUEST._write_connector_state(repo, state)
+    original_index = PUBLISH_REQUEST._write_execution_index(repo, state)
+    segments = PUBLISH_REQUEST._write_execution_segments(repo, state, original_index)
+    assert len(segments) == 2
+
+    first_index = Path(segments[0])
+    first = json.loads(first_index.read_text(encoding="ascii"))
+    second_index = Path(first["next_execution_index"])
+    second = json.loads(second_index.read_text(encoding="ascii"))
+    assert first["version"] == second["version"] == 2
+    assert first["first_tree_index"] == 0
+    assert second["first_tree_index"] == 10
+    assert first["end_tree"] == second["start_tree"]
+    assert second["next_execution_index"] is None
+    assert first["total_tree_count"] == second["total_tree_count"] == 14
+    assert len(first["packets"]) == 11
+    assert len(second["packets"]) == 5
+    assert second["end_tree"] == second["final_tree"] == prior
+    recovered = json.loads(run_request(repo, "connector-segments").stdout)
+    assert recovered["execution_index"] == str(first_index)
+    assert recovered["execution_segment_count"] == 2
+    assert first_index.is_file() and second_index.is_file()
+    # The helper verifies immutable packet descriptors; no commit was changed.
+    assert prepared(repo)["payload_sha256"] == hashlib.sha256(base64.b64decode(
+        prepared(repo)["payload_b64"], validate=True,
+    )).hexdigest()
+
+    if shutil.which("node"):
+        result = subprocess.run(
+            ["node", "-e", _SEGMENT_EXECUTOR_TEST, str(first_index), str(second_index)],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+
+_SEGMENT_EXECUTOR_TEST = r"""
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+const source = fs.readFileSync('scripts/publish_connector_executor.js', 'utf8');
+async function execute(path, corrupt=false, wrongSHA=false) {
+  const dir=path.slice(0,path.lastIndexOf('/')+1);
+  const index=JSON.parse(fs.readFileSync(path, 'utf8'));
+  let treeCalls=0, commits=0, refUpdates=0, deletes=0, output=[];
+  const tools={
+    files__list:async ()=>({items:[],next_cursor:null}),
+    files__manage_library: async ({operations})=>({results:operations.map(op=>{
+      if(op.operation==='upload') return {status:'succeeded',file_id:op.container_path,library_file_id:op.container_path};
+      if(op.operation==='delete') deletes++;
+      return {status:'succeeded'};
+    })}),
+    files__read: async ({read})=>({results:read.map(({ref_id})=>({
+      content:[fs.readFileSync(ref_id,'utf8')],has_more:false,warnings:[],
+    }))}),
+    mcp__GitHub__create_tree: async args=>{
+      treeCalls++;
+      const packet=JSON.parse(fs.readFileSync(dir+'tree-batch-'+String(treeCalls-1).padStart(3,'0')+'.json','utf8'));
+      return {result:{sha:wrongSHA ? 'f'.repeat(40) : packet.expected_tree}};
+    },
+    mcp__GitHub__create_commit: async ()=>{commits++;return {result:{sha:'a'.repeat(40)}};},
+    mcp__GitHub__update_ref: async ()=>{refUpdates++;return {result:{success:true}};},
+  };
+  const exec=new AsyncFunction('tools','text','INDEX_PATH',source);
+  let error='';
+  if(corrupt){
+    const raw=JSON.parse(fs.readFileSync(path,'utf8'));
+    raw.end_tree='0'.repeat(40);
+    tools.files__read=async args=>({results:args.read.map(({ref_id})=>({
+      content:[ref_id===path?JSON.stringify(raw):fs.readFileSync(ref_id,'utf8')],has_more:false,warnings:[],
+    }))});
+  }
+  try{await exec(tools,t=>output.push(JSON.parse(t)),path);}catch(e){error=String(e);}
+  return {treeCalls,commits,refUpdates,deletes,output,error,index};
+}
+(async()=>{
+  const [first,second]=process.argv.slice(-2);
+  const failed=await execute(first,true);
+  assert.match(failed.error,/end tree mismatch/);
+  assert.equal(failed.treeCalls,0);
+  assert.equal(failed.commits,0);
+  const mismatch=await execute(first,false,true);
+  assert.match(mismatch.error,/SHA mismatch/);
+  assert.equal(mismatch.commits,0);
+  assert.equal(mismatch.refUpdates,0);
+  const a=await execute(first);
+  assert.equal(a.error,'');assert.equal(a.treeCalls,10);
+  assert.equal(a.commits,0);assert.equal(a.refUpdates,0);
+  assert.equal(a.output[0].stage,'continue');
+  assert.equal(a.output[0].next_execution_index,second);
+  const b=await execute(second);
+  assert.equal(b.error,'');assert.ok(b.treeCalls>0&&b.treeCalls<=10);
+  assert.equal(b.commits,1);assert.equal(b.refUpdates,1);
+  assert.equal(b.output[0].stage,'transport-ref-updated');
+})().catch(err=>{console.error(err);process.exitCode=1;});
+"""
+
+
 def test_transport_plan_replaces_only_its_fixed_slot(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
     prepare_change(repo)

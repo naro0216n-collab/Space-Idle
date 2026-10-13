@@ -90,14 +90,14 @@ Publish Gateway workflowを変更する際は、Publish control maintenanceに�
 
 通常の成功経路でLibrary一覧や削除後の全件再列挙は行わない。再試行時の既存登録は同じtransactionの決定論的なパスだけ上書きし、登録・読取・削除の応答が失敗または不確定となった場合は、transactionに限定した一覧・回収を行い、回収を確認できなければGitHubへ書き込まない。無関係なLibraryファイルや別transactionのファイルを操作しない。
 
-Executorの登録・読取・削除が完了した後、同じ実行の中でGitHub transportのtree生成、commit作成、`publish` ref更新を行う。中断または一時ファイル操作の失敗時は、保存済みtransactionを使用して「中断・失敗時の再開」から続ける。通常publishの実行者が扱う入力は`execution_index`と固定Launcherのsourceであり、packet数やpayload規模にかかわらず同じ手順を使う。
+Executorの登録・読取・削除が完了した後、GitHub transportのtreeを生成する。1実行での`GitHub.create_tree`は最大10回とし、それを超える計画はhelperが事前に検証した複数の実行indexへ分割する。途中区間はGitHubに確定したtree SHAと次区間の`next_execution_index`のみ返し、commitと`publish` ref更新は最終区間で一度だけ実行する。ChatGPTは各区間で同一の固定Launcherを繰り返すだけとし、tree SHAの転記・packet選択・分割手順の作成をしない。Library操作は10回制限に含めず、各区間で原本検証と一時ファイル回収を済ませてからGitHubへ書き込む。中断時は同じ区間のindexから安全に再開する。通常publishの実行者が扱う入力は`execution_index`と固定Launcherのsourceであり、payload規模にかかわらず同じ手順を使う。
 
 ### 通常publishの手順
 
 1. 責務単位の関連検証を完了し、ローカル`develop`にcommitする。
 2. `python scripts/publish_request.py prepare`でpublish requestを作成する。
 3. publish直前にGitHubのheads一覧を1回取得し、観測した`develop`と`publish`のHEADを`connector-plan`に指定する。
-4. 返された`execution_index`の絶対パスを`INDEX_PATH`に指定し、`scripts/publish_connector_launch.js`の固定sourceをそのまま1回の`functions.exec`で実行する。Launcher／ExecutorがLibrary中継とGitHub transportを完了する。
+4. 返された`execution_index`の絶対パスを`INDEX_PATH`に指定し、`scripts/publish_connector_launch.js`の固定sourceをそのまま`functions.exec`で実行する。結果が`stage: continue`なら返却された`next_execution_index`を次の`INDEX_PATH`として、同じ固定Launcherを実行する。`stage: transport-ref-updated`が返るまで機械的に繰り返す（分割計画・SHAの手動操作は不要）。
 5. 返却されたtransport commitに対応するPublish Gateway runが`completed / success`になったことを確認し、transport commit SHA、run ID、結論を`record`へ渡す。runの完了までtransactionを保持し、その間は独立したローカル作業を進めてよい。
 6. 次のpublishを始める際に直前Fast CIの結果を確認する。Fast CIが失敗していれば原因を修正したcheckpointで次のpublishへ進む。
 
@@ -113,13 +113,13 @@ python scripts/publish_request.py record \
   --gateway-conclusion success
 ```
 
-`functions.exec`では先頭に`const INDEX_PATH = '<execution_index>';`を定義し、その後に`scripts/publish_connector_launch.js`の内容を続けて実行する。Launcherのsourceはローカルrepoから取得し、ExecutorのsourceはLauncherが共有`develop`から取得する。
+`functions.exec`では先頭に`const INDEX_PATH = '<execution_index>';`を定義し、その後に`scripts/publish_connector_launch.js`の内容を続けて実行する。区間継続でも`INDEX_PATH`以外は変更しない。Launcherのsourceはローカルrepoから取得し、ExecutorのsourceはLauncherが共有`develop`から取得する。既存の長大なtransactionを新方式へ移行する場合に限り、`python scripts/publish_request.py connector-segments`で保存済み計画から実行indexを生成する。`prepare`やcommitを作り直さない。
 
 ### 中断・失敗時の再開
 
 | 到達状態 | 続行手順 |
 |---|---|
-| `publish` ref更新前 | 保存済みtransactionの`execution_index`で固定Launcherを再実行する。入力や回収処理の問題は原因を解消したうえで同じtransactionから続ける。 |
+| `publish` ref更新前 | 未完了区間の`execution_index`で固定Launcherを再実行する。`continue`を受け取った区間のtreeはGitHubに保持されるため、次のindexから続ける。未完了区間の再実行も決定論的なtree作成のみであり、commit・ref更新は最終区間まで行わない。 |
 | `publish` ref更新済み | 該当transport commitのPublish Gateway runを確認する。成功時は`record`し、Gateway側の一時的な障害は同じrunの再実行で扱う。 |
 | `record`済み | ローカル開発を続行する。次のpublish判断時に前回Fast CIの結果を確認する。 |
 
