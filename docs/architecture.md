@@ -1130,6 +1130,12 @@ Offline Progressは通常Simulationと別ルールにせず、実時間経過を
 
 ## 15. Validation / Test
 
+World Content登録は「全Celestial Bodyと参照地理の入力登録・契約検証」と「正規の球面分割・Environment・Resource Opportunityの実体化」を明確に分ける。前者は全製品登録を対象に、固体／非固体と参照地域の整合、ID／親関係／参照、有限な面積・地質・Resource値、生成Cell ID衝突、分割解像度の成立条件を実際のCell展開なしに検証する。後者は唯一の標準生成器を全固体天体へ適用し、例外的なBody専用生成経路を持たない。
+
+恒久テストでは、登録入力全件の検査と、異なる物理規模・地質・資源条件を持つ代表天体を標準生成器で実体化する幾何・被覆・隣接・量保存検査を組み合わせる。生成規則・保存則の性質は同一生成器の解像度変更でも検証し、全製品Worldを各解像度で重複実生成することを恒久契約にしない。実Applicationでの全World・Scenario・Survey・Founding・Save連接はそれぞれの横断契約に応じて検証する。共通登録契約だけでは判定できない具体的な地理分布の妥当性はContent調整の評価事項として扱い、間接検証が実Worldの全地理値を測定したという主張にすり替えない。
+
+通常ゲームとLoadは完全な製品World Definitionを使用する。プロセス内で生成済みの静的Definitionを再利用する場合も、SimulationごとにSpatial Graph、可変参照辞書、Environment Overlay、Operational Stateを独立に持ち、Content更新・Definition改変の明示的な検証はキャッシュされた製品Worldではなく標準登録／実生成経路へ通す。静的Definitionの再利用を別のWorld正本・Persisted State・開発段階によるCell再分割にしない。
+
 Configuration Validationは、Definition IDの重複、Resource Potential / Survey Target / Extraction / Process / Construction / Vehicle / Knowledge Requirementからの未定義Resource・Facility参照、旧semantic IDの残存、Generic Coreによる特定Content ID依存、および未定義Resource / Facility / Vehicle / Movement Operation参照、無効Eligibility / SiteRequirement、存在しないCapability / Service type、負の容量・率・期間、Priority範囲外、Facility Recipe / Maintenance / Decommission recovery、Vehicle Production、Transport Allocation、Spatial topology、Founding target / Deployment Recipe、Research Stage / Technology / Experience category、Survey Provider、Market Definition等の参照不整合を検出する。Research DefinitionではStage listが非空であること、`stage_id` の一意性、各typed Stage Specの必須fieldを検証する。Technology prerequisiteの未定義参照・自己参照・循環、表示段階とdependency方向の自己矛盾、Allocation dependency graphの循環もfail-closedとする。
 
 Runtime Validationは、Inventory / Reservation / Cargo / Funds / Fleetの保存と二重所有、Execution / Admission / Reservation settlement超過、Transport Capacity二重消費、Facility / Project / Movement lifecycle不整合、Research Point Pool capacity、Technology / Knowledge重複正本、Market commitment、Facility Decommission、Fleet Retirement / Commitment、Location領域、Facility placement等を検査する。

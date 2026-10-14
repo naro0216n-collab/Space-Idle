@@ -872,6 +872,8 @@ Offline Progressは通常Simulationと別ルールにせず、実時間をゲー
 
 静的な宇宙・天体・Surface Cell topology、Resource Potential、基準Physical Environment等を `World Definition` とし、ゲーム開始時のPlayer所有・運用状態を `Scenario Definition` として分離する。
 
+全固体天体の地理は共通の球面分割・地質分布・Resource面積配賦の登録処理から生成する。天体ごとに入力するのは物理寸法、参照地質・地形、Resource密度等のContentと生成解像度の規則であり、固有の地理生成・検証経路を天体ごとに増やさない。全製品Contentの登録入力を展開前に検証可能とし、共通生成器の等面積・隣接・量保存は物理条件の異なる代表的な実生成で検証する。必要な実ゲームでは常に正規の全Worldを用い、検証コストを理由にCell数、地理的多様性、開発選択肢を縮小しない。
+
 Scenario Definitionは少なくとも、開始時Operational Node / Surface Location、Facility、Fleet、Inventory、Knowledge / Technology、Funds、Market Provider State / Market Interface等のPlayer Stateを構成する。戦略的なsource / via固定がScenario自体の意味として必要な場合だけ初期routing hard constraintを持てる。開始時の具体的数量・価格・Facility数はContent balanceであり、Core仕様として固定しない。**初期配置は保有・所在・投入済み資源を記述するだけで、Facility DefinitionやConstruction/Operationの特別な種別を生まない。** 同種設備を後から取得するときも、別Scenarioや別の適格な天体・Cellに配置するときも、同じ物理的なSite/Capability/Resource/Technology/建設契約を用いる。初期配備のみを理由に建設不能な設備や初期状態だけ有効な運転経路を設けない。
 
 標準Scenarioでは、地球側に基礎産業・研究・打上げ・Vehicle建造を開始できる運用基盤、Resource売買に利用できる地球側Market Interface、成立済みTransport Network内で初期の反復物流を自動進行できる能力、地球周辺から月をRemote Surveyして候補を比較し、通常のResource / Fleet / Founding契約だけで最初の月面Locationを設立できる軌道・Fleet能力を持たせる。一方、開始時からプレイヤー所有の月面Surface Locationや完全な月面Resource Knowledgeは与えない。これらは開始時Facility数、Fleet数、Funds額等の固定値ではなく、標準Scenarioが成立させるゲームループ上の能力として扱う。月面進出はRemote Survey → 候補比較 → Founding Deploymentという通常ゲームループを使う。

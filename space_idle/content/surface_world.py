@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
-from math import cos, pi, radians, sin, sqrt, ceil
+from math import cos, pi, radians, sin, sqrt, ceil, isfinite
 
-from ..shared import SurfaceCellId
+from ..shared import CelestialBodyId, SurfaceCellId
 from ..spatial import (
     IlluminationField, ThermalField, PhysicalSurface, SpatialGraph, StaticFacetStore,
     SurfaceCellDef, SurfaceTerrain, great_circle_distance_km,
@@ -91,7 +91,78 @@ def _terrain_variation(baseline: SurfaceTerrain, latitude: float, longitude: flo
     )
 
 
-def register_complete_surface_world(graph: SpatialGraph, facets: StaticFacetStore) -> None:
+def validate_surface_registration(graph: SpatialGraph) -> None:
+    """Validate every authored body and reference region before Cell expansion.
+
+    The standard global generator receives no per-body custom implementation:
+    regular ring geometry, area accounting and adjacency are shared rules.
+    This validates product input coverage without realizing thousands of Cells.
+    Geometry/normalization behavior is checked on representative realized bodies.
+    """
+    by_body = {}
+    for cell_id, cell in graph.surface_cells.items():
+        if cell_id != cell.id:
+            raise ValueError(f'geographic reference key mismatch: {cell_id}')
+        if cell.spherical_bounds is not None:
+            raise ValueError(f'expected unexpanded geographic reference: {cell.id}')
+        if cell.body_id not in graph.bodies:
+            raise ValueError(f'unknown geographic reference body: {cell.id}')
+        by_body.setdefault(cell.body_id, []).append(cell)
+        if not isfinite(cell.area_km2) or cell.area_km2 <= 0:
+            raise ValueError(f'invalid reference area: {cell.id}')
+        if any(not isfinite(float(v)) or v < 0 for v in cell.resource_potential_by_resource.values()):
+            raise ValueError(f'invalid reference Resource potential: {cell.id}')
+        if any(not isfinite(float(v)) for v in cell.static_geology.values()):
+            raise ValueError(f'invalid reference geology: {cell.id}')
+        if any(not isfinite(value) for value in (
+            cell.terrain.terrain_factor, cell.terrain.bearing_capacity_factor,
+            cell.terrain.dust_factor, cell.terrain.slope_factor,
+        )):
+            raise ValueError(f'invalid geographic reference terrain: {cell.id}')
+        if any(cell.id not in graph.surface_cells[neighbor].neighbor_ids
+               for neighbor in cell.neighbor_ids):
+            raise ValueError(f'asymmetric geographic reference neighbor: {cell.id}')
+        if any(neighbor not in graph.surface_cells or graph.surface_cells[neighbor].body_id != cell.body_id
+               for neighbor in cell.neighbor_ids):
+            raise ValueError(f'foreign/unknown geographic reference neighbor: {cell.id}')
+    all_planned_ids: set[SurfaceCellId] = set()
+    for body_id, body in graph.bodies.items():
+        samples = by_body.get(body_id, ())
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            if samples:
+                raise ValueError(f'non-solid body has surface references: {body_id}')
+            continue
+        if not samples:
+            raise ValueError(f'solid body lacks geologic reference geography: {body_id}')
+        if not isfinite(body.mean_radius_km) or body.mean_radius_km <= 0:
+            raise ValueError(f'invalid physical body radius: {body_id}')
+        if not all(isfinite(cell.centroid.latitude_deg) and isfinite(cell.centroid.longitude_deg)
+                   for cell in samples):
+            raise ValueError(f'invalid geographic reference position: {body_id}')
+        # Prove that every Resource budget is physically seeded by at least one
+        # positive local deposit, independently of partition granularity.
+        if any(sum(cell.resource_potential_by_resource.get(resource, 0.0) for cell in samples) <= 0
+               for resource in {key for cell in samples for key in cell.resource_potential_by_resource}):
+            raise ValueError(f'geographic Resource lacks positive reference: {body_id}')
+        count = _ring_count(body.mean_radius_km)
+        ring_sizes = tuple(max(4, round(2 * count * sin(pi * (row + 0.5) / count)))
+                           for row in range(count))
+        if len(samples) >= sum(ring_sizes):
+            raise ValueError(f'insufficient geographic partition resolution: {body_id}')
+        slug = str(body_id).rsplit('.', 1)[-1]
+        generated_ids = {SurfaceCellId(f'base.cell.{slug}.grid.{row:02d}.{col:03d}')
+                         for row, size in enumerate(ring_sizes) for col in range(size)}
+        if generated_ids & graph.surface_cells.keys():
+            raise ValueError(f'geographic reference collides with generated Cell ID: {body_id}')
+        if generated_ids & all_planned_ids:
+            raise ValueError(f'generated surface Cell IDs collide across bodies: {body_id}')
+        all_planned_ids.update(generated_ids)
+
+
+def register_complete_surface_world(
+    graph: SpatialGraph, facets: StaticFacetStore,
+    *, body_ids: frozenset[CelestialBodyId] | None = None,
+) -> None:
     """Replace sparse reference regions with physical equal-area full coverage.
 
     Reference IDs are preserved as named geographic cells, so founding and
@@ -100,14 +171,23 @@ def register_complete_surface_world(graph: SpatialGraph, facets: StaticFacetStor
     area times reference density establishes a physical Resource budget;
     derived Cell opportunities sum to that budget at any partition resolution.
     """
+    validate_surface_registration(graph)
+    if body_ids is not None:
+        unknown = body_ids - graph.bodies.keys()
+        if unknown:
+            raise ValueError(f'unknown selected bodies: {sorted(unknown)}')
     reference_by_body = {}
     for cell in graph.surface_cells.values():
         reference_by_body.setdefault(cell.body_id, []).append(cell)
-    rebuilt: dict[SurfaceCellId, SurfaceCellDef] = {}
+    rebuilt: dict[SurfaceCellId, SurfaceCellDef] = ({} if body_ids is None else {
+        cell.id: cell for cell in graph.surface_cells.values() if cell.body_id not in body_ids
+    })
     illumination: dict[SurfaceCellId, IlluminationField] = {}
     climate: dict[SurfaceCellId, ThermalField] = {}
     for body_id, body in sorted(graph.bodies.items(), key=lambda row: str(row[0])):
-        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE or (
+            body_ids is not None and body_id not in body_ids
+        ):
             continue
         originals = sorted(reference_by_body.get(body_id, ()), key=lambda cell: str(cell.id))
         if not originals:

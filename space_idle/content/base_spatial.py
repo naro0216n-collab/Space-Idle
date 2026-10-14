@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from functools import lru_cache
+
 from ..shared import CelestialBodyId, DefinitionId
 from ..spatial import (
     AtmosphereField,
@@ -65,7 +68,7 @@ def _moon_cell(
 BASE_WORLD_DEFINITION_ID = "base.world.sol"
 
 
-def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
+def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, EnvironmentResolver]:
     graph = SpatialGraph()
     graph.add_star_system(StarSystemDef(
         ids.SOL_SYSTEM,
@@ -252,7 +255,8 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     register_solar_system_environment(graph, facets)
     register_giant_orbital_environment(graph, facets)
     register_solar_system_regions(graph, facets)
-    register_complete_surface_world(graph, facets)
+    if realize_surface:
+        register_complete_surface_world(graph, facets)
 
     # Body-global Physical Environment is defined once per body.  Surface Cell
     # local fields/overlays remain explicit below; Surface Locations never copy
@@ -336,3 +340,51 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     facets.set(ids.MARS_ORBIT, CommunicationField(750.0, 0.90))
 
     return graph, EnvironmentResolver(graph, facets)
+
+
+def build_world_registration() -> tuple[SpatialGraph, EnvironmentResolver]:
+    """Register all physical Content inputs without expanding generated cells.
+
+    This is an *authored registration*, never a playable World Definition.
+    Call the standard surface registrar to materialize any representative body.
+    """
+    return _assemble_world(realize_surface=False)
+
+
+def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
+    """Build the complete physical World required by a game or Save restore."""
+    return _assemble_world(realize_surface=True)
+
+
+@lru_cache(maxsize=1)
+def _standard_world_template() -> tuple[SpatialGraph, EnvironmentResolver]:
+    """Process-local immutable-input template; not shared authoritative State."""
+    return build_world_definition()
+
+
+def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
+    """Fresh physical Definition maps without regenerating the full geography.
+
+    Each Application receives independent graph, facet dictionaries and Cell
+    nested mappings. Static immutable definitions are safely reused; Scenario
+    and runtime overlays are never shared. Explicit World generation and
+    registration APIs remain uncached for Content edits and generator tests.
+    """
+    template, environment = _standard_world_template()
+    graph = SpatialGraph(
+        star_systems=dict(template.star_systems), bodies=dict(template.bodies),
+        nodes=dict(template.nodes),
+        surface_cells={cell_id: replace(
+            cell, static_geology=dict(cell.static_geology),
+            resource_potential_by_resource=dict(cell.resource_potential_by_resource),
+        ) for cell_id, cell in template.surface_cells.items()},
+    )
+    static = StaticFacetStore(
+        facets={key: replace(facet, composition=dict(facet.composition))
+                if isinstance(facet, AtmosphereField) else facet
+                for key, facet in environment.static.facets.items()},
+        body_facets={key: replace(facet, composition=dict(facet.composition))
+                     if isinstance(facet, AtmosphereField) else facet
+                     for key, facet in environment.static.body_facets.items()},
+    )
+    return graph, EnvironmentResolver(graph, static)

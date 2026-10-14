@@ -281,56 +281,148 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
     assert sim.inventory.stock == stock
 
 
-def test_static_world_partitions_cover_each_solid_body_without_multiplying_opportunity(monkeypatch):
-    """Geometry, quantity and topology follow registration, not authored Cell count."""
-    from collections import defaultdict
+def test_registered_world_inputs_and_representative_realization_preserve_global_geometry():
+    """Product Content coverage is checked before expansion; generator rules
+    are exercised on diverse real bodies, not two fully generated Solar Systems.
+    """
     from math import isclose, pi
-    from space_idle.content.base_spatial import build_world_definition
+    from space_idle.content.base_spatial import build_world_registration
+    from space_idle.content.surface_world import (
+        register_complete_surface_world, validate_surface_registration,
+    )
+    from space_idle.surface_partition import validate_surface_partitions
+
+    registered, environment = build_world_registration()
+    validate_surface_registration(registered)
+    original_ids = set(registered.surface_cells)
+    originals = tuple(registered.surface_cells.values())
+    solid = [body for body in registered.bodies.values()
+             if body.physical_surface is PhysicalSurface.SOLID]
+    assert solid
+    assert all(any(cell.body_id == body.id for cell in originals) for body in solid)
+    assert all(not any(cell.body_id == body.id for cell in originals)
+               for body in registered.bodies.values()
+               if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
+    # Pick physically different inputs; do not make specific body names or
+    # hard-coded Cell counts an architectural contract.
+    by_radius = sorted(solid, key=lambda body: body.mean_radius_km)
+    varied = max(solid, key=lambda body: len({
+        rid for cell in originals if cell.body_id == body.id
+        for rid in cell.resource_potential_by_resource
+    }))
+    selected = frozenset({by_radius[0].id, by_radius[-1].id, varied.id})
+    budgets = {}
+    for body_id in selected:
+        sample = tuple(cell for cell in originals if cell.body_id == body_id)
+        radius = registered.bodies[body_id].mean_radius_km
+        for resource in {rid for cell in sample for rid in cell.resource_potential_by_resource}:
+            budgets[(body_id, resource)] = (4 * pi * radius**2 / sum(c.area_km2 for c in sample)) * sum(
+                c.resource_potential_by_resource.get(resource, 0.0) for c in sample
+            )
+    register_complete_surface_world(registered, environment.static, body_ids=selected)
+    validate_surface_partitions(registered)
+    assert original_ids <= set(registered.surface_cells)  # Named reference sites survive.
+    assert len(registered.surface_cells) > len(original_ids)
+    for body_id in selected:
+        cells = registered.cells_for_body(body_id)
+        assert cells and all(cell.spherical_bounds is not None for cell in cells)
+        surface_area = 4 * pi * registered.bodies[body_id].mean_radius_km**2
+        assert isclose(sum(cell.area_km2 for cell in cells), surface_area, rel_tol=1e-10)
+        reached, frontier = {cells[0].id}, [cells[0].id]
+        while frontier:
+            for neighbor in registered.surface_cells[frontier.pop()].neighbor_ids - reached:
+                reached.add(neighbor)
+                frontier.append(neighbor)
+        assert reached == {cell.id for cell in cells}
+    for (body_id, resource), expected in budgets.items():
+        actual = sum(cell.resource_potential_by_resource.get(resource, 0.0)
+                     for cell in registered.cells_for_body(body_id))
+        assert actual == pytest.approx(expected, rel=1e-10, abs=1e-10)
+    # Non-selected references remain exactly as authored, not regenerated.
+    assert all(registered.surface_cells[cell.id] is cell for cell in originals
+               if cell.body_id not in selected)
+
+
+
+def test_registration_rejects_invalid_product_inputs_before_surface_expansion():
+    from space_idle.content.base_spatial import build_world_registration
+    from space_idle.content.surface_world import validate_surface_registration
+
+    graph, _environment = build_world_registration()
+    reference = next(iter(graph.surface_cells.values()))
+    graph.surface_cells[reference.id] = replace(
+        reference, resource_potential_by_resource={
+            resource: float('nan') for resource in reference.resource_potential_by_resource
+        },
+    )
+    with pytest.raises(ValueError, match='reference Resource potential'):
+        validate_surface_registration(graph)
+    graph.surface_cells[reference.id] = reference
+    # Unregistered solid bodies and broken cross-body links are not repaired
+    # by the regular generator or concealed by representative sampling.
+    body_references = [cell for cell in graph.surface_cells.values()
+                       if cell.body_id == reference.body_id]
+    for cell in body_references:
+        del graph.surface_cells[cell.id]
+    with pytest.raises(ValueError, match='lacks geologic reference'):
+        validate_surface_registration(graph)
+
+
+def test_standard_partition_registration_conserves_resources_across_resolution():
+    """Resolution independence belongs to the shared generator, not 29 copies."""
+    from collections import defaultdict
+    from space_idle.content.base_spatial import build_world_registration
     from space_idle.content import surface_world
     from space_idle.surface_partition import validate_surface_partitions
 
-    def totals(world):
+    def realize(*, finer):
+        graph, environment = build_world_registration()
+        body = max((body for body in graph.bodies.values()
+                    if body.physical_surface is PhysicalSurface.SOLID),
+                   key=lambda b: b.mean_radius_km)
+        if finer:
+            original = surface_world._ring_count
+            surface_world._ring_count = lambda radius: original(radius) + 2
+        try:
+            surface_world.register_complete_surface_world(
+                graph, environment.static, body_ids=frozenset({body.id}),
+            )
+        finally:
+            if finer:
+                surface_world._ring_count = original
+        validate_surface_partitions(graph)
         quantities = defaultdict(float)
-        for cell in world.surface_cells.values():
-            for resource_id, potential in cell.resource_potential_by_resource.items():
-                quantities[(cell.body_id, resource_id)] += potential
-        return quantities
+        cells = graph.cells_for_body(body.id)
+        for cell in cells:
+            for rid, potential in cell.resource_potential_by_resource.items():
+                quantities[rid] += potential
+        return cells, quantities
 
-    first, _ = build_world_definition()
-    validate_surface_partitions(first, require_all_solid=True)
-    body_counts = defaultdict(int)
-    for cell in first.surface_cells.values():
-        body_counts[cell.body_id] += 1
-    for body_id, body in first.bodies.items():
-        cells = first.cells_for_body(body_id)
-        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
-            assert not cells
-            continue
-        assert len(cells) == body_counts[body_id]
-        assert len(cells) > 1
-        surface_area = 4 * pi * body.mean_radius_km ** 2
-        assert isclose(sum(cell.area_km2 for cell in cells), surface_area, rel_tol=1e-10)
-        assert all(isclose(cell.area_km2, surface_area / len(cells), rel_tol=1e-10) for cell in cells)
-        # Connectivity is a topological requirement, not a body-specific script.
-        reached = {cells[0].id}
-        frontier = [cells[0].id]
-        while frontier:
-            current = frontier.pop()
-            newly_reached = first.surface_cells[current].neighbor_ids - reached
-            reached.update(newly_reached)
-            frontier.extend(newly_reached)
-        assert reached == {cell.id for cell in cells}
+    normal_cells, normal = realize(finer=False)
+    finer_cells, finer = realize(finer=True)
+    assert len(finer_cells) > len(normal_cells)
+    assert normal.keys() == finer.keys()
+    for resource, total in normal.items():
+        assert finer[resource] == pytest.approx(total, rel=1e-10, abs=1e-10)
 
-    original_ring_count = surface_world._ring_count
-    monkeypatch.setattr(surface_world, "_ring_count", lambda radius: original_ring_count(radius) + 2)
-    finer, _ = build_world_definition()
-    validate_surface_partitions(finer, require_all_solid=True)
-    assert len(finer.surface_cells) > len(first.surface_cells)
-    first_totals, finer_totals = totals(first), totals(finer)
-    assert first_totals.keys() == finer_totals.keys()
-    for key, amount in first_totals.items():
-        assert finer_totals[key] == pytest.approx(amount, rel=1e-10, abs=1e-10)
 
+def test_standard_world_instances_do_not_share_mutable_static_mappings():
+    from space_idle.content.base_spatial import instantiate_standard_world
+    from space_idle.spatial import ThermalField
+
+    left, left_env = instantiate_standard_world()
+    right, right_env = instantiate_standard_world()
+    cell_id = next(iter(left.surface_cells))
+    assert left is not right
+    assert left.surface_cells[cell_id] is not right.surface_cells[cell_id]
+    assert left.surface_cells[cell_id].static_geology is not right.surface_cells[cell_id].static_geology
+    left.surface_cells[cell_id].static_geology['test_mutation'] = 99.0
+    assert 'test_mutation' not in right.surface_cells[cell_id].static_geology
+    body = left.surface_cells[cell_id].body_id
+    left.bodies.pop(body)
+    assert body in right.bodies
+    left_env.static.facets[(cell_id, ThermalField)] = ThermalField(500)
+    assert left_env.static.facets != right_env.static.facets
 
 def test_geographic_diversity_and_survey_eligibility_do_not_depend_on_actual_deposits():
     """Regional choice must survive the World generator and Knowledge boundary."""

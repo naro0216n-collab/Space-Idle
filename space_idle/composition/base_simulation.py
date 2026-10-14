@@ -46,7 +46,7 @@ from ..content.base_research import (
     build_experience_contribution_rules, build_research_definitions, build_research_providers,
 )
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
-from ..content.base_spatial import BASE_WORLD_DEFINITION_ID, build_world_definition
+from ..content.base_spatial import BASE_WORLD_DEFINITION_ID, instantiate_standard_world
 from ..content.base_transport import (
     build_spaceflight_movement_rules,
     build_surface_access_movement_rules,
@@ -59,7 +59,7 @@ def build_base_simulation(
     external_population_sources: tuple[ExternalPopulationSourceDefinition, ...],
 ) -> Simulation:
     """Compose static base-game definitions with empty authoritative runtime State."""
-    graph, environment = build_world_definition()
+    graph, environment = instantiate_standard_world()
 
     authored = AssetDefinitions()
     facility_rows, vehicle_rows = build_base_assets()
