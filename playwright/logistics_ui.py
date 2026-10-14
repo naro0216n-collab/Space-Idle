@@ -19,6 +19,33 @@ PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
+def _wait_for_allocation_preview(page, *, forward: float, reverse: float, editing: bool) -> None:
+    """Wait for a complete result for the entered capacity targets, not a stale row.
+
+    A new input starts a debounced HTTP request. The inspector clears its rows
+    while that request is in flight, so waiting for *any* ``dt`` is racy.
+    """
+    page.wait_for_function(
+        r"""([forward, reverse, editing]) => {
+          const root = document.querySelector('#allocationPreview');
+          const rows = [...(root?.querySelectorAll('.kv-grid dt') || [])];
+          const field = label => rows.find(row => row.textContent.trim() === label)
+            ?.nextElementSibling?.textContent?.trim();
+          const target = field('輸送能力目標');
+          const values = target?.match(/^\s*([\d,.]+)\s*\/\s*([\d,.]+)\s*t\/日\s*$/);
+          if (!values || Number(values[1].replaceAll(',', '')) !== forward
+              || Number(values[2].replaceAll(',', '')) !== reverse) return false;
+          const labels = ['必要Fleet', '利用可能Fleet', '不足', '成立可能輸送能力',
+            '選択経路', '運行周期 / 所要時間'];
+          if (editing) labels.push('現在のCapacity target', '現在の利用可能Capacity',
+            '現在の使用Capacity', '現在の余力');
+          return labels.every(label => Boolean(field(label)));
+        }""",
+        arg=[forward, reverse, editing],
+        timeout=10000,
+    )
+
+
 def run(browser) -> None:
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
@@ -193,9 +220,7 @@ def run(browser) -> None:
             assert page.locator('#allocationForward').evaluate('input => input.checkValidity()'), (
                 'Direction-specific capacity target must accept a physical numeric value'
             )
-            page.locator("#allocationPreview .kv-grid dt").first.wait_for(timeout=10000)
-            assert page.locator("#allocationPreview .kv-grid dd").count() >= 4
-            assert all(value.strip() for value in page.locator("#allocationPreview .kv-grid dd").all_inner_texts())
+            _wait_for_allocation_preview(page, forward=1, reverse=0, editing=False)
             page.locator('[data-allocation-priority="5"]').click()
             page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -282,9 +307,7 @@ def run(browser) -> None:
             allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
-            page.locator('#allocationPreview .kv-grid dt').first.wait_for(timeout=10000)
-            assert '現在のCapacity target' in page.locator('#allocationPreview').inner_text()
-            assert '輸送能力目標' in page.locator('#allocationPreview').inner_text()
+            _wait_for_allocation_preview(page, forward=1, reverse=0, editing=True)
             page.locator('[data-allocation-priority="4"]').click()
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
