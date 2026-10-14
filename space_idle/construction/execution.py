@@ -117,11 +117,15 @@ class ConstructionExecutionMixin:
         location = service.graph.locations[project.operational_node_id]
         cells = set(location.developed_cell_ids)
         cells.add(project.target.cell_id)
-        prospective = sum(
-            row.demand
-            for row in service.load_sources_for_cells(project.operational_node_id, cells)
-        )
-        return max(0.0, prospective - service.demand(project.operational_node_id))
+        prospective = sum(row.demand for row in service.load_sources_for_cells(
+            project.operational_node_id, cells,
+        ))
+        current = sum(row.demand for row in service.load_sources_for_cells(
+            project.operational_node_id, location.developed_cell_ids,
+        ))
+        # This is the additional *construction Activity* required to reach a
+        # new geographic footprint, not an increment of operating demand.
+        return max(0.0, prospective - current)
 
     def project_service_requirement_forecast(
         self, project: ConstructionProject

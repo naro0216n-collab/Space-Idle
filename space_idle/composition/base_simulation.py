@@ -209,6 +209,7 @@ def build_base_simulation(
         "scientific_exploration", exploration_owner_exists
     )
     extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure, survey, facilities.definitions, technology)
+    surface_infrastructure.extraction_activity_source = extraction
 
     population = PopulationService(
         facilities, inventory, graph, population_rules,

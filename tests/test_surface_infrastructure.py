@@ -64,7 +64,7 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
     assert one_remote.available_capacity == pytest.approx(0.0)
     assert one_remote.fulfillment == pytest.approx(0.0)
     assert one_remote.limiting_factors == ("surface_infrastructure",)
-    assert any(row.code == "territory_area" for row in one_remote.load_sources)
+    assert any(row.code == "activity_distance" for row in one_remote.load_sources)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
     assert all(
         location_id != ids.EARTH_CELL_COASTAL
@@ -103,9 +103,14 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
     assert frontier
     sim.graph.develop_surface_cell(ids.EARTH, frontier[0])
     two_remote = _snapshot(sim)
-    assert two_remote.demand > one_remote.demand
-    assert two_remote.demand > supplied.demand
-    assert two_remote.nominal_capacity == pytest.approx(supplied.nominal_capacity)
+    # Unused territory itself has no ongoing distribution Activity.
+    assert two_remote.demand == pytest.approx(supplied.demand)
+    sim.facilities.install(
+        ids.SURFACE_POWER_GRID, ids.EARTH, site_cell_id=frontier[0],
+    )
+    expanded = _snapshot(sim)
+    assert expanded.demand > two_remote.demand
+    assert expanded.nominal_capacity == pytest.approx(supplied.nominal_capacity)
 
 
 def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_execution_is_limited_once():
@@ -410,6 +415,25 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
                      if cell not in sim.graph.locations[a].developed_cell_ids
                      and sim.graph.owner_of_cell(cell) is None)
     sim.graph.develop_surface_cell(a, next_cell)
+    # Merely declaring an unoccupied territory does not consume distribution.
+    assert sim.surface_infrastructure.demand(a) == 0.0
+    # Actual active equipment in a remote Cell creates finite local distribution
+    # work, regardless of whether the Cell hosts extraction or a site facility.
+    sim.facilities.install(ids.SURFACE_POWER_GRID, a, site_cell_id=next_cell)
+    # A provider-constrained scenario must remain constrained independent of
+    # Content's current hub rate and the selected body's physical cell area.
+    from dataclasses import replace
+    from space_idle.facilities import ServiceCapacitySupply
+    hub = sim.facilities.definitions[ids.SURFACE_DISTRIBUTION_HUB]
+    expected_load = sim.surface_infrastructure.demand(a)
+    assert expected_load > 0
+    sim.facilities.definitions[ids.SURFACE_DISTRIBUTION_HUB] = replace(
+        hub, service_capacity_supplies=tuple(
+            ServiceCapacitySupply(row.service_type, expected_load / 2)
+            if row.service_type == 'surface_distribution' else row
+            for row in hub.service_capacity_supplies
+        ),
+    )
     sim.transport.invalidate_movement_plans()
     physical = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert physical.available.forward_t_per_day == pytest.approx(physical.nominal.forward_t_per_day)
@@ -623,3 +647,65 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
     final_loaded.execute(AdvanceTime(30))
     assert final_loaded._simulation.graph.terrain_profile(core).id == target_profile
     assert final_loaded._simulation.graph.surface_cells[core].resource_potential_by_resource == original_resource_potential
+
+
+def test_surface_distribution_uses_physical_area_and_distance_not_cell_count():
+    """Subdivision changes approximation resolution, not the amount of geography.
+
+    A missing anchor must report the same physical coverage for coarse and fine
+    partitions. With valid anchors, more supply locations cannot increase the
+    minimum transport burden for the same physical territory.
+    """
+    from math import pi
+    from space_idle.shared import CelestialBodyId, StarSystemId, SurfaceCellId
+    from space_idle.spatial import (
+        SpatialGraph, StarSystemDef, CelestialBodyDef,
+        CharacteristicTransportGeometry, SurfaceCellDef, SurfaceTerrain,
+        EnvironmentResolver, StaticFacetStore,
+    )
+    from space_idle.surface_partition import ring_partition, surface_partition_adjacency
+    from space_idle.surface_infrastructure import SurfaceInfrastructureService
+    from space_idle.facilities import FacilityBook
+    from space_idle.service_capacity import ServiceCapacityRegistry
+
+    def partition(ring_sizes):
+        graph = SpatialGraph()
+        geometry = CharacteristicTransportGeometry((0.0,), (0.0,))
+        system_id = StarSystemId('test.infra.system')
+        body_id = CelestialBodyId('test.infra.body')
+        radius = 1000.0
+        graph.add_star_system(StarSystemDef(system_id, 'System', geometry))
+        graph.add_body(CelestialBodyDef(body_id, 'Body', radius, system_id, geometry))
+        cells = tuple(
+            SurfaceCellDef(
+                SurfaceCellId(f'test.infra.cell.{ring}.{index}'), body_id,
+                bounds.area_km2(radius), bounds.center(), frozenset(),
+                SurfaceTerrain(), display_name=f"Region {ring}-{index}", spherical_bounds=bounds,
+            )
+            for ring, row in enumerate(ring_partition(ring_sizes))
+            for index, bounds in enumerate(row)
+        )
+        neighbors = surface_partition_adjacency(cells)
+        from dataclasses import replace
+        graph.surface_cells = {cell.id: replace(cell, neighbor_ids=neighbors[cell.id])
+                               for cell in cells}
+        service = SurfaceInfrastructureService(
+            graph, FacilityBook({}, EnvironmentResolver(graph, StaticFacetStore())),
+            ServiceCapacityRegistry(),
+        )
+        return service, body_id, tuple(graph.surface_cells)
+
+    expected = None
+    for rings in ((4, 4), (8, 8), (8, 16, 8)):
+        service, body_id, cells = partition(rings)
+        loads = service.physical_load_sources_for_cells(body_id, cells, ())
+        assert len(loads) == 1 and loads[0].code == 'access_anchor_missing'
+        assert loads[0].demand == pytest.approx(
+            4 * pi * service.graph.bodies[body_id].mean_radius_km**2 / service.area_reference_km2
+        )
+        if expected is None:
+            expected = loads[0].demand
+        assert loads[0].demand == pytest.approx(expected)
+        single = sum(x.demand for x in service.physical_load_sources_for_cells(body_id, cells, cells[:1]))
+        two = sum(x.demand for x in service.physical_load_sources_for_cells(body_id, cells, cells[:2]))
+        assert 0 <= two <= single

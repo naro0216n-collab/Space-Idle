@@ -216,6 +216,41 @@ class ExtractionService:
             return 0.0
         return 1.0 / (1.0 + capacity / opportunity)
 
+    def surface_distribution_activities(
+        self, location_id: SpatialNodeId, facilities: FacilityBook, day: int,
+    ) -> tuple[tuple[object, float], ...]:
+        """Physical Cell workloads for actually selected extraction methods.
+
+        A prospective Resource deposit is not an operating Activity. Divide
+        each installed extraction unit's finite daily capacity over the
+        accessible, known deposit once; the distribution service applies the
+        geographic burden rather than multiplying Resource opportunity again.
+        """
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            return ()
+        by_cell = {}
+        cells = tuple(sorted(location.developed_cell_ids, key=str))
+        for facility in facilities.active_compatible_at(location_id, day):
+            if self.nominal_capacity(facility) <= 0:
+                continue
+            method = self.method_for_facility(facility)
+            if method is None or self.missing_method_technologies(method):
+                continue
+            weighted = tuple((cell_id, self.graph.surface_cells[cell_id]
+                              .resource_potential_by_resource.get(method.resource_id, 0.0)
+                              * self._cell_accessibility(method, cell_id))
+                             for cell_id in cells
+                             if self._knowledge_cell_eligible(method, cell_id, method.resource_id))
+            available = math.fsum(amount for _, amount in weighted)
+            if available <= 1e-12:
+                continue
+            quantity = self.nominal_capacity(facility)
+            for cell_id, amount in weighted:
+                if amount > 0:
+                    by_cell[cell_id] = by_cell.get(cell_id, 0.0) + quantity * amount / available
+        return tuple(sorted(by_cell.items(), key=lambda row: str(row[0])))
+
     def static_opportunity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         location = self.graph.locations.get(location_id)
         if location is None:

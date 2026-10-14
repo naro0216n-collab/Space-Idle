@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import heapq
 import math
 
@@ -60,6 +60,21 @@ class SurfaceInfrastructureService:
     service_capacity_registry: ServiceCapacityRegistry
     service_type: str = SURFACE_DISTRIBUTION_SERVICE
     access_anchor_capability_id: str = SURFACE_ACCESS_ANCHOR_CAPABILITY
+    # Physical service-volume units, independent of the registered Cell grid.
+    # These coefficients are Content-adjustable, not grid-resolution limits.
+    area_reference_km2: float = 1_000_000.0
+    distance_reference_km: float = 1_000.0
+    # Derived Composition wiring; not a second activity or demand State.
+    extraction_activity_source: object | None = field(default=None, repr=False, compare=False)
+    site_facility_units_per_day: float = 1.0
+    extraction_t_per_service_unit: float = 1.0
+
+    def __post_init__(self) -> None:
+        if (not math.isfinite(self.area_reference_km2) or self.area_reference_km2 <= 0
+                or not math.isfinite(self.distance_reference_km) or self.distance_reference_km <= 0
+                or not math.isfinite(self.site_facility_units_per_day) or self.site_facility_units_per_day < 0
+                or not math.isfinite(self.extraction_t_per_service_unit) or self.extraction_t_per_service_unit <= 0):
+            raise ValueError("surface distribution physical units must be finite and positive")
 
     def active_access_anchors(
         self, location_id: SpatialNodeId, day: int = 0
@@ -162,21 +177,24 @@ class SurfaceInfrastructureService:
         if any(anchor not in cells for anchor in anchors):
             raise ValueError("access anchors must belong to the stated territory")
         if not anchors:
-            return (SurfaceInfrastructureLoad("access_anchor_missing", float(len(cells))),)
+            return (SurfaceInfrastructureLoad(
+                "access_anchor_missing",
+                math.fsum(self.graph.surface_cells[cell_id].area_km2 for cell_id in cells)
+                / self.area_reference_km2,
+            ),)
         distances = self._anchor_distances(body_id, cells, anchors)
-        anchor_set = set(anchors)
         territory_area = 0.0
         territory_spread = 0.0
         for cell_id in sorted(cells, key=str):
-            if cell_id in anchor_set:
-                continue
-            distance_km, anchor_id = distances[cell_id]
+            distance_km, _anchor_id = distances[cell_id]
             cell = self.graph.surface_cells[cell_id]
-            anchor = self.graph.surface_cells[anchor_id]
-            area_ratio = cell.area_km2 / anchor.area_km2
-            distance_units = distance_km / math.sqrt(anchor.area_km2)
-            territory_area += area_ratio
-            territory_spread += area_ratio * max(0.0, distance_units - 1.0)
+            area_units = cell.area_km2 / self.area_reference_km2
+            distance_units = distance_km / self.distance_reference_km
+            # A site's own access anchor has zero distance, but an entire
+            # Cell never becomes an implicit free distribution zone. Finer
+            # partitions approximate the same physical area-distance integral.
+            territory_area += area_units * min(1.0, distance_units)
+            territory_spread += area_units * max(0.0, distance_units - 1.0)
         rows: list[SurfaceInfrastructureLoad] = []
         if territory_area > 1e-12:
             rows.append(SurfaceInfrastructureLoad("territory_area", territory_area))
@@ -196,9 +214,44 @@ class SurfaceInfrastructureService:
             location.body_id, cell_ids, (anchor for anchor in anchors if anchor in cell_ids)
         )
 
-    def load_sources(self, location_id: SpatialNodeId, day: int = 0) -> tuple[SurfaceInfrastructureLoad, ...]:
+    def _active_workload_by_cell(
+        self, location_id: SpatialNodeId, day: int,
+    ) -> dict[SurfaceCellId, float]:
+        """Activity ownership is external; only geographic Service demand lives here."""
         location = self.graph.locations[location_id]
-        return self.load_sources_for_cells(location_id, location.developed_cell_ids, day)
+        workloads: dict[SurfaceCellId, float] = {}
+        for facility in self.facilities.active_compatible_at(location_id, day):
+            if facility.site_cell_id not in location.developed_cell_ids:
+                continue
+            workloads[facility.site_cell_id] = (
+                workloads.get(facility.site_cell_id, 0.0)
+                + facility.level * self.site_facility_units_per_day
+            )
+        source = self.extraction_activity_source
+        if source is not None:
+            for cell_id, throughput in source.surface_distribution_activities(
+                location_id, self.facilities, day,
+            ):
+                workloads[cell_id] = (workloads.get(cell_id, 0.0)
+                                      + throughput / self.extraction_t_per_service_unit)
+        return workloads
+
+    def load_sources(self, location_id: SpatialNodeId, day: int = 0) -> tuple[SurfaceInfrastructureLoad, ...]:
+        """Only active geographical work consumes finite Local Distribution Service."""
+        location = self.graph.locations[location_id]
+        workloads = self._active_workload_by_cell(location_id, day)
+        if not workloads:
+            return ()
+        anchors = self.active_access_anchor_cells(location_id, day)
+        if not anchors:
+            return (SurfaceInfrastructureLoad("access_anchor_missing", math.fsum(workloads.values())),)
+        distances = self._anchor_distances(location.body_id, location.developed_cell_ids, anchors)
+        rate = math.fsum(
+            quantity * distance_km / self.distance_reference_km
+            for cell_id, quantity in sorted(workloads.items(), key=lambda row: str(row[0]))
+            for distance_km, _anchor_id in (distances[cell_id],)
+        )
+        return () if rate <= 1e-12 else (SurfaceInfrastructureLoad("activity_distance", rate),)
 
     def demand(self, location_id: SpatialNodeId, day: int = 0) -> float:
         return math.fsum(row.demand for row in self.load_sources(location_id, day))
@@ -231,7 +284,7 @@ class SurfaceInfrastructureService:
             priority,
             "surface_infrastructure",
             EntityId(f"surface_infrastructure:{location_id}"),
-            "territory_distribution",
+            "active_surface_distribution",
         )
 
     def snapshot(
@@ -401,7 +454,14 @@ class SurfaceInfrastructureService:
         cells = set(self.graph.locations[location_id].developed_cell_ids)
         cells.add(cell_id)
         loads = self.load_sources_for_cells(location_id, cells, day)
-        demand = math.fsum(load.demand for load in loads)
+        # Development demand is an incremental construction Activity, rather
+        # than a standing cost of the prospective territory. Existing
+        # production activities retain their actual workload and allocation.
+        previous = math.fsum(row.demand for row in self.load_sources_for_cells(
+            location_id, self.graph.locations[location_id].developed_cell_ids, day,
+        ))
+        incremental = max(0.0, math.fsum(load.demand for load in loads) - previous)
+        demand = self.demand(location_id, day) + incremental
         summary = allocation_plan.summary(location_id, self.service_type)
         try:
             base_allocated = allocation_plan.allocated(self.service_request_id(location_id))
