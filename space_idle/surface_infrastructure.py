@@ -392,7 +392,7 @@ class SurfaceInfrastructureService:
         cell_id: SurfaceCellId,
         allocation_plan: ServiceCapacityAllocationPlan,
         *,
-        development_request_id: EntityId | None = None,
+        active_development_capacity: float = 0.0,
         day: int = 0,
     ) -> SurfaceInfrastructureSnapshot:
         failures = self.graph.surface_cell_development_failures(location_id, cell_id)
@@ -409,15 +409,11 @@ class SurfaceInfrastructureService:
             raise ValueError(
                 f"shared surface infrastructure allocation missing for {location_id}"
             ) from exc
-        if development_request_id is None:
-            support = base_allocated + summary.spare_rate
-        else:
-            try:
-                support = base_allocated + allocation_plan.allocated(development_request_id)
-            except KeyError as exc:
-                raise ValueError(
-                    f"surface development allocation missing: {development_request_id}"
-                ) from exc
+        # Surface-development work consumes this same Service through its
+        # Construction Execution Bundle, not an independent Service Request.
+        # A selected Project may already own part of the finite supply; include
+        # only that settled allocation instead of assuming it remains spare.
+        support = base_allocated + summary.spare_rate + active_development_capacity
         allocated = min(demand, support)
         fulfillment = 1.0 if demand <= 1e-12 else min(1.0, allocated / demand)
         limiting = () if fulfillment >= 1.0 - 1e-9 else ("surface_infrastructure",)

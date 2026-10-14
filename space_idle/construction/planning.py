@@ -242,7 +242,7 @@ class ConstructionPlanningMixin:
             raise ValueError("surface cell development recipe is not configured")
         failures = [
             (failure.code, failure.detail)
-            for failure in self.surface_cell_development_failures(location_id, cell_id, day)
+            for failure in self.surface_cell_development_plan_failures(location_id, cell_id, day)
         ]
         if failures:
             raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
@@ -259,7 +259,7 @@ class ConstructionPlanningMixin:
         recipe_id: DefinitionId, priority: ActivityPriority,
         procurement_policy: ProcurementTimingPolicy, day: int = 0,
     ) -> ProjectId:
-        failures = self.surface_cell_engineering_failures(location_id, cell_id, recipe_id, day)
+        failures = self.surface_cell_engineering_plan_failures(location_id, cell_id, recipe_id, day)
         if failures:
             raise ValueError("; ".join(f.detail for f in failures))
         return self._create_project(

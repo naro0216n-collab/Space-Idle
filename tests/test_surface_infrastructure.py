@@ -342,6 +342,14 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     )
     projected = decision.allocations.execution.fulfillment(bundle_id)
     assert projected > 0.0
+    # An already-running Project draws the incremental Surface Service from
+    # its Execution Bundle. Preview must neither invent a removed service
+    # request nor hide that capacity as if it were unavailable.
+    active_cell = next(row for row in app.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells
+                       if row.id == str(ids.EARTH_CELL_COASTAL))
+    active_option = next(row for row in active_cell.development_options
+                         if row.location_id == str(ids.EARTH))
+    assert active_option.projected_surface_infrastructure_fulfillment > 0.0
 
     app.execute(AdvanceTime(1))
     project_view = next(row for row in app.query(GetProjects()).items if row.id == project_id)
@@ -419,6 +427,59 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     assert allocation.available.forward_t_per_day == pytest.approx(
         constrained.available.forward_t_per_day
     )
+
+
+def test_surface_spatial_intents_wait_for_real_environment_without_disclosing_unmeasured_truth():
+    """Development and engineering select a place, then obey its physical Site constraints."""
+    from dataclasses import replace
+    from space_idle import EngineerSurfaceCell
+    from space_idle.site import FacetValueRange, SiteRequirements
+    from space_idle.spatial import ThermalField
+
+    app = build_game_application()
+    sim = app._simulation
+    site_condition = FacetValueRange(
+        ThermalField, "nominal_temperature_k", "test:unfavorable_temperature",
+        "actual Site temperature outside permitted range", maximum=0.0,
+    )
+    development_id = sim.projects.surface_cell_development_recipe_id
+    engineering_id = ids.SURFACE_TERRAIN_ENGINEERING_PROJECT
+    assert development_id is not None
+    for recipe_id in (development_id, engineering_id):
+        recipe = sim.projects.spatial_recipes[recipe_id]
+        sim.projects.spatial_recipes[recipe_id] = replace(
+            recipe, site_requirements=replace(
+                recipe.site_requirements,
+                environment=recipe.site_requirements.environment + (site_condition,),
+            ),
+        )
+
+    cases = (
+        (ids.EARTH_CELL_COASTAL, development_id,
+         lambda: app.execute(DevelopSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_COASTAL)))),
+        (ids.EARTH_CELL_INDUSTRIAL, engineering_id,
+         lambda: app.execute(EngineerSurfaceCell(str(ids.EARTH), str(ids.EARTH_CELL_INDUSTRIAL), str(engineering_id)))),
+    )
+    for cell, recipe_id, command in cases:
+        sim.surface_knowledge.cell_attribute_levels[(cell, "environment")] = 0
+        sim.surface_knowledge.environment_observation_fingerprints.pop(cell, None)
+        surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+        cell_view = next(row for row in surface.cells if row.id == str(cell))
+        options = cell_view.development_options if recipe_id == development_id else cell_view.engineering_options
+        option = next(row for row in options if row.location_id == str(ids.EARTH)
+                      and (recipe_id == development_id or row.recipe_id == str(engineering_id)))
+        assert option.can_plan and option.site_knowledge_unverified
+        assert not any(row.code == site_condition.code for row in option.blockers)
+        project_id = command().created_id
+        assert project_id
+        queued = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+        assert not any(row.code == site_condition.code for row in queued.blockers)
+        assert any(row.code == "site_knowledge_unverified" for row in queued.blockers)
+        app.execute(AdvanceTime(1))
+        assert sim.projects.projects[next(key for key in sim.projects.projects if str(key) == project_id)].construction_done == 0
+        sim.surface_knowledge.observe_attribute(cell, "environment", 2)
+        revealed = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+        assert any(row.code == site_condition.code for row in revealed.blockers)
 
 
 def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_continuity(tmp_path):

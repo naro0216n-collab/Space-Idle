@@ -179,6 +179,38 @@ class ConstructionRulesMixin:
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
 
+    def _spatial_intent_failures(self, recipe_id: DefinitionId, failures):
+        """A physical Site condition gates execution, not an authored Project intent.
+
+        Structural territory/claim and explicit Knowledge eligibility remain
+        required at planning. Runtime Environment and installed/active
+        Capability can become satisfied during queued construction.
+        """
+        recipe = self.spatial_recipes[recipe_id]
+        runtime_codes = {row.code for row in recipe.site_requirements.environment}
+        runtime_codes.update(("capability:installed", "capability:active"))
+        return tuple(row for row in failures if row.code not in runtime_codes)
+
+    def surface_cell_development_plan_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        recipe_id = self.surface_cell_development_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            return self.surface_cell_development_failures(location_id, cell_id, day, power)
+        return self._spatial_intent_failures(
+            recipe_id, self.surface_cell_development_failures(location_id, cell_id, day, power)
+        )
+
+    def surface_cell_engineering_plan_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        recipe_id: DefinitionId, day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        failures = self.surface_cell_engineering_failures(location_id, cell_id, recipe_id, day, power)
+        if recipe_id not in self.spatial_recipes or self.spatial_recipes[recipe_id].target_terrain_profile_id is None:
+            return failures
+        return self._spatial_intent_failures(recipe_id, failures)
+
     def terrain_engineering_recipes(self) -> tuple[SpatialDevelopmentRecipe, ...]:
         """All authored landform outcomes, independent of Content registration order."""
         return tuple(sorted((recipe for recipe in self.spatial_recipes.values()

@@ -134,6 +134,13 @@ class ResearchProgressionProjectorMixin:
                 else:
                     blockers = sim.research.demonstration_site_blockers(definition.id, node.id, sim.day, power_by_location.get(node.id), surface_cell_id)
                     can_select = sim.research.can_select_demonstration_site(definition.id, node.id, sim.day, surface_cell_id)
+                context_id = surface_cell_id if surface_cell_id is not None else node.id
+                unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                    context_id, spec.site_requirements,
+                )
+                public_blockers = tuple(
+                    blocker for blocker in blockers if blocker[0] not in unpublished
+                )
                 resource_status = (
                     sim.research.prototype_site_resources(
                         definition.id, ResearchExecutionSite(node.id, surface_cell_id)
@@ -170,7 +177,7 @@ class ResearchProgressionProjectorMixin:
                     )
                     service_work_capacity = min(1.0, service_work_capacity)
                 estimated_days = (
-                    None if blockers or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
+                    None if public_blockers or unpublished or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
                     else float(remaining_work) / service_work_capacity
                 )
                 comparison_values = (
@@ -184,7 +191,7 @@ class ResearchProgressionProjectorMixin:
                 rows.append(ResearchSiteOptionRow(
                     str(node.id), None if surface_cell_id is None else str(surface_cell_id),
                     constraints_from_pairs(
-                        blockers,
+                        public_blockers,
                         affected_action="select_research_execution_site",
                         related_entity_kind="research",
                         related_entity_id=str(definition.id),
@@ -193,6 +200,7 @@ class ResearchProgressionProjectorMixin:
                     comparison_key=f"{node.id}|{surface_cell_id or ''}",
                     comparison_values=comparison_values,
                     resources=resource_rows,
+                    site_knowledge_unverified=bool(unpublished),
                 ))
         return tuple(rows)
 
@@ -389,6 +397,19 @@ class ResearchProgressionProjectorMixin:
 
             current_blockers = sim.research.current_blockers(definition.id, day=sim.day, power_by_location=power_by_location)
             current_blockers += sim.research.allocation_blockers(definition.id, execution_allocations)
+            if state is not None and current_spec is not None and isinstance(
+                current_spec, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)
+            ) and state.execution_context is not None:
+                site = state.execution_context
+                context_id = site.surface_cell_id or site.operational_node_id
+                unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                    context_id, current_spec.site_requirements,
+                )
+                if unpublished:
+                    current_blockers = tuple(
+                        blocker for blocker in current_blockers
+                        if blocker[0] not in unpublished
+                    ) + (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
             priority = 3 if state is None else state.priority
             stage_progress = 0.0
             stage_required = 0.0

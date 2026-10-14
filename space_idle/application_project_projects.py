@@ -429,6 +429,27 @@ class ProjectProjectorMixin:
                 external_requirements,
                 decision.allocations.transport,
             )
+            # A queued or executing Site Project may be physically unsuitable.
+            # Its real blockers govern simulation; the player's read model must
+            # not reveal an unobserved Cell through an in-progress Project.
+            if isinstance(project.target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
+                hidden = sim.surface_knowledge.unpublished_site_condition_codes(
+                    project.target.cell_id, recipe.site_requirements,
+                )
+                if hidden:
+                    blockers = tuple(row for row in blockers if row[0] not in hidden) + (
+                        ("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),
+                    )
+            elif isinstance(project.target, NewFacilityTarget):
+                definition = sim.facilities.definitions[project.target.facility_def_id]
+                context_id = project.site_cell_id or project.operational_node_id
+                hidden = sim.surface_knowledge.unpublished_site_condition_codes(
+                    context_id, definition.installation_requirements, recipe.site_requirements,
+                )
+                if hidden:
+                    blockers = tuple(row for row in blockers if row[0] not in hidden) + (
+                        ("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),
+                    )
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
@@ -588,6 +609,20 @@ class ProjectProjectorMixin:
                             current_level=int(current),
                             met=current >= requirement.minimum_level,
                         ))
+                if target_cell is not None:
+                    unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                        target_cell, recipe.target_requirements,
+                    )
+                    unknown_facility = (
+                        not sim.surface_knowledge.publishes_environment(target_cell)
+                        and any(sim.facilities.definitions[deployment.facility_def_id].installation_requirements.environment
+                                for deployment in recipe.deployed_facilities)
+                    )
+                    blockers = tuple(row for row in blockers
+                        if row[0] not in {f"target:{code}" for code in unpublished}
+                        and not (unknown_facility and row[0] == "facility_environment"))
+                    if unpublished or unknown_facility:
+                        blockers += (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
                 site_blockers = tuple(
                     row for row in blockers
                     if row[0].startswith("staging:") or row[0].startswith("target:")

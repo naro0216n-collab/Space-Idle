@@ -379,10 +379,14 @@ def test_surface_founding_preview_does_not_expose_unmeasured_site_truth():
         target_requirements=SiteRequirements(environment=(physical_condition,)),
     )
     target = sim.founding.surface_target_spec(ids.MOON, cell)
-    physical_blockers = sim.founding.planning_failures(
-        ids.LUNAR_ORBIT, target, recipe_id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    physical_blockers = sim.founding.target_settlement_failures(
+        target, sim.founding.deployment_recipes[recipe_id], "Founding preview", sim.day,
     )
     assert any(row.code == "target:environment:thermal_eligibility" for row in physical_blockers)
+    planning = sim.founding.planning_failures(
+        ids.LUNAR_ORBIT, target, recipe_id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    )
+    assert not any(row.code == "target:environment:thermal_eligibility" for row in planning)
 
     def option():
         surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell),)))
@@ -393,12 +397,31 @@ def test_surface_founding_preview_does_not_expose_unmeasured_site_truth():
                     and item.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
 
     unknown = option()
-    assert unknown.site_knowledge_unverified
+    assert unknown.can_plan and unknown.site_knowledge_unverified
     assert all(blocker.code != "target:environment:thermal_eligibility" for blocker in unknown.blockers)
+    # The uncertain intent can be created, but the unfit site cannot consume
+    # Fleet/payload through a deployment or mint an Operational Node.
+    _stage_founding_resources(sim)
+    project_id = app.execute(PlanOperationalNodeFounding(
+        staging_node_id=str(ids.LUNAR_ORBIT), display_name="Unverified outpost",
+        target_spec=SurfaceLocationFoundingTarget("surface_location", str(ids.MOON), str(cell)),
+        deployment_recipe_id=str(recipe_id), vehicle_definition_id=str(ids.REUSABLE_SURFACE_CARGO_LANDER),
+    )).created_id
+    assert project_id is not None
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
+    app.execute(AdvanceTime(1))
+    assert project.status.value == "preparing" and project.movement_execution_id is None
+    row = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert any(blocker.code == "site_knowledge_unverified" for blocker in row.blockers)
+    assert all(blocker.code != "target:environment:thermal_eligibility" for blocker in row.blockers)
     sim.surface_knowledge.observe_attribute(cell, "environment", 2)
     measured = option()
     assert not measured.site_knowledge_unverified
     assert any(blocker.code == "target:environment:thermal_eligibility" for blocker in measured.blockers)
+    assert measured.can_plan is False  # Existing claim forbids another Founding intent.
+    row = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert any(blocker.code == "target:environment:thermal_eligibility" for blocker in row.blockers)
+    app.execute(CancelFounding(project_id))
 
 
 def test_founding_target_preflight_uses_facility_site_and_powered_inventory_contracts_atomically():
@@ -458,8 +481,8 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
     assert any(row.code == "initial_inventory_admission" for row in blocked_failures)
     assert not sim.graph.has_operational_node(blocked_target)
 
-    # A valid plan can still lose eligibility while in transit. Arrival must fail
-    # before any target-side State is materialized.
+    # A valid plan can lose eligibility while in transit. Settlement must
+    # retain the physical Fleet/payload and avoid partial target creation.
     sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
     target_id = orbital_target("test.node.founding_atomic_preflight", 991000.0)
     add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 5.0)
@@ -477,11 +500,17 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
     sim.power.specs[storage_facility] = PowerSpec(load_mw=1.0)
     remaining = execution.completion_day - sim.day
     assert remaining > 0
-    with pytest.raises(ApplicationError, match="founding settlement preflight failed"):
-        app.execute(AdvanceTime(remaining))
+    app.execute(AdvanceTime(remaining))
+    assert project.status.value == "deploying"
+    assert project.movement_execution_id is not None
     assert not sim.graph.has_operational_node(target_id)
     assert not sim.facilities.all_at(target_id)
     assert sim.inventory.amount(target_id, ids.PROPELLANT) == pytest.approx(0.0)
+    # Recovery is a new physical State, never retroactive settlement.
+    sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
+    app.execute(AdvanceTime(1))
+    assert project.status.value == "complete"
+    assert sim.graph.has_operational_node(target_id)
 
 
 def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():

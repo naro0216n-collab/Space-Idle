@@ -11,6 +11,7 @@ from .application_views import (
     SurfaceResourceKnowledgeRow,
 )
 from .founding import NonSurfaceOperationalNodeTargetSpec
+from .construction.models import SurfaceCellDevelopmentTarget
 from .facilities import FacilityPlacementScope
 from .shared import CelestialBodyId
 
@@ -209,15 +210,24 @@ class SurfaceProjectorMixin:
                 limiting_factors: tuple[str, ...] = ()
                 graph_blockers = sim.graph.surface_cell_development_failures(location.operational_node_id, cell.id)
                 if not graph_blockers and sim.surface_infrastructure is not None:
-                    development_request_id = (
-                        sim.projects.surface_development_service_request_id(active_spatial_project.id)
-                        if active_spatial_project is not None
-                        and active_spatial_project.operational_node_id == location.operational_node_id
-                        else None
-                    )
+                    active_development_capacity = 0.0
+                    if (active_spatial_project is not None
+                            and active_spatial_project.operational_node_id == location.operational_node_id
+                            and isinstance(active_spatial_project.target, SurfaceCellDevelopmentTarget)
+                            and active_spatial_project.target.cell_id == cell.id):
+                        bundle_id = sim.projects.construction_execution_bundle_id(active_spatial_project.id)
+                        try:
+                            fulfillment = decision.allocations.execution.fulfillment(bundle_id)
+                        except KeyError:
+                            fulfillment = 0.0
+                        active_development_capacity = fulfillment * next(
+                            (amount for service_type, amount in
+                             sim.projects.project_service_requirement_forecast(active_spatial_project)
+                             if service_type == sim.surface_infrastructure.service_type), 0.0,
+                        )
                     projected = sim.surface_infrastructure.prospective_development_snapshot(
                         location.operational_node_id, cell.id, decision.allocations.services,
-                        development_request_id=development_request_id,
+                        active_development_capacity=active_development_capacity,
                         day=sim.day,
                     )
                     projected_demand = projected.demand
@@ -232,7 +242,9 @@ class SurfaceProjectorMixin:
                             related_entity_kind="surface_cell",
                             related_entity_id=str(cell.id),
                         ),
-                        can_plan=not public_failures,
+                        can_plan=not sim.projects.surface_cell_development_plan_failures(
+                            location.operational_node_id, cell.id, sim.day, location_power
+                        ),
                         site_knowledge_unverified=bool(unpublished),
                         projected_surface_infrastructure_demand=projected_demand,
                         projected_surface_infrastructure_fulfillment=projected_fulfillment,
@@ -277,7 +289,9 @@ class SurfaceProjectorMixin:
                             tuple((row.code, row.detail) for row in public_failures), affected_action="engineer_surface_cell",
                             related_entity_kind="surface_cell", related_entity_id=str(cell.id),
                         ),
-                        can_plan=not public_failures,
+                        can_plan=not sim.projects.surface_cell_engineering_plan_failures(
+                            owner, cell.id, engineering_recipe.id, sim.day
+                        ),
                         site_knowledge_unverified=bool(unpublished) or terrain_quality < 2,
                         construction_required=(None if terrain_quality < 2 else
                             sim.projects.development_work_required(engineering_recipe.id, cell.id)),
@@ -378,11 +392,16 @@ class SurfaceProjectorMixin:
                                 sim.facilities.definitions[deployment.facility_def_id].installation_requirements.environment
                                 for deployment in recipe.deployed_facilities
                             ))
-                            public_failures = tuple(
-                                failure for failure in failures
-                                if failure.code not in {f"target:{code}" for code in unpublished}
-                                and (environment_quality >= 2 or failure.code != "facility_environment")
+                            # Intent eligibility cannot depend on hidden physical
+                            # conditions. Known runtime Site incompatibility is
+                            # still visible, but can_plan describes only planning.
+                            runtime_failures = sim.founding.target_settlement_failures(
+                                target_spec, recipe, "Founding preview", sim.day,
                             )
+                            public_failures = tuple(failure for failure in (*failures, *runtime_failures)
+                                if failure.code not in {f"target:{code}" for code in unpublished}
+                                and (environment_quality >= 2 or failure.code != "facility_environment"))
+                            public_failures = tuple(dict.fromkeys(public_failures))
                             try:
                                 movement_plan = sim.founding.movement_plan_for_target(
                                     staging_id, target_spec, vehicle.id, recipe.payload_t_per_unit, sim.day
@@ -443,7 +462,7 @@ class SurfaceProjectorMixin:
                                     related_entity_kind="surface_cell",
                                     related_entity_id=str(cell.id),
                                 ),
-                                can_plan=not public_failures,
+                                can_plan=not failures,
                                 site_knowledge_unverified=bool(unpublished) or unverified_facility,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
                                 comparison_key=(

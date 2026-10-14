@@ -352,6 +352,51 @@ def test_cell_local_research_site_requires_and_persists_explicit_developed_cell(
     assert selected.operational_node_id == str(EARTH)
     assert selected.surface_cell_id == str(ids.EARTH_CELL_INDUSTRIAL)
 
+    # A different, physically unsuitable site requirement must not disclose
+    # unobserved environment through the choice, blockers or time estimate.
+    # Selecting an uncertain context is allowed; execution still uses World.
+    other_id = DefinitionId("test.research.unobserved_site")
+    condition = FacetValueRange(
+        ThermalField, "nominal_temperature_k", "unobserved_thermal_range",
+        "measured thermal condition not met", maximum=0.0,
+    )
+    sim.research.definitions[other_id] = ResearchDefinition(
+        other_id, "Unobserved site trial",
+        (ResearchPrototypeStageSpec(
+            "prototype", {}, SiteRequirements(
+                environment=(condition,),
+                spatial_classification_requirements=req.SURFACE_CLASSIFICATION,
+            ), required_work=2.0,
+        ),), prerequisites=frozenset(),
+    )
+    target = ids.EARTH_CELL_INDUSTRIAL
+    sim.surface_knowledge.cell_attribute_levels[(target, "environment")] = 0
+    sim.surface_knowledge.environment_observation_fingerprints.pop(target, None)
+    app.execute(StartResearch(str(other_id)))
+    option = next(site for site in _research_row(app, other_id).execution_context_options
+                  if site.surface_cell_id == str(target))
+    assert option.can_select and option.site_knowledge_unverified
+    assert not any(blocker.code == condition.code for blocker in option.blockers)
+    assert next(row for row in option.comparison_values
+                if row.axis_key == "estimated_days").number_value is None
+    app.execute(SetResearchPrototypeSite(str(other_id), "prototype", str(EARTH), str(target)))
+    selected = _research_row(app, other_id)
+    assert not any(row.code == condition.code for row in selected.current_blockers)
+    assert any(row.code == "site_knowledge_unverified" for row in selected.current_blockers)
+    app.execute(AdvanceTime(1))
+    assert sim.research.active[other_id].stage_progress == pytest.approx(0.0)
+
+    # Measured physical incompatibility becomes reportable, while choosing
+    # an execution context remains distinct from its actual daily operation.
+    sim.surface_knowledge.observe_attribute(target, "environment", 2)
+    measured = _research_row(app, other_id)
+    option = next(site for site in measured.execution_context_options
+                  if site.surface_cell_id == str(target))
+    assert not option.site_knowledge_unverified and option.can_select
+    assert any(blocker.code == condition.code for blocker in option.blockers)
+    assert any(blocker.code == condition.code for blocker in measured.current_blockers)
+
+
 def test_prototype_resource_staging_is_site_owned_durable_and_completes_when_runtime_service_recovers():
     app = build_game_application()
     sim = app._simulation

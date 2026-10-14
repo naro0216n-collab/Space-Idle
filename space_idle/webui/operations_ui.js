@@ -172,7 +172,7 @@
       promptText:'実行地点から2〜4候補を比較に追加すると、Fleet拘束・Resource・Service供給・所要時間を共通の比較軸で確認できます。',
       headingHtml:(row)=>`<strong>${esc(researchSiteLabel(row))}</strong><small>${row.can_select?'選択可能':'条件未達'}</small>`,
       detailButtonHtml:()=>'',
-      blockerHtml:(row)=>`${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">選択条件を満たす</span>'}${researchSiteResourceHtml(row)}`,
+      blockerHtml:(row)=>`${row.site_knowledge_unverified?'<div class="cell-sub">現地環境は未測定です。地点選択は可能ですが、実行の成立は未確定です。</div>':''}${(row.blockers||[]).length?`<div class="issue-stack">${row.blockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">既知の選択制約なし</span>'}${researchSiteResourceHtml(row)}`,
     });
   }
   const surveyIntentPreviewSerial=new Map();
@@ -1014,7 +1014,7 @@
       const timeLabel=estimate?.text_value||
         (estimate?.number_value==null?'—':`${fmt(estimate.number_value,2)} 日`);
       return `<div class="detail-card ${isSelected?'is-usable':''}"><div class="mode-title"><span>${esc(researchSiteLabel(site))}</span><span class="badge ${blocked?'warn':canSelect||isSelected?'ok':''}">${badge}</span></div>`+
-        `${blocked?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}`+
+        `${site.site_knowledge_unverified?'<div class="cell-sub">現地環境は未測定です。地点選択は試行可能ですが実行成立は未確定です。</div>':''}${blocked?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}`+
         `${researchSiteResourceHtml(site)}<div class="cell-sub">現在条件での参考所要日数: ${timeLabel}</div>`+
         `<div class="action-row">${compareAction}<button type="button" ${attr}="${esc(site.operational_node_id)}" data-surface-cell-id="${esc(site.surface_cell_id||'')}" data-id="${esc(r.id)}" data-stage-id="${esc(r.current_stage_id||'')}" ${!canSelect||isSelected?'disabled':''}>${kind==='prototype'?'試作地点に設定':'実証地点に設定'}</button></div></div>`;
     }).join('');

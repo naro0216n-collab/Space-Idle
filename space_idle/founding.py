@@ -405,9 +405,17 @@ class OperationalNodeFoundingService:
             for row in failures
         )
         if not target_identity_blocked:
-            failures.extend(self._target_settlement_failures(
-                target_spec, recipe, "Founding preview", day
-            ))
+            # Founding planning reserves an intent and a fleet, not a completed
+            # installation. A physical environment may become suitable while
+            # preparation is queued. Check it before irreversible deployment;
+            # otherwise can_plan would reveal unobserved World truth.
+            runtime_codes = {f"target:{condition.code}" for condition in recipe.target_requirements.environment}
+            runtime_codes.add("facility_environment")
+            failures.extend(
+                failure for failure in self.target_settlement_failures(
+                    target_spec, recipe, "Founding preview", day
+                ) if failure.code not in runtime_codes
+            )
 
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
@@ -575,10 +583,11 @@ class OperationalNodeFoundingService:
     def execution_requirement_bundles(
         self, day: int = 0
     ) -> tuple[ExecutionRequirementBundle, ...]:
-        del day
         rows: list[ExecutionRequirementBundle] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if project.status is not FoundingStatus.PREPARING or project.paused:
+                continue
+            if any(b.code != "resource_shortage" for b in self.blockers(project.id, day)):
                 continue
             if not project.inputs_consumed:
                 for requirement in self.project_resource_requirements(project.id):
@@ -688,6 +697,13 @@ class OperationalNodeFoundingService:
                 if not (row.code == "cell_claimed" and row.detail == str(EntityId(project.id)))
             ]
         failures = [row for row in failures if row.code != "fleet_units"]
+        # A selected target remains physically subject to Site requirements;
+        # the planning-only relaxation never grants runtime eligibility.
+        recipe = self.deployment_recipes[project.deployment_recipe_id]
+        failures.extend(self.target_settlement_failures(
+            project.target_spec, recipe, project.display_name, day
+        ))
+        failures = list(dict.fromkeys(failures))
         if project.status is FoundingStatus.PREPARING and not project.inputs_consumed:
             for requirement in self.project_resource_requirements(project.id):
                 staged = self.staged_payload_t(project.id, requirement.resource_id)
@@ -835,6 +851,12 @@ class OperationalNodeFoundingService:
             if execution is None:
                 raise RuntimeError(f"founding MovementExecution missing: {project.id}")
             if execution.completion_day <= day:
+                # World may have been changed after dispatch. Keep Fleet and
+                # payload committed to the arrived Movement until all target
+                # admission conditions are satisfied, without partial creation.
+                recipe = self.deployment_recipes[project.deployment_recipe_id]
+                if self.target_settlement_failures(project.target_spec, recipe, project.display_name, day):
+                    continue
                 self._complete(project, day)
                 physical_state_changed = True
         return physical_state_changed
@@ -906,6 +928,13 @@ class OperationalNodeFoundingService:
                     f"{facility.definition_id}:{failure.code}:{failure.detail}",
                 ))
         return tuple(failures)
+
+    def target_settlement_failures(
+        self, target_spec: FoundingTargetSpec, recipe: DeploymentRecipe,
+        display_name: str, day: int,
+    ) -> tuple[FoundingBlocker, ...]:
+        """Physical target preflight used by both decisions and actual deployment."""
+        return self._target_settlement_failures(target_spec, recipe, display_name, day)
 
     def _target_settlement_failures(
         self,

@@ -26,6 +26,7 @@ class ResearchSiteOptionRow:
     comparison_key: str = ""
     comparison_values: tuple[ComparisonValueRow, ...] = ()
     resources: tuple[ResearchSiteResourceRow, ...] = ()
+    site_knowledge_unverified: bool = False
 
 
 @dataclass(frozen=True)
