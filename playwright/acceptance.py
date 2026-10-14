@@ -140,7 +140,8 @@ def run(browser) -> dict[str, object]:
     # not two hard-coded base-Content Cell IDs. Founding options are projected
     # only for explicitly requested Cells, so scope that single detailed Query
     # to the current body's actual Cell IDs.
-    moon_cells = runtime.query(GetSurfaceMap(str(ids.MOON))).data.cells
+    moon_surface = runtime.query(GetSurfaceMap(str(ids.MOON))).data
+    moon_cells = moon_surface.cells
     # Full-detail Founding options contain every registered Deployment Recipe.
     # Only two distinct candidate Cells and one blocked alternative are needed
     # for this browser decision contract. Query a bounded scope until they are
@@ -374,7 +375,7 @@ def run(browser) -> dict[str, object]:
                     "survey must use the selected celestial body, not the operational node body")
             _assert(str(ids.MOON) == page.evaluate("() => window.SpaceIdleApp.state.selectedSurfaceBodyId"),
                     "selected body must remain separate from the provider Operational Node")
-            _assert(page.locator('#locationTitle').inner_text() == founding_surface_projection.display_name,
+            _assert(page.locator('#locationTitle').inner_text() == moon_surface.display_name,
                     "surface workspace must identify the Application-projected physical body")
             page.locator('.primary-nav-button[data-section="global"]').click()
             _assert(page.locator('#systemMapViewport').evaluate("element => element.style.transform") == scaled,
