@@ -88,8 +88,12 @@ def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds
     sim = app._simulation
     # Surface cells are map geometry, never implicit Operational Nodes or stores.
     before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
-    body_with_cells = next(body.id for body in sim.graph.bodies.values()
-                           if sim.graph.cells_for_body(body.id))
+    # This test concerns node ownership, not large-map rendering. Query a
+    # small real surface; all product bodies share the same ownership model.
+    counts: dict[CelestialBodyId, int] = {}
+    for cell in sim.graph.surface_cells.values():
+        counts[cell.body_id] = counts.get(cell.body_id, 0) + 1
+    body_with_cells = min(counts, key=counts.get)
     map_view = app.query(GetSurfaceMap(str(body_with_cells)))
     assert map_view.cells
     assert all(cell.display_name for cell in map_view.cells)
@@ -98,8 +102,8 @@ def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds
     assert all(cell.environment_knowledge_level == 0 or cell.environment for cell in map_view.cells)
     assert any(cell.environment_knowledge_level == 0 and not cell.environment
                for cell in map_view.cells)
-    assert all(str(cell.id) not in {str(node) for node in sim.graph.operational_node_ids()}
-               for cell in map_view.cells)
+    node_ids = {str(node) for node in sim.graph.operational_node_ids()}
+    assert all(str(cell.id) not in node_ids for cell in map_view.cells)
     assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
 
     dormant = SpatialNodeId("test.node.dormant")
