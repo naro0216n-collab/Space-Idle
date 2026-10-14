@@ -156,6 +156,10 @@ class ConstructionPlanningMixin:
             procurement_policy,
             resources=resources,
             site_cell_id=site_cell_id,
+            planned_spatial_work=(
+                self.development_work_required(target.recipe_id, target.cell_id)
+                if isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)) else None
+            ),
         )
         self._activate_procurement_if_eligible(self.projects[project_id], day)
         return project_id
@@ -252,13 +256,10 @@ class ConstructionPlanningMixin:
 
     def plan_surface_cell_engineering(
         self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
-        priority: ActivityPriority, procurement_policy: ProcurementTimingPolicy,
-        day: int = 0,
+        recipe_id: DefinitionId, priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy, day: int = 0,
     ) -> ProjectId:
-        recipe_id = self.surface_terrain_engineering_recipe_id
-        if recipe_id is None or recipe_id not in self.spatial_recipes:
-            raise ValueError("terrain engineering recipe is not configured")
-        failures = self.surface_cell_engineering_failures(location_id, cell_id, day)
+        failures = self.surface_cell_engineering_failures(location_id, cell_id, recipe_id, day)
         if failures:
             raise ValueError("; ".join(f.detail for f in failures))
         return self._create_project(

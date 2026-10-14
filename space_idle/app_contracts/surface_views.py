@@ -97,6 +97,9 @@ class SurfaceCellDevelopmentOption:
     active_project_id: str | None = None
     procurement_policy_options: tuple[str, ...] = ()
     site_knowledge_unverified: bool = False
+    recipe_id: str | None = None
+    recipe_display_name: str | None = None
+    target_profile_display_name: str | None = None
 
 
 @dataclass(frozen=True)

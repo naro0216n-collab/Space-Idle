@@ -57,7 +57,6 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     construction_resource_providers: dict[DefinitionId, ConstructionResourceProviderSpec] = field(default_factory=dict)
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)
     surface_cell_development_recipe_id: DefinitionId | None = None
-    surface_terrain_engineering_recipe_id: DefinitionId | None = None
     projects: dict[ProjectId, ConstructionProject] = field(default_factory=dict)
     # Transient completion events consumed within the canonical-day boundary;
     # authoritative terrain lives in Spatial and observed terrain in Knowledge.

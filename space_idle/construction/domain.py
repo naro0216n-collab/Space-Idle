@@ -88,6 +88,7 @@ def capture_projects(sim: Any) -> dict[str, Any]:
                 "status": project.status.value,
                 "procurement_started_day": project.procurement_started_day,
                 "construction_done": project.construction_done,
+                "planned_spatial_work": project.planned_spatial_work,
                 "paused": project.paused,
                 "pause_started_day": project.pause_started_day,
                 "completed_facility_id": None if project.completed_facility_id is None else str(project.completed_facility_id),
@@ -114,7 +115,7 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
     sim.projects.__dict__.pop("_retired_facility_definitions", None)
     project_fields = {
         "id", "target", "operational_node_id", "site_cell_id", "priority",
-        "procurement_policy", "status", "procurement_started_day", "construction_done",
+        "procurement_policy", "status", "procurement_started_day", "construction_done", "planned_spatial_work",
         "paused", "pause_started_day", "completed_facility_id", "materials_committed",
         "irreversible_started", "salvage_recovered_fraction", "salvage_recovered",
         "resources",
@@ -181,6 +182,8 @@ def restore_projects(sim: Any, data: dict[str, Any]) -> None:
                 else decode_int(row["procurement_started_day"], "construction procurement_started_day")
             ),
             construction_done=decode_float(row["construction_done"], "construction_done"),
+            planned_spatial_work=(None if row["planned_spatial_work"] is None else
+                                  decode_float(row["planned_spatial_work"], "planned_spatial_work")),
             paused=decode_bool(row["paused"], "construction paused"),
             pause_started_day=(
                 None if row["pause_started_day"] is None
@@ -274,13 +277,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
                 sim.projects.knowledge_requirement_failures is not None,
                 f"spatial development Knowledge Requirement has no eligibility provider: {recipe_id}",
             )
-    if sim.projects.surface_terrain_engineering_recipe_id is not None:
-        terrain_id = sim.projects.surface_terrain_engineering_recipe_id
-        _require(terrain_id in sim.projects.spatial_recipes, "unknown terrain engineering recipe")
-        target_profile_id = sim.projects.spatial_recipes[terrain_id].target_terrain_profile_id
-        _require(target_profile_id in sim.graph.terrain_profiles, "terrain engineering references unknown profile")
-        _require(terrain_id != sim.projects.surface_cell_development_recipe_id,
-                 "surface engineering and territory expansion cannot share a recipe")
+    _require(all(recipe.id != sim.projects.surface_cell_development_recipe_id
+                 for recipe in sim.projects.terrain_engineering_recipes()),
+             "surface engineering and territory expansion cannot share a recipe")
     if sim.projects.surface_cell_development_recipe_id is not None:
         _require(sim.projects.surface_cell_development_recipe_id in sim.projects.spatial_recipes, "unknown surface cell development recipe")
         _require(sim.projects.spatial_recipes[sim.projects.surface_cell_development_recipe_id].target_terrain_profile_id is None,
@@ -307,6 +306,15 @@ def validate_runtime(sim: Any) -> None:
             _require(old_id not in completed_decommissions, f"duplicate completed decommission: {old_id}")
             completed_decommissions[old_id] = historical
     active_spatial_cells: set[SurfaceCellId] = set()
+    # A Cell can be engineered repeatedly; only the latest completed project
+    # represents its current physical profile. Project IDs are allocated in
+    # sequence and overlapping spatial projects for the same Cell are forbidden.
+    latest_terrain_projects: dict[SurfaceCellId, ConstructionProject] = {}
+    for historical in sim.projects.projects.values():
+        if isinstance(historical.target, SurfaceCellEngineeringTarget) and historical.status is ProjectStatus.COMPLETE:
+            previous = latest_terrain_projects.get(historical.target.cell_id)
+            if previous is None or int(str(historical.id).rsplit(".", 1)[-1]) > int(str(previous.id).rsplit(".", 1)[-1]):
+                latest_terrain_projects[historical.target.cell_id] = historical
     for project_id, project in sim.projects.projects.items():
         _require(sim.graph.has_operational_node(project.operational_node_id), f"project references unknown host location: {project_id}")
         target = project.target
@@ -399,11 +407,13 @@ def validate_runtime(sim: Any) -> None:
             if project.status is ProjectStatus.COMPLETE:
                 _require(target.cell_id in sim.graph.locations[project.operational_node_id].developed_cell_ids,
                          f"completed spatial project does not belong to its location: {project_id}")
-                if isinstance(target, SurfaceCellEngineeringTarget):
+                if isinstance(target, SurfaceCellEngineeringTarget) and latest_terrain_projects[target.cell_id] is project:
                     _require(sim.graph.terrain_profile(target.cell_id).id ==
                              sim.projects.spatial_recipes[target.recipe_id].target_terrain_profile_id,
-                             f"completed engineering project did not settle terrain: {project_id}")
+                             f"latest engineering project did not settle terrain: {project_id}")
 
+        _require((project.planned_spatial_work is not None) == isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)),
+                 f"spatial work snapshot ownership mismatch: {project_id}")
         _require(-1e-9 <= project.construction_done <= recipe.construction_work + 1e-8, f"invalid construction progress: {project_id}")
         _require(not project.paused or project.pause_started_day is not None, f"paused project missing pause day: {project_id}")
         _require(project.paused or project.pause_started_day is None, f"active project retains pause day: {project_id}")

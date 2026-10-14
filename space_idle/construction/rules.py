@@ -17,6 +17,7 @@ from .models import (
     FacilityUpgradeTarget,
     NewFacilityTarget,
     ProjectRecipe,
+    SpatialDevelopmentRecipe,
     ProjectStatus,
     SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
@@ -64,19 +65,13 @@ class ConstructionRulesMixin:
         if isinstance(target, FacilityDecommissionTarget):
             return self.decommission_recipes[target.facility_definition_id]
         recipe = self.spatial_recipes[target.recipe_id]
-        return replace(recipe, construction_work=self.development_work_required(target.recipe_id, target.cell_id))
+        return replace(recipe, construction_work=project.planned_spatial_work)
 
     def development_work_required(self, recipe_id: DefinitionId, cell_id: SurfaceCellId) -> float:
         """Apply the same physical work to preview, accounting and execution."""
         recipe = self.spatial_recipes[recipe_id]
         graph = self.facilities.environment.graph
-        if recipe.target_terrain_profile_id is not None:
-            # A completed engineering project must retain its original work
-            # budget after the Cell's effective landform changes. Engineering
-            # cannot be planned twice for the same target profile.
-            profile = graph.terrain_profiles[graph.surface_cells[cell_id].terrain.profile_id]
-        else:
-            profile = graph.terrain_profile(cell_id)
+        profile = graph.terrain_profile(cell_id)
         return recipe.construction_work * profile.development_work_factor
 
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
@@ -184,16 +179,20 @@ class ConstructionRulesMixin:
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
 
+    def terrain_engineering_recipes(self) -> tuple[SpatialDevelopmentRecipe, ...]:
+        """All authored landform outcomes, independent of Content registration order."""
+        return tuple(sorted((recipe for recipe in self.spatial_recipes.values()
+                            if recipe.target_terrain_profile_id is not None), key=lambda row: str(row.id)))
+
     def surface_cell_engineering_failures(
         self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
-        day: int = 0, power: PowerSnapshot | None = None,
+        recipe_id: DefinitionId, day: int = 0, power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
-        """Single Domain authority for engineering plan and Application blockers."""
-        recipe_id = self.surface_terrain_engineering_recipe_id
-        if recipe_id is None or recipe_id not in self.spatial_recipes:
-            return (SiteRequirementFailure("construction_recipe", "terrain engineering recipe is not configured"),)
+        """Single Domain authority for a selected landform project."""
+        recipe = self.spatial_recipes.get(recipe_id)
+        if recipe is None or recipe.target_terrain_profile_id is None:
+            return (SiteRequirementFailure("construction_recipe", "unknown terrain engineering recipe"),)
         graph = self.facilities.environment.graph
-        recipe = self.spatial_recipes[recipe_id]
         failures = [
             SiteRequirementFailure(code, detail) for code, detail in
             graph.terrain_engineering_failures(location_id, cell_id, recipe.target_terrain_profile_id)

@@ -412,25 +412,37 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
     sim = app._simulation
     core = ids.EARTH_CELL_INDUSTRIAL
     natural = sim.graph.surface_cells[core].terrain.profile_id
-    target_recipe = sim.projects.spatial_recipes[sim.projects.surface_terrain_engineering_recipe_id]
+    target_recipe = sim.projects.spatial_recipes[ids.SURFACE_TERRAIN_ENGINEERING_PROJECT]
     target_profile = target_recipe.target_terrain_profile_id
     assert natural != target_profile  # Authored starter region offers a real terrain decision.
     from space_idle.api.codec import decode_command
     decoded = decode_command({
         "type": "EngineerSurfaceCell",
-        "payload": {"location_id": str(ids.EARTH), "cell_id": str(core)},
+        "payload": {"location_id": str(ids.EARTH), "cell_id": str(core), "recipe_id": str(target_recipe.id)},
     })
     assert isinstance(decoded, EngineerSurfaceCell)
     initial_profile = sim.graph.terrain_profile(core)
     original_resource_potential = dict(sim.graph.surface_cells[core].resource_potential_by_resource)
+    # The real Extraction calculation must consume the current Terrain Profile,
+    # not just expose it through a Map label or a separate forecast formula.
+    extraction_methods = tuple(method for method in sim.extraction.specs.values()
+                               if method.resource_id == ids.METAL_ORE and method.requires_excavation_access)
+    assert extraction_methods
+    def physical_ore_access(game):
+        return game._simulation.extraction.opportunity_for_cells(
+            ids.METAL_ORE, extraction_methods, (core,), eligible=lambda _method, _cell: True,
+        )
+    initial_ore_access = physical_ore_access(app)
     baseline_map = next(row for row in app.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
-    plan = baseline_map.engineering_options[0]
+    choices = {option.recipe_id: option for option in baseline_map.engineering_options}
+    assert len(choices) >= 2
+    plan = choices[str(target_recipe.id)]
     assert plan.can_plan and not plan.blockers
     assert plan.construction_required == pytest.approx(
         target_recipe.construction_work * initial_profile.development_work_factor
     )
     project_id = app.execute(EngineerSurfaceCell(
-        str(ids.EARTH), str(core), procurement_policy="immediate"
+        str(ids.EARTH), str(core), str(target_recipe.id), procurement_policy="immediate"
     )).created_id
     assert project_id is not None
     project = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
@@ -455,6 +467,7 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
         assert world.surface_cells[core].terrain.profile_id == natural
         assert world.surface_cells[core].resource_potential_by_resource == original_resource_potential
         assert world.terrain_profile(core).excavation_accessibility > initial_profile.excavation_accessibility
+        assert physical_ore_access(game) > initial_ore_access
         finished = game._simulation.projects.projects[project.id]
         assert finished.status.value == "complete"
         assert finished.construction_done == pytest.approx(plan.construction_required)
@@ -462,7 +475,7 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
         assert game._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
         cell_view = next(row for row in game.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
         assert dict(cell_view.terrain)["terrain_profile"] == world.terrain_profile(core).display_name
-        assert not cell_view.engineering_options[0].can_plan
+        assert not {option.recipe_id: option for option in cell_view.engineering_options}[str(target_recipe.id)].can_plan
         assert len(world.locations) == len(sim.graph.locations)
 
     assert loaded_sim.graph.engineered_terrain == sim.graph.engineered_terrain
@@ -470,3 +483,60 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
     reloaded, _ = load_game(save_path, build_game_application_for_load)
     assert reloaded._simulation.graph.terrain_profile(core).id == target_profile
     assert reloaded._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
+
+    # Two distinct authored outcomes on the SAME Cell must not corrupt prior
+    # completed projects. The later Project snapshots the current, rather than
+    # the original natural, landform's construction work.
+    grading = reloaded._simulation.projects.spatial_recipes[ids.SURFACE_TERRAIN_GRADING_PROJECT]
+    graded_work = grading.construction_work * reloaded._simulation.graph.terrain_profile(core).development_work_factor
+    second_view = next(row for row in reloaded.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
+    grading_option = next(row for row in second_view.engineering_options if row.recipe_id == str(grading.id))
+    assert grading_option.can_plan
+    assert grading_option.recipe_display_name == grading.display_name
+    assert grading_option.target_profile_display_name == reloaded._simulation.graph.terrain_profiles[
+        grading.target_terrain_profile_id
+    ].display_name
+    assert grading_option.construction_required == pytest.approx(graded_work)
+    from space_idle.app_contracts.common import ApplicationError
+    with pytest.raises(ApplicationError, match="unknown terrain engineering recipe"):
+        reloaded.execute(EngineerSurfaceCell(
+            str(ids.EARTH), str(core), str(ids.SURFACE_CELL_DEVELOPMENT_PROJECT),
+            procurement_policy="immediate",
+        ))
+    second_id = reloaded.execute(EngineerSurfaceCell(
+        str(ids.EARTH), str(core), str(grading.id), procurement_policy="immediate"
+    )).created_id
+    assert second_id is not None
+    second = next(p for p in reloaded._simulation.projects.projects.values() if str(p.id) == second_id)
+    assert second.planned_spatial_work == pytest.approx(graded_work)
+    reloaded.execute(AdvanceTime(4))
+    save_game(reloaded, save_path)
+    resumed, _ = load_game(save_path, build_game_application_for_load)
+    resumed_second = resumed._simulation.projects.projects[second.id]
+    assert resumed_second.planned_spatial_work == pytest.approx(graded_work)
+    assert resumed_second.construction_done == pytest.approx(second.construction_done)
+    resumed.execute(AdvanceTime(20))
+    assert resumed._simulation.graph.terrain_profile(core).id == grading.target_terrain_profile_id
+    assert physical_ore_access(resumed) == pytest.approx(initial_ore_access)
+    assert resumed._simulation.graph.surface_cells[core].terrain.profile_id == natural
+    if grading.target_terrain_profile_id == natural:
+        assert core not in resumed._simulation.graph.engineered_terrain
+    assert resumed._simulation.projects.projects[project.id].construction_done == pytest.approx(plan.construction_required)
+    assert resumed._simulation.projects.projects[second.id].construction_done == pytest.approx(graded_work)
+    assert resumed._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
+    save_game(resumed, save_path)
+    final_loaded, _ = load_game(save_path, build_game_application_for_load)
+    assert final_loaded._simulation.graph.terrain_profile(core).id == grading.target_terrain_profile_id
+
+    # A subsequent return to the first authored outcome is legitimate, with
+    # an independent new investment and no overwrite of historical progress.
+    third_id = final_loaded.execute(EngineerSurfaceCell(
+        str(ids.EARTH), str(core), str(target_recipe.id), procurement_policy="immediate"
+    )).created_id
+    assert third_id is not None
+    third = next(p for p in final_loaded._simulation.projects.projects.values() if str(p.id) == third_id)
+    assert third.planned_spatial_work == pytest.approx(target_recipe.construction_work *
+        final_loaded._simulation.graph.terrain_profile(core).development_work_factor)
+    final_loaded.execute(AdvanceTime(30))
+    assert final_loaded._simulation.graph.terrain_profile(core).id == target_profile
+    assert final_loaded._simulation.graph.surface_cells[core].resource_potential_by_resource == original_resource_potential

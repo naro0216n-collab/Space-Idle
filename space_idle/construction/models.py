@@ -199,9 +199,14 @@ class ConstructionProject:
     # Facility placement state only. Geographic project target cells live on
     # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None
+    # Frozen at project creation: subsequent engineering cannot alter already
+    # committed work, even after Save / Load or another terrain modification.
+    planned_spatial_work: float | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
+        if self.planned_spatial_work is not None and (not isfinite(self.planned_spatial_work) or self.planned_spatial_work <= 0):
+            raise ValueError("planned spatial work must be finite and positive")
         if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
             raise ValueError("salvage recovered fraction must be within 0..1")
         if any(amount < 0.0 for amount in self.salvage_recovered.values()):

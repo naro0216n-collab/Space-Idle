@@ -517,7 +517,10 @@ class SpatialGraph:
             raise ValueError("; ".join(message for _, message in failures))
         # Natural geography remains unchanged. Only the actual constructed
         # improvement is authoritative runtime state.
-        self.engineered_terrain[cell_id] = target_profile_id
+        if target_profile_id == self.surface_cells[cell_id].terrain.profile_id:
+            self.engineered_terrain.pop(cell_id, None)
+        else:
+            self.engineered_terrain[cell_id] = target_profile_id
 
     def add_surface_cell(self, cell: SurfaceCellDef) -> None:
         if cell.id in self.surface_cells:

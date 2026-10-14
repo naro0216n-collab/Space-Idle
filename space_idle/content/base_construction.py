@@ -30,6 +30,17 @@ def build_spatial_development_recipes() -> dict:
 
         ),
         SpatialDevelopmentRecipe(
+            ids.SURFACE_TERRAIN_GRADING_PROJECT,
+            "Surface Terrain Grading",
+            (
+                BuildResourceRequirement(ids.MACHINERY, 1.0),
+                BuildResourceRequirement(ids.CONSTRUCTION_EQUIPMENT, 1.0),
+            ),
+            12.0,
+            surface_site,
+            target_terrain_profile_id="rolling",
+        ),
+        SpatialDevelopmentRecipe(
             ids.SURFACE_TERRAIN_ENGINEERING_PROJECT,
             "Surface Terrain Engineering",
             (

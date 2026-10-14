@@ -157,6 +157,7 @@ class SurfaceProjectorMixin:
         # Several Cell candidates at the same owner share one preview; local
         # physical effects and site blockers still use the selected Cell.
         placement_materials = {}
+        engineering_recipes = sim.projects.terrain_engineering_recipes()
         for cell in cells:
             owner = sim.graph.owner_of_cell(cell.id)
             terrain_quality = sim.surface_knowledge.attribute_level(cell.id, "terrain")
@@ -254,15 +255,13 @@ class SurfaceProjectorMixin:
                 )
             development_options = tuple(development_options_list)
             engineering_options_list = []
-            engineering_recipe_id = sim.projects.surface_terrain_engineering_recipe_id
-            engineering_recipe = sim.projects.spatial_recipes.get(engineering_recipe_id)
-            if owner is not None and engineering_recipe is not None:
+            if owner is not None:
                 active = sim.projects.active_spatial_project_for_cell(cell.id)
-                for location in (sim.graph.locations[owner],):
-                    # Domain owns all eligibility; the public projection only
-                    # removes physical facts not yet released by Knowledge.
+                for engineering_recipe in engineering_recipes:
+                    # All authored landform outcomes share one Project and
+                    # Domain eligibility path; UI never derives terrain rules.
                     failures = sim.projects.surface_cell_engineering_failures(
-                        location.operational_node_id, cell.id, sim.day
+                        owner, cell.id, engineering_recipe.id, sim.day
                     )
                     unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
                         cell.id, engineering_recipe.site_requirements
@@ -285,6 +284,11 @@ class SurfaceProjectorMixin:
                         resources=tuple((str(r.resource_id), r.amount_t) for r in engineering_recipe.resources),
                         active_project_id=None if active is None else str(active.id),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
+                        recipe_id=str(engineering_recipe.id),
+                        recipe_display_name=engineering_recipe.display_name,
+                        target_profile_display_name=sim.graph.terrain_profiles[
+                            engineering_recipe.target_terrain_profile_id
+                        ].display_name,
                     ))
             engineering_options = tuple(engineering_options_list)
             resources = ()
