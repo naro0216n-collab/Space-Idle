@@ -9,6 +9,7 @@ surface area, not the number of seed regions, sets body-wide opportunity.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import lru_cache
 from hashlib import sha256
 from math import cos, pi, radians, sin, sqrt, ceil, isfinite
 
@@ -37,6 +38,7 @@ def _spherical_rings(radius_km: float):
     return ring_partition(columns)
 
 
+@lru_cache(maxsize=2048)
 def _regional_phase(body_id: str, subject: str) -> float:
     return int.from_bytes(sha256(f'{body_id}/{subject}'.encode()).digest()[:4], 'big') / 2**32 * 2 * pi
 
@@ -217,6 +219,13 @@ def register_complete_surface_world(
             reserved[choice] = original
             chosen_reference_positions[original.id] = choice
             available.remove(choice)
+        # The physical reference set and its Resource vocabulary do not change
+        # between Cells. Derive these once per body, not for every grid slot.
+        resources = sorted({resource for source in originals for resource in source.resource_potential_by_resource})
+        reference_illumination = {
+            source.id: facets.facets.get((source.id, IlluminationField)) for source in originals
+        }
+        reference_climate = facets.body_facets.get((body_id, ThermalField))
         rows = []
         flux = graph.representative_solar_flux_w_m2(body_id)
         for ring_idx, column, bounds in positions:
@@ -225,11 +234,11 @@ def register_complete_surface_world(
             id = site.id if site is not None else SurfaceCellId(
                 f'base.cell.{str(body_id).rsplit(".", 1)[-1]}.grid.{ring_idx:02d}.{column:03d}'
             )
-            nearest = min(originals, key=lambda original: (
-                great_circle_distance_km(center, original.centroid, body.mean_radius_km), str(original.id)
-            ))
+            # Distances drive both nearest-geology selection and resource
+            # interpolation. Compute them once for each Cell/reference pair.
             distances = [(original, great_circle_distance_km(center, original.centroid, body.mean_radius_km))
                          for original in originals]
+            nearest = min(distances, key=lambda pair: (pair[1], str(pair[0].id)))[0]
             # The distance kernel represents region-scale geology. Area and
             # per-area quantities remain explicit in the World definition.
             weights = [(origin, 1 / (1 + (distance / max(1.0, body.mean_radius_km * 0.7))**4))
@@ -237,7 +246,7 @@ def register_complete_surface_world(
             weight_total = sum(weight for _, weight in weights)
             area = bounds.area_km2(body.mean_radius_km)
             potential = {}
-            for resource in sorted({resource for original in originals for resource in original.resource_potential_by_resource}):
+            for resource in resources:
                 density = sum(weight * original.resource_potential_by_resource.get(resource, 0.0) / original.area_km2
                               for original, weight in weights) / weight_total
                 positive_distances = [distance for original, distance in distances
@@ -273,8 +282,7 @@ def register_complete_surface_world(
             rows.append(row)
             if flux is not None and site is None:
                 # A representative local illumination profile, not daily weather.
-                baseline = next((facet for (c, kind), facet in facets.facets.items()
-                                 if c == nearest.id and kind is IlluminationField), None)
+                baseline = reference_illumination[nearest.id]
                 availability = baseline.availability if baseline is not None else 0.50
                 # Representative geography, not date-driven weather. Latitude
                 # and topography determine long-run exposure and site tradeoffs.
@@ -283,7 +291,6 @@ def register_complete_surface_world(
                     flux, max(0.0, min(1.0, availability * exposure)),
                 )
             if site is None:
-                reference_climate = facets.body_facets.get((body_id, ThermalField))
                 if reference_climate is not None:
                     # Long-term thermal geography: latitude and continental/
                     # basin structure, never a date-dependent climate tick.
