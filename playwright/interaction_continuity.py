@@ -23,7 +23,7 @@ def run(browser) -> None:
     )
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
-    thread = Thread(target=server.serve_forever, daemon=True)
+    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
 
     try:

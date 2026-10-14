@@ -245,6 +245,21 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
         assert campaign["projected_provider_display_name"]
         assert campaign["projected_provider_display_name"] != campaign["projected_provider_definition_id"]
 
+        # The shell uses the same coherent UI snapshot outside Surface Map.
+        # Global Campaign decisions must remain visible, but unselected worlds'
+        # per-Cell observations must not be serialized on every periodic sync.
+        status, _, summary = _request(
+            port, "GET", f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}",
+        )
+        assert status == 200
+        assert summary["data"]["surveys"]["items"] == []
+        assert {row["id"] for row in summary["data"]["surveys"]["campaigns"]} == {
+            row["id"] for row in payload["data"]["surveys"]["campaigns"]
+        }
+        assert payload["data"]["surveys"]["items"]
+        assert all(row["body_id"] == str(ids.MOON)
+                   for row in payload["data"]["surveys"]["items"])
+
         status, _, payload = _request(port, "GET", preview_path)
         assert status == 200
         assert payload["data"]["can_apply"] is False

@@ -357,7 +357,10 @@ class SurveyProgressionProjectorMixin:
             cache[key] = result
         return result
 
-    def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None, *, body_id=None) -> SurveysView:
+    def _surveys_view(
+        self, provider_operational_node_id: SpatialNodeId | None, *, body_id=None,
+        include_target_rows: bool = True,
+    ) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
             return SurveysView((), (), ())
@@ -366,9 +369,11 @@ class SurveyProgressionProjectorMixin:
         # Filter before projecting knowledge and provider decisions. A body-scoped
         # UI query must never request derived candidates for unrelated worlds.
         target_items = (
-            sim.survey.targets.items() if body_id is None else (
-                (key, target) for key, target in sim.survey.targets.items()
-                if sim.graph.surface_cells[key[0]].body_id == body_id
+            () if not include_target_rows else (
+                sim.survey.targets.items() if body_id is None else (
+                    (key, target) for key, target in sim.survey.targets.items()
+                    if sim.graph.surface_cells[key[0]].body_id == body_id
+                )
             )
         )
         for (cell_id, resource_id), _target in sorted(

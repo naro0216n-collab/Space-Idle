@@ -100,7 +100,10 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
                 "projects": GetProjects(operational_node_id),
                 "build_options": GetBuildOptions(operational_node_id),
                 "bottlenecks": GetBottlenecks(operational_node_id),
-                "surveys": GetSurveys(operational_node_id, surface_body_id),
+                "surveys": GetSurveys(
+                    operational_node_id, surface_body_id,
+                    include_target_rows=surface_body_id is not None,
+                ),
             })
         if surface_body_id:
             queries["surface_map"] = GetSurfaceMap(surface_body_id, founding_cell_ids)

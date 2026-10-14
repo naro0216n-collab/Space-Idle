@@ -161,6 +161,7 @@ class ApplicationQueryRouterMixin:
             return self._surveys_view(
                 None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id),
                 body_id=body_id,
+                include_target_rows=query.include_target_rows,
             )
         if isinstance(query, GetSurveyCampaignIntentPreview):
             return self._survey_campaign_intent_preview_view(query)

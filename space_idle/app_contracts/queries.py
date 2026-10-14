@@ -95,6 +95,7 @@ class GetScientificExplorations: pass
 class GetSurveys:
     provider_operational_node_id: str | None = None
     body_id: str | None = None
+    include_target_rows: bool = True
 @dataclass(frozen=True)
 class GetSurveyCampaignIntentPreview:
     target_cell_ids: tuple[str, ...]

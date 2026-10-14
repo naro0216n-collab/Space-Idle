@@ -141,18 +141,23 @@ def run(browser) -> dict[str, object]:
     # only for explicitly requested Cells, so scope that single detailed Query
     # to the current body's actual Cell IDs.
     moon_cells = runtime.query(GetSurfaceMap(str(ids.MOON))).data.cells
-    founding_surface_projection = runtime.query(GetSurfaceMap(
-        str(ids.MOON), tuple(cell.id for cell in moon_cells),
-    )).data
-    eligible_sites = [
-        cell for cell in founding_surface_projection.cells
-        if any(option.can_plan for option in cell.foundation_options)
-    ]
-    founding_cell_projection = next(
-        (cell for cell in eligible_sites
-         if any(not option.can_plan for option in cell.foundation_options)),
-        None,
-    )
+    # Full-detail Founding options contain every registered Deployment Recipe.
+    # Only two distinct candidate Cells and one blocked alternative are needed
+    # for this browser decision contract. Query a bounded scope until they are
+    # found instead of materializing detailed options for the entire globe.
+    eligible_sites = []
+    founding_cell_projection = None
+    for offset in range(0, len(moon_cells), 8):
+        cell_ids = tuple(cell.id for cell in moon_cells[offset:offset + 8])
+        detailed_cells = runtime.query(GetSurfaceMap(str(ids.MOON), cell_ids)).data.cells
+        for cell in detailed_cells:
+            if any(option.can_plan for option in cell.foundation_options):
+                eligible_sites.append(cell)
+                if (founding_cell_projection is None
+                        and any(not option.can_plan for option in cell.foundation_options)):
+                    founding_cell_projection = cell
+        if founding_cell_projection is not None and len(eligible_sites) >= 2:
+            break
     if founding_cell_projection is None or len(eligible_sites) < 2:
         raise AssertionError(
             "new-game Application must expose two eligible founding sites and a blocked alternative"
@@ -203,7 +208,7 @@ def run(browser) -> dict[str, object]:
     )
     port = int(server.server_address[1])
     server_origin = f"http://127.0.0.1:{port}"
-    server_thread = Thread(target=server.serve_forever, name="space-idle-e2e-http", daemon=True)
+    server_thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), name="space-idle-e2e-http", daemon=True)
     server_thread.start()
     checkpoint("server startup")
 
