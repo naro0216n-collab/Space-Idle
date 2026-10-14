@@ -25,6 +25,8 @@ class PopulationRules:
     mortality_rate: float
     lethal_threshold: float
     incapacitation_threshold: float
+    # Content-owned demographic net-growth rate per supported resident per day.
+    natural_growth_rate_per_person_per_day: float = 0.0
 
     def __post_init__(self) -> None:
         if any(not math.isfinite(value) or value <= 0 for value in (
@@ -32,6 +34,9 @@ class PopulationRules:
             self.incapacitation_threshold,
         )):
             raise ValueError('population rules must be positive and finite')
+        if (not math.isfinite(self.natural_growth_rate_per_person_per_day)
+                or self.natural_growth_rate_per_person_per_day < 0):
+            raise ValueError('population natural growth rate must be finite and nonnegative')
 
 
 @dataclass(frozen=True)
@@ -195,6 +200,14 @@ class PopulationService:
     external_definitions: dict[str, ExternalPopulationSourceDefinition]
     groups: dict[EntityId, PopulationGroup] = field(default_factory=dict)
     targets: dict[SpatialNodeId, int] = field(default_factory=dict)
+    # Natural growth is independent of external recruitment Targets.
+    natural_growth_enabled: dict[SpatialNodeId, bool] = field(default_factory=dict)
+    growth_credit: dict[SpatialNodeId, float] = field(default_factory=dict)
+    growth_last_added: dict[SpatialNodeId, int] = field(default_factory=dict)
+    growth_last_blockers: dict[SpatialNodeId, tuple[str, ...]] = field(default_factory=dict)
+    # Confirmed Inventory receipts, not a second Resource stock or production forecast.
+    growth_supply_day: int = -1
+    growth_supply_received: dict[tuple[SpatialNodeId, DefinitionId], float] = field(default_factory=dict)
     transfer_orders: dict[EntityId, PassengerTransferOrder] = field(default_factory=dict)
     external_remaining: dict[str, int] = field(default_factory=dict)
     # Daily quota accounting, not another people Stock.  A completed boundary
@@ -249,9 +262,32 @@ class PopulationService:
                 continue
             factor = (1.0 if provider_factors is None else provider_factors.get(facility.id, 1.0))
             if power is not None:
-                factor *= power.utilization_by_facility.get(facility.id, 1.0)
+                factor *= (power.utilization_by_facility.get(facility.id, 1.0)
+                           * power.maintenance_factor_by_facility.get(facility.id, 1.0))
             enabled += amount * max(0.0, min(1.0, factor))
         return nominal, enabled
+
+    def set_natural_growth_enabled(self, node_id: SpatialNodeId, enabled: bool) -> None:
+        if not self.graph.has_operational_node(node_id):
+            raise ValueError('natural growth requires an established Operational Node')
+        if type(enabled) is not bool:
+            raise ValueError('natural growth enabled must be boolean')
+        self.natural_growth_enabled[node_id] = enabled
+
+    def is_natural_growth_enabled(self, node_id: SpatialNodeId) -> bool:
+        if not self.graph.has_operational_node(node_id):
+            raise ValueError('natural growth requires an established Operational Node')
+        return self.natural_growth_enabled.get(node_id, True)
+
+    def observe_resource_inflow(
+        self, day: int, node_id: SpatialNodeId, resource_id: DefinitionId, amount: float,
+    ) -> None:
+        """Record only actual settled receipts for the ongoing calendar day."""
+        if day != self.growth_supply_day:
+            self.growth_supply_day = day
+            self.growth_supply_received.clear()
+        key = (node_id, resource_id)
+        self.growth_supply_received[key] = self.growth_supply_received.get(key, 0.0) + amount
 
     def initialize(self, node_id: SpatialNodeId, count: int) -> None:
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
@@ -1514,9 +1550,11 @@ class PopulationService:
                     )
         self._day_fulfillment = by_node
 
-    def settle_deprivation(self) -> None:
+    def settle_deprivation(self) -> dict[SpatialNodeId, tuple[int, float]]:
+        day_result: dict[SpatialNodeId, tuple[int, float]] = {}
         for node_id in sorted(self.graph.operational_node_ids(), key=str):
             count = self.count_at(node_id)
+            day_result[node_id] = (count, self._day_fulfillment.get(node_id, 0.0))
             if not count:
                 continue
             ratio = max(0.0, min(1.0, self._day_fulfillment.get(node_id, 0.0) / count))
@@ -1525,6 +1563,78 @@ class PopulationService:
                 if not group.count:
                     del self.groups[group.id]
         self._day_fulfillment.clear()
+        return day_result
+
+    def settle_natural_growth(
+        self, day: int, daily_support: dict[SpatialNodeId, tuple[int, float]],
+        power_by_location: dict[SpatialNodeId, object],
+        execution: ExecutionAllocationPlan,
+    ) -> None:
+        """At end of day, admit new people only against executed living provision.
+
+        Receipts are a ledger of actual Inventory settlement, never projected future
+        production. No Life Support Resource is consumed again during this transition.
+        Children of this transition begin contributing Crew on the following day.
+        """
+        inbound = self._inbound_by_node()
+        received = self.growth_supply_received if self.growth_supply_day == day else {}
+        actual_by_provider = {row.bundle_id: row.allocated_execution for row in execution.allocations}
+        for node_id in sorted(self.graph.operational_node_ids(), key=str):
+            blockers: list[str] = []
+            before, supported = daily_support.get(node_id, (0, 0.0))
+            count = self.count_at(node_id)
+            reserved_arrivals = inbound.get(node_id, 0)
+            if not self.is_natural_growth_enabled(node_id):
+                blockers.append('natural_growth_disabled')
+            if not count:
+                blockers.append('population_absent')
+            if count != before or supported + 1e-7 < before or any(
+                group.deprivation > 1e-9 for group in self.groups_at(node_id)
+            ):
+                blockers.append('living_support_unfulfilled')
+            housing_spare = self.housing_capacity(node_id, day) - count - reserved_arrivals
+            if housing_spare < 1:
+                blockers.append('housing_reserved_or_full')
+            _, enabled_life_support = self.service_capacity_supply_at(
+                node_id, 'life_support', self.facilities, power_by_location.get(node_id), day
+            )
+            life_support_spare = math.floor(enabled_life_support + 1e-8) - count - reserved_arrivals
+            if life_support_spare < 1:
+                blockers.append('life_support_capacity_limited')
+
+            # Marginal resource need conservatively accounts for the hungriest
+            # available Life Support unit; no private allocator or simulated future.
+            marginal_need: dict[DefinitionId, float] = {}
+            used_living_resource: dict[DefinitionId, float] = {}
+            for facility, definition in self._facilities_at(node_id, day):
+                spec = definition.life_support
+                if spec is None:
+                    continue
+                actual = actual_by_provider.get(self._provider_bundle_id(facility.id), 0.0)
+                for resource_id, rate in spec.net_resources:
+                    marginal_need[resource_id] = max(marginal_need.get(resource_id, 0.0), rate)
+                    used_living_resource[resource_id] = used_living_resource.get(resource_id, 0.0) + actual * rate
+            resource_spare = math.inf
+            for resource_id, rate in marginal_need.items():
+                if rate <= 0:
+                    continue
+                proven_supply_surplus = (received.get((node_id, resource_id), 0.0)
+                                         - used_living_resource.get(resource_id, 0.0)
+                                         - reserved_arrivals * rate)
+                physical_spare = self.inventory.available(node_id, resource_id) - reserved_arrivals * rate
+                resource_spare = min(resource_spare, math.floor((min(proven_supply_surplus, physical_spare) + 1e-9) / rate))
+            if resource_spare < 1:
+                blockers.append('living_resource_supply_limited')
+
+            added = 0
+            if not blockers and self.rules.natural_growth_rate_per_person_per_day > 0:
+                credit = self.growth_credit.get(node_id, 0.0) + count * self.rules.natural_growth_rate_per_person_per_day
+                added = min(math.floor(credit + 1e-10), housing_spare, life_support_spare, resource_spare)
+                self.growth_credit[node_id] = max(0.0, credit - added)
+                if added:
+                    self.initialize(node_id, added)
+            self.growth_last_added[node_id] = int(added)
+            self.growth_last_blockers[node_id] = tuple(blockers)
 
     def _settle_group_deprivation(self, group: PopulationGroup, ratio: float) -> int:
         group.deprivation = max(0.0, group.deprivation + 1 - ratio - self.rules.recovery_rate * ratio)
@@ -1562,6 +1672,26 @@ class PopulationService:
             group.__post_init__()
             if group.position.kind == 'operational_node' and not self.graph.has_operational_node(SpatialNodeId(group.position.ref)):
                 raise ValueError('population node missing')
+        for node_id, enabled in self.natural_growth_enabled.items():
+            if not self.graph.has_operational_node(node_id) or type(enabled) is not bool:
+                raise ValueError('invalid natural growth switch')
+        for node_id, credit in self.growth_credit.items():
+            if (not self.graph.has_operational_node(node_id) or not math.isfinite(credit) or credit < 0):
+                raise ValueError('invalid natural growth credit')
+        for node_id, count in self.growth_last_added.items():
+            if not self.graph.has_operational_node(node_id) or type(count) is not int or count < 0:
+                raise ValueError('invalid settled natural growth count')
+        for node_id, codes in self.growth_last_blockers.items():
+            if not self.graph.has_operational_node(node_id) or any(not isinstance(code, str) for code in codes):
+                raise ValueError('invalid natural growth blocker')
+        if type(self.growth_supply_day) is not int or self.growth_supply_day < -1:
+            raise ValueError('invalid natural growth supply evidence day')
+        for (node_id, resource_id), amount in self.growth_supply_received.items():
+            if (not self.graph.has_operational_node(node_id) or resource_id not in self.inventory.resource_definitions
+                    or not math.isfinite(amount) or amount < 0):
+                raise ValueError('invalid natural growth supply evidence')
+        if self.growth_supply_day == -1 and self.growth_supply_received:
+            raise ValueError('natural growth supply without a day')
         for node_id, count in self.targets.items():
             if not self.graph.has_operational_node(node_id) or isinstance(count, bool) or not isinstance(count, int) or count < 0:
                 raise ValueError('invalid population target')

@@ -89,7 +89,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         external_population_sources=(
             ExternalPopulationSourceDefinition('base.population.earth_recruitment', ids.EARTH, 5000, 8),
         ),
-        population_rules=PopulationRules(0.25, 0.05, 2.0, 3.0),
+        population_rules=PopulationRules(0.25, 0.05, 2.0, 3.0, natural_growth_rate_per_person_per_day=0.0008),
         funds_balance_musd=360.0,
         market_provider_ids=(EARTH_MARKET_PROVIDER,),
         market_interfaces=(

@@ -749,6 +749,10 @@ class LocationProjectorMixin:
                 )
                       for definition in sorted(pop.external_definitions.values(), key=lambda source: source.id)
                       if definition.operational_node_id == location_id),
+                natural_growth_enabled=pop.is_natural_growth_enabled(location_id),
+                natural_growth_credit=pop.growth_credit.get(location_id, 0.0),
+                natural_growth_last_added=pop.growth_last_added.get(location_id, 0),
+                natural_growth_blockers=pop.growth_last_blockers.get(location_id, ()),
                 inbound_count=confirmed_inbound,
                 outbound_count=confirmed_outbound,
                 expected_count_after_confirmed_arrivals=pop.count_at(location_id) + confirmed_inbound,

@@ -22,7 +22,7 @@ from .application import (
     SetSurveyPriority, SetTimeControl, SetVehicleProductionSettings, StartResearch,
     StartScientificExploration, SetScientificExplorationPriority, SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet,
     UpdateTransportAllocation, SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
-    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
     CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 

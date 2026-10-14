@@ -9,7 +9,7 @@ from .application_commands import (
     SetFacilityActivityPriority,
     SetMaintenancePriority,
     SetTimeControl,
-    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
     CancelPassengerTransfer,
 )
 from .shared import DefinitionId, EntityId, SpatialNodeId
@@ -18,6 +18,9 @@ from .shared import DefinitionId, EntityId, SpatialNodeId
 class OperationsCommandHandlerMixin:
     def _handle_operations_command(self, command: Command):
         sim = self._simulation
+        if isinstance(command, SetNaturalPopulationGrowth):
+            sim.population.set_natural_growth_enabled(SpatialNodeId(command.operational_node_id), command.enabled)
+            return CommandResult()
         if isinstance(command, SetPopulationTarget):
             sim.population.set_target(SpatialNodeId(command.operational_node_id), command.desired_count)
             return CommandResult()

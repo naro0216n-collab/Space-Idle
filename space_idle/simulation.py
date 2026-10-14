@@ -1625,7 +1625,10 @@ class Simulation:
         if self.scientific_exploration is not None:
             self.scientific_exploration.settle_crew_life_support()
         if self.population is not None:
-            self.population.settle_deprivation()
+            daily_support = self.population.settle_deprivation()
+            self.population.settle_natural_growth(
+                self.day, daily_support, allocations.power_by_location, allocations.execution,
+            )
         if self.research is not None:
             self.research.settle_completions(self.day + 1)
         if self.projects.settle_completions(
@@ -1644,7 +1647,29 @@ class Simulation:
     def _advance_canonical_day(
         self, observe_decision: Callable[[TickDecisionProjection], None] | None = None,
     ) -> None:
-        """Advance exactly one canonical game day through the phase contract."""
+        """Advance one day while recording confirmed Resource receipts once."""
+        population = self.population
+        if population is None:
+            self._advance_canonical_day_phases(observe_decision)
+            return
+        previous_observer = self.inventory._settlement_observer
+
+        def population_inflow_observer(direction, node_id, resource_id, amount, operation, owner, counterparty, activity):
+            if previous_observer is not None:
+                previous_observer(direction, node_id, resource_id, amount, operation, owner, counterparty, activity)
+            if direction == 'inventory_in':
+                population.observe_resource_inflow(self.day, node_id, resource_id, amount)
+
+        self.inventory._settlement_observer = population_inflow_observer
+        try:
+            self._advance_canonical_day_phases(observe_decision)
+        finally:
+            self.inventory._settlement_observer = previous_observer
+
+    def _advance_canonical_day_phases(
+        self, observe_decision: Callable[[TickDecisionProjection], None] | None = None,
+    ) -> None:
+        """Run canonical phase ordering without synthesizing another simulation."""
         # Phase 1: Boundary settlement.  In the normal resting state this was
         # already completed when the previous day returned.
         self._ensure_current_boundary_settled()

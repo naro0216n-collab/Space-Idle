@@ -257,6 +257,10 @@ class PopulationView:
     deprivation_person_days: float
     resource_demand_per_day: tuple[tuple[str, float], ...]
     external_sources: tuple[ExternalPopulationSourceRow, ...]
+    natural_growth_enabled: bool = True
+    natural_growth_credit: float = 0.0
+    natural_growth_last_added: int = 0
+    natural_growth_blockers: tuple[str, ...] = ()
     inbound_count: int = 0
     outbound_count: int = 0
     expected_count_after_confirmed_arrivals: int = 0

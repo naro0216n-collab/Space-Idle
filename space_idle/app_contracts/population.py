@@ -14,6 +14,16 @@ class SetPopulationTarget:
 
 
 @dataclass(frozen=True)
+class SetNaturalPopulationGrowth:
+    operational_node_id: str
+    enabled: bool
+
+    def __post_init__(self) -> None:
+        if not self.operational_node_id or type(self.enabled) is not bool:
+            raise ValueError('natural growth setting requires a node and boolean')
+
+
+@dataclass(frozen=True)
 class ClearPopulationTarget:
     operational_node_id: str
 

@@ -38,6 +38,15 @@ def capture_population_state(sim):
             }
             for order in sorted(population.transfer_orders.values(), key=lambda value: str(value.id))
         ],
+        'natural_growth_enabled': {str(key): value for key, value in sorted(population.natural_growth_enabled.items())},
+        'growth_credit': {str(key): value for key, value in sorted(population.growth_credit.items())},
+        'growth_last_added': {str(key): value for key, value in sorted(population.growth_last_added.items())},
+        'growth_last_blockers': {str(key): list(value) for key, value in sorted(population.growth_last_blockers.items())},
+        'growth_supply_day': population.growth_supply_day,
+        'growth_supply_received': [
+            {'node_id': str(node), 'resource_id': str(resource), 'amount': amount}
+            for (node, resource), amount in sorted(population.growth_supply_received.items())
+        ],
         'external_remaining': dict(sorted(population.external_remaining.items())),
         'external_acquisition_day': population.external_acquisition_day,
         'external_acquired_today': dict(sorted(population.external_acquired_today.items())),
@@ -47,7 +56,7 @@ def capture_population_state(sim):
 
 
 def restore_population_state(sim, state):
-    row = require_fields(state, {'groups', 'targets', 'transfer_orders', 'external_remaining', 'external_acquisition_day', 'external_acquired_today', 'next_group_id', 'next_transfer_order_id'}, 'population state')
+    row = require_fields(state, {'groups', 'targets', 'transfer_orders', 'natural_growth_enabled', 'growth_credit', 'growth_last_added', 'growth_last_blockers', 'growth_supply_day', 'growth_supply_received', 'external_remaining', 'external_acquisition_day', 'external_acquired_today', 'next_group_id', 'next_transfer_order_id'}, 'population state')
     service = sim.population
     groups = {}
     for raw in decode_list(row['groups'], 'population groups'):
@@ -77,6 +86,31 @@ def restore_population_state(sim, state):
     remaining = decode_dict(row['external_remaining'], 'external population remaining')
     service.groups = groups
     service.targets = targets
+    service.natural_growth_enabled = {
+        SpatialNodeId(node): enabled
+        for node, enabled in decode_dict(row['natural_growth_enabled'], 'natural growth enabled').items()
+    }
+    service.growth_credit = {
+        SpatialNodeId(node): decode_float(credit, 'natural growth credit')
+        for node, credit in decode_dict(row['growth_credit'], 'growth credit').items()
+    }
+    service.growth_last_added = {
+        SpatialNodeId(node): decode_int(count, 'natural growth added')
+        for node, count in decode_dict(row['growth_last_added'], 'growth added').items()
+    }
+    service.growth_last_blockers = {
+        SpatialNodeId(node): tuple(decode_str(code, 'growth blocker') for code in decode_list(codes, 'growth blockers'))
+        for node, codes in decode_dict(row['growth_last_blockers'], 'growth blockers').items()
+    }
+    service.growth_supply_day = decode_int(row['growth_supply_day'], 'growth supply day')
+    service.growth_supply_received = {}
+    for evidence in decode_list(row['growth_supply_received'], 'growth supply received'):
+        data = require_fields(evidence, {'node_id', 'resource_id', 'amount'}, 'growth receipt')
+        key = (SpatialNodeId(decode_str(data['node_id'], 'growth receipt node')),
+               DefinitionId(decode_str(data['resource_id'], 'growth receipt resource')))
+        if key in service.growth_supply_received:
+            raise ValueError('duplicate growth receipt')
+        service.growth_supply_received[key] = decode_float(data['amount'], 'growth receipt amount')
     orders = {}
     for raw in decode_list(row['transfer_orders'], 'passenger orders'):
         data = require_fields(raw, {

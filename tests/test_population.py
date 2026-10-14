@@ -528,3 +528,80 @@ def test_external_population_eligibility_is_derived_from_existing_research():
     assert pop.external_available(source_id, sim.day) == 0
     sim.technology.completed.add(tech)
     assert pop.external_available(source_id, sim.day) > 0
+
+
+def test_natural_growth_settles_after_actual_life_support_and_uses_node_switch(tmp_path):
+    """Natural growth uses already-executed supply; it does not backdate Crew or living consumption."""
+    from dataclasses import replace
+    from datetime import timedelta
+    from space_idle import AdvanceTime, SetNaturalPopulationGrowth
+    from space_idle.simulation import OfflineProgressPolicy
+
+    growing = build_game_application()
+    inactive = build_game_application()
+    for app in (growing, inactive):
+        population = app._simulation.population
+        population.rules = replace(population.rules, natural_growth_rate_per_person_per_day=0.2)
+
+    node_id = str(ids.EARTH)
+    initial = growing._simulation.population.count_at(ids.EARTH)
+    inactive.execute(SetNaturalPopulationGrowth(node_id, False))
+    growing.execute(AdvanceTime(1))
+    inactive.execute(AdvanceTime(1))
+
+    grow_pop = growing._simulation.population
+    assert grow_pop.count_at(ids.EARTH) > initial
+    assert grow_pop.growth_last_added[ids.EARTH] == grow_pop.count_at(ids.EARTH) - initial
+    assert grow_pop.growth_last_blockers[ids.EARTH] == ()
+    assert inactive._simulation.population.count_at(ids.EARTH) == initial
+    assert inactive.query(GetOperationalNode(node_id)).population.natural_growth_enabled is False
+    assert inactive._simulation.population.growth_last_blockers[ids.EARTH] == ('natural_growth_disabled',)
+    assert inactive._simulation.population.growth_credit.get(ids.EARTH, 0) == 0
+    assert growing._simulation.inventory.stock == inactive._simulation.inventory.stock
+
+    before_stop = grow_pop.count_at(ids.EARTH)
+    credit_before_stop = grow_pop.growth_credit.get(ids.EARTH, 0.0)
+    growing.execute(SetNaturalPopulationGrowth(node_id, False))
+    growing.execute(AdvanceTime(1))
+    assert grow_pop.count_at(ids.EARTH) == before_stop
+    assert grow_pop.growth_credit.get(ids.EARTH, 0.0) == credit_before_stop
+    growing.execute(SetNaturalPopulationGrowth(node_id, True))
+
+    path = tmp_path / 'population-natural-growth.json'
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    save_game(growing, path, saved_at=saved_at)
+    direct, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(direct._simulation) == capture_state(growing._simulation)
+    assert direct.query(GetOperationalNode(node_id)).population.natural_growth_enabled
+    assert direct.query(GetOperationalNode(node_id)).population.natural_growth_credit == pytest.approx(credit_before_stop)
+    offline, result = load_game(
+        path, build_game_application_for_load,
+        now=saved_at + timedelta(seconds=3),
+        offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
+    )
+    direct.execute(AdvanceTime(3))
+    assert result is not None and result.advanced_days == 3
+    assert capture_state(direct._simulation) == capture_state(offline._simulation)
+
+
+def test_natural_growth_requires_confirmed_replenishment_not_just_large_stock():
+    from dataclasses import replace
+    from space_idle import AdvanceTime, SetNaturalPopulationGrowth
+
+    app = build_game_application()
+    sim = app._simulation
+    sim.population.rules = replace(sim.population.rules, natural_growth_rate_per_person_per_day=0.5)
+    initial = sim.population.count_at(ids.EARTH)
+    farm = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == ids.FOOD_FARM)
+    app.execute(PauseFacility(str(farm.id)))
+    assert sim.inventory.available(ids.EARTH, ids.FOOD) > 100
+    app.execute(AdvanceTime(1))
+    assert sim.population.count_at(ids.EARTH) == initial
+    assert 'living_resource_supply_limited' in sim.population.growth_last_blockers[ids.EARTH]
+
+    sim.population.groups.clear()
+    sim.population.growth_credit[ids.EARTH] = 0.9
+    app.execute(AdvanceTime(1))
+    assert sim.population.count_at(ids.EARTH) == 0
+    assert sim.population.growth_credit[ids.EARTH] == pytest.approx(0.9)
+    assert 'population_absent' in sim.population.growth_last_blockers[ids.EARTH]

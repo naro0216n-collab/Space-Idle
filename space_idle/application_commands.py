@@ -30,7 +30,7 @@ from .app_contracts.logistics import (
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
 from .app_contracts.population import (
-    SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
+    SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
     CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from .app_contracts.economy import (
@@ -44,7 +44,7 @@ from .app_contracts.queries import (
 )
 
 Command: TypeAlias = (
-    SetPopulationTarget | ClearPopulationTarget | RequestPassengerTransfer | CancelPassengerTransfer |
+    SetPopulationTarget | ClearPopulationTarget | SetNaturalPopulationGrowth | RequestPassengerTransfer | CancelPassengerTransfer |
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectProcurementPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityExtractionMethod | SetFacilityActivityPriority | SetMaintenancePriority |

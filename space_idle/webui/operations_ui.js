@@ -349,6 +349,8 @@
     const pop=loc.population;
     const populationCard=pop?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">人口</span><h3>居住・生命維持</h3></div><span class="badge ${pop.life_support_allocated+1e-9<pop.life_support_required?'warn':'ok'}">${fmt(pop.current_count,0)} 人</span></div>
       <div class="capacity-quad"><div><span>現在人数</span><strong>${fmt(pop.current_count,0)} 人</strong></div><div><span>人口目標</span><strong>${pop.desired_count==null?'未設定':`${fmt(pop.desired_count,0)} 人`}</strong></div><div><span>利用可能居住枠</span><strong>${fmt(pop.housing_usable,0)} / ${fmt(pop.housing_physical,0)} 人</strong></div><div><span>活動拘束</span><strong>${fmt(pop.committed_count,0)} 人</strong></div></div>
+      <div class="form-row"><span>拠点内の自然人口増加</span><button type="button" data-toggle-natural-growth data-enabled="${!pop.natural_growth_enabled}">${pop.natural_growth_enabled?'自然増加を停止':'自然増加を許可'}</button></div>
+      <div class="cell-sub">自然増加 ${pop.natural_growth_enabled?'許可':'停止'} · 前日増加 ${fmt(pop.natural_growth_last_added,0)} 人 · 成長蓄積 ${fmt(pop.natural_growth_credit,3)} 人${(pop.natural_growth_blockers||[]).length?` · 制約 ${pop.natural_growth_blockers.map(esc).join('、')}`:''}</div>
       <div class="cell-sub">確定Inbound ${fmt(pop.inbound_count,0)} 人 · Transit Outbound ${fmt(pop.outbound_count,0)} 人 · 確定到着後 ${fmt(pop.expected_count_after_confirmed_arrivals,0)} 人（未発送候補を除く）</div>
       <div class="overview-capacity"><div class="overview-capacity-heading"><strong>Life Support（person-day/日）</strong><span>割当見込 ${fmt(pop.life_support_allocated,2)} / 需要 ${fmt(pop.life_support_required,2)}</span></div><div class="cell-sub">Crew供給可能 ${fmt(pop.crew_capacity,2)} / 使用 ${fmt(pop.crew_service_used_per_day,2)} 人日/日 · 累積不足 ${fmt(pop.deprivation_person_days,2)} 人日</div></div>
       <div class="cell-sub">生活資源（消費/日・現在在庫・輸送中・確定Inboundによる追加需要/日）</div>
@@ -1337,6 +1339,11 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
+    const growthToggle=event.target.closest('[data-toggle-natural-growth]');
+    if(growthToggle){
+      try{await command('SetNaturalPopulationGrowth',{operational_node_id:state.operationalNodeId,enabled:growthToggle.dataset.enabled==='true'});}catch{}
+      return;
+    }
     const popSet=event.target.closest('[data-set-population-target]');
     if(popSet){
       const input=$('[data-population-target-input]');
