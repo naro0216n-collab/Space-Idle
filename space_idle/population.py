@@ -279,6 +279,32 @@ class PopulationService:
             raise ValueError('natural growth requires an established Operational Node')
         return self.natural_growth_enabled.get(node_id, True)
 
+    def natural_growth_capacity_context(self, node_id: SpatialNodeId, day: int, power: object) -> tuple[int, int, int]:
+        """Physical current acceptance headroom; not a future growth simulation.
+
+        Arrival commitments own their already-reserved headroom. Life Support
+        enabled nameplate is not proof of same-day Resource allocation.
+        """
+        reserved = self._inbound_by_node().get(node_id, 0)
+        occupants = self.count_at(node_id)
+        housing = max(0, self.housing_capacity(node_id, day) - occupants - reserved)
+        _, support = self.service_capacity_supply_at(
+            node_id, 'life_support', self.facilities, power, day
+        )
+        life_support = max(0, math.floor(support + 1e-8) - occupants - reserved)
+        return housing, life_support, reserved
+
+    @staticmethod
+    def natural_growth_blocker_detail(code: str) -> str:
+        return {
+            'natural_growth_disabled': 'この拠点では自然増加が停止中',
+            'population_absent': '既存人口がいない',
+            'living_support_unfulfilled': '既存人口の生命維持が充足していない',
+            'housing_reserved_or_full': '既存人口と到着予定者で居住枠に余裕がない',
+            'life_support_capacity_limited': '既存人口と到着予定者を超える生命維持能力がない',
+            'living_resource_supply_limited': '実際の生活物資補給と在庫の余力がない',
+        }[code]
+
     def observe_resource_inflow(
         self, day: int, node_id: SpatialNodeId, resource_id: DefinitionId, amount: float,
     ) -> None:

@@ -142,6 +142,8 @@ class LocationProjectorMixin:
 
     def _environment_rows(self, location_id: SpatialContextId) -> tuple[EnvironmentFacetRow, ...]:
         sim = self._simulation
+        if not sim.surface_knowledge.publishes_environment(location_id):
+            return ()
         facet_types = sim.environment.static.facet_types()
         rows: list[EnvironmentFacetRow] = []
         for facet_type in sorted(
@@ -168,6 +170,11 @@ class LocationProjectorMixin:
 
         facet_types = sim.environment.static.facet_types()
         environment_summary: list[LocationEnvironmentSummaryRow] = []
+        public_node_environment = sim.surface_knowledge.publishes_environment(location_id)
+        public_cells = {
+            cell_id: sim.surface_knowledge.publishes_environment(cell_id)
+            for cell_id in location.developed_cell_ids
+        }
         for facet_type in sorted(
             facet_types, key=lambda value: getattr(value, "facet_key", value.__name__)
         ):
@@ -176,14 +183,17 @@ class LocationProjectorMixin:
                 continue
             location_facet = sim.environment.get(location_id, facet_type)
             location_values = (
-                () if location_facet is None else self._environment_values(location_facet)
+                () if location_facet is None or not public_node_environment
+                else self._environment_values(location_facet)
             )
             cell_values: list[tuple[str, tuple[tuple[str, object], ...]]] = []
             if scope is not EnvironmentFieldScope.BODY_GLOBAL:
                 for cell_id in sorted(location.developed_cell_ids, key=str):
                     facet = sim.environment.get(cell_id, facet_type)
                     if facet is not None:
-                        cell_values.append((str(cell_id), self._environment_values(facet)))
+                        cell_values.append((
+                            str(cell_id), self._environment_values(facet) if public_cells[cell_id] else (),
+                        ))
             if not location_values and not cell_values:
                 continue
             environment_summary.append(
@@ -729,6 +739,15 @@ class LocationProjectorMixin:
                         min(demand.requested_count, option.possible_people) * option.payload_per_person_t,
                         option.blockers,
                     ))
+            growth_housing_spare, growth_support_spare, growth_reserved = pop.natural_growth_capacity_context(
+                location_id, sim.day, power,
+            )
+            growth_observation_day = pop.growth_supply_day if pop.growth_supply_day >= 0 else None
+            growth_confirmed_receipts = tuple(sorted(
+                (str(resource), amount)
+                for (node, resource), amount in pop.growth_supply_received.items()
+                if node == location_id
+            ))
             population_view = PopulationView(
                 sum(group.count for group in people),
                 pop.targets.get(location_id),
@@ -753,6 +772,18 @@ class LocationProjectorMixin:
                 natural_growth_credit=pop.growth_credit.get(location_id, 0.0),
                 natural_growth_last_added=pop.growth_last_added.get(location_id, 0),
                 natural_growth_blockers=pop.growth_last_blockers.get(location_id, ()),
+                natural_growth_constraints=constraints_from_pairs(
+                    tuple((code, pop.natural_growth_blocker_detail(code))
+                          for code in pop.growth_last_blockers.get(location_id, ())),
+                    affected_action="natural_population_growth",
+                    related_entity_kind="operational_node",
+                    related_entity_id=str(location_id),
+                ),
+                natural_growth_housing_spare=growth_housing_spare,
+                natural_growth_life_support_spare=growth_support_spare,
+                natural_growth_reserved_arrivals=growth_reserved,
+                natural_growth_supply_observed_day=growth_observation_day,
+                natural_growth_confirmed_receipts=growth_confirmed_receipts,
                 inbound_count=confirmed_inbound,
                 outbound_count=confirmed_outbound,
                 expected_count_after_confirmed_arrivals=pop.count_at(location_id) + confirmed_inbound,

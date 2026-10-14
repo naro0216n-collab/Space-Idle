@@ -483,6 +483,8 @@ class SurfaceProjectorMixin:
                     cell.display_name or str(cell.id),
                     terrain_knowledge_level=terrain_quality,
                     environment_knowledge_level=environment_quality,
+                    geology_knowledge_level=sim.surface_knowledge.attribute_level(cell.id, "geology"),
+                    geology=sim.surface_knowledge.visible_geology(cell.id),
                     movement_accessible=movement_accessible,
                     minimum_transit_days=minimum_transit_days,
                 )

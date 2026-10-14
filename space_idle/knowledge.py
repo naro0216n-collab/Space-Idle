@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from math import floor
 from hashlib import sha256
+import json
 
 from .exploration_models import KnowledgeLevel, KnowledgeRequirement, SurveyTarget, SurveyObservationModeSpec
 from .shared import CelestialBodyId, DefinitionId, SurfaceCellId
@@ -84,19 +85,58 @@ class SurfaceKnowledgeState:
     # silently reveal weather, slope, geology or Power conditions.
     cell_attribute_levels: dict[tuple[SurfaceCellId, str], int] = field(default_factory=dict)
     terrain_overview_resolution: float = 0.5
+    # A measurement belongs to the physical environment at observation time.
+    # Store only evidence identity, never a second copy of World values.
+    environment_observation_fingerprints: dict[SurfaceCellId, str] = field(default_factory=dict)
+    environment: object | None = field(default=None, repr=False, compare=False)
+
+    def _environment_fingerprint(self, cell_id: SurfaceCellId) -> str | None:
+        if self.environment is None:
+            return None
+        fields = []
+        for facet_type in sorted(self.environment.static.facet_types(),
+                                 key=lambda item: getattr(item, 'facet_key', item.__name__)):
+            value = self.environment.get(cell_id, facet_type)
+            fields.append((getattr(facet_type, 'facet_key', facet_type.__name__),
+                           None if value is None else asdict(value) if is_dataclass(value) else repr(value)))
+        encoded = json.dumps(fields, sort_keys=True, default=str, separators=(',', ':'))
+        return sha256(encoded.encode('utf-8')).hexdigest()
+
+    def publishes_environment(self, context_id: object) -> bool:
+        """A physical Surface Location cannot expose unmeasured member Cells
+        through its aggregate node or location environmental breakdown.
+        """
+        if context_id in self.graph.surface_cells:
+            return self.attribute_level(context_id, 'environment') >= 2
+        location = self.graph.locations.get(context_id)
+        if location is not None:
+            return all(self.publishes_environment(cell_id)
+                       for cell_id in location.developed_cell_ids)
+        # Active non-surface operations have locally accessible environment.
+        return True
+
+    def visible_geology(self, cell_id: SurfaceCellId) -> tuple[tuple[str, float], ...]:
+        """Physical geology is published only after that attribute is measured."""
+        if self.attribute_level(cell_id, 'geology') < 2:
+            return ()
+        return tuple(sorted(self.graph.surface_cells[cell_id].static_geology.items()))
 
     def attribute_level(self, cell_id: SurfaceCellId, attribute: str) -> int:
         if cell_id not in self.graph.surface_cells or attribute not in ("terrain", "environment", "geology"):
             raise KeyError((cell_id, attribute))
-        return self.cell_attribute_levels.get((cell_id, attribute), 0)
+        level = self.cell_attribute_levels.get((cell_id, attribute), 0)
+        if attribute == 'environment' and level and self.environment is not None:
+            if self.environment_observation_fingerprints.get(cell_id) != self._environment_fingerprint(cell_id):
+                return 0
+        return level
 
-    def unpublished_site_condition_codes(self, cell_id: SurfaceCellId, *requirements: object) -> frozenset[str]:
+    def unpublished_site_condition_codes(self, context_id: object, *requirements: object) -> frozenset[str]:
         """Which authored Environment requirements cannot be explained publicly.
 
         This only classifies metadata for projection; execution continues to
         evaluate true World conditions through the owning Site service.
         """
-        if self.attribute_level(cell_id, "environment") >= 2:
+        if self.publishes_environment(context_id):
             return frozenset()
         return frozenset(
             condition.code
@@ -120,7 +160,13 @@ class SurfaceKnowledgeState:
         if isinstance(level, bool) or not isinstance(level, int) or level not in (1, 2):
             raise ValueError("attribute observation quality must be overview=1 or measured=2")
         key = (cell_id, attribute)
-        self.cell_attribute_levels[key] = max(level, self.cell_attribute_levels.get(key, 0))
+        # A weaker new observation cannot preserve a measurement from an old
+        # physical environment. Unchanged subjects still improve monotonically.
+        self.cell_attribute_levels[key] = max(level, self.attribute_level(cell_id, attribute))
+        if attribute == 'environment':
+            fingerprint = self._environment_fingerprint(cell_id)
+            if fingerprint is not None:
+                self.environment_observation_fingerprints[cell_id] = fingerprint
 
     def observe_body(self, body_id: CelestialBodyId, *, resource_level: KnowledgeLevel,
                      attribute_level: int = 0,
@@ -138,7 +184,7 @@ class SurfaceKnowledgeState:
         resources_by_cell = self.resource_ids_by_cell
         for cell in self.graph.cells_for_body(body_id):
             if attribute_level:
-                for attribute in ("terrain", "environment"):
+                for attribute in ("terrain", "environment", "geology"):
                     self.observe_attribute(cell.id, attribute, attribute_level)
             if resource_level is not KnowledgeLevel.UNKNOWN:
                 for resource_id in resources_by_cell.get(cell.id, ()):

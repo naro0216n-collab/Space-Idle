@@ -105,7 +105,7 @@ def build_base_simulation(
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    knowledge = SurfaceKnowledgeState(instantiate_standard_survey_targets(), graph, terrain_overview_resolution=0.5)
+    knowledge = SurfaceKnowledgeState(instantiate_standard_survey_targets(), graph, terrain_overview_resolution=0.5, environment=environment)
     survey = SurveyService(
         knowledge.targets, build_survey_providers(), facilities, graph, transport, technology,
         knowledge, _standard_survey_registration_proof(),

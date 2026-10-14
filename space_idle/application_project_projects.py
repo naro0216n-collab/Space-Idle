@@ -776,13 +776,17 @@ class ProjectProjectorMixin:
             site_failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day, powers[location_id]
             )
+            unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                location_id, definition.installation_requirements, recipe.site_requirements,
+            )
             blockers = tuple(
                 ("technology", str(technology))
                 for technology in sorted(
                     recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
                     key=str,
                 )
-            ) + tuple((failure.code, failure.detail) for failure in site_failures)
+            ) + tuple((failure.code, failure.detail) for failure in site_failures
+                      if failure.code not in unpublished)
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
             )
@@ -801,7 +805,10 @@ class ProjectProjectorMixin:
                 can_plan=not plan_failures,
                 placement_scope=definition.placement_scope.value,
                 projected_material_readiness_day=material_readiness_day,
-                **self._prospective_facility_effects(recipe, location_id),
+                site_knowledge_unverified=bool(unpublished),
+                **self._surface_facility_public_effects(
+                    recipe, location_id, sim.surface_knowledge.publishes_environment(location_id)
+                ),
             ))
         return BuildOptionsView(
             str(location_id),

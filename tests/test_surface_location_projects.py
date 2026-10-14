@@ -3,7 +3,7 @@ from __future__ import annotations
 from stock_support import add_preexisting_stock
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -20,12 +20,15 @@ from space_idle import (
     GetProjects,
     GetSurfaceMap,
     GetWorld,
+    GetOperationalNode,
+    StartSurvey,
+    SurveyProviderConstraintInput,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content import base_requirements as req
-from space_idle.persistence import load_game, save_game
+from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.founding import (
     DeploymentRecipe, FoundingFacilityDeployment, FoundingResourceRequirement,
     NonSurfaceOperationalNodeTargetSpec,
@@ -35,6 +38,7 @@ from space_idle.exploration_models import KnowledgeLevel
 from space_idle.power import FixedGeneration, PowerSpec
 from space_idle.storage import StorageProviderSpec
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
+from space_idle.simulation import OfflineProgressPolicy
 from space_idle.spatial import SpatialNodeDef, SpatialNodeKind, ThermalField
 from space_idle.site import FacetValueRange, SiteRequirements
 from space_idle.spatial_claims import SurfaceCellClaim
@@ -529,6 +533,75 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert cell.terrain_knowledge_level == 0
     assert not cell.terrain
     assert option_values["development_work_factor"] is None
+
+
+def test_observation_foundation_and_resource_access_are_one_application_progression(tmp_path):
+    """Survey evidence changes the actual founding/extraction decision, without
+    creating a fictional inventory node before physical Fleet deployment.
+    Science's independent real-Movement observation is tested at its own owner.
+    """
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    resource = ids.MINERAL_FEEDSTOCK
+    before = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell),))).cells
+                  if row.id == str(cell))
+    initial_resource = next(row for row in before.resources if row.resource_id == str(resource))
+    assert initial_resource.visible_potential is None
+    assert before.geology == ()
+
+    campaign_id = app.execute(StartSurvey(
+        target_cell_ids=(str(cell),), resource_ids=(str(resource),), goal_knowledge_level=2,
+        provider_constraint=SurveyProviderConstraintInput(
+            str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        ),
+        observation_mode_constraint="remote_orbital_spectrometry",
+    )).created_id
+    assert campaign_id is not None
+    target = sim.surface_knowledge.targets[(cell, resource)]
+    while sim.surface_knowledge.progress(cell, resource) < target.thresholds[1] - 1e-9:
+        progress = sim.surface_knowledge.progress(cell, resource)
+        app.execute(AdvanceTime(1))
+        assert sim.surface_knowledge.progress(cell, resource) > progress
+    observed = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell),))).cells
+                    if row.id == str(cell))
+    observed_resource = next(row for row in observed.resources if row.resource_id == str(resource))
+    assert observed_resource.knowledge_level == 2
+    assert observed_resource.visible_potential is not None
+    assert observed_resource.visible_potential_precision_fraction is not None
+    assert observed.terrain_knowledge_level > 0 and observed.geology == ()
+
+    # A physical target is never a second operational resource/transport node.
+    _stage_founding_resources(sim)
+    founding_id = app.execute(_found_command("Surveyed outpost", cell)).created_id
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == founding_id)
+    node_id = sim.founding.target_operational_node_id(project.target_spec)
+    assert not sim.graph.has_operational_node(node_id)
+    _advance_founding_to_completion(app, project)
+    assert sim.graph.has_operational_node(node_id)
+    assert sim.graph.locations[node_id].core_cell_id == cell
+    result = app.query(GetOperationalNode(str(node_id)))
+    assert result.id == str(node_id)
+    assert result.population is not None
+    assert result.population.current_count == 0
+    # A surveyed ore deposit is a real accessible opportunity, not free
+    # extraction throughput or player-owned stock at founding completion.
+    assert sim.surface_knowledge.visible_potential(cell, resource) == observed_resource.visible_potential
+    assert sim.inventory.amount(node_id, resource) >= 0
+    before_people = sim.population.count_at(node_id)
+    assert before_people == 0
+
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / 'observed-founded-node.json'
+    save_game(app, path, saved_at=saved_at)
+    direct, _ = load_game(path, build_game_application_for_load)
+    offline, outcome = load_game(path, build_game_application_for_load,
+                                  now=saved_at + timedelta(seconds=1),
+                                  offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0))
+    direct.execute(AdvanceTime(1))
+    assert outcome is not None and outcome.advanced_days == 1
+    assert capture_state(offline._simulation) == capture_state(direct._simulation)
+    assert offline._simulation.population.count_at(node_id) == 0
 
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):

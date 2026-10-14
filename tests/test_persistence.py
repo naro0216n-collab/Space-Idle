@@ -15,6 +15,8 @@ from space_idle import (
     DevelopSurfaceCell,
     GetDependencyAnalytics,
     GetOperationalNode,
+    GetSurfaceMap,
+    GetBuildOptions,
     GetResearch,
     GetWorld,
     PauseBuild,
@@ -161,7 +163,32 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
         TerraformingEnvironmentOverlay(TerraformingService({body_id: climate}))
     )
     overlay = app._simulation.environment.overlays[-1]
+    cell_id = ids.EARTH_CELL_INDUSTRIAL
+    knowledge = app._simulation.surface_knowledge
+    def surface_cell(game):
+        return next(row for row in game.query(GetSurfaceMap(str(body_id))).cells
+                    if row.id == str(cell_id))
+
+    # Acquired geology is independent of changing atmosphere; an environment
+    # observation is evidence of one physical state, not permanent omniscience.
+    assert surface_cell(app).geology == ()
+    knowledge.observe_attribute(cell_id, "geology", 2)
+    knowledge.observe_attribute(cell_id, "environment", 2)
+    measured = surface_cell(app)
+    assert measured.geology == tuple(sorted(app._simulation.graph.surface_cells[cell_id].static_geology.items()))
+    assert measured.environment_knowledge_level == 2 and measured.environment
     overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
+    stale = surface_cell(app)
+    assert stale.environment_knowledge_level == 0 and stale.environment == ()
+    assert stale.geology == measured.geology and stale.geology_knowledge_level == 2
+    # A prospective facility on the same location cannot bypass Knowledge by
+    # querying the true atmosphere via the Construction catalog.
+    candidate = next(row for row in app.query(GetBuildOptions(str(ids.EARTH))).items
+                     if row.facility_definition_id == str(ids.BREATHABLE_SURFACE_LIFE_SUPPORT))
+    assert candidate.site_knowledge_unverified
+    assert not any(row.code == 'environment:breathable_oxygen' for row in candidate.blockers)
+    assert candidate.can_plan
+    assert candidate.power_nominal_generation_mw is None
 
     def load_factory():
         loaded_app = build_game_application_for_load()
@@ -179,10 +206,22 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
     loaded, offline = load_game(path, load_factory)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    assert surface_cell(loaded).environment == ()
+    assert surface_cell(loaded).geology == measured.geology
 
     app.execute(AdvanceTime(1))
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+    # Re-observing the modified environment restores published measurements;
+    # it does not mutate the physical World or unrelated geological evidence.
+    loaded._simulation.surface_knowledge.observe_attribute(cell_id, "environment", 1)
+    assert surface_cell(loaded).environment_knowledge_level == 1
+    assert surface_cell(loaded).environment == ()
+    loaded._simulation.surface_knowledge.observe_attribute(cell_id, "environment", 2)
+    fresh = surface_cell(loaded)
+    assert fresh.environment_knowledge_level == 2 and fresh.environment
+    assert fresh.geology == measured.geology
 
 def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)

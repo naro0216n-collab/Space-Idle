@@ -38,6 +38,10 @@ def capture_surface_knowledge(sim: Any) -> dict[str, Any]:
                 key=lambda x: (str(x[0][0]), str(x[0][1])),
             )
         ],
+        "environment_observation_fingerprints": [
+            {"cell_id": str(cell), "fingerprint": value}
+            for cell, value in sorted(sim.surface_knowledge.environment_observation_fingerprints.items())
+        ],
         "cell_attribute_levels": [
             {"cell_id": str(cell), "attribute": attribute, "level": level}
             for (cell, attribute), level in sorted(sim.surface_knowledge.cell_attribute_levels.items())
@@ -69,6 +73,13 @@ def restore_surface_knowledge(sim: Any, data: dict[str, Any]) -> None:
     knowledge.observed_presence_probability = _restore_knowledge_map(
         data["observed_presence_probability"], "probability", "presence_probability"
     )
+    knowledge.environment_observation_fingerprints.clear()
+    for index, raw in enumerate(decode_list(data["environment_observation_fingerprints"], "observed environment fingerprints")):
+        row = require_fields(raw, {"cell_id", "fingerprint"}, f"environment fingerprint[{index}]")
+        cell_id = SurfaceCellId(decode_str(row["cell_id"], "environment fingerprint cell id"))
+        if cell_id in knowledge.environment_observation_fingerprints:
+            raise ValueError(f"duplicate environment fingerprint: {cell_id}")
+        knowledge.environment_observation_fingerprints[cell_id] = decode_str(row["fingerprint"], "environment fingerprint")
     knowledge.cell_attribute_levels.clear()
     for index, raw in enumerate(decode_list(data["cell_attribute_levels"], "knowledge cell attributes")):
         row = require_fields(raw, {"cell_id", "attribute", "level"}, f"knowledge cell attribute[{index}]")
@@ -123,10 +134,19 @@ def validate_surface_knowledge_runtime(sim: Any) -> None:
                 key in sim.surface_knowledge.estimated_potential,
                 f"estimated Survey Knowledge lacks an estimated potential value: {key}",
             )
+    for cell_id, fingerprint in sim.surface_knowledge.environment_observation_fingerprints.items():
+        _require(cell_id in sim.graph.surface_cells, f"environment evidence references missing Cell: {cell_id}")
+        _require(len(fingerprint) == 64 and all(c in '0123456789abcdef' for c in fingerprint),
+                 f"invalid environment observation fingerprint: {cell_id}")
+        _require((cell_id, 'environment') in sim.surface_knowledge.cell_attribute_levels,
+                 f"environment evidence has no observed attribute: {cell_id}")
     for (cell_id, attr), level in sim.surface_knowledge.cell_attribute_levels.items():
         _require(cell_id in sim.graph.surface_cells, f"observed attribute references missing Cell: {cell_id}")
         _require(attr in ("terrain", "environment", "geology"), f"invalid observed attribute: {attr}")
         _require(type(level) is int and level in (1, 2), f"invalid observation level: {cell_id}/{attr}")
+        if attr == 'environment' and sim.surface_knowledge.environment is not None:
+            _require(cell_id in sim.surface_knowledge.environment_observation_fingerprints,
+                     f"environment observation lacks physical evidence identity: {cell_id}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

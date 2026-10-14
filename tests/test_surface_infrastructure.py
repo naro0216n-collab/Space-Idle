@@ -185,6 +185,26 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
         str(ids.EARTH_CELL_COASTAL),
         str(ids.EARTH_CELL_INDUSTRIAL),
     }
+    # The same Location projection must not expose a newly developed Cell's
+    # physical values until the Knowledge owner records a real observation.
+    occupied = sim.graph.locations[ids.EARTH].developed_cell_ids
+    frontier = next(
+        candidate for owner in sorted(occupied, key=str)
+        for candidate in sorted(sim.graph.surface_cells[owner].neighbor_ids, key=str)
+        if candidate not in occupied
+        and sim.surface_knowledge.attribute_level(candidate, "environment") == 0
+    )
+    sim.graph.develop_surface_cell(ids.EARTH, frontier)
+    unknown = app.query(GetOperationalNode(str(ids.EARTH)))
+    unknown_illumination = next(summary for summary in unknown.surface_location.environment_summary
+                                if summary.key == "illumination")
+    assert dict(unknown_illumination.cell_values)[str(frontier)] == ()
+    assert unknown.environment == ()
+    sim.surface_knowledge.observe_attribute(frontier, "environment", 2)
+    disclosed = app.query(GetOperationalNode(str(ids.EARTH)))
+    fresh = next(summary for summary in disclosed.surface_location.environment_summary
+                 if summary.key == "illumination")
+    assert dict(fresh.cell_values)[str(frontier)]
 
 
 def test_surface_infrastructure_limits_remote_service_execution_without_disabling_capability():

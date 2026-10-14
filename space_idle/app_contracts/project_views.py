@@ -87,6 +87,7 @@ class BuildOptionRow:
     life_support_net_resources_per_person_day: tuple[tuple[str, float], ...] = ()
     research_capacity: BuildResearchCapacityRow | None = None
     survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
+    site_knowledge_unverified: bool = False
 
 
 @dataclass(frozen=True)

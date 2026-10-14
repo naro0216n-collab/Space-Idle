@@ -261,6 +261,12 @@ class PopulationView:
     natural_growth_credit: float = 0.0
     natural_growth_last_added: int = 0
     natural_growth_blockers: tuple[str, ...] = ()
+    natural_growth_constraints: tuple[DecisionConstraintRow, ...] = ()
+    natural_growth_housing_spare: int = 0
+    natural_growth_life_support_spare: int = 0
+    natural_growth_reserved_arrivals: int = 0
+    natural_growth_supply_observed_day: int | None = None
+    natural_growth_confirmed_receipts: tuple[tuple[str, float], ...] = ()
     inbound_count: int = 0
     outbound_count: int = 0
     expected_count_after_confirmed_arrivals: int = 0

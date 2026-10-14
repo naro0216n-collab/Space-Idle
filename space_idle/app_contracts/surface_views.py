@@ -124,6 +124,8 @@ class SurfaceCellRow:
     display_name: str = ""
     terrain_knowledge_level: int = 0
     environment_knowledge_level: int = 0
+    geology_knowledge_level: int = 0
+    geology: tuple[tuple[str, float], ...] = ()
     movement_accessible: bool | None = None
     minimum_transit_days: int | None = None
 
