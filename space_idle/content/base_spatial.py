@@ -23,7 +23,7 @@ from ..spatial import (
     StarSystemDef,
     StaticFacetStore,
     SurfaceCellDef,
-    SurfaceTerrain,
+    SurfaceTerrain, TerrainProfileDef,
     SurfacePoint,
     ThermalField,
 )
@@ -70,7 +70,14 @@ BASE_WORLD_DEFINITION_ID = "base.world.sol"
 
 
 def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, EnvironmentResolver]:
+    # Landform rather than unrelated per-Cell dust/slope/bearing multipliers.
     graph = SpatialGraph()
+    graph.terrain_profiles.update({
+        "plain": TerrainProfileDef("plain", "Plains", 1.0, 1.0),
+        "basin": TerrainProfileDef("basin", "Basin", 1.10, 0.95),
+        "rolling": TerrainProfileDef("rolling", "Rolling Terrain", 1.25, 0.90),
+        "rugged": TerrainProfileDef("rugged", "Rugged Highlands", 1.60, 0.72),
+    })
     graph.add_star_system(StarSystemDef(
         ids.SOL_SYSTEM,
         "太陽系",
@@ -133,7 +140,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             35.0,
             139.0,
             (ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND),
-            SurfaceTerrain(1.0, 1.0, 0.05, 0.02),
+            SurfaceTerrain("rolling"),
             {ids.MINERAL_FEEDSTOCK: 60.0, ids.METAL_ORE: 35.0, ids.WATER: 120.0},
         ),
         _earth_cell(
@@ -142,7 +149,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             20.0,
             150.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
-            SurfaceTerrain(0.95, 0.95, 0.07, 0.03),
+            SurfaceTerrain("plain"),
             {ids.MINERAL_FEEDSTOCK: 45.0, ids.METAL_ORE: 24.0, ids.WATER: 180.0},
         ),
         _earth_cell(
@@ -151,7 +158,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             45.0,
             110.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
-            SurfaceTerrain(0.92, 0.96, 0.06, 0.05),
+            SurfaceTerrain("plain"),
             {ids.MINERAL_FEEDSTOCK: 72.0, ids.METAL_ORE: 52.0, ids.WATER: 75.0},
         ),
     )
@@ -162,7 +169,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             -88.0,
             30.0,
             (ids.MOON_CELL_POLAR_COLD_TRAP, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
-            SurfaceTerrain(0.90, 0.90, 0.55, 0.10),
+            SurfaceTerrain("rolling"),
             {ids.VOLATILE_BEARING_MATERIAL: 0.45, ids.MINERAL_FEEDSTOCK: 22.0, ids.METAL_ORE: 5.5},
         ),
         _moon_cell(
@@ -171,7 +178,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             -89.0,
             50.0,
             (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.MOON_CELL_SOUTH_POLAR_PLAIN),
-            SurfaceTerrain(0.62, 0.75, 0.60, 0.28),
+            SurfaceTerrain("rugged"),
             {ids.VOLATILE_BEARING_MATERIAL: 4.5, ids.MINERAL_FEEDSTOCK: 16.0, ids.METAL_ORE: 3.8},
         ),
         _moon_cell(
@@ -184,7 +191,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
                 ids.MOON_CELL_POLAR_COLD_TRAP,
                 ids.MOON_CELL_EQUATORIAL_HIGHLANDS,
             ),
-            SurfaceTerrain(0.84, 0.86, 0.60, 0.12),
+            SurfaceTerrain("rolling"),
             {ids.VOLATILE_BEARING_MATERIAL: 0.18, ids.MINERAL_FEEDSTOCK: 25.0, ids.METAL_ORE: 6.2},
         ),
         _moon_cell(
@@ -193,7 +200,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             0.0,
             20.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),
-            SurfaceTerrain(0.95, 0.95, 0.60, 0.05),
+            SurfaceTerrain("plain"),
             {ids.VOLATILE_BEARING_MATERIAL: 0.02, ids.MINERAL_FEEDSTOCK: 38.0, ids.METAL_ORE: 9.0},
         ),
         _moon_cell(
@@ -206,7 +213,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
                 ids.MOON_CELL_NEARSIDE_MARE,
                 ids.MOON_CELL_FARSIDE_HIGHLANDS,
             ),
-            SurfaceTerrain(0.78, 0.82, 0.65, 0.18),
+            SurfaceTerrain("rolling"),
             {ids.VOLATILE_BEARING_MATERIAL: 0.06, ids.MINERAL_FEEDSTOCK: 30.0, ids.METAL_ORE: 7.5},
         ),
         _moon_cell(
@@ -215,7 +222,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             5.0,
             170.0,
             (ids.MOON_CELL_EQUATORIAL_HIGHLANDS,),
-            SurfaceTerrain(0.75, 0.80, 0.67, 0.20),
+            SurfaceTerrain("rugged"),
             {ids.VOLATILE_BEARING_MATERIAL: 0.08, ids.MINERAL_FEEDSTOCK: 28.0, ids.METAL_ORE: 6.8},
         ),
     )
@@ -224,7 +231,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             ids.MARS_CELL_EQUATORIAL_PLAIN, ids.MARS_BODY, 4_000_000.0,
             SurfacePoint(2.0, 135.0),
             frozenset((ids.MARS_CELL_NORTHERN_BASIN, ids.MARS_CELL_POLAR_HIGHLANDS)),
-            SurfaceTerrain(0.86, 0.82, 0.48, 0.13),
+            SurfaceTerrain("rolling"),
             {"crust_accessibility": 1.0, "regolith_accessibility": 0.85},
             {ids.MINERAL_FEEDSTOCK: 40.0, ids.METAL_ORE: 16.0, ids.VOLATILE_BEARING_MATERIAL: 0.35},
             "赤道平原",
@@ -233,7 +240,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             ids.MARS_CELL_NORTHERN_BASIN, ids.MARS_BODY, 5_000_000.0,
             SurfacePoint(42.0, 50.0),
             frozenset((ids.MARS_CELL_EQUATORIAL_PLAIN,)),
-            SurfaceTerrain(0.92, 0.90, 0.46, 0.08),
+            SurfaceTerrain("basin"),
             {"crust_accessibility": 0.9, "regolith_accessibility": 0.95},
             {ids.MINERAL_FEEDSTOCK: 34.0, ids.METAL_ORE: 10.0, ids.VOLATILE_BEARING_MATERIAL: 0.55},
             "北部低地",
@@ -242,7 +249,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             ids.MARS_CELL_POLAR_HIGHLANDS, ids.MARS_BODY, 3_000_000.0,
             SurfacePoint(-78.0, 110.0),
             frozenset((ids.MARS_CELL_EQUATORIAL_PLAIN,)),
-            SurfaceTerrain(0.65, 0.72, 0.61, 0.30),
+            SurfaceTerrain("rugged"),
             {"crust_accessibility": 0.75, "regolith_accessibility": 0.75},
             {ids.MINERAL_FEEDSTOCK: 18.0, ids.METAL_ORE: 7.0, ids.VOLATILE_BEARING_MATERIAL: 2.8},
             "南極高地",
@@ -381,6 +388,7 @@ def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
         # Application. Construct the known dataclass directly: dataclasses.replace
         # repeatedly discovers the same fields for every one of the 4k+ Cells.
         # __post_init__ is still executed; no verification is bypassed.
+        terrain_profiles=dict(template.terrain_profiles),
         surface_cells={cell_id: SurfaceCellDef(
             cell.id, cell.body_id, cell.area_km2, cell.centroid,
             cell.neighbor_ids, cell.terrain, dict(cell.static_geology),

@@ -100,20 +100,17 @@ class SpatialDevelopmentRecipe:
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
     self_deploying: bool = False
     knowledge_requirements: tuple[KnowledgeRequirementSpec, ...] = ()
-    # Content-defined work penalties for difficult terrain. Physical geography
-    # is read from the target Cell, never replicated as Project State.
-    slope_work_weight: float = 0.0
-    dust_work_weight: float = 0.0
+    # A terrain engineering recipe declares the resulting landform. The
+    # baseline Resource and work commitment is not a free instantaneous buff.
+    target_terrain_profile_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("spatial development recipe display name must not be empty")
         if self.self_deploying:
             raise ValueError("location development must consume construction capacity")
-        if any(not isfinite(value) or value < 0 for value in (
-            self.slope_work_weight, self.dust_work_weight,
-        )):
-            raise ValueError("surface development work weights must be finite and non-negative")
+        if self.target_terrain_profile_id is not None and not self.target_terrain_profile_id:
+            raise ValueError("terrain engineering requires a target landform")
 
 
 ProjectRecipe: TypeAlias = (
@@ -148,8 +145,14 @@ class SurfaceCellDevelopmentTarget:
     cell_id: SurfaceCellId
 
 
+@dataclass(frozen=True)
+class SurfaceCellEngineeringTarget:
+    recipe_id: DefinitionId
+    cell_id: SurfaceCellId
+
+
 ConstructionTarget: TypeAlias = (
-    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget
+    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget | SurfaceCellEngineeringTarget
 )
 
 

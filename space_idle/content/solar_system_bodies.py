@@ -241,7 +241,7 @@ def register_solar_system_regions(graph: SpatialGraph, facets: StaticFacetStore)
         }
         graph.add_surface_cell(SurfaceCellDef(
             cell_id, body_id, area, SurfacePoint(lat, lon), frozenset(),
-            SurfaceTerrain(0.8, 0.8, 0.2, 0.1),
+            SurfaceTerrain("rolling"),
             {"crust_accessibility": 0.8, "regolith_accessibility": 0.8},
             {resource: amount for resource, amount in potentials.items() if amount > 0},
             label,

@@ -13,6 +13,7 @@ from .models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
+    SurfaceCellEngineeringTarget,
     ProjectBlocker,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "FacilityUpgradeTarget",
     "FacilityDecommissionTarget",
     "SurfaceCellDevelopmentTarget",
+    "SurfaceCellEngineeringTarget",
     "ProjectBlocker",
 ]

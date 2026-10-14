@@ -245,18 +245,7 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
                 spec.geology_accessibility_key in geology_keys,
                 f"extraction spec references unknown geology accessibility: {definition_id}/{spec.geology_accessibility_key}",
             )
-        if spec.terrain_accessibility_attribute is not None:
-            attribute = spec.terrain_accessibility_attribute
-            if attribute not in terrain_checked:
-                terrain_checked[attribute] = (
-                    all(hasattr(kind, attribute) for kind in ctx.static_terrain_types)
-                    if ctx.static_terrain_types is not None
-                    else all(hasattr(cell.terrain, attribute) for cell in cells)
-                )
-            _require(
-                terrain_checked[attribute],
-                f"extraction spec references unknown terrain accessibility: {definition_id}/{attribute}",
-            )
+
 
     if knowledge_target_owners and ctx.survey_registration_matches:
         # The validated complete Cell × Resource product supplies a target for

@@ -268,6 +268,7 @@
     if(p.target_kind==='facility_decommission')return '設備撤去';
     if(p.target_kind==='operational_node_founding')return '新拠点設立';
     if(p.target_kind==='surface_cell_development')return '地表区域開発';
+    if(p.target_kind==='surface_cell_engineering')return '地表造成';
     return '新規設備建設';
   };
   const surfaceCell=(id)=>(state.surfaceMap?.cells||[]).find((row)=>row.id===id);
@@ -1202,10 +1203,9 @@
       ['必要機数',`${fmt(row.required_units,0)} 機`],
       ['搭載量',`${fmt(row.payload_t,2)} t`],
       ['1機あたり搭載量',`${fmt(row.payload_t_per_unit,2)} t`],
-      ['地形係数',publicTerrainNumber(terrain,'terrain_factor')],
-      ['地盤支持力',publicTerrainNumber(terrain,'bearing_capacity_factor')],
-      ['粉塵負荷',publicTerrainNumber(terrain,'dust_factor')],
-      ['斜面負荷',publicTerrainNumber(terrain,'slope_factor')],
+      ['地形',terrain.terrain_profile||'未測定'],
+      ['開発負担',publicTerrainNumber(terrain,'development_work_factor')],
+      ['掘削アクセス',publicTerrainNumber(terrain,'excavation_accessibility')],
     ]);
     setInspector(`設立候補 · ${row.target_cell_name}`,
       section('候補状態',kv([
@@ -1260,6 +1260,11 @@
     const foundationSection=cell.developed?'':section('新拠点設立',foundation);
     const foundationComparisonSection=cell.developed||!foundingComparisonAvailable?'':section('設立候補比較',foundationComparisonHtml());
     const developmentSection=cell.developed?'':section('既存拠点から開発',development);
+    const engineering=(cell.engineering_options||[]).map((option)=>{
+      const blocked=!option.can_plan||!!option.active_project_id;
+      return `<div class="detail-card surface-action-card"><div class="mode-title">地表造成</div><div class="cell-sub">必要工数 ${option.construction_required==null?'未測定':fmt(option.construction_required,0)} · 資源は通常Construction Projectで確保</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${(option.blockers||[]).map(issueHtml).join('')}${surfacePlanControls(`engineering:${cell.id}:${option.location_id}`,option,blocked)}<button type="button" class="primary" data-surface-engineer="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${blocked?'disabled':''}>地表造成案件を作成</button></div>`;
+    }).join('');
+    const engineeringSection=cell.developed?section('地域造成',engineering):'';
     const facilitySection=cell.developed?section('位置依存設備',facilities):'';
     setInspector(surfaceCellLabel(cell.id),
       section('地域状態',kv([
@@ -1269,15 +1274,15 @@
         ['緯度',`${fmt(cell.latitude_deg,2)}°`],
         ['経度',`${fmt(cell.longitude_deg,2)}°`],
       ]))+
-      foundationSection+foundationComparisonSection+developmentSection+facilitySection+
+      foundationSection+foundationComparisonSection+developmentSection+engineeringSection+facilitySection+
       section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
       section('代表気候・環境条件',cell.environment_knowledge_level>=2?environmentHtml(cell.environment):'<div class="cell-sub">'+(cell.environment_knowledge_level?'概略観測済み · 精密数値は未測定':'未観測 · Survey / Scientific Explorationで取得')+'</div>')+
       section('地形',kv([
         ['観測品質',cell.terrain_knowledge_level>=2?'測定済み':cell.terrain_knowledge_level?'概略既知':'未観測'],
-        ['地形係数',publicTerrainNumber(terrain,'terrain_factor')],
-        ['支持力係数',publicTerrainNumber(terrain,'bearing_capacity_factor')],
-        ['粉塵係数',publicTerrainNumber(terrain,'dust_factor')],
-        ['傾斜係数',publicTerrainNumber(terrain,'slope_factor')],
+        ['地形',esc(terrain.terrain_profile||'未測定')],
+        ['開発負担',publicTerrainNumber(terrain,'development_work_factor')],
+        ['掘削アクセス',publicTerrainNumber(terrain,'excavation_accessibility')],
+        ['造成済み',Number(terrain.engineered)?'はい':'いいえ'],
       ]))+
       section('隣接地域',neighbors)
     );
@@ -1383,6 +1388,7 @@
     const foundingComparePin=event.target.closest('[data-founding-compare-pin]');if(foundingComparePin){const candidates=foundationComparisonCandidates(),key=foundingComparePin.dataset.foundingComparePin;toggleComparisonPin(foundationComparisonScope(),candidates,key);await A.loadUiSnapshot().catch((error)=>banner(error.message,'error'));renderInspector();return;}
     const preserveSurfaceDecision=(cellId)=>{state.inspector={type:'surface-cell',id:cellId};render();};
     const surfaceBuild=event.target.closest('[data-surface-build]');if(surfaceBuild){const cellId=surfaceBuild.dataset.cellId,plan=surfacePlanPayload(surfaceBuild);try{await command('PlanBuild',{operational_node_id:surfaceBuild.dataset.locationId,facility_id:surfaceBuild.dataset.surfaceBuild,site_cell_id:cellId,...plan});await A.completeActiveDraft(`surface-build:${cellId}:${surfaceBuild.dataset.surfaceBuild}`);preserveSurfaceDecision(cellId);banner('地表設備の建設案件を作成しました');}catch{}return;}
+    const surfaceEngineer=event.target.closest('[data-surface-engineer]');if(surfaceEngineer){const cellId=surfaceEngineer.dataset.cellId,plan=surfacePlanPayload(surfaceEngineer);try{await command('EngineerSurfaceCell',{location_id:surfaceEngineer.dataset.surfaceEngineer,cell_id:cellId,...plan});await A.completeActiveDraft(`engineering:${cellId}:${surfaceEngineer.dataset.surfaceEngineer}`);preserveSurfaceDecision(cellId);banner('地表造成案件を作成しました');}catch{}return;}
     const surfaceDevelop=event.target.closest('[data-surface-develop]');if(surfaceDevelop){const cellId=surfaceDevelop.dataset.cellId,plan=surfacePlanPayload(surfaceDevelop);try{await command('DevelopSurfaceCell',{location_id:surfaceDevelop.dataset.surfaceDevelop,cell_id:cellId,...plan});await A.completeActiveDraft(`development:${cellId}:${surfaceDevelop.dataset.surfaceDevelop}`);preserveSurfaceDecision(cellId);banner('地表地域の開発案件を作成しました');}catch{}return;}
     const nonSurfaceFound=event.target.closest('[data-nonsurface-found]');
     if(nonSurfaceFound){

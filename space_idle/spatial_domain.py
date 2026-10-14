@@ -33,6 +33,10 @@ def capture(sim: Any) -> dict[str, Any]:
             str(node_id) for node_id in sorted(sim.graph.operational_node_states, key=str)
         ],
         "overlays": sim.environment.capture_overlay_state(),
+        "engineered_terrain": [
+            {"cell_id": str(cell), "profile_id": profile}
+            for cell, profile in sorted(sim.graph.engineered_terrain.items(), key=lambda row: str(row[0]))
+        ],
     }
 
 
@@ -76,6 +80,20 @@ def restore(sim: Any, data: dict[str, Any]) -> None:
         raise ValueError("duplicate spatial operational node")
     operational_nodes = tuple(OperationalNodeState(node_id) for node_id in operational_node_ids)
     sim.graph.replace_dynamic_state(tuple(locations), operational_nodes)
+    improvements = {}
+    for index, raw in enumerate(decode_list(data["engineered_terrain"], "engineered terrain")):
+        row = require_fields(raw, {"cell_id", "profile_id"}, f"engineered terrain[{index}]")
+        cell_id = SurfaceCellId(decode_str(row["cell_id"], "engineered terrain cell_id"))
+        profile_id = decode_str(row["profile_id"], "engineered terrain profile_id")
+        if cell_id in improvements:
+            raise ValueError(f"duplicate engineered terrain: {cell_id}")
+        if cell_id not in sim.graph.surface_cells or profile_id not in sim.graph.terrain_profiles:
+            raise ValueError(f"invalid engineered terrain: {cell_id}/{profile_id}")
+        owner = sim.graph.owner_of_cell(cell_id)
+        if owner is None or profile_id == sim.graph.surface_cells[cell_id].terrain.profile_id:
+            raise ValueError(f"unowned/redundant terrain change: {cell_id}")
+        improvements[cell_id] = profile_id
+    sim.graph.engineered_terrain = improvements
     sim.environment.restore_overlay_state(
         decode_list(data["overlays"], "environment overlays")
     )
@@ -106,6 +124,9 @@ def validate_static_world(graph: Any, environment: Any) -> None:
         graph.lineage(node_id)
         graph.environment_lineage(node_id)
 
+    for profile_id, profile in graph.terrain_profiles.items():
+        _require(profile.id == profile_id, f"terrain profile key mismatch: {profile_id}")
+
     for cell_id, cell in graph.surface_cells.items():
         _require(cell_id == cell.id, f"surface cell key mismatch: {cell_id}")
         _require(cell.body_id in graph.bodies, f"surface cell has unknown body: {cell_id}")
@@ -113,6 +134,7 @@ def validate_static_world(graph: Any, environment: Any) -> None:
             graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID,
             f"surface cell on body without solid surface: {cell_id}",
         )
+        _require(cell.terrain.profile_id in graph.terrain_profiles, f"unknown terrain profile: {cell_id}")
         _require(cell.area_km2 > 0, f"surface cell has invalid area: {cell_id}")
         _require(cell_id not in cell.neighbor_ids, f"surface cell self adjacency: {cell_id}")
         for neighbor_id in cell.neighbor_ids:
@@ -173,6 +195,7 @@ class ValidatedStaticWorld:
     body_facets: Mapping = field(repr=False)
     geology_keys: frozenset[str] = field(repr=False)
     terrain_types: frozenset[type] = field(repr=False)
+    terrain_profiles: Mapping = field(repr=False)
 
     def matches(self, graph: Any, environment: Any) -> bool:
         return (type(graph) is self.graph_kind
@@ -182,6 +205,7 @@ class ValidatedStaticWorld:
                 and graph.bodies == self.bodies
                 and graph.nodes == self.nodes
                 and graph.surface_cells == self.cells
+                and graph.terrain_profiles == self.terrain_profiles
                 and environment.static.facets == self.facets
                 and environment.static.body_facets == self.body_facets)
 
@@ -222,6 +246,7 @@ def certify_static_world(graph: Any, environment: Any) -> ValidatedStaticWorld:
         static_facets(environment.static.body_facets),
         frozenset(key for cell in graph.surface_cells.values() for key in cell.static_geology),
         frozenset(type(cell.terrain) for cell in graph.surface_cells.values()),
+        MappingProxyType(deepcopy(graph.terrain_profiles)),
     )
 
 
@@ -237,6 +262,12 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
 
 
 def validate_runtime(sim: Any) -> None:
+    for cell_id, profile_id in sim.graph.engineered_terrain.items():
+        _require(cell_id in sim.graph.surface_cells, f"engineered terrain unknown Cell: {cell_id}")
+        _require(profile_id in sim.graph.terrain_profiles, f"engineered terrain unknown profile: {cell_id}")
+        _require(sim.graph.owner_of_cell(cell_id) is not None, f"engineered terrain lacks owner: {cell_id}")
+        _require(profile_id != sim.graph.surface_cells[cell_id].terrain.profile_id,
+                 f"redundant engineered terrain: {cell_id}")
     for node_id, state in sim.graph.operational_node_states.items():
         _require(node_id == state.id, f"operational node key mismatch: {node_id}")
         context_count = int(node_id in sim.graph.nodes) + int(node_id in sim.graph.locations)

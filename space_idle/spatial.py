@@ -114,21 +114,33 @@ class RadiationField(SpatialFacet):
 
 
 @dataclass(frozen=True)
-class SurfaceTerrain:
-    """Static terrain/geology descriptors owned by SurfaceCellDef."""
-    terrain_factor: float = 1.0
-    bearing_capacity_factor: float = 1.0
-    dust_factor: float = 0.0
-    slope_factor: float = 0.0
+class TerrainProfileDef:
+    """Authored landform and the two physical activities it directly affects.
+
+    This is not a universal productivity, power, maintenance or Resource buff.
+    """
+    id: str
+    display_name: str
+    development_work_factor: float = 1.0
+    excavation_accessibility: float = 1.0
 
     def __post_init__(self) -> None:
-        if min(
-            self.terrain_factor,
-            self.bearing_capacity_factor,
-            self.dust_factor,
-            self.slope_factor,
-        ) < 0:
-            raise ValueError("surface factors must be non-negative")
+        if not self.id or not self.display_name.strip():
+            raise ValueError("terrain profile needs an ID and name")
+        if any(not isfinite(value) or value <= 0 for value in (
+            self.development_work_factor, self.excavation_accessibility,
+        )):
+            raise ValueError("terrain work/access values must be finite and positive")
+
+
+@dataclass(frozen=True)
+class SurfaceTerrain:
+    """A Cell's naturally occurring landform, resolved through authored profiles."""
+    profile_id: str = "standard"
+
+    def __post_init__(self) -> None:
+        if not self.profile_id:
+            raise ValueError("surface terrain profile must be specified")
 
 
 @dataclass(frozen=True)
@@ -404,6 +416,10 @@ class SpatialGraph:
     # Non-surface nodes only. Surface economic nodes live in locations.
     nodes: dict[SpatialNodeId, SpatialNodeDef] = field(default_factory=dict)
     surface_cells: dict[SurfaceCellId, SurfaceCellDef] = field(default_factory=dict)
+    terrain_profiles: dict[str, TerrainProfileDef] = field(default_factory=lambda: {
+        "standard": TerrainProfileDef("standard", "Standard Terrain"),
+    })
+    engineered_terrain: dict[SurfaceCellId, str] = field(default_factory=dict)
     locations: dict[SpatialNodeId, SurfaceLocationState] = field(default_factory=dict)
     operational_node_states: dict[SpatialNodeId, OperationalNodeState] = field(default_factory=dict)
 
@@ -474,6 +490,34 @@ class SpatialGraph:
                          or body.parent_orbit_semimajor_axis_km is not None)):
                 raise ValueError("body orbit and spatial-node Cartesian geometry cannot be independent baselines")
         self.nodes[node.id] = node
+
+    def terrain_profile(self, cell_id: SurfaceCellId) -> TerrainProfileDef:
+        cell = self.surface_cells[cell_id]
+        profile_id = self.engineered_terrain.get(cell_id, cell.terrain.profile_id)
+        return self.terrain_profiles[profile_id]
+
+    def terrain_engineering_failures(self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+                                     target_profile_id: str) -> tuple[tuple[str, str], ...]:
+        if location_id not in self.locations:
+            return (("unknown_location", "unknown surface location"),)
+        if cell_id not in self.surface_cells:
+            return (("unknown_cell", "unknown surface cell"),)
+        if target_profile_id not in self.terrain_profiles:
+            return (("unknown_terrain", "unknown terrain profile"),)
+        if cell_id not in self.locations[location_id].developed_cell_ids:
+            return (("not_developed", "terrain engineering requires owned developed territory"),)
+        if self.terrain_profile(cell_id).id == target_profile_id:
+            return (("already_engineered", "target landform is already in effect"),)
+        return ()
+
+    def engineer_surface_cell(self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+                              target_profile_id: str) -> None:
+        failures = self.terrain_engineering_failures(location_id, cell_id, target_profile_id)
+        if failures:
+            raise ValueError("; ".join(message for _, message in failures))
+        # Natural geography remains unchanged. Only the actual constructed
+        # improvement is authoritative runtime state.
+        self.engineered_terrain[cell_id] = target_profile_id
 
     def add_surface_cell(self, cell: SurfaceCellDef) -> None:
         if cell.id in self.surface_cells:

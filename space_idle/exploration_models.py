@@ -223,7 +223,7 @@ class ExtractionSpec:
     output_resource_id: DefinitionId
     opportunity_requirements: SiteRequirements = SiteRequirements()
     geology_accessibility_key: str | None = None
-    terrain_accessibility_attribute: str | None = None
+    requires_excavation_access: bool = False
     minimum_knowledge_level: KnowledgeLevel | None = None
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
     display_name: str | None = None
@@ -235,8 +235,6 @@ class ExtractionSpec:
             raise ValueError("extraction method requires explicit capability")
         if self.geology_accessibility_key is not None and not self.geology_accessibility_key:
             raise ValueError("geology accessibility key must not be empty")
-        if self.terrain_accessibility_attribute is not None and not self.terrain_accessibility_attribute:
-            raise ValueError("terrain accessibility attribute must not be empty")
         if self.minimum_knowledge_level is not None:
             object.__setattr__(self, "minimum_knowledge_level", KnowledgeLevel(self.minimum_knowledge_level))
             if self.minimum_knowledge_level is KnowledgeLevel.UNKNOWN:

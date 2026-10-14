@@ -108,13 +108,12 @@ class SurfaceKnowledgeState:
         """Content-granularity intervals, never a midpoint that reveals true value."""
         if self.attribute_level(cell_id, "terrain") < 1:
             return ()
-        terrain = self.graph.surface_cells[cell_id].terrain
-        result: list[tuple[str, float]] = []
-        for attr in ("terrain_factor", "bearing_capacity_factor", "dust_factor", "slope_factor"):
-            value = float(getattr(terrain, attr))
-            lower = floor(value / self.terrain_overview_resolution) * self.terrain_overview_resolution
-            result.extend(((attr + "_min", lower), (attr + "_max", lower + self.terrain_overview_resolution)))
-        return tuple(result)
+        # Overview intentionally reports a range, not an unobserved exact
+        # landform. Its numeric scale is the cost of terrain preparation only.
+        value = self.graph.terrain_profile(cell_id).development_work_factor
+        lower = floor(value / self.terrain_overview_resolution) * self.terrain_overview_resolution
+        return (("development_work_min", lower),
+                ("development_work_max", lower + self.terrain_overview_resolution))
 
     def observe_attribute(self, cell_id: SurfaceCellId, attribute: str, level: int) -> None:
         self.attribute_level(cell_id, attribute)

@@ -429,7 +429,7 @@
   };
   const affectedActionLabels={
     admit_inventory:'入庫',admit_storage:'保管',operate_facility:'設備運用',plan_facility_decommission:'設備撤去',
-    plan_facility_upgrade:'設備更新',plan_build:'建設計画',progress_construction_project:'建設進行',develop_surface_cell:'地域開発',
+    plan_facility_upgrade:'設備更新',plan_build:'建設計画',progress_construction_project:'建設進行',develop_surface_cell:'地域開発',engineer_surface_cell:'地表造成',
     plan_founding:'拠点設立',select_research_execution_site:'研究地点選択',set_research_provider_fleet:'研究Fleet配備',
     operate_research_provider:'研究実行',progress_research:'研究進行',start_research:'研究開始',start_survey:'調査開始',
     progress_survey:'調査進行',progress_scientific_exploration:'科学探査進行',return_scientific_exploration:'科学探査の帰還',abort_scientific_exploration:'科学探査の中止',unassign_scientific_exploration_fleet:'科学探査Fleet解除',plan_vehicle_production:'輸送機生産計画',

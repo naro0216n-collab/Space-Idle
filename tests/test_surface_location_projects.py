@@ -528,7 +528,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     # comparison even though the true World remains executable.
     assert cell.terrain_knowledge_level == 0
     assert not cell.terrain
-    assert option_values["terrain_factor"] is None
+    assert option_values["development_work_factor"] is None
 
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):

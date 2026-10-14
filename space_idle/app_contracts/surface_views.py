@@ -107,7 +107,7 @@ class SurfaceCellRow:
     latitude_deg: float
     longitude_deg: float
     neighbor_ids: tuple[str, ...]
-    terrain: tuple[tuple[str, float], ...]
+    terrain: tuple[tuple[str, float | str], ...]
     environment: tuple[EnvironmentFacetRow, ...]
     resources: tuple[SurfaceResourceKnowledgeRow, ...]
     developed: bool
@@ -115,6 +115,7 @@ class SurfaceCellRow:
     is_location_core: bool
     foundation_blockers: tuple[DecisionConstraintRow, ...]
     development_options: tuple[SurfaceCellDevelopmentOption, ...]
+    engineering_options: tuple[SurfaceCellDevelopmentOption, ...] = ()
     facility_placement_options: tuple[SurfaceFacilityPlacementOption, ...] = ()
     foundation_options: tuple[FoundingOption, ...] = ()
     display_name: str = ""

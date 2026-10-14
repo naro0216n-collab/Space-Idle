@@ -10,7 +10,7 @@ from ..power import PowerSnapshot
 from ..shared import EntityId, SpatialNodeId
 from .models import (
     CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityDecommissionTarget, FacilityUpgradeTarget, NewFacilityTarget,
-    ProjectStatus, SurfaceCellDevelopmentTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 
 
@@ -69,6 +69,12 @@ class ConstructionExecutionMixin:
             project.salvage_recovered = dict(recovered)
             self.facility_lifecycle_registry.release_references(target.facility_id)
             self.facilities.finalize_decommission(target.facility_id)
+        elif isinstance(target, SurfaceCellEngineeringTarget):
+            profile_id = self.spatial_recipes[target.recipe_id].target_terrain_profile_id
+            self.facilities.environment.graph.engineer_surface_cell(
+                project.operational_node_id, target.cell_id, profile_id
+            )
+            self.engineered_results.append(target.cell_id)
         else:
             self.facilities.environment.graph.develop_surface_cell(
                 project.operational_node_id, target.cell_id
@@ -85,6 +91,11 @@ class ConstructionExecutionMixin:
                 facility is not None
                 and facility.operational_node_id == project.operational_node_id
                 and facility.level == target.target_level - 1
+            )
+        if isinstance(target, SurfaceCellEngineeringTarget):
+            return not self.facilities.environment.graph.terrain_engineering_failures(
+                project.operational_node_id, target.cell_id,
+                self.spatial_recipes[target.recipe_id].target_terrain_profile_id
             )
         if isinstance(target, SurfaceCellDevelopmentTarget):
             return not self.facilities.environment.graph.surface_cell_development_failures(

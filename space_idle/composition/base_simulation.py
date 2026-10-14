@@ -135,6 +135,7 @@ def build_base_simulation(
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
         surface_cell_development_recipe_id=ids.SURFACE_CELL_DEVELOPMENT_PROJECT,
+        surface_terrain_engineering_recipe_id=ids.SURFACE_TERRAIN_ENGINEERING_PROJECT,
         surface_cell_claim_registry=surface_cell_claim_registry,
         facility_lifecycle_registry=facility_lifecycle_registry,
     )

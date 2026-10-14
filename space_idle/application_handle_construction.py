@@ -13,7 +13,7 @@ from .application_commands import (
     PauseFounding,
     ResumeFounding,
     SetFoundingPriority,
-    DevelopSurfaceCell,
+    DevelopSurfaceCell, EngineerSurfaceCell,
     ResumeBuild,
     SetProjectPriority,
     SetProjectProcurementPolicy,
@@ -94,6 +94,15 @@ class ConstructionCommandHandlerMixin:
             sim.founding.set_priority(ProjectId(command.project_id), command.priority); return CommandResult()
         if isinstance(command, DevelopSurfaceCell):
             pid = sim.projects.plan_surface_cell_development(
+                self._require_operational_node(command.location_id),
+                SurfaceCellId(command.cell_id),
+                command.priority,
+                command.procurement_policy,
+                day=sim.day,
+            )
+            return CommandResult(str(pid))
+        if isinstance(command, EngineerSurfaceCell):
+            pid = sim.projects.plan_surface_cell_engineering(
                 self._require_operational_node(command.location_id),
                 SurfaceCellId(command.cell_id),
                 command.priority,

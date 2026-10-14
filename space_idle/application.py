@@ -9,7 +9,7 @@ from .application_commands import (
     GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, PauseBuild, PauseFacility,
     PauseResearch, PauseScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, PauseSurvey, PauseTransportAllocation,
-    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, EngineerSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
     ResumeVehicleProduction, SetFacilityProcess, SetFacilityExtractionMethod, SetMaintenancePriority,

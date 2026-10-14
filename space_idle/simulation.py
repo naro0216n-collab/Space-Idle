@@ -1636,6 +1636,11 @@ class Simulation:
             allocations.power_by_location, allocations.execution, self.day
         ):
             self.transport.invalidate_movement_plans()
+        # The owner actually performed this physical modification. Settle its
+        # publicly known result into the Knowledge owner, not into a UI mask.
+        for cell_id in self.projects.engineered_results:
+            self.surface_knowledge.observe_attribute(cell_id, "terrain", 2)
+        self.projects.engineered_results.clear()
         next_day = self.day + 1
         self.day = next_day
         # Phase 8 may refresh derived state only from allocations already

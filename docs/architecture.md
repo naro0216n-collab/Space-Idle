@@ -271,6 +271,8 @@ Application QueryはActivityごとに現在利用可能なtransitionとblocker�
 
 ### 5.1 Star System / Celestial Body / Surface Cell / Spatial Node / Operational Node
 
+地形はWorld / Spatialに登録された不変Terrain Profile DefinitionとCellのProfile参照を正本とする。造成済みCellのみ有効Profileの変更ResultをSpatial runtime Stateに保存し、Save / Load／Offline／Runtime Validationで検証する。Constructionは通常の資材・有限Construction Serviceによる造成Projectを所有して完了時にResultを一度だけsettleする。ExtractionはWorldが解決した有効Profileと地質を読み、自Domainの採掘応答を導出する。Knowledgeは地形の観測品質と造成既知情報を所有し、Applicationは未観測の真値・派生工数を公開しない。Terraformingの気候Overlayは天体環境だけを所有し、地表造成のResultを複製しない。
+
 物理的位置を表すSpatial modelと、経済・産業Stateを所有するOperational Nodeを分離する。Spatial modelは多数の天体、小惑星、将来の別恒星系を同じ契約で扱えるよう、Star Systemとその内部Spatial contextを持つ。
 
 ```text

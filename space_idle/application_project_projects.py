@@ -16,7 +16,7 @@ from .application_views import (
 from .construction.models import (
     CONSTRUCTION_SERVICE_TYPE,
     FacilityUpgradeTarget, FacilityDecommissionTarget, NewFacilityTarget,
-    ProjectStatus, SurfaceCellDevelopmentTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 from .facilities import FacilityPlacementScope
 from .survey import SurveyProviderSourceKind
@@ -468,7 +468,8 @@ class ProjectProjectorMixin:
                 definition = sim.facilities.definitions[target.facility_definition_id]
                 display_name = definition.display_name
             else:
-                target_kind = "surface_cell_development"
+                target_kind = ("surface_cell_engineering" if isinstance(target, SurfaceCellEngineeringTarget)
+                               else "surface_cell_development")
                 target_cell_id = str(target.cell_id)
                 target_location_id = str(project.operational_node_id)
                 display_name = recipe.display_name

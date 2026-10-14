@@ -18,7 +18,7 @@ from .models import (
     NewFacilityTarget,
     ProjectRecipe,
     ProjectStatus,
-    SurfaceCellDevelopmentTarget,
+    SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 
 
@@ -69,11 +69,15 @@ class ConstructionRulesMixin:
     def development_work_required(self, recipe_id: DefinitionId, cell_id: SurfaceCellId) -> float:
         """Apply the same physical work to preview, accounting and execution."""
         recipe = self.spatial_recipes[recipe_id]
-        terrain = self.facilities.environment.graph.surface_cells[cell_id].terrain
-        return recipe.construction_work * (
-            1.0 + recipe.slope_work_weight * max(0.0, terrain.slope_factor)
-            + recipe.dust_work_weight * max(0.0, terrain.dust_factor)
-        )
+        graph = self.facilities.environment.graph
+        if recipe.target_terrain_profile_id is not None:
+            # A completed engineering project must retain its original work
+            # budget after the Cell's effective landform changes. Engineering
+            # cannot be planned twice for the same target profile.
+            profile = graph.terrain_profiles[graph.surface_cells[cell_id].terrain.profile_id]
+        else:
+            profile = graph.terrain_profile(cell_id)
+        return recipe.construction_work * profile.development_work_factor
 
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
         facility = self.facilities.facilities[facility_id]
@@ -118,7 +122,7 @@ class ConstructionRulesMixin:
 
     def _spatial_target_cell(self, project: ConstructionProject) -> SurfaceCellId | None:
         target = project.target
-        if isinstance(target, SurfaceCellDevelopmentTarget):
+        if isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
             return target.cell_id
         return None
 
@@ -132,6 +136,7 @@ class ConstructionRulesMixin:
             )
             for project in sorted(self.projects.values(), key=lambda row: str(row.id))
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+            if isinstance(project.target, SurfaceCellDevelopmentTarget)
             if (target_cell := self._spatial_target_cell(project)) is not None
         )
 
@@ -179,6 +184,26 @@ class ConstructionRulesMixin:
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
 
+    def surface_cell_engineering_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        """Single Domain authority for engineering plan and Application blockers."""
+        recipe_id = self.surface_terrain_engineering_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            return (SiteRequirementFailure("construction_recipe", "terrain engineering recipe is not configured"),)
+        graph = self.facilities.environment.graph
+        recipe = self.spatial_recipes[recipe_id]
+        failures = [
+            SiteRequirementFailure(code, detail) for code, detail in
+            graph.terrain_engineering_failures(location_id, cell_id, recipe.target_terrain_profile_id)
+        ]
+        if self.active_spatial_project_for_cell(cell_id) is not None:
+            failures.append(SiteRequirementFailure("cell_project", "a surface project is already in progress"))
+        if graph.has_operational_node(location_id):
+            failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
+        return tuple(dict.fromkeys(failures))
+
     def spatial_project_failures(
         self,
         project: ConstructionProject,
@@ -186,18 +211,20 @@ class ConstructionRulesMixin:
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         target = project.target
-        if not isinstance(target, SurfaceCellDevelopmentTarget):
-            raise TypeError("project is not a surface development project")
+        if not isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
+            raise TypeError("project is not a spatial development project")
         graph = self.facilities.environment.graph
-        failures: list[SiteRequirementFailure] = [
-            SiteRequirementFailure(code, detail)
-            for code, detail in graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)
-        ]
-        for claim in self.surface_cell_claim_registry.claims_for(
-            target.cell_id,
-            exclude=("construction_project", EntityId(project.id)),
-        ):
-            failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
+        if isinstance(target, SurfaceCellEngineeringTarget):
+            target_profile_id = self.spatial_recipes[target.recipe_id].target_terrain_profile_id
+            failures = [SiteRequirementFailure(code, detail) for code, detail in
+                        graph.terrain_engineering_failures(project.operational_node_id, target.cell_id, target_profile_id)]
+        else:
+            failures = [SiteRequirementFailure(code, detail) for code, detail in
+                        graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)]
+            for claim in self.surface_cell_claim_registry.claims_for(
+                target.cell_id, exclude=("construction_project", EntityId(project.id)),
+            ):
+                failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
         failures.extend(self._spatial_recipe_site_failures(
             target.recipe_id, project.operational_node_id, target.cell_id, day, power
         ))

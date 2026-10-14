@@ -10,7 +10,7 @@ from .models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     NewFacilityTarget,
-    SurfaceCellDevelopmentTarget,
+    SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
     ProjectBlocker,
     ProjectResourceState,
     ProjectStatus,
@@ -248,6 +248,22 @@ class ConstructionPlanningMixin:
             priority,
             procurement_policy,
             day=day,
+        )
+
+    def plan_surface_cell_engineering(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        priority: ActivityPriority, procurement_policy: ProcurementTimingPolicy,
+        day: int = 0,
+    ) -> ProjectId:
+        recipe_id = self.surface_terrain_engineering_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            raise ValueError("terrain engineering recipe is not configured")
+        failures = self.surface_cell_engineering_failures(location_id, cell_id, day)
+        if failures:
+            raise ValueError("; ".join(f.detail for f in failures))
+        return self._create_project(
+            SurfaceCellEngineeringTarget(recipe_id, cell_id), location_id,
+            priority, procurement_policy, day=day,
         )
 
     def settings_mutable(self, project_id: ProjectId) -> bool:

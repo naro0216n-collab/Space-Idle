@@ -79,16 +79,15 @@ def _resource_distribution(body_id: str, resource_id: str, latitude: float,
 
 def _terrain_variation(baseline: SurfaceTerrain, latitude: float, longitude: float,
                        body_id: str) -> SurfaceTerrain:
-    # Region-scale slopes and load-bearing differences make a mineral-rich cell
-    # potentially a poor construction site; separate fields need not correlate.
-    relief = _regional_field(latitude, longitude, _regional_phase(body_id, 'relief'))
-    regolith = _regional_field(latitude, longitude, _regional_phase(body_id, 'regolith'))
-    return SurfaceTerrain(
-        baseline.terrain_factor * (0.72 + 0.42 * (1 - relief)),
-        baseline.bearing_capacity_factor * (0.72 + 0.35 * (1 - relief)),
-        baseline.dust_factor * (0.75 + 0.75 * (1 + regolith)),
-        baseline.slope_factor * (0.5 + 2.4 * (1 + relief)),
-    )
+    """Contiguous regional landform classes, not four independent noise factors."""
+    relief = _regional_field(latitude, longitude, _regional_phase(body_id, 'landform'))
+    # Reference landforms bias nearby terrain without forcing uniform regions.
+    baseline_severity = {"plain": 0, "basin": 0, "rolling": 1, "rugged": 2,
+                         "standard": 0}.get(baseline.profile_id, 0)
+    severity = baseline_severity + (1 if relief > 0.33 else -1 if relief < -0.43 else 0)
+    if baseline.profile_id == "basin" and severity <= 0:
+        return SurfaceTerrain("basin")
+    return SurfaceTerrain("plain" if severity <= 0 else "rolling" if severity == 1 else "rugged")
 
 
 def validate_surface_registration(graph: SpatialGraph) -> None:
@@ -114,11 +113,8 @@ def validate_surface_registration(graph: SpatialGraph) -> None:
             raise ValueError(f'invalid reference Resource potential: {cell.id}')
         if any(not isfinite(float(v)) for v in cell.static_geology.values()):
             raise ValueError(f'invalid reference geology: {cell.id}')
-        if any(not isfinite(value) for value in (
-            cell.terrain.terrain_factor, cell.terrain.bearing_capacity_factor,
-            cell.terrain.dust_factor, cell.terrain.slope_factor,
-        )):
-            raise ValueError(f'invalid geographic reference terrain: {cell.id}')
+        if cell.terrain.profile_id not in graph.terrain_profiles:
+            raise ValueError(f'unknown geographic reference terrain: {cell.id}')
         if any(cell.id not in graph.surface_cells[neighbor].neighbor_ids
                for neighbor in cell.neighbor_ids):
             raise ValueError(f'asymmetric geographic reference neighbor: {cell.id}')
@@ -283,9 +279,8 @@ def register_complete_surface_world(
                 # Representative geography, not date-driven weather. Latitude
                 # and topography determine long-run exposure and site tradeoffs.
                 exposure = (0.22 + 0.78 * max(0.0, cos(lat)) ** 0.6)
-                horizon = 0.80 + 0.20 * max(0.0, terrain.bearing_capacity_factor)
                 illumination[id] = IlluminationField(
-                    flux, max(0.0, min(1.0, availability * exposure * horizon)),
+                    flux, max(0.0, min(1.0, availability * exposure)),
                 )
             if site is None:
                 reference_climate = facets.body_facets.get((body_id, ThermalField))

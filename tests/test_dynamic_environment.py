@@ -64,9 +64,13 @@ def test_terraforming_body_state_projects_to_surface_locations_but_not_orbit_and
 
     assert env.require(site_a, AtmosphereField).pressure_pa == 610.0
     assert env.require(site_b, AtmosphereField).pressure_pa == 610.0
+    original_landform = graph.surface_cells[cell_a].terrain
     saved_overlay = env.capture_overlay_state()
     service.add_atmosphere(mars_body, 390.0, 0.015, DefinitionId("n2"), 0.10, 5.0)
     assert env.require(site_a, AtmosphereField).pressure_pa == 1000.0
+    # Global climate change does not silently level the physical surface.
+    assert graph.surface_cells[cell_a].terrain == original_landform
+    assert not graph.engineered_terrain
     assert env.require(site_b, AtmosphereField).pressure_pa == 1000.0
     assert env.require(site_a, ThermalField).nominal_temperature_k == 215.0
     assert env.require(cell_a, ThermalField).nominal_temperature_k == 215.0

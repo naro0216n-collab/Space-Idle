@@ -163,11 +163,12 @@ class SurfaceProjectorMixin:
             environment_quality = sim.surface_knowledge.attribute_level(cell.id, "environment")
             # Published geography is intentionally distinct from the physical
             # World used for executable eligibility and resource settlement.
+            terrain_profile = sim.graph.terrain_profile(cell.id)
             public_terrain = (
-                (("terrain_factor", cell.terrain.terrain_factor),
-                 ("bearing_capacity_factor", cell.terrain.bearing_capacity_factor),
-                 ("dust_factor", cell.terrain.dust_factor),
-                 ("slope_factor", cell.terrain.slope_factor))
+                (("terrain_profile", terrain_profile.display_name),
+                 ("development_work_factor", terrain_profile.development_work_factor),
+                 ("excavation_accessibility", terrain_profile.excavation_accessibility),
+                 ("engineered", float(cell.id in sim.graph.engineered_terrain)))
                 if terrain_quality >= 2 else sim.surface_knowledge.terrain_overview(cell.id)
             )
             public_environment = self._environment_rows(cell.id) if environment_quality >= 2 else ()
@@ -252,6 +253,40 @@ class SurfaceProjectorMixin:
                     )
                 )
             development_options = tuple(development_options_list)
+            engineering_options_list = []
+            engineering_recipe_id = sim.projects.surface_terrain_engineering_recipe_id
+            engineering_recipe = sim.projects.spatial_recipes.get(engineering_recipe_id)
+            if owner is not None and engineering_recipe is not None:
+                active = sim.projects.active_spatial_project_for_cell(cell.id)
+                for location in (sim.graph.locations[owner],):
+                    # Domain owns all eligibility; the public projection only
+                    # removes physical facts not yet released by Knowledge.
+                    failures = sim.projects.surface_cell_engineering_failures(
+                        location.operational_node_id, cell.id, sim.day
+                    )
+                    unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                        cell.id, engineering_recipe.site_requirements
+                    )
+                    public_failures = tuple(
+                        row for row in failures
+                        if row.code not in unpublished
+                        and not (terrain_quality < 2 and row.code == "already_engineered")
+                    )
+                    engineering_options_list.append(SurfaceCellDevelopmentOption(
+                        location_id=str(owner),
+                        blockers=constraints_from_pairs(
+                            tuple((row.code, row.detail) for row in public_failures), affected_action="engineer_surface_cell",
+                            related_entity_kind="surface_cell", related_entity_id=str(cell.id),
+                        ),
+                        can_plan=not public_failures,
+                        site_knowledge_unverified=bool(unpublished) or terrain_quality < 2,
+                        construction_required=(None if terrain_quality < 2 else
+                            sim.projects.development_work_required(engineering_recipe.id, cell.id)),
+                        resources=tuple((str(r.resource_id), r.amount_t) for r in engineering_recipe.resources),
+                        active_project_id=None if active is None else str(active.id),
+                        procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
+                    ))
+            engineering_options = tuple(engineering_options_list)
             resources = ()
             if sim.survey is not None:
                 resources = tuple(
@@ -373,17 +408,12 @@ class SurfaceProjectorMixin:
                                 ),
                                 ComparisonValueRow(axis_key="payload_t", number_value=recipe.payload_t),
                                 ComparisonValueRow(
-                                    axis_key="terrain_factor", number_value=cell.terrain.terrain_factor if terrain_quality >= 2 else None
+                                    axis_key="development_work_factor",
+                                    number_value=terrain_profile.development_work_factor if terrain_quality >= 2 else None,
                                 ),
                                 ComparisonValueRow(
-                                    axis_key="bearing_capacity_factor",
-                                    number_value=cell.terrain.bearing_capacity_factor if terrain_quality >= 2 else None,
-                                ),
-                                ComparisonValueRow(
-                                    axis_key="dust_factor", number_value=cell.terrain.dust_factor if terrain_quality >= 2 else None
-                                ),
-                                ComparisonValueRow(
-                                    axis_key="slope_factor", number_value=cell.terrain.slope_factor if terrain_quality >= 2 else None
+                                    axis_key="excavation_accessibility",
+                                    number_value=terrain_profile.excavation_accessibility if terrain_quality >= 2 else None,
                                 ),
                             )
                             foundation_rows.append(FoundingOption(
@@ -443,6 +473,7 @@ class SurfaceProjectorMixin:
                         related_entity_id=str(cell.id),
                     ),
                     development_options,
+                    engineering_options,
                     facility_placement_options,
                     foundation_options,
                     cell.display_name or str(cell.id),
@@ -457,10 +488,8 @@ class SurfaceProjectorMixin:
                 ("transit_days", "移動時間", "integer", "日"),
                 ("preparation_work", "準備工数", "number", None),
                 ("payload_t", "搭載量", "number", "t"),
-                ("terrain_factor", "地形係数", "number", None),
-                ("bearing_capacity_factor", "地盤支持力", "number", None),
-                ("dust_factor", "粉塵負荷", "number", None),
-                ("slope_factor", "斜面負荷", "number", None),
+                ("development_work_factor", "地表施工負担", "number", None),
+                ("excavation_accessibility", "掘削アクセス", "number", None),
             ),
             founding_comparison_values,
         )

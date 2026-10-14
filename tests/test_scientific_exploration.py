@@ -360,7 +360,7 @@ def test_scientific_exploration_save_load_preserves_fleet_commitment_and_future_
     after_science = _row(app)
     assert after_science.observation_cells_with_new_knowledge == 0
     assert after_science.observation_cell_count == before_science.observation_cell_count
-    assert moon_after.terrain and "terrain_factor" not in dict(moon_after.terrain)
+    assert moon_after.terrain and "terrain_profile" not in dict(moon_after.terrain)
     assert all(row.knowledge_level >= 1 and row.visible_potential is None
                and 0 <= row.presence_probability <= 1 for row in moon_after.resources)
     assert capture_state(app._simulation)["survey"] == survey_before

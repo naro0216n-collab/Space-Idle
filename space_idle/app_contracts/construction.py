@@ -86,6 +86,14 @@ class DevelopSurfaceCell:
 
 
 @dataclass(frozen=True)
+class EngineerSurfaceCell:
+    location_id: str
+    cell_id: str
+    priority: ActivityPriority = DEFAULT_ACTIVITY_PRIORITY
+    procurement_policy: ProcurementTimingPolicyValue = "standard_wait"
+
+
+@dataclass(frozen=True)
 class CancelBuild:
     project_id: str
 

@@ -16,7 +16,7 @@ from .validation import validate_domain_runtime_state, validate_runtime_state
 from .validation_support import ConfigurationError
 
 
-SAVE_SCHEMA_VERSION = 72
+SAVE_SCHEMA_VERSION = 73
 
 
 class SaveFormatError(ValueError):

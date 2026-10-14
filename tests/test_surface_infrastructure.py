@@ -120,8 +120,8 @@ def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_
         ids.EARTH, ids.METAL_ORE, sim.facilities, power, sim.day,
         decision.allocations.services,
     )
-    core_access = sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].terrain.bearing_capacity_factor
-    remote_access = sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].terrain.bearing_capacity_factor
+    core_access = sim.graph.terrain_profile(ids.EARTH_CELL_INDUSTRIAL).excavation_accessibility
+    remote_access = sim.graph.terrain_profile(ids.EARTH_CELL_COASTAL).excavation_accessibility
     physical_opportunity = core * core_access + remote * remote_access
     assert opportunity == pytest.approx(physical_opportunity)
     constrained = next(
@@ -255,7 +255,7 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     assert option.projected_surface_infrastructure_fulfillment == 0.0
     assert tuple(factor.code for factor in option.limiting_factors) == ("surface_infrastructure",)
     # Geography has operational meaning beyond map decoration: two adjacent
-    # development choices with different dust/slope burdens require different
+    # development choices with different landforms require different
     # real Construction work. Unobserved work remains hidden in Map preview.
     frontier = tuple(sorted(
         candidate for candidate in sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].neighbor_ids
@@ -266,10 +266,14 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     # freezing a particular authored regional value as a Core test contract.
     from dataclasses import replace
     original_cell = sim.graph.surface_cells[other]
+    from space_idle.spatial import SurfaceTerrain
+    coast_work_factor = sim.graph.terrain_profile(ids.EARTH_CELL_COASTAL).development_work_factor
+    new_profile_id = next(
+        key for key, profile in sim.graph.terrain_profiles.items()
+        if profile.development_work_factor != coast_work_factor
+    )
     sim.graph.surface_cells[other] = replace(
-        original_cell, terrain=replace(
-            original_cell.terrain, slope_factor=original_cell.terrain.slope_factor + 3.0,
-        ),
+        original_cell, terrain=SurfaceTerrain(new_profile_id),
     )
     unknown = next(cell for cell in surface.cells if cell.id == str(other))
     assert next(row for row in unknown.development_options
@@ -395,3 +399,74 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     assert allocation.available.forward_t_per_day == pytest.approx(
         constrained.available.forward_t_per_day
     )
+
+
+def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_continuity(tmp_path):
+    """Player-initiated landform change crosses Construction, Spatial, Knowledge and Save."""
+    from space_idle import EngineerSurfaceCell
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.persistence import load_game, save_game
+    from space_idle.simulation import OfflineProgressPolicy
+
+    app = build_game_application()
+    sim = app._simulation
+    core = ids.EARTH_CELL_INDUSTRIAL
+    natural = sim.graph.surface_cells[core].terrain.profile_id
+    target_recipe = sim.projects.spatial_recipes[sim.projects.surface_terrain_engineering_recipe_id]
+    target_profile = target_recipe.target_terrain_profile_id
+    assert natural != target_profile  # Authored starter region offers a real terrain decision.
+    from space_idle.api.codec import decode_command
+    decoded = decode_command({
+        "type": "EngineerSurfaceCell",
+        "payload": {"location_id": str(ids.EARTH), "cell_id": str(core)},
+    })
+    assert isinstance(decoded, EngineerSurfaceCell)
+    initial_profile = sim.graph.terrain_profile(core)
+    original_resource_potential = dict(sim.graph.surface_cells[core].resource_potential_by_resource)
+    baseline_map = next(row for row in app.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
+    plan = baseline_map.engineering_options[0]
+    assert plan.can_plan and not plan.blockers
+    assert plan.construction_required == pytest.approx(
+        target_recipe.construction_work * initial_profile.development_work_factor
+    )
+    project_id = app.execute(EngineerSurfaceCell(
+        str(ids.EARTH), str(core), procurement_policy="immediate"
+    )).created_id
+    assert project_id is not None
+    project = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
+    assert sim.graph.terrain_profile(core) == initial_profile
+
+    app.execute(AdvanceTime(4))
+    assert project.status.value != "complete"
+    assert sim.graph.terrain_profile(core) == initial_profile
+    save_path = tmp_path / "engineer.json"
+    save_game(app, save_path)
+    loaded, _ = load_game(save_path, build_game_application_for_load)
+    loaded_sim = loaded._simulation
+    assert loaded_sim.graph.terrain_profile(core) == initial_profile
+    assert loaded_sim.projects.projects[project.id].construction_done == pytest.approx(project.construction_done)
+
+    app.execute(AdvanceTime(12))
+    offline_result = loaded.advance_offline(12.0, OfflineProgressPolicy(1.0))
+    assert offline_result.advanced_days == 12
+    for game in (app, loaded):
+        world = game._simulation.graph
+        assert world.terrain_profile(core).id == target_profile
+        assert world.surface_cells[core].terrain.profile_id == natural
+        assert world.surface_cells[core].resource_potential_by_resource == original_resource_potential
+        assert world.terrain_profile(core).excavation_accessibility > initial_profile.excavation_accessibility
+        finished = game._simulation.projects.projects[project.id]
+        assert finished.status.value == "complete"
+        assert finished.construction_done == pytest.approx(plan.construction_required)
+        assert finished.materials_committed
+        assert game._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
+        cell_view = next(row for row in game.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
+        assert dict(cell_view.terrain)["terrain_profile"] == world.terrain_profile(core).display_name
+        assert not cell_view.engineering_options[0].can_plan
+        assert len(world.locations) == len(sim.graph.locations)
+
+    assert loaded_sim.graph.engineered_terrain == sim.graph.engineered_terrain
+    save_game(loaded, save_path)
+    reloaded, _ = load_game(save_path, build_game_application_for_load)
+    assert reloaded._simulation.graph.terrain_profile(core).id == target_profile
+    assert reloaded._simulation.surface_knowledge.attribute_level(core, "terrain") == 2

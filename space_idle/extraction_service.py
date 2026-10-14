@@ -181,8 +181,8 @@ class ExtractionService:
         if spec.geology_accessibility_key is not None:
             geology = cell.static_geology.get(spec.geology_accessibility_key, 0.0)
         terrain = 1.0
-        if spec.terrain_accessibility_attribute is not None:
-            terrain = getattr(cell.terrain, spec.terrain_accessibility_attribute)
+        if spec.requires_excavation_access:
+            terrain = self.graph.terrain_profile(cell_id).excavation_accessibility
         return max(0.0, geology) * max(0.0, terrain)
 
     def _knowledge_cell_eligible(

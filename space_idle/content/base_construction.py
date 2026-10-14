@@ -27,8 +27,18 @@ def build_spatial_development_recipes() -> dict:
             36.0,
             surface_site,
             knowledge_requirements=(),
-            slope_work_weight=0.35,
-            dust_work_weight=0.15,
+
+        ),
+        SpatialDevelopmentRecipe(
+            ids.SURFACE_TERRAIN_ENGINEERING_PROJECT,
+            "Surface Terrain Engineering",
+            (
+                BuildResourceRequirement(ids.STRUCTURAL_COMPONENTS, 3.0),
+                BuildResourceRequirement(ids.MACHINERY, 2.0),
+            ),
+            24.0,
+            surface_site,
+            target_terrain_profile_id="plain",
         ),
     )
     return {recipe.id: recipe for recipe in recipes}

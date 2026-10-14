@@ -20,7 +20,7 @@ from .models import (
     NewFacilityTarget,
     ProjectResourceState,
     ProjectStatus,
-    SurfaceCellDevelopmentTarget,
+    SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 
 
@@ -35,7 +35,9 @@ def _capture_target(target) -> dict[str, Any]:
             "facility_id": str(target.facility_id),
             "facility_definition_id": str(target.facility_definition_id),
         }
-    return {"kind": "surface_cell_development", "recipe_id": str(target.recipe_id), "cell_id": str(target.cell_id)}
+    return {"kind": ("surface_cell_engineering" if isinstance(target, SurfaceCellEngineeringTarget)
+                     else "surface_cell_development"),
+            "recipe_id": str(target.recipe_id), "cell_id": str(target.cell_id)}
 
 
 def _restore_target(data: dict[str, Any]):
@@ -59,12 +61,13 @@ def _restore_target(data: dict[str, Any]):
             EntityId(decode_str(row["facility_id"], "construction facility_id")),
             DefinitionId(decode_str(row["facility_definition_id"], "construction facility_definition_id")),
         )
-    if kind == "surface_cell_development":
+    if kind in ("surface_cell_development", "surface_cell_engineering"):
         row = require_fields(
             data, {"kind", "recipe_id", "cell_id"},
             "construction surface cell development target",
         )
-        return SurfaceCellDevelopmentTarget(
+        target_type = SurfaceCellEngineeringTarget if kind == "surface_cell_engineering" else SurfaceCellDevelopmentTarget
+        return target_type(
             DefinitionId(decode_str(row["recipe_id"], "construction recipe_id")),
             SurfaceCellId(decode_str(row["cell_id"], "construction cell_id")),
         )
@@ -263,13 +266,25 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(recipe_id == recipe.id, f"spatial development recipe key mismatch: {recipe_id}")
         _require(not recipe.self_deploying, f"spatial development must use construction capacity: {recipe_id}")
         _validate_physical_recipe(recipe, f"spatial_development:{recipe_id}", ctx)
+        if recipe.target_terrain_profile_id is not None:
+            _require(recipe.target_terrain_profile_id in sim.graph.terrain_profiles,
+                     f"spatial engineering references unknown Terrain Profile: {recipe_id}")
         if recipe.knowledge_requirements:
             _require(
                 sim.projects.knowledge_requirement_failures is not None,
                 f"spatial development Knowledge Requirement has no eligibility provider: {recipe_id}",
             )
+    if sim.projects.surface_terrain_engineering_recipe_id is not None:
+        terrain_id = sim.projects.surface_terrain_engineering_recipe_id
+        _require(terrain_id in sim.projects.spatial_recipes, "unknown terrain engineering recipe")
+        target_profile_id = sim.projects.spatial_recipes[terrain_id].target_terrain_profile_id
+        _require(target_profile_id in sim.graph.terrain_profiles, "terrain engineering references unknown profile")
+        _require(terrain_id != sim.projects.surface_cell_development_recipe_id,
+                 "surface engineering and territory expansion cannot share a recipe")
     if sim.projects.surface_cell_development_recipe_id is not None:
         _require(sim.projects.surface_cell_development_recipe_id in sim.projects.spatial_recipes, "unknown surface cell development recipe")
+        _require(sim.projects.spatial_recipes[sim.projects.surface_cell_development_recipe_id].target_terrain_profile_id is None,
+                 "surface expansion cannot change a Cell's terrain")
     _require(set(sim.projects.procurement_wait_days) == {"immediate", "standard_wait", "extended_wait"}, "invalid procurement timing policy configuration")
     _require(all(days >= 0 for days in sim.projects.procurement_wait_days.values()), "negative procurement wait period")
     for definition_id, spec in sim.projects.construction_providers.items():
@@ -373,13 +388,21 @@ def validate_runtime(sim: Any) -> None:
             _require(project.site_cell_id is None, f"surface development duplicates target cell: {project_id}")
             _require(target.recipe_id in sim.projects.spatial_recipes, f"development project references unknown recipe: {project_id}")
             recipe = sim.projects.recipe_for_project(project)
+            registered_recipe = sim.projects.spatial_recipes[target.recipe_id]
+            _require((registered_recipe.target_terrain_profile_id is not None) == isinstance(target, SurfaceCellEngineeringTarget),
+                     f"spatial project target and recipe mismatch: {project_id}")
             _require(project.operational_node_id in sim.graph.locations, f"surface development host is not a surface location: {project_id}")
             _require(target.cell_id in sim.graph.surface_cells, f"surface development references unknown cell: {project_id}")
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
                 _require(target.cell_id not in active_spatial_cells, f"duplicate active spatial target cell: {target.cell_id}")
                 active_spatial_cells.add(target.cell_id)
             if project.status is ProjectStatus.COMPLETE:
-                _require(target.cell_id in sim.graph.locations[project.operational_node_id].developed_cell_ids, f"completed development project did not attach cell: {project_id}")
+                _require(target.cell_id in sim.graph.locations[project.operational_node_id].developed_cell_ids,
+                         f"completed spatial project does not belong to its location: {project_id}")
+                if isinstance(target, SurfaceCellEngineeringTarget):
+                    _require(sim.graph.terrain_profile(target.cell_id).id ==
+                             sim.projects.spatial_recipes[target.recipe_id].target_terrain_profile_id,
+                             f"completed engineering project did not settle terrain: {project_id}")
 
         _require(-1e-9 <= project.construction_done <= recipe.construction_work + 1e-8, f"invalid construction progress: {project_id}")
         _require(not project.paused or project.pause_started_day is not None, f"paused project missing pause day: {project_id}")
