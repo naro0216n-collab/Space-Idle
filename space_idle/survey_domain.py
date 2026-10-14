@@ -162,24 +162,24 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         return
     _require(sim.survey.graph is sim.graph, "survey service must use simulation spatial graph")
     _require(sim.survey.transport is sim.transport, "survey service must use simulation Fleet owner")
-    # These are already materialized registration entries. Do not eagerly
-    # format several error messages per Cell × Resource on every composition.
-    # Every entry is still checked; invalid Content is never sampled away.
+    # The standard template is registered as a complete Cell × Resource
+    # product once. A fresh dict per Game is compared with that immutable
+    # template; altered definitions or World input fall back to generic
+    # exhaustive validation. A key-count alone is NOT proof of valid targets.
     cells = sim.graph.surface_cells
     resources = sim.inventory.resource_definitions
-    for key, target in sim.survey.targets.items():
-        if key != (target.cell_id, target.resource_id):
-            raise ConfigurationError(f"survey target key mismatch: {key}")
-        if target.cell_id not in cells:
-            raise ConfigurationError(f"survey target references unknown surface cell: {key}")
-        if target.resource_id not in resources:
-            raise ConfigurationError(f"survey target references unknown resource: {key}")
-        if len(target.thresholds) != 3:
-            raise ConfigurationError(f"survey target must define three knowledge thresholds: {key}")
-        if not all(value > 0 for value in target.thresholds):
-            raise ConfigurationError(f"non-positive survey threshold: {key}")
-        if not target.thresholds[0] < target.thresholds[1] < target.thresholds[2]:
-            raise ConfigurationError(f"non-increasing survey thresholds: {key}")
+    if not ctx.survey_registration_matches:
+        for key, target in sim.survey.targets.items():
+            if key != (target.cell_id, target.resource_id):
+                raise ConfigurationError(f"survey target key mismatch: {key}")
+            if target.cell_id not in cells:
+                raise ConfigurationError(f"survey target references unknown surface cell: {key}")
+            if target.resource_id not in resources:
+                raise ConfigurationError(f"survey target references unknown resource: {key}")
+            if len(target.thresholds) != 3 or not all(value > 0 for value in target.thresholds):
+                raise ConfigurationError(f"invalid survey target thresholds: {key}")
+            if not target.thresholds[0] < target.thresholds[1] < target.thresholds[2]:
+                raise ConfigurationError(f"non-increasing survey thresholds: {key}")
     facility_owners: dict[DefinitionId, DefinitionId] = {}
     for provider_id, provider in sim.survey.providers.items():
         _require(provider_id == provider.id, f"survey provider key mismatch: {provider_id}")
@@ -211,6 +211,16 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
     _require(sim.extraction.graph is sim.graph, "extraction service must use simulation spatial graph")
     _require(sim.extraction.technology_state is sim.technology,
              "extraction eligibility must use the authoritative Technology State")
+
+    # These are independent, static registration contracts. Inspect the World
+    # once for each *different* property, not once per Extraction method. A
+    # growing catalog of extraction methods must not multiply a full-World
+    # traversal on every Application composition.
+    cells = sim.graph.surface_cells.values()
+    geology_keys = (ctx.static_geology_keys if ctx.static_geology_keys is not None else
+                    {key for cell in cells for key in cell.static_geology})
+    terrain_checked: dict[str, bool] = {}
+    knowledge_target_owners: dict[DefinitionId, DefinitionId] = {}
     for definition_id, spec in sim.extraction.specs.items():
         _require(definition_id == spec.id, f"extraction method key mismatch: {definition_id}")
         _require(
@@ -224,13 +234,7 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
                 sim.extraction.survey is not None,
                 f"extraction Knowledge eligibility has no Survey service: {definition_id}",
             )
-            for cell in sim.graph.surface_cells.values():
-                if cell.resource_potential_by_resource.get(spec.resource_id, 0.0) <= 0:
-                    continue
-                _require(
-                    (cell.id, spec.resource_id) in sim.extraction.survey.targets,
-                    f"extraction Knowledge eligibility has no Survey target: {definition_id}/{cell.id}/{spec.resource_id}",
-                )
+            knowledge_target_owners.setdefault(spec.resource_id, definition_id)
         validate_site_requirements(
             spec.opportunity_requirements,
             ctx.known_capabilities,
@@ -238,20 +242,44 @@ def validate_extraction_configuration(sim: Any, ctx: ValidationContext) -> None:
         )
         if spec.geology_accessibility_key is not None:
             _require(
-                any(
-                    spec.geology_accessibility_key in cell.static_geology
-                    for cell in sim.graph.surface_cells.values()
-                ),
+                spec.geology_accessibility_key in geology_keys,
                 f"extraction spec references unknown geology accessibility: {definition_id}/{spec.geology_accessibility_key}",
             )
         if spec.terrain_accessibility_attribute is not None:
+            attribute = spec.terrain_accessibility_attribute
+            if attribute not in terrain_checked:
+                terrain_checked[attribute] = (
+                    all(hasattr(kind, attribute) for kind in ctx.static_terrain_types)
+                    if ctx.static_terrain_types is not None
+                    else all(hasattr(cell.terrain, attribute) for cell in cells)
+                )
             _require(
-                all(
-                    hasattr(cell.terrain, spec.terrain_accessibility_attribute)
-                    for cell in sim.graph.surface_cells.values()
-                ),
-                f"extraction spec references unknown terrain accessibility: {definition_id}/{spec.terrain_accessibility_attribute}",
+                terrain_checked[attribute],
+                f"extraction spec references unknown terrain accessibility: {definition_id}/{attribute}",
             )
+
+    if knowledge_target_owners and ctx.survey_registration_matches:
+        # The validated complete Cell × Resource product supplies a target for
+        # every known resource, including absent deposits. A new Extraction
+        # resource outside that product still requires the generic check.
+        registration = sim.survey.verified_registration
+        knowledge_target_owners = {
+            resource: owner for resource, owner in knowledge_target_owners.items()
+            if resource not in registration.resource_ids
+        }
+    if knowledge_target_owners:
+        # Survey eligibility follows each physically available resource.
+        # Traversing one Cell's deposits once replaces one full traversal per
+        # Extraction method, including methods sharing the same resource.
+        targets = sim.extraction.survey.targets
+        for cell in cells:
+            for resource_id, potential in cell.resource_potential_by_resource.items():
+                owner = knowledge_target_owners.get(resource_id)
+                if owner is not None and potential > 0:
+                    _require(
+                        (cell.id, resource_id) in targets,
+                        f"extraction Knowledge eligibility has no Survey target: {owner}/{cell.id}/{resource_id}",
+                    )
 
 
 def validate_survey_runtime(sim: Any) -> None:

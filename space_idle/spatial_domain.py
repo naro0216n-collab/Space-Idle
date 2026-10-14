@@ -171,6 +171,8 @@ class ValidatedStaticWorld:
     cells: Mapping = field(repr=False)
     facets: Mapping = field(repr=False)
     body_facets: Mapping = field(repr=False)
+    geology_keys: frozenset[str] = field(repr=False)
+    terrain_types: frozenset[type] = field(repr=False)
 
     def matches(self, graph: Any, environment: Any) -> bool:
         return (type(graph) is self.graph_kind
@@ -218,13 +220,14 @@ def certify_static_world(graph: Any, environment: Any) -> ValidatedStaticWorld:
         MappingProxyType(cells),
         static_facets(environment.static.facets),
         static_facets(environment.static.body_facets),
+        frozenset(key for cell in graph.surface_cells.values() for key in cell.static_geology),
+        frozenset(type(cell.terrain) for cell in graph.surface_cells.values()),
     )
 
 
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     _require(sim.environment.graph is sim.graph, "simulation/environment spatial graph mismatch")
-    proof = getattr(sim.graph, "_static_world_proof", None)
-    if proof is None or not proof.matches(sim.graph, sim.environment):
+    if not ctx.static_world_proof_matches:
         validate_static_world(sim.graph, sim.environment)
     # Overlays can change at runtime and must never inherit a static proof.
     sim.environment.ordered_overlays()

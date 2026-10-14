@@ -137,7 +137,12 @@ class ScenarioDefinition:
                 level=row.level,
             )
             initial_facility_ids.append(facility_id)
-        sim.refresh_storage()
+        # Opening stock is authored ownership, not an ordinary admission.
+        # Its precondition is *physical* special-pool capacity only; no Power,
+        # Resource, or Maintenance allocation may be decided before the opening
+        # inventory and other Scenario State have been installed. Bootstrap
+        # resolves the actual usable capacity after Scenario application.
+        sim.storage.refresh(sim.day, {})
         opening_stock = {}
         for row in self.inventory_stock:
             key = (row.operational_node_id, row.resource_id)

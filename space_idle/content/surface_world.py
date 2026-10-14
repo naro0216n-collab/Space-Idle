@@ -315,6 +315,15 @@ def register_complete_surface_world(
             resource: sum(row.resource_potential_by_resource.get(resource, 0.0) for row in rows)
             for resource in resource_totals
         }
+        # Positive geological budgets must be realizable, even when Content
+        # supplies extremely sparse deposits. Silent zero division avoidance
+        # would otherwise erase a Resource from an entire body. The scale
+        # factor enforces the budget by construction, not through per-Cell
+        # conservation assertions in every game startup.
+        for resource, budget in resource_totals.items():
+            produced = generated_totals[resource]
+            if not (isfinite(budget) and budget > 0 and isfinite(produced) and produced > 0):
+                raise ValueError(f'invalid surface Resource distribution: {body_id}/{resource}')
         normalized = []
         for row in rows:
             normalized.append(replace(row, resource_potential_by_resource={

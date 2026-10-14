@@ -91,19 +91,23 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     sim = app._simulation
     graph = sim.graph
     env = sim.environment
-    # Static geology and survey target coverage is checked at registration;
-    # calendar invariance is a runtime contract, not one assertion per Cell.
-    # Sample physically different bodies and every explicitly authored local
-    # climate override; global all-Cell validation belongs to the generator.
-    representative = {}
+    # Static registration has already established the body/Cell/Facet graph.
+    # The daily-climate rule is about the clock and overlay ownership, not a
+    # second full enumeration of all generated climate facets. Exercise every
+    # authored reference region and latitude extremes of every solid body.
+    from collections import defaultdict
+    from space_idle.content.base_spatial import build_world_registration
+
+    source_world, _ = build_world_registration()
+    by_body = defaultdict(list)
     for cell in graph.surface_cells.values():
-        representative.setdefault(cell.body_id, cell.id)
-    climate_cells = set(representative.values())
-    climate_cells.update(
-        cell_id for cell_id, facet_type in env.static.facets
-        if cell_id in graph.surface_cells
-        and facet_type in (IlluminationField, ThermalField)
-    )
+        by_body[cell.body_id].append(cell)
+    climate_cells = set(source_world.surface_cells)
+    for cells in by_body.values():
+        climate_cells.add(min(cells, key=lambda cell: cell.centroid.latitude_deg).id)
+        climate_cells.add(max(cells, key=lambda cell: cell.centroid.latitude_deg).id)
+        climate_cells.add(min(cells, key=lambda cell: cell.terrain.bearing_capacity_factor).id)
+        climate_cells.add(max(cells, key=lambda cell: cell.terrain.bearing_capacity_factor).id)
     assert climate_cells
     baseline_climate = {
         cell_id: (
@@ -128,13 +132,18 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         env.get(cell_id, ThermalField),
     ) == climate for cell_id, climate in baseline_climate.items())
 
-    # Same solar Facility in different Cells receives exactly the flux and
-    # availability resolved from each Cell; no second AU attenuation is applied.
-    candidate_by_body = {}
-    for cell_id, cell in graph.surface_cells.items():
-        candidate_by_body.setdefault(cell.body_id, cell_id)
-    candidate_cells = tuple(candidate_by_body.values())
-    assert candidate_cells  # A present surface Cell, not an arbitrary unowned one.
+    # Same solar Facility at contrasting heliocentric distances receives
+    # precisely the local registered flux, without another AU attenuation.
+    # Exhaustive body input validation belongs to registration, not this
+    # behavior test's repeated per-body facility installation.
+    by_flux = sorted(
+        (body_id for body_id in by_body
+         if graph.representative_solar_flux_w_m2(body_id) is not None),
+        key=lambda body_id: graph.representative_solar_flux_w_m2(body_id),
+    )
+    representative_bodies = {by_flux[0], by_flux[-1], by_flux[len(by_flux) // 2]}
+    candidate_cells = tuple(by_body[body_id][0].id for body_id in representative_bodies)
+    assert candidate_cells
     # Use a purpose-built solar Definition rather than requiring any named
     # Content Facility to remain in the catalogue.
     generator_id = DefinitionId("test.facility.solar_probe")
@@ -221,9 +230,10 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
     monkeypatch.setattr(sim.founding, "planning_failures", tracked)
     # Test multi-target query scoping against an available physical body,
     # rather than fixing the number or names of Moon Surface Cells.
-    candidate = next(
+    candidate = min(
         ((body.id, sim.graph.cells_for_body(body.id)) for body in sim.graph.bodies.values()
-         if len(sim.graph.cells_for_body(body.id)) >= 2), None
+         if len(sim.graph.cells_for_body(body.id)) >= 2),
+        key=lambda value: len(value[1]), default=None,
     )
     assert candidate is not None  # At least one map must support multi-target selection.
     body_id, physical_cells = candidate
@@ -372,6 +382,22 @@ def test_registration_rejects_invalid_product_inputs_before_surface_expansion():
     with pytest.raises(ValueError, match='lacks geologic reference'):
         validate_surface_registration(graph)
 
+    # A positive Resource reference that is numerically too small to survive
+    # the generator's minimum deposit resolution must fail closed. Otherwise
+    # budget normalization silently loses the entire resource on that body.
+    from space_idle.content.surface_world import register_complete_surface_world
+    small, environment = build_world_registration()
+    body_id = reference.body_id
+    ref_cells = [cell for cell in small.surface_cells.values() if cell.body_id == body_id]
+    resource = next(iter(reference.resource_potential_by_resource))
+    for cell in ref_cells:
+        if resource in cell.resource_potential_by_resource:
+            potential = dict(cell.resource_potential_by_resource)
+            potential[resource] = 1e-300
+            small.surface_cells[cell.id] = replace(cell, resource_potential_by_resource=potential)
+    with pytest.raises(ValueError, match='invalid surface Resource distribution'):
+        register_complete_surface_world(small, environment.static, body_ids=frozenset({body_id}))
+
 
 def test_standard_partition_registration_conserves_resources_across_resolution():
     """Resolution independence belongs to the shared generator, not 29 copies."""
@@ -429,38 +455,101 @@ def test_standard_world_instances_do_not_share_mutable_static_mappings():
     left_env.static.facets[(cell_id, ThermalField)] = ThermalField(500)
     assert left_env.static.facets != right_env.static.facets
 
+def test_survey_product_registration_and_spatial_ids_reject_invalid_inputs():
+    """Exercise registration at the boundary, not the entire product in every test."""
+    from space_idle.content.base_spatial import build_world_registration
+    from space_idle.content.base_progression import build_survey_targets, build_extraction_specs
+    from space_idle.content.surface_world import validate_surface_registration
+    from space_idle.shared import CelestialBodyId, DefinitionId
+    from space_idle.survey_service import ValidatedSurveyRegistration
+
+    graph, _ = build_world_registration()
+    resources = frozenset(spec.resource_id for spec in build_extraction_specs().values())
+    targets = build_survey_targets(graph)
+    cells = frozenset(graph.surface_cells)
+    # The certificate constructor is the structural invariant, not a separate
+    # test loop which happens to repeat its implementation.
+    verified = ValidatedSurveyRegistration(targets, resources, cells)
+    assert verified.targets == targets
+    bad = dict(targets)
+    key, target = next(iter(targets.items()))
+    bad[key] = replace(target, resource_id=DefinitionId('test.unregistered.resource'))
+    with pytest.raises(ValueError, match='invalid Survey registration target'):
+        ValidatedSurveyRegistration(bad, resources, cells)
+    bad.pop(key)
+    with pytest.raises(ValueError, match='does not cover the Cell/Resource product'):
+        ValidatedSurveyRegistration(bad, resources, cells)
+
+    sample = next(iter(graph.surface_cells.values()))
+    with pytest.raises(ValueError, match="duplicate surface cell"):
+        graph.add_surface_cell(sample)
+    with pytest.raises(ValueError, match="unknown celestial body"):
+        graph.add_surface_cell(replace(
+            sample, id=SurfaceCellId("test.invalid.reference"),
+            body_id=CelestialBodyId("test.unknown.body"),
+        ))
+
+    # Two authored bodies with different IDs but the same generated suffix
+    # would otherwise overwrite a Cell in the completed World dict.
+    body = graph.bodies[sample.body_id]
+    collision = CelestialBodyId("test.validation." + str(sample.body_id).rsplit(".", 1)[-1])
+    graph.add_body(replace(body, id=collision, parent_body_id=None))
+    graph.add_surface_cell(replace(sample, id=SurfaceCellId("test.collision.reference"),
+                                   body_id=collision, neighbor_ids=frozenset()))
+    with pytest.raises(ValueError, match="generated surface Cell IDs collide"):
+        validate_surface_registration(graph)
+
+
 def test_geographic_diversity_and_survey_eligibility_do_not_depend_on_actual_deposits():
-    """Regional choice must survive the World generator and Knowledge boundary."""
+    """Registration guarantees survey eligibility; geography requires sampling.
+
+    The standard target builder constructs the entire Cell × Resource product,
+    and certification checks the input references once. Do not enumerate the
+    product again in this Application test. Use deterministic latitude strata
+    and physical extremes for the independent distribution contract.
+    """
+    from collections import defaultdict
+    from hashlib import blake2b
+    from statistics import pvariance
+
     app = build_game_application()
     sim = app._simulation
     for body in sim.graph.bodies.values():
         if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
             continue
         cells = sim.graph.cells_for_body(body.id)
-        possible = {resource for cell in cells for resource in cell.resource_potential_by_resource}
-        # Absence on an entire celestial body is likewise not free Knowledge.
-        # Survey eligibility is the same Content-level resource catalogue on
-        # every solid body, regardless of its actual deposited resources.
-        surveyable = {spec.resource_id for spec in sim.extraction.specs.values()}
-        target_resources = {resource for (cell, resource) in sim.survey.targets
-                            if sim.graph.surface_cells[cell].body_id == body.id}
-        assert target_resources == surveyable
+        assert cells
+        by_latitude = defaultdict(list)
         for cell in cells:
-            assert {(cell.id, resource) for resource in surveyable} <= sim.survey.targets.keys()
-        # The same world has different geology and construction geography.
-        # Generic Content must not just replicate one reference tuple across
-        # arbitrarily many equal-area Cells.
-        assert len({round(cell.terrain.bearing_capacity_factor, 5) for cell in cells}) > 1
-        if len(possible) > 1:
-            assert len({tuple(sorted(cell.resource_potential_by_resource)) for cell in cells}) > 1
+            band = min(2, max(0, int((cell.centroid.latitude_deg + 90) // 60)))
+            by_latitude[band].append(cell)
 
-    # One genuinely barren Cell and one bearing the same Resource must be
-    # indistinguishable by the list of surveyable Resource types before survey.
+        def stable_order(cell):
+            return blake2b(str(cell.id).encode('utf-8'), digest_size=8).digest()
+
+        chosen = {cell.id: cell for band in by_latitude.values()
+                  for cell in sorted(band, key=stable_order)[:12]}
+        # Explicitly exercise the physically limiting Cells even if they fall
+        # outside the bounded geographic sample.
+        for cell in (min(cells, key=lambda item: item.terrain.bearing_capacity_factor),
+                     max(cells, key=lambda item: item.terrain.bearing_capacity_factor),
+                     min(cells, key=lambda item: len(item.resource_potential_by_resource)),
+                     max(cells, key=lambda item: len(item.resource_potential_by_resource))):
+            chosen[cell.id] = cell
+        sample = tuple(chosen.values())
+        assert sample
+        assert pvariance(cell.terrain.bearing_capacity_factor for cell in sample) > 0
+        possible = {resource for cell in cells for resource in cell.resource_potential_by_resource}
+        if len(possible) > 1:
+            assert len({tuple(sorted(cell.resource_potential_by_resource)) for cell in sample}) > 1
+
+    # Knowledge disclosure is a behavioral rule: check opposite physical
+    # conditions directly, instead of reiterating the full target registry.
     moon = sim.graph.cells_for_body(ids.MOON)
     resource = ids.VOLATILE_BEARING_MATERIAL
     bearing = next(cell for cell in moon if cell.resource_potential_by_resource.get(resource, 0) > 0)
     barren = next(cell for cell in moon if cell.resource_potential_by_resource.get(resource, 0) == 0)
-    moon_map = app.query(GetSurfaceMap(str(ids.MOON)))
+    moon_map = app.query(GetSurfaceMap(str(ids.MOON), (str(bearing.id), str(barren.id))))
     views = {row.id: row for row in moon_map.cells}
     for cell in (bearing, barren):
         row = next(resource_row for resource_row in views[str(cell.id)].resources
@@ -496,7 +585,11 @@ def test_verified_static_world_rechecks_modified_geography_and_facets():
     with pytest.raises(ConfigurationError, match="negative resource potential"):
         validate_simulation_configuration(sim)
     sim.graph.surface_cells[cell_id].resource_potential_by_resource[resource] = valid_potential
-    baseline = build_game_application()._simulation
+    # A separately materialized static registry is enough to verify
+    # target-dictionary ownership; a second complete Application provides
+    # no additional evidence for this static registry contract.
+    from space_idle.content.base_progression import instantiate_standard_survey_targets
+    other_targets = instantiate_standard_survey_targets()
 
     facet_id = next(key for key in sim.environment.static.facets if key[1] is IlluminationField)
     saved_facet = sim.environment.static.facets[facet_id]
@@ -510,7 +603,7 @@ def test_verified_static_world_rechecks_modified_geography_and_facets():
     # immutable SurveyTarget Definitions come from the same Content template.
     target_id = next(iter(sim.survey.targets))
     removed = sim.survey.targets.pop(target_id)
-    assert target_id in baseline.survey.targets
+    assert target_id in other_targets
     # Static geometry verification never substitutes for Survey's own
     # registration checks when targets have been changed independently.
     sim.survey.targets[target_id] = replace(removed, resource_id=DefinitionId("test.invalid.survey_resource"))

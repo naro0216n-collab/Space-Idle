@@ -59,8 +59,22 @@ def test_unrestricted_ordinary_inventory_and_shared_finite_special_storage():
         opening.initialize_stock({(node, a): 1.0})
 
 
-def test_application_exposes_special_capacity_but_not_fictitious_ordinary_headroom():
+def test_application_exposes_special_capacity_but_not_fictitious_ordinary_headroom(monkeypatch):
+    # Standard Scenario must install opening Inventory before running the first
+    # allocation. Physical storage checking during installation is not a
+    # provisional production/Power/Resource simulation.
+    from space_idle.simulation import Simulation
+
+    original = Simulation.tick_decision_projection
+    initial_snapshots = []
+
+    def projected_after_opening_stock(sim, *args, **kwargs):
+        initial_snapshots.append(bool(sim.inventory.stock))
+        return original(sim, *args, **kwargs)
+
+    monkeypatch.setattr(Simulation, "tick_decision_projection", projected_after_opening_stock)
     app = build_game_application()
+    assert initial_snapshots and all(initial_snapshots)
     sim = app._simulation
     node = ids.EARTH
     pool = "cryogenic"

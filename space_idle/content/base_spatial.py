@@ -377,9 +377,15 @@ def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
     graph = SpatialGraph(
         star_systems=dict(template.star_systems), bodies=dict(template.bodies),
         nodes=dict(template.nodes),
-        surface_cells={cell_id: replace(
-            cell, static_geology=dict(cell.static_geology),
-            resource_potential_by_resource=dict(cell.resource_potential_by_resource),
+        # A validated frozen Cell still owns mutable nested Content maps per
+        # Application. Construct the known dataclass directly: dataclasses.replace
+        # repeatedly discovers the same fields for every one of the 4k+ Cells.
+        # __post_init__ is still executed; no verification is bypassed.
+        surface_cells={cell_id: SurfaceCellDef(
+            cell.id, cell.body_id, cell.area_km2, cell.centroid,
+            cell.neighbor_ids, cell.terrain, dict(cell.static_geology),
+            dict(cell.resource_potential_by_resource), cell.display_name,
+            cell.spherical_bounds,
         ) for cell_id, cell in template.surface_cells.items()},
     )
     static = StaticFacetStore(

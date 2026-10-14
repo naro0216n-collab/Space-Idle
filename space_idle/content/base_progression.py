@@ -64,16 +64,26 @@ def build_survey_targets(graph: SpatialGraph) -> dict:
 
 
 @lru_cache(maxsize=1)
-def _standard_survey_target_template() -> dict:
-    """Pure static Content, derived once from the full verified World input."""
+def _standard_surveyable_resources() -> frozenset[DefinitionId]:
+    return frozenset(spec.resource_id for spec in build_extraction_specs().values())
+
+
+@lru_cache(maxsize=1)
+def _standard_survey_registration_proof():
+    """Certify the standard Content product once at its Composition boundary."""
     from .base_spatial import _standard_world_template
+    from ..survey_service import ValidatedSurveyRegistration
     graph, _environment, _proof = _standard_world_template()
-    return build_survey_targets(graph)
+    return ValidatedSurveyRegistration(
+        build_survey_targets(graph), _standard_surveyable_resources(),
+        frozenset(graph.surface_cells),
+    )
+
 
 
 def instantiate_standard_survey_targets() -> dict:
     """Fresh mutable registry, with immutable SurveyTarget definitions reused."""
-    return dict(_standard_survey_target_template())
+    return dict(_standard_survey_registration_proof().targets)
 
 
 def build_survey_providers() -> dict:

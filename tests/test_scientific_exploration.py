@@ -875,61 +875,82 @@ def test_crewed_exploration_keeps_population_and_onboard_resources_until_physica
 
 
 def test_science_and_survey_estimates_share_monotone_order_independent_knowledge(tmp_path):
-    """An estimated science payload is a real observation, not an RP-only flag."""
+    """Exercise actual science once; ordering of observations is Knowledge's contract.
+
+    Replaying the same Fleet journey and entire solar-system tick sequence in
+    both orders would retest Movement, not the observation settlement rule.
+    """
+    from space_idle.knowledge import SurfaceKnowledgeState
+
     subject = ids.MOON_CELL_FARSIDE_HIGHLANDS
     resource = ids.VOLATILE_BEARING_MATERIAL
     science_id = ids.CISLUNAR_SCIENCE_EXPLORATION
     science_precision = 0.25
     survey_precision = 0.35
-    outputs = []
-    for science_first in (True, False):
-        app = build_game_application()
-        sim = app._simulation
-        sim.scientific_exploration.definitions[science_id] = replace(
-            sim.scientific_exploration.definitions[science_id],
-            observation_resource_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
-            observation_estimate_uncertainty_fraction=science_precision,
-        )
-        validate_simulation_configuration(sim)
-        knowledge = sim.surface_knowledge
-        survey_mode = next(
-            mode for mode in sim.survey.providers[ids.ORBITAL_RESOURCE_MAPPING_PROVIDER].observation_modes
-            if mode.max_knowledge_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-        )
-        assert survey_mode.estimate_uncertainty_fraction == survey_precision
-        def science():
-            _seed_exploration_movement_resources(app)
-            app.execute(StartScientificExploration(str(science_id)))
-            app.execute(AssignExplorationFleet(
-                str(science_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG),
-            ))
-            app.execute(AdvanceTime(2))
-            _advance_outbound_campaign_to_completion(app, science_id)
-            assert sim.scientific_exploration.campaigns[science_id].research_points_awarded > 0
-        def survey():
-            knowledge.settle_survey_work(
-                subject, resource, knowledge.targets[(subject, resource)].thresholds[1],
-                KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
-                ids.ORBITAL_RESOURCE_MAPPING_PROVIDER, survey_mode,
-            )
-        if science_first:
-            science()
-            survey()
-        else:
-            survey()
-            science()
-        assert knowledge.knowledge_level(subject, resource) is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-        assert knowledge.visible_potential_precision_fraction(subject, resource) == pytest.approx(science_precision)
-        assert knowledge.visible_potential(subject, resource) is not None
-        assert sim.survey.campaigns == {}
-        outputs.append(capture_state(sim)["surface_knowledge"])
-        validate_runtime_state(sim)
-        # The observed estimate and its uncertainty survive serialization.
-        path = tmp_path / f"estimate-{science_first}.json"
-        save_game(app, path)
-        loaded, _ = load_game(path, build_game_application_for_load)
-        assert capture_state(loaded._simulation)["surface_knowledge"] == outputs[-1]
-    assert outputs[0] == outputs[1]
+    app = build_game_application()
+    sim = app._simulation
+    sim.scientific_exploration.definitions[science_id] = replace(
+        sim.scientific_exploration.definitions[science_id],
+        observation_resource_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        observation_estimate_uncertainty_fraction=science_precision,
+    )
+    validate_simulation_configuration(sim)
+    knowledge = sim.surface_knowledge
+    survey_mode = next(
+        mode for mode in sim.survey.providers[ids.ORBITAL_RESOURCE_MAPPING_PROVIDER].observation_modes
+        if mode.max_knowledge_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    )
+    assert survey_mode.estimate_uncertainty_fraction == survey_precision
+
+    # Science reaches the shared Knowledge authority through real Application
+    # commands, Fleet movement, finite work and a completed observation.
+    _seed_exploration_movement_resources(app)
+    app.execute(StartScientificExploration(str(science_id)))
+    app.execute(AssignExplorationFleet(
+        str(science_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+    ))
+    app.execute(AdvanceTime(2))
+    _advance_outbound_campaign_to_completion(app, science_id)
+    assert sim.scientific_exploration.campaigns[science_id].research_points_awarded > 0
+    science_estimate = knowledge.visible_potential(subject, resource)
+    assert science_estimate is not None
+    assert knowledge.visible_potential_precision_fraction(subject, resource) == pytest.approx(science_precision)
+
+    work = knowledge.targets[(subject, resource)].thresholds[1]
+    knowledge.settle_survey_work(
+        subject, resource, work, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        ids.ORBITAL_RESOURCE_MAPPING_PROVIDER, survey_mode,
+    )
+    assert knowledge.knowledge_level(subject, resource) is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    assert knowledge.visible_potential_precision_fraction(subject, resource) == pytest.approx(science_precision)
+    assert knowledge.visible_potential(subject, resource) == science_estimate
+    assert sim.survey.campaigns == {}
+
+    # Reverse only the competing settlements on an independent Knowledge State.
+    # The rest of the World and the already-proven movement do not vary.
+    reverse = SurfaceKnowledgeState(knowledge.targets, knowledge.graph)
+    reverse.settle_survey_work(
+        subject, resource, work, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        ids.ORBITAL_RESOURCE_MAPPING_PROVIDER, survey_mode,
+    )
+    reverse.observe_resource(
+        subject, resource, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        precision=science_precision, estimate=science_estimate,
+    )
+    assert reverse.progress(subject, resource) == pytest.approx(knowledge.progress(subject, resource))
+    assert reverse.visible_potential_precision_fraction(subject, resource) == pytest.approx(
+        knowledge.visible_potential_precision_fraction(subject, resource)
+    )
+    assert reverse.visible_potential(subject, resource) == knowledge.visible_potential(subject, resource)
+    assert reverse.visible_presence_probability(subject, resource) == knowledge.visible_presence_probability(subject, resource)
+
+    validate_runtime_state(sim)
+    # One real roundtrip suffices to verify that both estimate and uncertainty
+    # belong to the persisted Knowledge authority, not Survey/Science Campaigns.
+    path = tmp_path / "science-survey-estimate.json"
+    save_game(app, path)
+    loaded, _ = load_game(path, build_game_application_for_load)
+    assert capture_state(loaded._simulation)["surface_knowledge"] == capture_state(sim)["surface_knowledge"]
 
     with pytest.raises(ValueError, match="uncertainty"):
         replace(sim.scientific_exploration.definitions[science_id],
@@ -945,13 +966,17 @@ def test_knowledge_estimate_tiebreak_and_positive_threshold_contract():
         SurveyTarget(SurfaceCellId("test.surface"), DefinitionId("test.resource"), (1.0, 1.0, 2.0))
 
     subject, resource = ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.METAL_ORE
-    # One real World definition suffices: the test varies independent
-    # observation State, not scenario setup or World registration.
+    # Knowledge-settlement order is independent of Application startup,
+    # owned Fleet and Simulation. Use real registered subjects and targets
+    # without materializing the full product World for a pure State contract.
+    from space_idle.content.base_spatial import build_world_registration
+    from space_idle.content.base_progression import build_survey_targets
     from space_idle.knowledge import SurfaceKnowledgeState
-    original = build_game_application()._simulation.surface_knowledge
+    graph, _ = build_world_registration()
+    targets = build_survey_targets(graph)
     states = []
     for reversed_order in (False, True):
-        knowledge = SurfaceKnowledgeState(original.targets, original.graph)
+        knowledge = SurfaceKnowledgeState(targets, graph)
         observations = [(0.4, 0.9), (0.4, 1.1)]
         for precision, estimate in reversed(observations) if reversed_order else observations:
             knowledge.observe_resource(

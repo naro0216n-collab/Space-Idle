@@ -45,9 +45,13 @@ def test_extraction_requires_content_defined_knowledge_without_mutating_static_p
     app = build_game_application()
     sim = app._simulation
     key = (ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
+    # Extraction executes against this Node's developed territory. World
+    # registration is separately certified; replaying all other bodies' static
+    # geology around one local inventory settlement tests no extra contract.
+    local_cells = sim.graph.locations[ids.EARTH].developed_cell_ids
     before_potential = {
-        cell_id: dict(cell.resource_potential_by_resource)
-        for cell_id, cell in sim.graph.surface_cells.items()
+        cell_id: dict(sim.graph.surface_cells[cell_id].resource_potential_by_resource)
+        for cell_id in local_cells
     }
 
     sim.surface_knowledge.knowledge_progress[key] = 0.0
@@ -76,8 +80,8 @@ def test_extraction_requires_content_defined_knowledge_without_mutating_static_p
     )
     assert sim.inventory.amount(ids.EARTH, ids.MINERAL_FEEDSTOCK) > before_stock
     assert {
-        cell_id: dict(cell.resource_potential_by_resource)
-        for cell_id, cell in sim.graph.surface_cells.items()
+        cell_id: dict(sim.graph.surface_cells[cell_id].resource_potential_by_resource)
+        for cell_id in local_cells
     } == before_potential
 
 def test_soft_saturation_response_is_monotonic_diminishing_and_opportunity_sensitive():

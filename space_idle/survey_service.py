@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
+from types import MappingProxyType
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Mapping
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from .facilities import FacilityBook
 from .power import PowerSnapshot
@@ -66,6 +69,47 @@ class SurveyCampaignProjection:
     resolution_blockers: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ValidatedSurveyRegistration:
+    """Immutable verification evidence shared between independent Simulations.
+
+    The actual targets remain owned by Knowledge, as separately mutable
+    dictionaries per Game. This proof is not a second registration authority.
+    """
+    targets: Mapping[tuple[SurfaceCellId, DefinitionId], SurveyTarget]
+    resource_ids: frozenset[DefinitionId]
+    cell_ids: frozenset[SurfaceCellId]
+
+    def __post_init__(self) -> None:
+        # A caller cannot label an arbitrary registry "verified": the
+        # certificate constructor establishes the full cartesian product and
+        # validates its values before it can license the fast path.
+        resources = frozenset(self.resource_ids)
+        cells = frozenset(self.cell_ids)
+        targets = dict(self.targets)
+        if len(targets) != len(cells) * len(resources):
+            raise ValueError("Survey registration does not cover the Cell/Resource product")
+        for key, target in targets.items():
+            if (not isinstance(target, SurveyTarget)
+                    or key != (target.cell_id, target.resource_id)
+                    or target.cell_id not in cells or target.resource_id not in resources):
+                raise ValueError(f"invalid Survey registration target: {key}")
+            thresholds = target.thresholds
+            if (len(thresholds) != 3 or not all(isfinite(value) and value > 0 for value in thresholds)
+                    or not thresholds[0] < thresholds[1] < thresholds[2]
+                    or not isfinite(target.prior_presence_probability)
+                    or not 0 <= target.prior_presence_probability <= 1
+                    or not isfinite(target.presence_detection_reliability)
+                    or not 0.5 < target.presence_detection_reliability < 1):
+                raise ValueError(f"invalid Survey registration knowledge thresholds: {key}")
+        object.__setattr__(self, "targets", MappingProxyType(targets))
+        object.__setattr__(self, "resource_ids", resources)
+        object.__setattr__(self, "cell_ids", cells)
+
+    def __deepcopy__(self, memo):
+        return self
+
+
 @dataclass
 class SurveyService:
     DEFAULT_PRIORITY = DEFAULT_ACTIVITY_PRIORITY
@@ -77,6 +121,10 @@ class SurveyService:
     transport: "TransportService"
     technology_state: TechnologyState
     knowledge: SurfaceKnowledgeState = field(default=None)
+    # Validated static registration input, injected by Composition. This is a
+    # read-only definition witness, not Survey/Knowledge authoritative State.
+    # Generic or changed registries take the full validator path instead.
+    verified_registration: ValidatedSurveyRegistration | None = field(default=None, repr=False)
     campaigns: dict[EntityId, SurveyCampaign] = field(default_factory=dict)
     provider_assignments: dict[EntityId, SurveyProviderAssignmentState] = field(default_factory=dict)
     _campaign_counter: int = 0
