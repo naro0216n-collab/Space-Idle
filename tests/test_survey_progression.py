@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
 from space_idle import (
     AdvanceTime,
     GetSurveys,
+    GetBottlenecks,
     GetSurveyCampaignIntentPreview,
     PauseSurvey,
     ResumeSurvey,
@@ -210,7 +212,7 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
         assert blockers == ()
         assert candidate is not None
         projected = next(
-            campaign for campaign in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns
+            campaign for campaign in app.query(GetSurveys(str(ids.LUNAR_ORBIT), body_id=str(ids.MOON))).campaigns
             if campaign.id == campaign_id
         )
         assert len(projected.candidates) == 2
@@ -241,10 +243,18 @@ def test_candidate_arbitration_auto_resolves_only_equivalent_options_and_require
     assert sim.survey.execution_requirement_bundles(sim.day) == ()
 
     row = next(
-        campaign for campaign in app.query(GetSurveys(str(ids.LUNAR_ORBIT))).campaigns
+        campaign for campaign in app.query(GetSurveys(str(ids.LUNAR_ORBIT), body_id=str(ids.MOON))).campaigns
         if campaign.id == campaign_id
     )
     assert any(blocker.code == "survey_decision_required" for blocker in row.blockers)
+    # Attention/Bottlenecks need campaign blockers, not the global per-Cell
+    # knowledge map. The same blocker must survive the scoped projection.
+    with patch.object(sim.surface_knowledge, "visible_potential", side_effect=AssertionError(
+        "Bottlenecks must not enumerate Survey knowledge"
+    )):
+        issues = app.query(GetBottlenecks()).items
+    assert any(issue.source == "survey" and issue.entity_id == campaign_id
+               and issue.code == "survey_decision_required" for issue in issues)
     viable = [candidate for candidate in row.candidates if candidate.viable]
     assert len(viable) >= 2
     assert {candidate.provider_source_kind for candidate in viable} == {"fleet"}
@@ -361,7 +371,7 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
 
     requirement = KnowledgeRequirement(cell, resource, KnowledgeLevel.PRESENCE_PROBABILITY)
     assert sim.surface_knowledge.knowledge_requirement_failures(requirement)
-    before = next(row for row in app.query(GetSurveys()).items
+    before = next(row for row in app.query(GetSurveys(body_id=str(ids.MARS_BODY))).items
                   if row.cell_id == str(cell) and row.resource_id == str(resource))
     assert before.location_id is None
     assert before.knowledge_level == int(KnowledgeLevel.UNKNOWN)
@@ -390,7 +400,7 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert dict(sim.transport.fleet_pools) == initial_fleet
     assert sim.graph.owner_of_cell(cell) is None
 
-    after = next(row for row in app.query(GetSurveys()).items
+    after = next(row for row in app.query(GetSurveys(body_id=str(ids.MARS_BODY))).items
                  if row.cell_id == str(cell) and row.resource_id == str(resource))
     assert after.knowledge_level == int(KnowledgeLevel.PRESENCE_PROBABILITY)
     assert after.location_id is None
@@ -458,7 +468,7 @@ def test_survey_provider_separates_compatible_vehicle_commitments_modes_and_capa
     assert {row.source_definition_id for row in comparable} == {main_vehicle, alternative_vehicle}
     assert projection.resolved_candidate is None
     assert 'survey_decision_required' in projection.resolution_blockers
-    view = next(row for row in app.query(GetSurveys(str(node))).campaigns if row.id == campaign_id)
+    view = next(row for row in app.query(GetSurveys(str(node), body_id=str(ids.MOON))).campaigns if row.id == campaign_id)
     keys = {row.comparison_key for row in view.candidates if row.observation_mode_id == 'remote_orbital_spectrometry'
             and row.provider_definition_id == str(provider_id)}
     assert len(keys) == 2

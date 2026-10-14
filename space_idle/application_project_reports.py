@@ -1005,7 +1005,20 @@ class ApplicationReportProjectorMixin:
 
     def _progression_issues(self, location_filter: str | None) -> tuple[IssueRow, ...]:
         issues: list[IssueRow] = []
-        research = self._research_view()
+        cache = getattr(self, "_query_projection_cache", None)
+        # A composite UI snapshot requests global attention and local blockers
+        # from the same physical State. Their scopes differ, but the underlying
+        # progression decisions must not be rederived for each query.
+        sources = None if cache is None else cache.get("progression_issue_sources")
+        if sources is None:
+            sources = (
+                self._research_view(),
+                self._scientific_explorations_view(),
+                self._survey_campaign_rows(),
+            )
+            if cache is not None:
+                cache["progression_issue_sources"] = sources
+        research, explorations, survey_campaigns = sources
         for row in research.items:
             groups: list[tuple[str, tuple[DecisionConstraintRow, ...], str | None]] = []
             if row.status in {"available", "locked"}:
@@ -1027,7 +1040,6 @@ class ApplicationReportProjectorMixin:
                         attention_required=source != "research_start",
                     ))
 
-        explorations = self._scientific_explorations_view()
         for row in explorations.items:
             if location_filter is not None and location_filter not in {
                 row.origin_id, row.destination_id
@@ -1044,8 +1056,7 @@ class ApplicationReportProjectorMixin:
                     resource_id=resource_id,
                 ))
 
-        surveys = self._surveys_view(None)
-        for row in surveys.campaigns:
+        for row in survey_campaigns:
             issue_location = row.projected_provider_operational_node_id or row.provider_constraint_operational_node_id
             if location_filter is not None and issue_location != location_filter:
                 continue

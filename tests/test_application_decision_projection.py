@@ -249,6 +249,15 @@ def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_conte
     assert to_jsonable(app.query(GetAttention()))["items"] == [
         to_jsonable(issue) for issue in attention
     ]
+    # A single composite read shares progression derivations but must preserve
+    # global and location-specific issue contracts independently.
+    batched = app.query_many({
+        "attention": GetAttention(), "global": GetBottlenecks(),
+        "local": GetBottlenecks(str(EARTH)),
+    })
+    assert batched["attention"].items == attention
+    assert batched["global"].items == bottlenecks
+    assert batched["local"] == app.query(GetBottlenecks(str(EARTH)))
 
 
 def test_target_stock_context_exposes_physical_quantities_without_picking_a_reserve_strategy():
@@ -515,7 +524,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
 "operational_node": GetOperationalNode(location_id),
         "flow": GetFlowReport(location_id), "projects": GetProjects(location_id),
         "build_options": GetBuildOptions(location_id), "bottlenecks": GetBottlenecks(location_id),
-        "surveys": GetSurveys(location_id),
+        "surveys": GetSurveys(location_id, body_id=str(ids.EARTH_BODY)),
     }
     result = runtime.snapshot(queries)
     payload = to_jsonable(result.data)

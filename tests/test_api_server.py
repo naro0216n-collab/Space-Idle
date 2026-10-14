@@ -290,7 +290,10 @@ def test_http_nested_intent_and_save_load_boundary(tmp_path):
 
 def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):
     with running_api(tmp_path) as port:
-        path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+        # The view-token contract needs a representative Surface scope, not
+        # an unfiltered payload of every Survey target in the Solar System.
+        surface_scope = f"&surface_body_id={ids.EARTH_BODY}"
+        path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}{surface_scope}"
         status, headers, payload = _request(port, "GET", path)
         assert status == 200
         assert payload["revision"] == 0
@@ -311,7 +314,7 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
 
         # An ETag belongs to one concrete UI-state representation. Reusing the
         # Earth-node ETag for another scope must not suppress that projection.
-        other_path = f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}"
+        other_path = f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}{surface_scope}"
         status, _, payload = _request(
             port,
             "GET",
@@ -325,7 +328,7 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         # changes invalidate the composite view token and constrain Movement.
         inspect_path = (
             f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
-            f"&inspect_node_id={ids.LUNAR_ORBIT}"
+            f"&inspect_node_id={ids.LUNAR_ORBIT}{surface_scope}"
         )
         status, _, payload = _request(port, "GET", inspect_path, headers={"X-Space-Idle-Known-View": etag})
         assert status == 200

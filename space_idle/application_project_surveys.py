@@ -327,15 +327,41 @@ class SurveyProgressionProjectorMixin:
             comparison_axes=comparison_axes,
         )
 
+    def _survey_campaign_rows(self, *, body_id=None):
+        """Project campaign decisions without traversing unrelated Survey knowledge.
+
+        Attention and Bottlenecks consume only campaign blockers, whereas the
+        Surveys view additionally exposes every registered Cell/Resource pair.
+        Keep both consumers on the same campaign projection within one query.
+        """
+        sim = self._simulation
+        if sim.survey is None or not sim.survey.campaigns:
+            return ()
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("survey_campaign_rows", body_id)
+        if cache is not None and key in cache:
+            return cache[key]
+        decision = self._tick_decision_projection()
+        result = tuple(
+            self._survey_campaign_row(
+                campaign, decision.allocations.execution,
+                decision.allocations.services, decision.allocations.power_by_location,
+            )
+            for campaign in sorted(sim.survey.campaigns.values(), key=lambda row: str(row.id))
+            if body_id is None or any(
+                sim.graph.surface_cells[cell_id].body_id == body_id
+                for cell_id in campaign.target_cell_ids
+            )
+        )
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def _surveys_view(self, provider_operational_node_id: SpatialNodeId | None, *, body_id=None) -> SurveysView:
         sim = self._simulation
         if sim.survey is None:
             return SurveysView((), (), ())
         provider_fleet = self._survey_provider_fleet_rows(provider_operational_node_id)
-        decision = self._tick_decision_projection()
-        execution_plan = decision.allocations.execution
-        service_plan = decision.allocations.services
-        powers = decision.allocations.power_by_location
         knowledge_rows: list[SurveyRow] = []
         # Filter before projecting knowledge and provider decisions. A body-scoped
         # UI query must never request derived candidates for unrelated worlds.
@@ -363,12 +389,4 @@ class SurveyProgressionProjectorMixin:
                 visible_potential=sim.surface_knowledge.visible_potential(cell_id, resource_id),
                 visible_potential_precision_fraction=sim.surface_knowledge.visible_potential_precision_fraction(cell_id, resource_id),
             ))
-        campaign_rows = tuple(
-            self._survey_campaign_row(campaign, execution_plan, service_plan, powers)
-            for campaign in sorted(sim.survey.campaigns.values(), key=lambda row: str(row.id))
-            if body_id is None or any(
-                sim.graph.surface_cells[cell_id].body_id == body_id
-                for cell_id in campaign.target_cell_ids
-            )
-        )
-        return SurveysView(provider_fleet, tuple(knowledge_rows), campaign_rows)
+        return SurveysView(provider_fleet, tuple(knowledge_rows), self._survey_campaign_rows(body_id=body_id))
