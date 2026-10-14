@@ -240,7 +240,10 @@ class SurfaceProjectorMixin:
                             related_entity_kind="surface_cell",
                             related_entity_id=str(cell.id),
                         ),
-                        construction_required=None if development_recipe is None else development_recipe.construction_work,
+                        construction_required=(
+                            None if development_recipe is None or terrain_quality < 2
+                            else sim.projects.development_work_required(development_recipe.id, cell.id)
+                        ),
                         resources=() if development_recipe is None else tuple(
                             (str(req.resource_id), req.amount_t) for req in development_recipe.resources
                         ),

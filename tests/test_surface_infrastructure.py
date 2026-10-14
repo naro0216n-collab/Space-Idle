@@ -254,17 +254,51 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     assert option.projected_surface_infrastructure_demand > 0.0
     assert option.projected_surface_infrastructure_fulfillment == 0.0
     assert tuple(factor.code for factor in option.limiting_factors) == ("surface_infrastructure",)
+    # Geography has operational meaning beyond map decoration: two adjacent
+    # development choices with different dust/slope burdens require different
+    # real Construction work. Unobserved work remains hidden in Map preview.
+    frontier = tuple(sorted(
+        candidate for candidate in sim.graph.surface_cells[ids.EARTH_CELL_INDUSTRIAL].neighbor_ids
+        if candidate != ids.EARTH_CELL_COASTAL
+    ))
+    other = frontier[0]
+    # Vary the physical input in this isolated Game State, rather than
+    # freezing a particular authored regional value as a Core test contract.
+    from dataclasses import replace
+    original_cell = sim.graph.surface_cells[other]
+    sim.graph.surface_cells[other] = replace(
+        original_cell, terrain=replace(
+            original_cell.terrain, slope_factor=original_cell.terrain.slope_factor + 3.0,
+        ),
+    )
+    unknown = next(cell for cell in surface.cells if cell.id == str(other))
+    assert next(row for row in unknown.development_options
+                if row.location_id == str(ids.EARTH)).construction_required is None
+    sim.surface_knowledge.observe_attribute(other, "terrain", 2)
+    known_surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    known = next(cell for cell in known_surface.cells if cell.id == str(other))
+    known_option = next(row for row in known.development_options
+                        if row.location_id == str(ids.EARTH))
+    assert known_option.construction_required != option.construction_required
+    assert known_option.construction_required == pytest.approx(
+        sim.projects.development_work_required(sim.projects.surface_cell_development_recipe_id, other)
+    )
 
     project_id = app.execute(DevelopSurfaceCell(
         str(ids.EARTH), str(ids.EARTH_CELL_COASTAL), procurement_policy="extended_wait"
     )).created_id
     assert project_id is not None
+    project_state = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
+    assert sim.projects.recipe_for_project(project_state).construction_work == pytest.approx(
+        option.construction_required
+    )
     _ensure_project_materials_on_hand(sim, project_id)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
     app.execute(AdvanceTime(1))
     project = next(row for row in app.query(GetProjects()).items if row.id == project_id)
     assert project.construction_done == 0.0
+    assert project.construction_required == pytest.approx(option.construction_required)
     assert project.construction_fulfillment == 0.0
     assert tuple(factor.code for factor in project.limiting_factors) == ("surface_infrastructure",)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids

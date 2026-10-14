@@ -27,6 +27,8 @@ def build_spatial_development_recipes() -> dict:
             36.0,
             surface_site,
             knowledge_requirements=(),
+            slope_work_weight=0.35,
+            dust_work_weight=0.15,
         ),
     )
     return {recipe.id: recipe for recipe in recipes}

@@ -372,7 +372,7 @@ def validate_runtime(sim: Any) -> None:
         else:
             _require(project.site_cell_id is None, f"surface development duplicates target cell: {project_id}")
             _require(target.recipe_id in sim.projects.spatial_recipes, f"development project references unknown recipe: {project_id}")
-            recipe = sim.projects.spatial_recipes[target.recipe_id]
+            recipe = sim.projects.recipe_for_project(project)
             _require(project.operational_node_id in sim.graph.locations, f"surface development host is not a surface location: {project_id}")
             _require(target.cell_id in sim.graph.surface_cells, f"surface development references unknown cell: {project_id}")
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:

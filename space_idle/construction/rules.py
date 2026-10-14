@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import cached_property
+from dataclasses import replace
 
 from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
@@ -62,7 +63,17 @@ class ConstructionRulesMixin:
             return self.upgrade_recipes[(self._upgrade_definition_id(target.facility_id), target.target_level)]
         if isinstance(target, FacilityDecommissionTarget):
             return self.decommission_recipes[target.facility_definition_id]
-        return self.spatial_recipes[target.recipe_id]
+        recipe = self.spatial_recipes[target.recipe_id]
+        return replace(recipe, construction_work=self.development_work_required(target.recipe_id, target.cell_id))
+
+    def development_work_required(self, recipe_id: DefinitionId, cell_id: SurfaceCellId) -> float:
+        """Apply the same physical work to preview, accounting and execution."""
+        recipe = self.spatial_recipes[recipe_id]
+        terrain = self.facilities.environment.graph.surface_cells[cell_id].terrain
+        return recipe.construction_work * (
+            1.0 + recipe.slope_work_weight * max(0.0, terrain.slope_factor)
+            + recipe.dust_work_weight * max(0.0, terrain.dust_factor)
+        )
 
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
         facility = self.facilities.facilities[facility_id]

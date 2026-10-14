@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 from typing import Literal, TypeAlias
 
 from ..priority import ActivityPriority
@@ -99,12 +100,20 @@ class SpatialDevelopmentRecipe:
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
     self_deploying: bool = False
     knowledge_requirements: tuple[KnowledgeRequirementSpec, ...] = ()
+    # Content-defined work penalties for difficult terrain. Physical geography
+    # is read from the target Cell, never replicated as Project State.
+    slope_work_weight: float = 0.0
+    dust_work_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("spatial development recipe display name must not be empty")
         if self.self_deploying:
             raise ValueError("location development must consume construction capacity")
+        if any(not isfinite(value) or value < 0 for value in (
+            self.slope_work_weight, self.dust_work_weight,
+        )):
+            raise ValueError("surface development work weights must be finite and non-negative")
 
 
 ProjectRecipe: TypeAlias = (
