@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from ..spatial import SpatialGraph
 from ..survey import (
     ExtractionSpec, KnowledgeLevel, SurveyReachScope, SurveyReachSpec, SurveyObservationModeSpec,
@@ -59,6 +61,19 @@ def build_survey_targets(graph: SpatialGraph) -> dict:
                 cell.id, resource_id, (25.0, 75.0, 160.0), 0.5,
             ))
     return targets
+
+
+@lru_cache(maxsize=1)
+def _standard_survey_target_template() -> dict:
+    """Pure static Content, derived once from the full verified World input."""
+    from .base_spatial import _standard_world_template
+    graph, _environment, _proof = _standard_world_template()
+    return build_survey_targets(graph)
+
+
+def instantiate_standard_survey_targets() -> dict:
+    """Fresh mutable registry, with immutable SurveyTarget definitions reused."""
+    return dict(_standard_survey_target_template())
 
 
 def build_survey_providers() -> dict:

@@ -91,16 +91,30 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
     sim = app._simulation
     graph = sim.graph
     env = sim.environment
-    # Cell-local climate is resolved for unowned physical targets as well as
-    # operational locations; geometry validation belongs to the Spatial suite.
-    # World-specific atmospheric values are Content choices, not a fixed
-    # requirement of the generic Environment projection.
-    # A solid physical body may legitimately have no authored Surface Cells.
-    # The projection must use exactly the Cells that actually exist.
-    assert all(graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID
-               for cell in graph.surface_cells.values())
-
-    for cell_id, cell in graph.surface_cells.items():
+    # Static geology and survey target coverage is checked at registration;
+    # calendar invariance is a runtime contract, not one assertion per Cell.
+    # Sample physically different bodies and every explicitly authored local
+    # climate override; global all-Cell validation belongs to the generator.
+    representative = {}
+    for cell in graph.surface_cells.values():
+        representative.setdefault(cell.body_id, cell.id)
+    climate_cells = set(representative.values())
+    climate_cells.update(
+        cell_id for cell_id, facet_type in env.static.facets
+        if cell_id in graph.surface_cells
+        and facet_type in (IlluminationField, ThermalField)
+    )
+    assert climate_cells
+    baseline_climate = {
+        cell_id: (
+            env.require(cell_id, IlluminationField),
+            env.get(cell_id, ThermalField),
+        )
+        for cell_id in climate_cells
+    }
+    for cell_id in climate_cells:
+        cell = graph.surface_cells[cell_id]
+        assert graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID
         assert env.require(cell_id, GravityField).local_acceleration_m_s2 > 0
         assert env.require(cell_id, IlluminationField).solar_flux_w_m2 == pytest.approx(
             graph.representative_solar_flux_w_m2(cell.body_id)
@@ -108,16 +122,7 @@ def test_environment_power_and_knowledge_are_derived_from_distinct_world_facts()
         for resource in cell.resource_potential_by_resource:
             assert (cell_id, resource) in sim.survey.targets
 
-    # Advancing canonical game time does not evolve weather, season, or a
-    # synthetic daily solar forecast. The World uses representative climate.
-    baseline_climate = {
-        cell_id: (
-            env.require(cell_id, IlluminationField),
-            env.get(cell_id, ThermalField),
-        )
-        for cell_id in graph.surface_cells
-    }
-    sim.advance_days(3)
+    sim.advance_days(1)
     assert all((
         env.require(cell_id, IlluminationField),
         env.get(cell_id, ThermalField),
@@ -464,3 +469,52 @@ def test_geographic_diversity_and_survey_eligibility_do_not_depend_on_actual_dep
         assert row.presence_probability is None
         assert row.visible_potential is None
     assert sim.surface_knowledge.actual_potential(barren.id, resource) == 0
+
+
+def test_verified_static_world_rechecks_modified_geography_and_facets():
+    """Provenance reuses a proof only for unchanged records, not future edits."""
+    from space_idle.validation import validate_simulation_configuration
+    from space_idle.shared import DefinitionId
+    from space_idle.spatial import IlluminationField, ThermalField
+    from space_idle.validation_support import ConfigurationError
+
+    app = build_game_application()
+    sim = app._simulation
+    validate_simulation_configuration(sim)
+    cell_id, original = next(iter(sim.graph.surface_cells.items()))
+    # A mutation made after the standard World's initial validation cannot
+    # borrow that earlier geometric proof.
+    sim.graph.surface_cells[cell_id] = replace(original, area_km2=original.area_km2 * 1.01)
+    with pytest.raises(ValueError, match="surface cell physical area"):
+        validate_simulation_configuration(sim)
+    sim.graph.surface_cells[cell_id] = original
+
+    # In-place changes to mutable per-Cell Content also invalidate the proof.
+    resource = next(iter(original.resource_potential_by_resource))
+    valid_potential = original.resource_potential_by_resource[resource]
+    sim.graph.surface_cells[cell_id].resource_potential_by_resource[resource] = -1.0
+    with pytest.raises(ConfigurationError, match="negative resource potential"):
+        validate_simulation_configuration(sim)
+    sim.graph.surface_cells[cell_id].resource_potential_by_resource[resource] = valid_potential
+    baseline = build_game_application()._simulation
+
+    facet_id = next(key for key in sim.environment.static.facets if key[1] is IlluminationField)
+    saved_facet = sim.environment.static.facets[facet_id]
+    sim.environment.static.facets[facet_id] = ThermalField(300.0)
+    with pytest.raises(ConfigurationError, match="environment facet type mismatch"):
+        validate_simulation_configuration(sim)
+    sim.environment.static.facets[facet_id] = saved_facet
+    validate_simulation_configuration(sim)
+
+    # Target registry is also independent across composed games even when
+    # immutable SurveyTarget Definitions come from the same Content template.
+    target_id = next(iter(sim.survey.targets))
+    removed = sim.survey.targets.pop(target_id)
+    assert target_id in baseline.survey.targets
+    # Static geometry verification never substitutes for Survey's own
+    # registration checks when targets have been changed independently.
+    sim.survey.targets[target_id] = replace(removed, resource_id=DefinitionId("test.invalid.survey_resource"))
+    with pytest.raises(ConfigurationError, match="survey target key mismatch"):
+        validate_simulation_configuration(sim)
+    sim.survey.targets[target_id] = removed
+    validate_simulation_configuration(sim)

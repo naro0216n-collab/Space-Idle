@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
+from collections.abc import Mapping
 
 from .domain import DomainExtension, StateCodec, decode_list, decode_str, require_fields
 from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
-from .spatial import OperationalNodeState, PhysicalSurface, SurfaceLocationState
+from .spatial import AtmosphereField, OperationalNodeState, PhysicalSurface, SurfaceLocationState
 from .surface_partition import validate_surface_partitions
 from .validation_support import ValidationContext, require as _require
 
@@ -77,46 +81,46 @@ def restore(sim: Any, data: dict[str, Any]) -> None:
     )
 
 
-def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
-    _require(sim.environment.graph is sim.graph, "simulation/environment spatial graph mismatch")
-    for body_id, body in sim.graph.bodies.items():
+def validate_static_world(graph: Any, environment: Any) -> None:
+    """Fully verify authored static spatial and Environment definitions."""
+    for body_id, body in graph.bodies.items():
         _require(body_id == body.id, f"celestial body key mismatch: {body_id}")
-        _require(body.star_system_id in sim.graph.star_systems, f"celestial body has unknown system: {body_id}")
+        _require(body.star_system_id in graph.star_systems, f"celestial body has unknown system: {body_id}")
         if body.parent_body_id is not None:
-            _require(body.parent_body_id in sim.graph.bodies, f"celestial body has unknown parent: {body_id}")
+            _require(body.parent_body_id in graph.bodies, f"celestial body has unknown parent: {body_id}")
             _require(
-                sim.graph.bodies[body.parent_body_id].star_system_id == body.star_system_id,
+                graph.bodies[body.parent_body_id].star_system_id == body.star_system_id,
                 f"celestial body parent belongs to another system: {body_id}",
             )
-        sim.graph.body_lineage(body_id)
-    for node_id, node in sim.graph.nodes.items():
+        graph.body_lineage(body_id)
+    for node_id, node in graph.nodes.items():
         _require(node_id == node.id, f"spatial node key mismatch: {node_id}")
         _require(
-            node.parent_id is None or node.parent_id in sim.graph.nodes,
+            node.parent_id is None or node.parent_id in graph.nodes,
             f"spatial node has unknown parent: {node_id}",
         )
         _require(
-            node.body_id is None or node.body_id in sim.graph.bodies,
+            node.body_id is None or node.body_id in graph.bodies,
             f"spatial node has unknown celestial body: {node_id}",
         )
-        sim.graph.lineage(node_id)
-        sim.graph.environment_lineage(node_id)
+        graph.lineage(node_id)
+        graph.environment_lineage(node_id)
 
-    for cell_id, cell in sim.graph.surface_cells.items():
+    for cell_id, cell in graph.surface_cells.items():
         _require(cell_id == cell.id, f"surface cell key mismatch: {cell_id}")
-        _require(cell.body_id in sim.graph.bodies, f"surface cell has unknown body: {cell_id}")
+        _require(cell.body_id in graph.bodies, f"surface cell has unknown body: {cell_id}")
         _require(
-            sim.graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID,
+            graph.bodies[cell.body_id].physical_surface is PhysicalSurface.SOLID,
             f"surface cell on body without solid surface: {cell_id}",
         )
         _require(cell.area_km2 > 0, f"surface cell has invalid area: {cell_id}")
         _require(cell_id not in cell.neighbor_ids, f"surface cell self adjacency: {cell_id}")
         for neighbor_id in cell.neighbor_ids:
             _require(
-                neighbor_id in sim.graph.surface_cells,
+                neighbor_id in graph.surface_cells,
                 f"surface cell has unknown neighbor: {cell_id}/{neighbor_id}",
             )
-            neighbor = sim.graph.surface_cells[neighbor_id]
+            neighbor = graph.surface_cells[neighbor_id]
             _require(
                 neighbor.body_id == cell.body_id,
                 f"surface cell neighbor crosses celestial body: {cell_id}/{neighbor_id}",
@@ -128,26 +132,104 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         for resource_id, potential in cell.resource_potential_by_resource.items():
             _require(potential >= 0, f"surface cell has negative resource potential: {cell_id}/{resource_id}")
 
-    validate_surface_partitions(sim.graph)
+    validate_surface_partitions(graph)
 
-    for (context_id, facet_type), facet in sim.environment.static.facets.items():
+    for (context_id, facet_type), facet in environment.static.facets.items():
         _require(
-            context_id in sim.graph.nodes or context_id in sim.graph.surface_cells,
+            context_id in graph.nodes or context_id in graph.surface_cells,
             f"static environment facet references non-static context: {context_id}",
         )
-        sim.environment.static._field_scope(facet_type)
+        environment.static._field_scope(facet_type)
         _require(
             isinstance(facet, facet_type),
             f"environment facet type mismatch: {context_id}/{facet_type.__name__}",
         )
-    for (body_id, facet_type), facet in sim.environment.static.body_facets.items():
-        _require(body_id in sim.graph.bodies, f"body environment facet references unknown body: {body_id}")
-        sim.environment.static._field_scope(facet_type)
+    for (body_id, facet_type), facet in environment.static.body_facets.items():
+        _require(body_id in graph.bodies, f"body environment facet references unknown body: {body_id}")
+        environment.static._field_scope(facet_type)
         _require(
             isinstance(facet, facet_type),
             f"body environment facet type mismatch: {body_id}/{facet_type.__name__}",
         )
+
+
+@dataclass(frozen=True)
+class ValidatedStaticWorld:
+    """Validated registration snapshot, not a mutable authoritative World.
+
+    A standard Application receives independent mappings. Equality against the
+    complete static input must hold before reusing the geometric/facet proof;
+    altered or extended definitions always run the full generic validator.
+    """
+
+    graph_kind: type = field(repr=False)
+    environment_kind: type = field(repr=False)
+    static_store_kind: type = field(repr=False)
+    stars: Mapping = field(repr=False)
+    bodies: Mapping = field(repr=False)
+    nodes: Mapping = field(repr=False)
+    cells: Mapping = field(repr=False)
+    facets: Mapping = field(repr=False)
+    body_facets: Mapping = field(repr=False)
+
+    def matches(self, graph: Any, environment: Any) -> bool:
+        return (type(graph) is self.graph_kind
+                and type(environment) is self.environment_kind
+                and type(environment.static) is self.static_store_kind
+                and graph.star_systems == self.stars
+                and graph.bodies == self.bodies
+                and graph.nodes == self.nodes
+                and graph.surface_cells == self.cells
+                and environment.static.facets == self.facets
+                and environment.static.body_facets == self.body_facets)
+
+    def __deepcopy__(self, memo):
+        # A proof has no player-owned State and is safe to share with forecasts.
+        return self
+
+
+def certify_static_world(graph: Any, environment: Any) -> ValidatedStaticWorld:
+    """Register the full verification evidence once, before any Game State."""
+    _require(environment.graph is graph, "simulation/environment spatial graph mismatch")
+    validate_static_world(graph, environment)
+    # Freeze both the top-level registries and nested mutable Content maps.
+    # A caller cannot rewrite the evidence that licensed the fast path.
+    cells = {
+        cell_id: replace(
+            cell,
+            static_geology=MappingProxyType(dict(cell.static_geology)),
+            resource_potential_by_resource=MappingProxyType(dict(cell.resource_potential_by_resource)),
+        )
+        for cell_id, cell in graph.surface_cells.items()
+    }
+
+    def static_facets(rows):
+        return MappingProxyType({
+            key: replace(value, composition=MappingProxyType(dict(value.composition)))
+            if isinstance(value, AtmosphereField) else deepcopy(value)
+            for key, value in rows.items()
+        })
+
+    return ValidatedStaticWorld(
+        type(graph), type(environment), type(environment.static),
+        MappingProxyType(deepcopy(graph.star_systems)),
+        MappingProxyType(deepcopy(graph.bodies)),
+        MappingProxyType(deepcopy(graph.nodes)),
+        MappingProxyType(cells),
+        static_facets(environment.static.facets),
+        static_facets(environment.static.body_facets),
+    )
+
+
+def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
+    _require(sim.environment.graph is sim.graph, "simulation/environment spatial graph mismatch")
+    proof = getattr(sim.graph, "_static_world_proof", None)
+    if proof is None or not proof.matches(sim.graph, sim.environment):
+        validate_static_world(sim.graph, sim.environment)
+    # Overlays can change at runtime and must never inherit a static proof.
     sim.environment.ordered_overlays()
+    # Surface Location ownership and physical overlays are authoritative
+    # runtime State, even when the entire static input is unchanged.
     validate_runtime(sim)
 
 

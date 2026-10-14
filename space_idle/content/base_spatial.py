@@ -4,6 +4,7 @@ from dataclasses import replace
 from functools import lru_cache
 
 from ..shared import CelestialBodyId, DefinitionId
+from ..spatial_domain import certify_static_world
 from ..spatial import (
     AtmosphereField,
     CelestialBodyDef,
@@ -357,9 +358,11 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
 
 
 @lru_cache(maxsize=1)
-def _standard_world_template() -> tuple[SpatialGraph, EnvironmentResolver]:
-    """Process-local immutable-input template; not shared authoritative State."""
-    return build_world_definition()
+def _standard_world_template() -> tuple[SpatialGraph, EnvironmentResolver, object]:
+    """Process-local complete static World proof, never runtime State."""
+    graph, environment = build_world_definition()
+    proof = certify_static_world(graph, environment)
+    return graph, environment, proof
 
 
 def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
@@ -370,7 +373,7 @@ def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
     and runtime overlays are never shared. Explicit World generation and
     registration APIs remain uncached for Content edits and generator tests.
     """
-    template, environment = _standard_world_template()
+    template, environment, static_proof = _standard_world_template()
     graph = SpatialGraph(
         star_systems=dict(template.star_systems), bodies=dict(template.bodies),
         nodes=dict(template.nodes),
@@ -387,4 +390,7 @@ def instantiate_standard_world() -> tuple[SpatialGraph, EnvironmentResolver]:
                      if isinstance(facet, AtmosphereField) else facet
                      for key, facet in environment.static.body_facets.items()},
     )
+    # Generic Spatial Validation may reuse the already established proof only
+    # while the current instance still equals the verified static input.
+    graph._static_world_proof = static_proof
     return graph, EnvironmentResolver(graph, static)

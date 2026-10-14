@@ -40,7 +40,7 @@ from ..content.base_market import build_market_provider_definitions
 from ..content.base_progression import (
     build_extraction_specs,
     build_survey_providers,
-    build_survey_targets,
+    instantiate_standard_survey_targets,
 )
 from ..content.base_research import (
     build_experience_contribution_rules, build_research_definitions, build_research_providers,
@@ -104,7 +104,7 @@ def build_base_simulation(
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    knowledge = SurfaceKnowledgeState(build_survey_targets(graph), graph, terrain_overview_resolution=0.5)
+    knowledge = SurfaceKnowledgeState(instantiate_standard_survey_targets(), graph, terrain_overview_resolution=0.5)
     survey = SurveyService(knowledge.targets, build_survey_providers(), facilities, graph, transport, technology, knowledge)
 
     storage = StorageService(authored.storage, inventory, facilities)

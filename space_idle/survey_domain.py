@@ -7,7 +7,7 @@ from .domain import (
     require_fields,
 )
 from .validation_support import (
-    ValidationContext, require as _require,
+    ConfigurationError, ValidationContext, require as _require,
     validate_generated_id_counter as _validate_counter, validate_site_requirements,
 )
 from .exploration_models import (
@@ -162,19 +162,24 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         return
     _require(sim.survey.graph is sim.graph, "survey service must use simulation spatial graph")
     _require(sim.survey.transport is sim.transport, "survey service must use simulation Fleet owner")
+    # These are already materialized registration entries. Do not eagerly
+    # format several error messages per Cell × Resource on every composition.
+    # Every entry is still checked; invalid Content is never sampled away.
+    cells = sim.graph.surface_cells
+    resources = sim.inventory.resource_definitions
     for key, target in sim.survey.targets.items():
-        _require(key == (target.cell_id, target.resource_id), f"survey target key mismatch: {key}")
-        _require(target.cell_id in sim.graph.surface_cells, f"survey target references unknown surface cell: {key}")
-        if target.cell_id in sim.graph.surface_cells:
-            cell = sim.graph.surface_cells[target.cell_id]
-            # Zero physical opportunity is a legitimate measurement result.
-            # Requiring a positive World entry here leaks deposits through
-            # target availability and prevents observation of barren cells.
-            _require(target.resource_id in sim.inventory.resource_definitions, f"survey target references unknown resource: {key}")
-        _require(len(target.thresholds) == 3, f"survey target must define three knowledge thresholds: {key}")
-        _require(all(v > 0 for v in target.thresholds), f"non-positive survey threshold: {key}")
-        _require(target.thresholds[0] < target.thresholds[1] < target.thresholds[2],
-                 f"non-increasing survey thresholds: {key}")
+        if key != (target.cell_id, target.resource_id):
+            raise ConfigurationError(f"survey target key mismatch: {key}")
+        if target.cell_id not in cells:
+            raise ConfigurationError(f"survey target references unknown surface cell: {key}")
+        if target.resource_id not in resources:
+            raise ConfigurationError(f"survey target references unknown resource: {key}")
+        if len(target.thresholds) != 3:
+            raise ConfigurationError(f"survey target must define three knowledge thresholds: {key}")
+        if not all(value > 0 for value in target.thresholds):
+            raise ConfigurationError(f"non-positive survey threshold: {key}")
+        if not target.thresholds[0] < target.thresholds[1] < target.thresholds[2]:
+            raise ConfigurationError(f"non-increasing survey thresholds: {key}")
     facility_owners: dict[DefinitionId, DefinitionId] = {}
     for provider_id, provider in sim.survey.providers.items():
         _require(provider_id == provider.id, f"survey provider key mismatch: {provider_id}")
