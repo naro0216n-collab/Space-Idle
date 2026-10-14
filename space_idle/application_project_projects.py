@@ -195,6 +195,62 @@ class ProjectProjectorMixin:
                 if abs(target - current) > 1e-9:
                     rows.append(FacilityUpgradeDifferenceRow(kind, label, current, target, unit))
 
+        # Installed unit additions alter both nominal output and physical demand.
+        per_unit = definition.process_throughput_per_day
+        if sim.industry.compatible_processes(facility.definition_id) and per_unit > 0:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "capacity", "Industry Process実行量", per_unit * facility.level,
+                per_unit * target_level, "実行/日"))
+        if definition.housing_capacity:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "capacity", "居住Capacity", definition.housing_at_level(facility.level),
+                definition.housing_at_level(target_level), "人"))
+        if definition.life_support is not None:
+            life = definition.life_support
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", "Life Support供給", life.capacity_at_level(facility.level),
+                life.capacity_at_level(target_level), "人日/日"))
+        power_spec = sim.power.specs.get(facility.definition_id)
+        if power_spec is not None:
+            context = sim.facilities.facility_environment_context(facility)
+            generation, load = sim.power.nominal_for_definition_at_context(facility.definition_id, context)
+            for label, amount, unit in (
+                ("発電Capacity", generation, "MW"),
+                ("Power需要", load, "MW"),
+                ("停止中Power需要", power_spec.standby_load_mw, "MW"),
+            ):
+                if amount:
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "capacity" if "Capacity" in label else "demand", label,
+                        amount * facility.level, amount * target_level, unit))
+        for supply in definition.service_capacity_supplies:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", f"Service供給 · {supply.service_type}",
+                supply.nominal_rate * facility.level, supply.nominal_rate * target_level,
+                "単位/日"))
+        construction_provider = sim.projects.construction_providers.get(facility.definition_id)
+        if construction_provider is not None:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", "Construction Service供給",
+                construction_provider.work_per_day * facility.level,
+                construction_provider.work_per_day * target_level, "work/日"))
+        storage_provider = sim.storage.providers.get(facility.definition_id)
+        if storage_provider is not None:
+            for pool, capacity in sorted(storage_provider.capacity_t_by_pool.items()):
+                rows.append(FacilityUpgradeDifferenceRow(
+                    "capacity", f"保管Capacity · {pool}", capacity * facility.level,
+                    capacity * target_level, "t"))
+        if sim.survey is not None:
+            for survey_provider in sim.survey.providers.values():
+                if survey_provider.source_kind.value != "facility":
+                    continue
+                if not sim.survey.source_is_compatible(survey_provider, facility.definition_id):
+                    continue
+                rate = survey_provider.capacity_units_per_source_per_day
+                rows.append(FacilityUpgradeDifferenceRow(
+                    "service", f"Survey Service · {survey_provider.id}",
+                    rate * facility.level, rate * target_level, "観測単位/日"))
+
         maintenance_fraction = definition.maintenance_fraction_per_year
         if maintenance_fraction > 1e-12:
             current_maintenance = sim.facilities.maintenance_requirements_per_day(facility.id)
@@ -217,8 +273,6 @@ class ProjectProjectorMixin:
             unchanged.append("Capability構成")
         if sim.industry.compatible_processes(facility.definition_id):
             unchanged.append("Process選択肢")
-        if definition.service_capacity_supplies:
-            unchanged.append("固定Service供給")
         return tuple(rows), tuple(unchanged)
 
     def _facility_upgrade_option(self, facility, power=None) -> FacilityUpgradeOption | None:

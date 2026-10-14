@@ -508,7 +508,7 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     now[0] = 3.2
     queries = {
         "world": GetWorld(), "global_issues": GetAttention(), "research": GetResearch(),
-        "scientific_explorations": GetScientificExplorations(), 
+        "scientific_explorations": GetScientificExplorations(),
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
         "movement_plans": GetMovementPlans(include_modes=True), "fleet": GetFleet(),
         "transport_allocations": GetTransportAllocations(), "cargo_flows": GetCargoFlows(),

@@ -350,11 +350,7 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"general_research_equipment"}),
             tier=1,
-            levels=(
-                ResearchProviderLevelSpec(1, 4.0, 180.0, 1.0),
-                ResearchProviderLevelSpec(2, 6.5, 320.0, 1.35),
-                ResearchProviderLevelSpec(3, 9.5, 560.0, 1.70),
-            ),
+            levels=(ResearchProviderLevelSpec(1, 4.0, 180.0, 1.0),),
         ),
         ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER: ResearchProviderSpec(
             ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER,

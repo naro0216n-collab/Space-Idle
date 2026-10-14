@@ -364,7 +364,7 @@ class ConstructionRulesMixin:
         for facility in self.facilities.active_compatible_at(location_id, day):
             spec = self.construction_providers.get(facility.definition_id)
             if spec is not None:
-                capacity += spec.work_per_day
+                capacity += spec.work_per_day * facility.level
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += (
                 self.inventory.available(location_id, resource_id)
@@ -385,7 +385,7 @@ class ConstructionRulesMixin:
             utilization = power.utilization_by_facility.get(facility.id, 1.0)
             maintenance = power.maintenance_factor_by_facility.get(facility.id, 1.0)
             upstream = (provider_factors or {}).get(facility.id, 1.0)
-            capacity += spec.work_per_day * utilization * maintenance * upstream
+            capacity += spec.work_per_day * facility.level * utilization * maintenance * upstream
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += (
                 self.inventory.available(location_id, resource_id)

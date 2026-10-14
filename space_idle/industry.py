@@ -87,7 +87,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 owner_id=facility.id,
                 purpose=f"process:{process.id}",
                 operational_node_id=location_id,
-                requested_execution=self.facility_defs[facility.definition_id].process_throughput_per_day,
+                requested_execution=self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level,
                 priority=facility.activity_priority,
                 requirements=self.execution_requirements_for_process(process, inventory),
             ))
@@ -139,13 +139,13 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     ) -> tuple[float, float]:
         if power is None:
             nominal = sum(
-                self.facility_defs[facility.definition_id].process_throughput_per_day
+                self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
                 for facility in facilities.active_compatible_at(location_id, day)
                 for process in (self.process_for(facility),)
                 if process is not None and self.process_service_type(process.id) == service_type
             )
             available = sum(
-                self.facility_defs[facility.definition_id].process_throughput_per_day
+                self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
                 for facility in facilities.active_compatible_at(location_id, day)
                 for process in (self.process_for(facility),)
                 if process is not None and self.process_service_type(process.id) == service_type
@@ -176,7 +176,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             if process is None:
                 continue
             key = (location_id, self.process_service_type(process.id))
-            throughput = self.facility_defs[facility.definition_id].process_throughput_per_day
+            throughput = self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
             nominal[key] = nominal.get(key, 0.0) + throughput
             upstream = (provider_factors or {}).get(facility.id, 1.0)
             factor = max(
@@ -210,7 +210,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 if amount_t > 1e-12:
                     key = (resource_id, int(facility.activity_priority))
                     required[key] = (required.get(key, 0.0) + amount_t
-                                     * self.facility_defs[facility.definition_id].process_throughput_per_day)
+                                     * self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level)
 
         owner_id = EntityId(f"industry.site:{location_id}")
         requirements: list[SupplyRequirement] = []

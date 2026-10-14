@@ -264,7 +264,7 @@ class SurveyService:
         utilization = 1.0 if power is None else power.utilization_by_facility.get(facility.id, 1.0)
         maintenance = 1.0 if power is None else power.maintenance_factor_by_facility.get(facility.id, 1.0)
         infrastructure = 1.0 if provider_factors is None else provider_factors.get(facility.id, 1.0)
-        return provider.capacity_units_per_source_per_day * utilization * maintenance * infrastructure
+        return provider.capacity_units_per_source_per_day * facility.level * utilization * maintenance * infrastructure
 
     def provider_assignment_quantity(self, assignment_id: EntityId) -> int:
         assignment = self.provider_assignments[assignment_id]
@@ -381,7 +381,7 @@ class SurveyService:
         failures.extend(self._mode_site_failures(provider_operational_node_id, mode, day))
         failures.extend(self._source_capability_failures(provider, mode, source_definition_id))
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            count = len(self._facility_source_rows(provider, provider_operational_node_id,
+            count = sum(row.level for row in self._facility_source_rows(provider, provider_operational_node_id,
                 source_definition_id=source_definition_id, active_only=True, day=day))
         else:
             assignment = self.provider_assignment_for(provider.id, provider_operational_node_id, source_definition_id)
@@ -416,7 +416,7 @@ class SurveyService:
         source_definition_id: DefinitionId, day: int,
     ) -> int:
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:
-            return len(self._facility_source_rows(provider, operational_node_id,
+            return sum(row.level for row in self._facility_source_rows(provider, operational_node_id,
                 source_definition_id=source_definition_id, active_only=True, day=day))
         assignment = self.provider_assignment_for(provider.id, operational_node_id, source_definition_id)
         return 0 if assignment is None else self.provider_assignment_quantity(assignment.id)

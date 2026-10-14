@@ -331,7 +331,7 @@ class LocationProjectorMixin:
                     None if facility.site_cell_id is None else str(facility.site_cell_id),
                     tuple(
                         sorted(
-                            (supply.service_type, supply.nominal_rate)
+                            (supply.service_type, supply.nominal_rate * facility.level)
                             for supply in definition.service_capacity_supplies
                         )
                     ),
@@ -356,11 +356,11 @@ class LocationProjectorMixin:
                     not decommission_failures,
                     None if active_decommission is None else str(active_decommission.id),
                     power_active_load_mw=(
-                        sim.power.specs[facility.definition_id].load_mw
+                        sim.power.specs[facility.definition_id].load_mw * facility.level
                         if facility.definition_id in sim.power.specs else 0.0
                     ),
                     power_standby_load_mw=(
-                        sim.power.specs[facility.definition_id].standby_load_mw
+                        sim.power.specs[facility.definition_id].standby_load_mw * facility.level
                         if facility.definition_id in sim.power.specs else 0.0
                     ),
                 )
@@ -410,7 +410,7 @@ class LocationProjectorMixin:
             option_rows: list[IndustryProcessOptionRow] = []
             for option_process in compatible:
                 missing_technology = sim.industry.missing_process_technologies(option_process)
-                throughput = definition.process_throughput_per_day
+                throughput = definition.process_throughput_per_day * facility.level
                 requirements = sim.industry.execution_requirements_for_process(
                     option_process, sim.inventory
                 )

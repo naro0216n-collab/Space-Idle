@@ -354,5 +354,3 @@ class SurveysView:
     provider_fleet: tuple[SurveyProviderFleetRow, ...]
     items: tuple[SurveyRow, ...]
     campaigns: tuple[SurveyCampaignRow, ...]
-
-

@@ -208,22 +208,22 @@ class ResearchProviderSpec:
             raise ValueError("research provider requires nonempty physical source capabilities")
         if self.tier < 1:
             raise ValueError("research provider tier must be positive")
-        if not self.levels:
-            raise ValueError("research provider must define at least one level")
-        seen: set[int] = set()
-        for level in self.levels:
-            if level.level in seen:
-                raise ValueError(f"duplicate research provider level: {level.level}")
-            seen.add(level.level)
+        if len(self.levels) != 1 or self.levels[0].level != 1:
+            raise ValueError("research provider defines exactly one unit of equipment, not level-specific performance")
 
     def accepts_source(self, capabilities) -> bool:
         return self.required_source_capabilities.issubset(set(capabilities))
 
     def level_spec(self, level: int) -> ResearchProviderLevelSpec:
-        for spec in self.levels:
-            if spec.level == level:
-                return spec
-        raise ValueError(f"research provider does not define level {level}")
+        if type(level) is not int or level < 1:
+            raise ValueError("installed unit count must be a positive integer")
+        unit = self.levels[0]
+        return ResearchProviderLevelSpec(
+            level,
+            unit.generation_points_per_day * level,
+            unit.storage_capacity_points * level,
+            unit.research_execution_per_day * level,
+        )
 
 
 @dataclass(frozen=True)

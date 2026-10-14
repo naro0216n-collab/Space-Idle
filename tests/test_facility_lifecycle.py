@@ -386,10 +386,7 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
         ResearchProviderSourceKind.FACILITY,
         frozenset({"test_upgrade_research_instrument"}),
         tier=1,
-        levels=(
-            ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),
-            ResearchProviderLevelSpec(2, 5.0, 25.0, 1.0),
-        ),
+        levels=(ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),),
     )
     sim.projects.decommission_recipes[UPGRADE_FACILITY] = FacilityDecommissionRecipe(
         UPGRADE_FACILITY, construction_work=1.0,
@@ -451,8 +448,8 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
         for row in option.differences
     }
     assert ("level", 1.0, 2.0) in difference_values
-    assert ("capacity", 2.0, 5.0) in difference_values
-    assert ("capacity", 10.0, 25.0) in difference_values
+    assert ("capacity", 2.0, 4.0) in difference_values
+    assert ("capacity", 10.0, 20.0) in difference_values
     assert ("service", 0.5, 1.0) in difference_values
     _seed_upgrade_materials(app, facility, recipe)
 
@@ -597,3 +594,70 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
     assert EntityId(after_row.id) not in restored._simulation.facilities.facilities
     assert _project_row(restored, project_id).status == "complete"
     assert _project_row(restored, decommission_id).status == "complete"
+
+
+def test_installed_unit_count_scaling_matches_separate_identical_facilities_across_domains():
+    """Facility aggregation is physical quantity, not a free technology upgrade."""
+    from space_idle.facilities import LifeSupportSpec, ServiceCapacitySupply
+    from space_idle.construction.models import ConstructionProviderSpec
+    from space_idle.production import ProcessSpec
+    from space_idle.exploration_models import (
+        SurveyProviderSpec, SurveyObservationModeSpec, SurveyProviderSourceKind,
+        SurveyReachSpec, SurveyReachScope, KnowledgeLevel,
+    )
+
+    facility_def_id = DefinitionId('test.facility.aggregated_capacity')
+    process_id = DefinitionId('test.process.aggregated_capacity')
+    survey_id = DefinitionId('test.survey.aggregated_capacity')
+    research_id = DefinitionId('test.research.aggregated_capacity')
+
+    def configure(levels):
+        app = build_game_application()
+        sim = app._simulation
+        sim.facilities.definitions[facility_def_id] = FacilityDef(
+            facility_def_id, 'Aggregate capacity',
+            capability_supplies=(CapabilitySupply('test_aggregate_capacity'),),
+            service_capacity_supplies=(ServiceCapacitySupply('test_aggregate_service', 1.75),),
+            process_throughput_per_day=1.25,
+            housing_capacity=3,
+            life_support=LifeSupportSpec(4.0),
+        )
+        sim.power.specs[facility_def_id] = PowerSpec(FixedGeneration(3.0), load_mw=0.5, standby_load_mw=0.2)
+        sim.storage.providers[facility_def_id] = StorageProviderSpec(facility_def_id, {'cryogenic': 7.0})
+        sim.projects.construction_providers[facility_def_id] = ConstructionProviderSpec(facility_def_id, 2.5)
+        sim.industry.processes[process_id] = ProcessSpec(
+            process_id, 'Aggregate operation', frozenset({'test_aggregate_capacity'}),
+            {ids.CONSTRUCTION_EQUIPMENT: 0.25}, {ids.MINERAL_FEEDSTOCK: 0.1},
+        )
+        sim.research.providers[research_id] = ResearchProviderSpec(
+            research_id, ResearchProviderSourceKind.FACILITY,
+            frozenset({'test_aggregate_capacity'}), tier=1,
+            levels=(ResearchProviderLevelSpec(1, 1.5, 6.0, 0.25),),
+        )
+        mode = SurveyObservationModeSpec(
+            'aggregate_observation', 1.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
+            KnowledgeLevel.PRESENCE_PROBABILITY, 0.2, 0.1,
+        )
+        sim.survey.providers[survey_id] = SurveyProviderSpec(
+            survey_id, SurveyProviderSourceKind.FACILITY,
+            frozenset({'test_aggregate_capacity'}), (mode,),
+            capacity_units_per_source_per_day=0.8,
+        )
+        facility_ids = [sim.facilities.install(facility_def_id, ids.EARTH, level=level) for level in levels]
+        generation = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
+        service = sim.facilities.nominal_service_capacity_at(ids.EARTH, 'test_aggregate_service', sim.day)
+        construction = sim.projects.construction_nominal_capacity_at(ids.EARTH, sim.day)
+        survey = sim.survey.provider_capacity_at(survey_id, ids.EARTH, day=sim.day)
+        industry = sim.industry.execution_requirement_bundles(ids.EARTH, sim.facilities, sim.inventory, sim.day)
+        industry_volume = sum(row.requested_execution for row in industry if row.owner_id in facility_ids)
+        research = sum(sim.research.provider_generation(fid, {}, sim.day) for fid in facility_ids)
+        storage = sim.storage._capacity_for_node(ids.EARTH, sim.day, None)[0]
+        return (
+            sum(generation.generation_mw_by_facility[fid] for fid in facility_ids),
+            sum(request.requested_rate for request in generation.requests if request.owner_id in facility_ids),
+            service, construction, survey, industry_volume, research, storage['cryogenic'],
+            sim.population.housing_capacity(ids.EARTH, sim.day),
+            sum(sim.facilities.definitions[facility_def_id].life_support.capacity_at_level(level) for level in levels),
+        )
+
+    assert configure([2]) == pytest.approx(configure([1, 1]))

@@ -498,7 +498,7 @@ class FacilityBook:
         ):
             definition = self.definitions[facility.definition_id]
             contributions.extend(
-                supply.nominal_rate
+                supply.nominal_rate * facility.level
                 for supply in definition.service_capacity_supplies
                 if supply.service_type == service_type
             )
@@ -539,7 +539,7 @@ class FacilityBook:
             for supply in definition.service_capacity_supplies:
                 if supply.service_type == service_type:
                     contributions.append(
-                        supply.nominal_rate * utilization * maintenance * upstream
+                        supply.nominal_rate * facility.level * utilization * maintenance * upstream
                     )
         return math.fsum(contributions)
 

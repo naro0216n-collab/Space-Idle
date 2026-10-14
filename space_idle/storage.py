@@ -102,7 +102,7 @@ class StorageService:
                 else max(0.0, min(1.0, power.maintenance_factor_by_facility.get(facility.id, 1.0)))
             )
             for pool_key, capacity in provider.capacity_t_by_pool.items():
-                physical[pool_key] = physical.get(pool_key, 0.0) + capacity
+                physical[pool_key] = physical.get(pool_key, 0.0) + capacity * facility.level
                 if not compatible:
                     factor = 0.0
                     limiter_lists.setdefault(pool_key, []).append("storage_environment_unavailable")
@@ -116,7 +116,7 @@ class StorageService:
                     factor = maintenance
                     if maintenance < 1.0 - 1e-9:
                         limiter_lists.setdefault(pool_key, []).append("storage_maintenance_limited")
-                usable[pool_key] = usable.get(pool_key, 0.0) + capacity * factor
+                usable[pool_key] = usable.get(pool_key, 0.0) + capacity * facility.level * factor
         limiters = {key: tuple(dict.fromkeys(values)) for key, values in limiter_lists.items() if values}
         return physical, usable, limiters
 

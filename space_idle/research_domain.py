@@ -290,10 +290,7 @@ def validate_runtime(sim: Any) -> None:
     for facility in sim.facilities.facilities.values():
         provider = sim.research.facility_provider_spec(facility.id)
         if provider is not None:
-            _require(
-                any(level.level == facility.level for level in provider.levels),
-                f"Research Provider has no contribution definition for Facility Level: {facility.id}/L{facility.level}",
-            )
+            _require(facility.level >= 1, f"invalid Research Provider installed units: {facility.id}")
 
     provider_use_keys: set[tuple[DefinitionId, SpatialNodeId, DefinitionId]] = set()
     for assignment_id, assignment in sim.research.provider_assignments.items():

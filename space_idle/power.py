@@ -127,8 +127,8 @@ class PowerService:
             if not facility.paused:
                 generation_by_facility[facility.id] = self._generation(
                     spec, facility, facilities
-                )
-            load = spec.standby_load_mw if facility.paused else spec.load_mw
+                ) * facility.level
+            load = (spec.standby_load_mw if facility.paused else spec.load_mw) * facility.level
             if load > 0:
                 priority = facility.activity_priority
                 requests.append(ServiceCapacityRequest(
