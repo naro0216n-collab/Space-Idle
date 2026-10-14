@@ -473,11 +473,13 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
         assert finished.construction_done == pytest.approx(plan.construction_required)
         assert finished.materials_committed
         assert game._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
-        cell_view = next(row for row in game.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
-        assert dict(cell_view.terrain)["terrain_profile"] == world.terrain_profile(core).display_name
-        assert not {option.recipe_id: option for option in cell_view.engineering_options}[str(target_recipe.id)].can_plan
-        assert len(world.locations) == len(sim.graph.locations)
 
+    # Once at the Application boundary is sufficient: both execution modes
+    # already agree on authoritative terrain, Project and Knowledge state.
+    cell_view = next(row for row in app.query(GetSurfaceMap(str(ids.EARTH_BODY))).cells if row.id == str(core))
+    assert dict(cell_view.terrain)["terrain_profile"] == sim.graph.terrain_profile(core).display_name
+    assert not {option.recipe_id: option for option in cell_view.engineering_options}[str(target_recipe.id)].can_plan
+    assert len(loaded_sim.graph.locations) == len(sim.graph.locations)
     assert loaded_sim.graph.engineered_terrain == sim.graph.engineered_terrain
     save_game(loaded, save_path)
     reloaded, _ = load_game(save_path, build_game_application_for_load)

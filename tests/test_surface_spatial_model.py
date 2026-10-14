@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetSurfaceMap, build_game_application
+from space_idle import build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.supply import SupplyRoutingConstraintScope
@@ -86,25 +86,13 @@ def test_surface_topology_supports_variable_graphs_and_connected_single_owner_te
 def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds():
     app = build_game_application()
     sim = app._simulation
-    # Surface cells are map geometry, never implicit Operational Nodes or stores.
-    before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
-    # This test concerns node ownership, not large-map rendering. Query a
-    # small real surface; all product bodies share the same ownership model.
-    counts: dict[CelestialBodyId, int] = {}
-    for cell in sim.graph.surface_cells.values():
-        counts[cell.body_id] = counts.get(cell.body_id, 0) + 1
-    body_with_cells = min(counts, key=counts.get)
-    map_view = app.query(GetSurfaceMap(str(body_with_cells)))
-    assert map_view.cells
-    assert all(cell.display_name for cell in map_view.cells)
-    # Static World owns physical environment; the public Map only exposes
-    # measured fields. Unobserved values cannot become an implicit node fact.
-    assert all(cell.environment_knowledge_level == 0 or cell.environment for cell in map_view.cells)
-    assert any(cell.environment_knowledge_level == 0 and not cell.environment
-               for cell in map_view.cells)
-    node_ids = {str(node) for node in sim.graph.operational_node_ids()}
-    assert all(str(cell.id) not in node_ids for cell in map_view.cells)
-    assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
+    # Ownership is a Spatial/Inventory invariant, not a Map projection or
+    # an Environment/Knowledge presentation rule. Check the authoritative IDs
+    # directly; the public Map's disclosure rules have their own test.
+    node_ids = set(sim.graph.operational_node_ids())
+    cell_ids = set(sim.graph.surface_cells)
+    assert node_ids.isdisjoint(cell_ids)
+    assert all(location_id not in cell_ids for location_id, _ in sim.inventory.stock)
 
     dormant = SpatialNodeId("test.node.dormant")
     sim.graph.add(

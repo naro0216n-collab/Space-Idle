@@ -268,10 +268,8 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         supply.id for supply in sim.facilities.definitions[recipe.facility_def_id].capability_supplies
     ))
     # Planning eligibility does not hide physical investment effects when a
-    # Technology is missing; nor does preview create a new Facility or State.
-    facility_count = len(sim.facilities.facilities)
-    assert app.query(GetSurfaceMap(str(ids.EARTH_BODY))) == surface
-    assert len(sim.facilities.facilities) == facility_count
+    # Technology is missing. Query purity is covered at the Application boundary,
+    # rather than executing a second identical full-body Map projection here.
 
     catalog = app.query(GetCatalog())
     robotic = next(

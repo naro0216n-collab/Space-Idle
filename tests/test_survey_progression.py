@@ -357,16 +357,12 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     )
     sim.technology.completed.update(mode.prerequisite_technologies)
 
-    # One survey owner and knowledge projection, independently scoped by
-    # physical body; no remotely observed Cell becomes an owned Location.
-    global_view = app.query(GetSurveys())
+    # The product-wide Survey target registry is validated at registration.
+    # This transition needs only the target body's public projection; a
+    # 29-body unscoped projection would repeat that structural coverage.
     mars_view = app.query(GetSurveys(body_id=str(ids.MARS_BODY)))
-    moon_view = app.query(GetSurveys(body_id=str(ids.MOON)))
-    assert mars_view.items and moon_view.items
+    assert mars_view.items
     assert {row.body_id for row in mars_view.items} == {str(ids.MARS_BODY)}
-    assert {row.body_id for row in moon_view.items} == {str(ids.MOON)}
-    assert not {row.cell_id for row in mars_view.items} & {row.cell_id for row in moon_view.items}
-    assert {row.cell_id for row in mars_view.items} | {row.cell_id for row in moon_view.items} <= {row.cell_id for row in global_view.items}
     assert all(row.visible_potential is None for row in mars_view.items)
 
     requirement = KnowledgeRequirement(cell, resource, KnowledgeLevel.PRESENCE_PROBABILITY)

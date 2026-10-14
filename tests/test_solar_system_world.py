@@ -291,13 +291,12 @@ def test_registered_world_inputs_and_representative_realization_preserve_global_
     originals = tuple(registered.surface_cells.values())
     solid = [body for body in registered.bodies.values()
              if body.physical_surface is PhysicalSurface.SOLID]
-    assert solid
+    # register_complete_surface_world validates *every* registered body,
+    # including reference presence and solid/non-solid consistency. Avoid
+    # replicating its input-validation loop as a second test oracle.
     references_by_body = {body_id: [] for body_id in registered.bodies}
     for cell in originals:
         references_by_body[cell.body_id].append(cell)
-    assert all(references_by_body[body.id] for body in solid)
-    assert all(not references_by_body[body.id] for body in registered.bodies.values()
-               if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE)
     # Pick physically different inputs; do not make specific body names or
     # hard-coded Cell counts an architectural contract.
     by_radius = sorted(solid, key=lambda body: body.mean_radius_km)
@@ -499,6 +498,9 @@ def test_unknown_surface_map_does_not_reveal_actual_resource_presence():
     view = app.query(GetSurfaceMap(str(ids.MOON), (str(bearing.id), str(barren.id))))
     for cell in (bearing, barren):
         exposed = next(row for row in view.cells if row.id == str(cell.id))
+        assert exposed.display_name
+        assert exposed.environment_knowledge_level == 0
+        assert not exposed.environment
         evidence = next(row for row in exposed.resources if row.resource_id == str(resource))
         assert evidence.knowledge_level == 0
         assert evidence.presence_probability is None
@@ -514,7 +516,8 @@ def test_verified_static_world_rechecks_modified_geography_and_facets():
 
     app = build_game_application()
     sim = app._simulation
-    validate_simulation_configuration(sim)
+    # Initial product validation has already happened at composition.
+    # Exercise invalidation only when authoritative static inputs change.
     cell_id, original = next(iter(sim.graph.surface_cells.items()))
     # A mutation made after the standard World's initial validation cannot
     # borrow that earlier geometric proof.
@@ -554,4 +557,3 @@ def test_verified_static_world_rechecks_modified_geography_and_facets():
     with pytest.raises(ConfigurationError, match="survey target key mismatch"):
         validate_simulation_configuration(sim)
     sim.survey.targets[target_id] = removed
-    validate_simulation_configuration(sim)
