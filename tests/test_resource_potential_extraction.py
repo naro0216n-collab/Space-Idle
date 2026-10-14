@@ -175,11 +175,21 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
 
     location = app.query(GetOperationalNode(str(ids.EARTH)))
     extraction = next(row for row in location.extraction_resources if row.resource_id == str(ids.METAL_ORE))
-    assert extraction.effective_opportunity > 0.0
+    # Actual production can be reported, but partial environmental/geological
+    # observation is not a license to publish the World-derived rate curve.
+    assert extraction.effective_opportunity is None
     assert extraction.installed_nominal_capacity_t_per_day > 0.0
     assert 0.0 <= extraction.operational_fulfillment <= 1.0
-    assert extraction.marginal_efficiency > 0.0
+    assert extraction.marginal_efficiency is None
     assert extraction.output_t_per_day > 0.0
+    for cell_id in sim.graph.locations[ids.EARTH].developed_cell_ids:
+        sim.surface_knowledge.initialize_known(cell_id, ids.METAL_ORE)
+        for attribute in ('terrain', 'geology', 'environment'):
+            sim.surface_knowledge.observe_attribute(cell_id, attribute, 2)
+    observed = app.query(GetOperationalNode(str(ids.EARTH)))
+    resource = next(row for row in observed.extraction_resources if row.resource_id == str(ids.METAL_ORE))
+    assert resource.effective_opportunity > 0.0
+    assert resource.marginal_efficiency > 0.0
 
 
 def test_independently_named_facility_reuses_extraction_method_and_preserves_shared_opportunity():
@@ -422,3 +432,45 @@ def test_multi_method_extraction_is_a_physical_choice_from_application_to_save_a
         load_game(save_path, lambda: build_game_application_for_load(
             definition_transform=only_original,
         ), now=saved_at)
+
+
+def test_extraction_application_does_not_disclose_unobserved_world_opportunity():
+    """Physical execution may know a deposit; decision views may not infer it."""
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.EARTH_CELL_INDUSTRIAL
+    resource_id = ids.METAL_ORE
+    key = (cell, resource_id)
+    assert sim.extraction.static_opportunity(ids.EARTH, resource_id) > 0
+    # Unknown World subjects remain candidate Resource types, not zero deposits.
+    sim.surface_knowledge.knowledge_progress[key] = 0.0
+    before = app.query(GetOperationalNode(str(ids.EARTH)))
+    resource = next(row for row in before.extraction_resources if row.resource_id == str(resource_id))
+    assert resource.static_opportunity is None
+    assert resource.effective_opportunity is None
+    assert resource.marginal_efficiency is None
+    assert resource.knowledge_blocked_cell_count >= 1
+    mine = next(row for row in before.extraction if row.facility_definition_id == str(ids.METAL_ORE_MINE))
+    assert mine.effective_opportunity is None
+    assert mine.marginal_efficiency is None
+    assert all(option.potential_opportunity is None and option.nominal_output_t_per_day is None
+               for option in mine.method_options if option.resource_id == str(resource_id))
+    assert not any(factor.code.startswith(('resource_opportunity:', 'site:'))
+                   for factor in mine.limiting_factors)
+
+    # Knowledge and physical readiness are distinct: knowing a Resource amount
+    # does not automatically measure landform, geology or local Environment.
+    sim.surface_knowledge.initialize_known(*key)
+    sim.surface_knowledge.cell_attribute_levels[(cell, 'geology')] = 0
+    after = app.query(GetOperationalNode(str(ids.EARTH)))
+    known = next(row for row in after.extraction_resources if row.resource_id == str(resource_id))
+    assert known.static_opportunity is not None
+    assert known.effective_opportunity is None
+    # Once the exact relevant conditions have been observed, actual opportunity
+    # can be disclosed without reimplementing mining arithmetic in Application.
+    for attribute in ('terrain', 'geology', 'environment'):
+        sim.surface_knowledge.observe_attribute(cell, attribute, 2)
+    measured = app.query(GetOperationalNode(str(ids.EARTH)))
+    completed = next(row for row in measured.extraction_resources if row.resource_id == str(resource_id))
+    assert completed.static_opportunity is not None
+    assert completed.effective_opportunity is not None

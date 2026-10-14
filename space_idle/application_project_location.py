@@ -236,12 +236,21 @@ class LocationProjectorMixin:
         maintenance_fulfillment = decision.allocations.maintenance_fulfillment_by_facility
 
         facilities = []
+        hidden_operating_sites = {}
         for facility in sorted(
             (row for row in sim.facilities.facilities.values() if row.operational_node_id == location_id),
             key=lambda row: str(row.id),
         ):
             definition = sim.facilities.definitions[facility.definition_id]
             activation_failures = sim.facilities.activation_failures(facility, sim.day)
+            hidden = sim.surface_knowledge.unpublished_site_condition_codes(
+                sim.facilities.facility_environment_context(facility), definition.operating_requirements,
+            )
+            hidden_operating_sites[facility.id] = hidden
+            public_activation_failures = tuple((code, detail) for code, detail in activation_failures
+                                               if code not in hidden)
+            if hidden:
+                public_activation_failures += (("site_knowledge_unverified", "現地稼働環境は未測定・再測定待ち"),)
             active_and_compatible = not activation_failures
             research_provider = (
                 None
@@ -264,7 +273,7 @@ class LocationProjectorMixin:
                 facility.id, 0.0 if not active_and_compatible else 1.0
             )
             maintenance_requirements = sim.facilities.maintenance_requirements_per_day(facility.id)
-            operating_blockers = list(activation_failures)
+            operating_blockers = list(public_activation_failures)
             if active_and_compatible and power_utilization < 1.0 - 1e-9:
                 operating_blockers.append(("power", "電力配分不足"))
             maintenance_satisfaction = maintenance_fulfillment.get(facility.id, 1.0)
@@ -308,7 +317,7 @@ class LocationProjectorMixin:
                     facility.paused,
                     active_and_compatible,
                     constraints_from_pairs(
-                        activation_failures,
+                        public_activation_failures,
                         affected_action="operate_facility",
                         related_entity_kind="facility",
                         related_entity_id=str(facility.id),
@@ -486,7 +495,10 @@ class LocationProjectorMixin:
             process = sim.industry.process_for(facility)
             selection_required = len(compatible) > 1 and facility.selected_process_id is None
             if snap is not None:
-                limiting = snap.limiting_factors
+                limiting = tuple(code for code in snap.limiting_factors
+                                 if code not in {f"facility:{hidden}" for hidden in hidden_operating_sites[facility.id]})
+                if hidden_operating_sites[facility.id]:
+                    limiting += ("site_knowledge_unverified",)
                 scale = snap.scale
                 inputs = tuple(
                     (str(key), value)
@@ -503,10 +515,12 @@ class LocationProjectorMixin:
             else:
                 failures = sim.facilities.activation_failures(facility, sim.day)
                 limiting = (
-                    tuple(f"facility:{code}" for code, _detail in failures)
-                    if failures
-                    else ("process:unselected",)
+                    tuple(f"facility:{code}" for code, _detail in failures
+                          if code not in hidden_operating_sites[facility.id])
+                    if failures else ("process:unselected",)
                 )
+                if hidden_operating_sites[facility.id]:
+                    limiting += ("site_knowledge_unverified",)
                 scale = 0.0
                 inputs = ()
                 outputs = ()
@@ -549,9 +563,15 @@ class LocationProjectorMixin:
                 options = []
                 for method in methods:
                     missing = sim.extraction.missing_method_technologies(method)
-                    opportunity = sim.extraction.method_opportunity(location_id, method, sim.day)
+                    public_method = sim.extraction.public_opportunity_known(
+                        location_id, method.resource_id, (method,),
+                    )
+                    opportunity = (sim.extraction.method_opportunity(location_id, method, sim.day)
+                                   if public_method else None)
                     method_blockers = [f"technology:{technology}" for technology in missing]
-                    if opportunity <= 1e-12:
+                    if not public_method:
+                        method_blockers.append("knowledge_unverified")
+                    elif opportunity <= 1e-12:
                         method_blockers.extend(sim.extraction.method_opportunity_blockers(
                             location_id, method, sim.day,
                         ))
@@ -559,9 +579,9 @@ class LocationProjectorMixin:
                         str(method.id), method.display_name or str(method.id),
                         str(method.resource_id), self._resource_name(method.resource_id),
                         str(method.output_resource_id), self._resource_name(method.output_resource_id),
-                        opportunity, sim.extraction.diminishing_response(
+                        opportunity, (None if opportunity is None else sim.extraction.diminishing_response(
                             sim.extraction.nominal_capacity(facility), opportunity,
-                        ), not missing,
+                        )), not missing,
                         constraints_from_codes(
                             method_blockers,
                             affected_action="select_extraction_method" if missing else "run_extraction",
@@ -574,6 +594,19 @@ class LocationProjectorMixin:
                     else (("extraction:no_compatible_method",) if not methods
                           else ("extraction:unselected",))
                 )
+                reasons = tuple(code for code in reasons
+                                if code not in {f"facility:{hidden}" for hidden in hidden_operating_sites[facility.id]})
+                if hidden_operating_sites[facility.id]:
+                    reasons += ("site_knowledge_unverified",)
+                public_selected = (selected is not None and sim.extraction.public_opportunity_known(
+                    location_id, selected.resource_id, (selected,),
+                ))
+                if selected is not None and not public_selected:
+                    # Domain outputs remain real; confidential site results do not
+                    # appear as candidate suitability or an implicit zero deposit.
+                    reasons = tuple(reason for reason in reasons
+                                    if not reason.startswith(("resource_opportunity:", "site:", "knowledge:")))
+                    reasons += ("knowledge_unverified",)
                 extraction.append(ExtractionRow(
                     str(facility.id), str(facility.definition_id),
                     sim.facilities.definitions[facility.definition_id].display_name,
@@ -582,8 +615,8 @@ class LocationProjectorMixin:
                     "" if snap is None else str(snap.output_resource_id),
                     "" if snap is None else self._resource_name(snap.output_resource_id),
                     sim.extraction.nominal_capacity(facility),
-                    0.0 if snap is None else snap.effective_opportunity,
-                    0.0 if snap is None else snap.marginal_efficiency,
+                    (None if not public_selected else snap.effective_opportunity if snap is not None else 0.0),
+                    (None if not public_selected else snap.marginal_efficiency if snap is not None else 0.0),
                     0.0 if snap is None else snap.scale,
                     0.0 if snap is None else snap.output_t_per_day,
                     limiting_factors_from_codes(
@@ -594,24 +627,46 @@ class LocationProjectorMixin:
                     None if selected is None else str(selected.id),
                     tuple(options), selected is None,
                 ))
-            extraction_resources.extend(
-                ExtractionResourceRow(
-                    str(row.resource_id),
-                    self._resource_name(row.resource_id),
-                    row.static_opportunity,
-                    row.effective_opportunity,
-                    row.knowledge_eligible_cell_count,
-                    row.knowledge_blocked_cell_count,
-                    row.installed_nominal_capacity_t_per_day,
-                    row.operational_fulfillment,
-                    row.diminishing_efficiency,
-                    row.marginal_efficiency,
-                    row.output_t_per_day,
-                )
+            physical_rows = {
+                row.resource_id: row
                 for row in sim.extraction.resource_snapshots(
                     location_id, sim.facilities, power, sim.day, execution_allocations
                 )
+            }
+            # Public rows follow authored resource classes, never the positive
+            # deposits that happen to exist in the hidden physical World.
+            public_resource_ids = (
+                {method.resource_id for method in sim.extraction.specs.values()}
+                if location_id in sim.graph.locations else set(physical_rows)
             )
+            for resource_id in sorted(public_resource_ids, key=str):
+                row = physical_rows.get(resource_id)
+                active_methods = tuple(
+                    spec for facility in sim.facilities.active_compatible_at(location_id, sim.day)
+                    if (spec := sim.extraction.method_for_facility(facility)) is not None
+                    and spec.resource_id == resource_id
+                    and not sim.extraction.missing_method_technologies(spec)
+                )
+                candidates = tuple(spec for spec in sim.extraction.specs.values()
+                                   if spec.resource_id == resource_id)
+                static_known = sim.extraction.public_opportunity_known(location_id, resource_id)
+                effective_known = sim.extraction.public_opportunity_known(
+                    location_id, resource_id, active_methods,
+                )
+                eligible, blocked = sim.extraction.public_knowledge_cell_counts(
+                    location_id, resource_id, candidates,
+                )
+                extraction_resources.append(ExtractionResourceRow(
+                    str(resource_id), self._resource_name(resource_id),
+                    (row.static_opportunity if row is not None else 0.0) if static_known else None,
+                    (row.effective_opportunity if row is not None else 0.0) if effective_known else None,
+                    eligible, blocked,
+                    0.0 if row is None else row.installed_nominal_capacity_t_per_day,
+                    0.0 if row is None else row.operational_fulfillment,
+                    (row.diminishing_efficiency if row is not None else 0.0) if effective_known else None,
+                    (row.marginal_efficiency if row is not None else 0.0) if effective_known else None,
+                    0.0 if row is None else row.output_t_per_day,
+                ))
 
         capability_rows = tuple(
             CapabilityRow(

@@ -191,8 +191,8 @@ class ExtractionMethodOptionRow:
     resource_name: str
     output_resource_id: str
     output_resource_name: str
-    potential_opportunity: float
-    nominal_output_t_per_day: float
+    potential_opportunity: float | None
+    nominal_output_t_per_day: float | None
     can_select: bool
     blockers: tuple[DecisionConstraintRow, ...]
 
@@ -207,8 +207,8 @@ class ExtractionRow:
     output_resource_id: str
     output_resource_name: str
     nominal_capacity_t_per_day: float
-    effective_opportunity: float
-    marginal_efficiency: float
+    effective_opportunity: float | None
+    marginal_efficiency: float | None
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[DecisionConstraintRow, ...]
@@ -221,14 +221,14 @@ class ExtractionRow:
 class ExtractionResourceRow:
     resource_id: str
     resource_name: str
-    static_opportunity: float
-    effective_opportunity: float
+    static_opportunity: float | None
+    effective_opportunity: float | None
     knowledge_eligible_cell_count: int
     knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
-    diminishing_efficiency: float
-    marginal_efficiency: float
+    diminishing_efficiency: float | None
+    marginal_efficiency: float | None
     output_t_per_day: float
 
 

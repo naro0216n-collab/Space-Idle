@@ -92,6 +92,60 @@ class ExtractionService:
             raise ValueError("extraction method technology requirements not met: " + ", ".join(map(str, missing)))
         facility.selected_extraction_method_id = method_id
 
+    def public_opportunity_known(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId,
+        methods: tuple[ExtractionSpec, ...] = (),
+    ) -> bool:
+        """May the actual quantity be published, not merely used in execution?
+
+        Resource potential, geology, terrain and site Environment remain separate
+        observations. Execution reads World truth; this projection gate must not
+        turn a failed physical eligibility check into a clandestine survey.
+        """
+        location = self.graph.locations.get(location_id)
+        if location is None:
+            # No developed surface exists in this context. Zero physical
+            # opportunity follows from the public Spatial classification.
+            return True
+        if self.survey is None:
+            return False
+        from .exploration_models import KnowledgeLevel
+        knowledge = self.survey.knowledge
+        for cell_id in location.developed_cell_ids:
+            if knowledge.knowledge_level(cell_id, resource_id) < KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+                return False
+            if methods:
+                attributes = set()
+                for method in methods:
+                    if method.geology_accessibility_key is not None:
+                        attributes.add("geology")
+                    if method.requires_excavation_access:
+                        attributes.add("terrain")
+                    if method.opportunity_requirements.environment:
+                        attributes.add("environment")
+                if any(knowledge.attribute_level(cell_id, attribute) < 2 for attribute in attributes):
+                    return False
+        return True
+
+    def public_knowledge_cell_counts(
+        self, location_id: SpatialNodeId, resource_id: DefinitionId,
+        methods: tuple[ExtractionSpec, ...],
+    ) -> tuple[int, int]:
+        """Knowledge eligibility without using actual deposits to choose Cells.
+
+        Physical opportunity affects execution, not which unexplored Cells the
+        player is told might contain this Resource.
+        """
+        location = self.graph.locations.get(location_id)
+        if location is None or not methods:
+            return (0, 0)
+        eligible = sum(
+            any(self._knowledge_cell_eligible(method, cell_id, resource_id)
+                for method in methods)
+            for cell_id in location.developed_cell_ids
+        )
+        return eligible, len(location.developed_cell_ids) - eligible
+
     def method_opportunity(self, location_id: SpatialNodeId, method: ExtractionSpec, day: int) -> float:
         """Actual developed-Cell physics/Knowledge for a single candidate method."""
         location = self.graph.locations.get(location_id)

@@ -421,3 +421,37 @@ def test_scenario_and_later_facilities_share_construction_and_site_contracts(tmp
     assert sim.facilities.is_environmentally_compatible(sim.facilities.facilities[second], sim.day)
     second_generation = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw
     assert second_generation > first_generation
+
+
+def test_facility_operating_site_blockers_respect_unmeasured_environment():
+    """Facility operation follows World, while the Inspector follows Knowledge."""
+    from dataclasses import replace
+    from space_idle.site import SiteRequirements, FacetValueRange
+    from space_idle.spatial import ThermalField
+
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.EARTH_CELL_INDUSTRIAL
+    definition = sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION]
+    sim.facilities.definitions[definition.id] = replace(
+        definition,
+        operating_requirements=SiteRequirements(environment=(
+            FacetValueRange(ThermalField, 'nominal_temperature_k',
+                            'test_unmeasured_thermal_limit', 'Physical thermal limit',
+                            minimum=1e6),
+        )),
+    )
+    facility_id = sim.facilities.install(definition.id, ids.EARTH, site_cell_id=cell)
+    sim.surface_knowledge.cell_attribute_levels.pop((cell, 'environment'), None)
+    hidden = app.query(GetOperationalNode(str(ids.EARTH)))
+    facility = next(row for row in hidden.facilities if row.id == str(facility_id))
+    assert not facility.active_and_site_compatible
+    assert any(row.code == 'site_knowledge_unverified' for row in facility.activation_blockers)
+    assert all(row.code != 'test_unmeasured_thermal_limit' for row in facility.activation_blockers)
+    assert all(row.code != 'test_unmeasured_thermal_limit' for row in facility.operating_blockers)
+
+    sim.surface_knowledge.observe_attribute(cell, 'environment', 2)
+    observed = app.query(GetOperationalNode(str(ids.EARTH)))
+    facility = next(row for row in observed.facilities if row.id == str(facility_id))
+    assert any(row.code == 'test_unmeasured_thermal_limit' for row in facility.activation_blockers)
+    assert not any(row.code == 'site_knowledge_unverified' for row in facility.activation_blockers)
