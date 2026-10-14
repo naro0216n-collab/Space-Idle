@@ -894,7 +894,48 @@ def run(browser) -> dict[str, object]:
             )
             surface_inspector = page.locator("#inspectorContent").inner_text()
             _assert("地域状態" in surface_inspector, "surface cell inspector must expose physical cell state")
-            _assert("現在の環境" in surface_inspector, "surface cell inspector must expose application-projected current environment")
+            # Surface conditions are physical truth, but an unmeasured Cell
+            # cannot publish them.  The Inspector must reflect the same
+            # attribute-specific Knowledge quality as the Application DTO.
+            environment_heading = page.locator(
+                '#inspectorContent > .inspector-section > h3',
+                has_text='代表気候・環境条件',
+            )
+            _assert(environment_heading.count() == 1,
+                    "surface cell Inspector must expose the Environment decision context")
+            environment_section = environment_heading.locator('xpath=..').inner_text()
+            if selected_surface_projection.environment_knowledge_level < 2:
+                _assert(not selected_surface_projection.environment,
+                        "unmeasured physical Environment must not leak through Application")
+                expected_quality = ('未観測' if selected_surface_projection.environment_knowledge_level == 0
+                                    else '概略観測済み')
+                _assert(expected_quality in environment_section,
+                        "surface cell Inspector must disclose Knowledge quality, not unmeasured values")
+            else:
+                _assert('未観測' not in environment_section,
+                        "measured Environment must render the Application-projected values")
+            # Terrain and geology are distinct Knowledge subjects; measuring
+            # one may not disclose the other's physical values.
+            geology_heading = page.locator(
+                '#inspectorContent > .inspector-section > h3', has_text='地質',
+            )
+            terrain_heading = page.locator(
+                '#inspectorContent > .inspector-section > h3', has_text='地形',
+            )
+            _assert(geology_heading.count() == 1 and terrain_heading.count() == 1,
+                    "surface Inspector must expose independent geology and terrain Knowledge")
+            geology_section = geology_heading.locator('xpath=..').inner_text()
+            terrain_section = terrain_heading.locator('xpath=..').inner_text()
+            if selected_surface_projection.geology_knowledge_level < 2:
+                _assert(not selected_surface_projection.geology,
+                        "unmeasured geology must not leak into Surface Map Application state")
+                _assert('未観測' in geology_section or '概略観測済み' in geology_section,
+                        "geology Inspector must show observation quality before measured values")
+            if selected_surface_projection.terrain_knowledge_level < 2:
+                _assert(not dict(selected_surface_projection.terrain).get('terrain_profile'),
+                        "unmeasured terrain class must not leak into Surface Map Application state")
+                _assert('未測定' in terrain_section or '未観測' in terrain_section,
+                        "terrain Inspector must distinguish unknown and overview from measurement")
             _assert("資源調査情報" in surface_inspector, "surface cell inspector must expose survey-derived resource knowledge")
             _assert(page.locator('#inspectorContent [data-inspect="survey"]').count() > 0, "surface map resource decisions must link directly to survey controls")
             _assert("既存拠点から開発" in surface_inspector, "undeveloped cell must explain nearby location development eligibility in-place")
