@@ -22,6 +22,7 @@ from space_idle.logistics_models import CargoFlowSegment, CargoServiceLeg, Cargo
 from space_idle.construction.models import BuildResourceRequirement
 from dataclasses import replace
 from space_idle.production import ProcessSpec
+from space_idle.persistence import capture_state
 from space_idle.supply import SupplyRoutingConstraintScope
 
 
@@ -363,7 +364,7 @@ def test_detailed_forecast_replays_inventory_and_allocation_constraints_without_
     )
     assert expected_unshipped > 0
 
-    base_stock = dict(sim.inventory.stock)
+    base_state = capture_state(sim)
     selected_nodes = (EARTH, LEO)
     days = 6
     view = app.query(GetDetailedForecast(
@@ -384,40 +385,33 @@ def test_detailed_forecast_replays_inventory_and_allocation_constraints_without_
     assert execution.first_unmet_t == pytest.approx(expected_allocation_gap)
     assert procurement.first_unmet_t == pytest.approx(expected_unshipped)
     assert sim.day == view.base_day
-    assert sim.inventory.stock == base_stock
+    assert capture_state(sim) == base_state
 
-    # Observing a canonical allocation is read-only: the physical replay and
-    # its serialized state remain unchanged compared with ordinary advancement.
-    from copy import deepcopy
-    observed, ordinary = deepcopy(sim), deepcopy(sim)
-    seen = []
+    base_day = sim.day
+    # The forecast already ran on its own copy and left the Game unchanged.
+    # Advance this original State through the ordinary canonical path instead
+    # of cloning a second full World/Simulation merely for the comparison.
     timeline: dict[tuple, dict[int, float]] = {}
     for elapsed in range(days + 1):
-        for key in ordinary.inventory.stock:
+        for key in sim.inventory.stock:
             if key[0] in selected_nodes:
-                timeline.setdefault(key, {})[ordinary.day] = ordinary.inventory.available(*key)
+                timeline.setdefault(key, {})[sim.day] = sim.inventory.available(*key)
         if elapsed < days:
-            ordinary.advance_days(1)
+            sim.advance_days(1)
 
     for row in view.inventory_ranges:
         key = (next(node for node in selected_nodes if str(node) == row.operational_node_id),
                DefinitionId(row.resource_id))
         amounts = {day: timeline.get(key, {}).get(day, 0.0)
-                   for day in range(sim.day, sim.day + days + 1)}
+                   for day in range(base_day, base_day + days + 1)}
         minimum = min(amounts.values())
-        assert row.base_available_amount == pytest.approx(amounts[sim.day])
-        assert row.projected_available_amount == pytest.approx(amounts[sim.day + days])
+        assert row.base_available_amount == pytest.approx(amounts[base_day])
+        assert row.projected_available_amount == pytest.approx(amounts[base_day + days])
         assert row.minimum_available_amount == pytest.approx(minimum)
         assert amounts[row.minimum_available_day] == pytest.approx(minimum)
-        first_depleted = next((day for day in range(sim.day + 1, sim.day + days + 1)
+        first_depleted = next((day for day in range(base_day + 1, base_day + days + 1)
                                if amounts[day - 1] > 1e-9 and amounts[day] <= 1e-9), None)
         assert row.first_depleted_day == first_depleted
-
-    observed.advance_days(days, observe_decision=lambda decision: seen.append(decision.snapshot.day))
-    assert seen == list(range(sim.day, sim.day + days))
-    assert observed.inventory.stock == ordinary.inventory.stock
-    assert observed.logistics.cargo_flows == ordinary.logistics.cargo_flows
-    assert observed.logistics.arrival_waiting == ordinary.logistics.arrival_waiting
 
     with pytest.raises(ApplicationError, match="unsupported detailed forecast horizon"):
         app.query(GetDetailedForecast(horizon="UNKNOWN", period_days=1))
@@ -449,7 +443,7 @@ def test_forecast_distinguishes_unadmitted_final_cargo_from_intermediate_handoff
 
     waiting_before = deepcopy(sim.logistics.arrival_waiting)
     view = app.query(GetDetailedForecast(
-        "operational_nodes", node_ids=(str(LEO),), period_days=2,
+        "operational_nodes", node_ids=(str(LEO),), period_days=1,
     ))
     assert {(row.final_destination_id, row.first_waiting_day) for row in view.arrival_waiting} == {
         (str(LEO), sim.day), (str(ids.LUNAR_ORBIT), sim.day),

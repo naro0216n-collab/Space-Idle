@@ -18,11 +18,16 @@ def _source_modules() -> tuple[tuple[Path, Path, ast.AST], ...]:
     )
 
 
-def _module_import_targets(path: Path, tree: ast.AST) -> set[str]:
-    """Return normalized relative import targets for architecture assertions."""
+def _module_source_contracts(
+    path: Path, tree: ast.AST, content_ids: set[str]
+) -> tuple[set[str], set[str]]:
+    """Find forbidden imports and concrete ID literals in a single AST traversal."""
     module_parts = list(path.relative_to(PACKAGE).with_suffix("").parts)
     targets: set[str] = set()
+    embedded: set[str] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in content_ids:
+            embedded.add(node.value)
         if isinstance(node, ast.Import):
             targets.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -40,7 +45,7 @@ def _module_import_targets(path: Path, tree: ast.AST) -> set[str]:
                 # layer as `import space_idle.persistence`.
                 targets.update(module + "." + alias.name for alias in node.names
                                if alias.name != "*")
-    return targets
+    return targets, embedded
 
 
 def _matches_dependency(target: str, prohibited: tuple[str, ...]) -> bool:
@@ -76,8 +81,15 @@ def test_layer_dependency_direction_is_enforced():
         ),
         "api": ("space_idle.content", "space_idle.composition", "space_idle.bootstrap"),
     }
+    current_content_ids = {
+        value
+        for name, value in vars(base_ids).items()
+        if name.isupper() and isinstance(value, str)
+    }
+    assert current_content_ids
+
     for path, rel, tree in _source_modules():
-        targets = _module_import_targets(path, tree)
+        targets, embedded = _module_source_contracts(path, tree, current_content_ids)
         assert not any(target == "scripts" or target.startswith("scripts.")
                        for target in targets), f"{rel} imports development-only scripts"
 
@@ -100,30 +112,16 @@ def test_layer_dependency_direction_is_enforced():
         offenders = sorted(target for target in targets if _matches_dependency(target, forbidden))
         assert not offenders, f"{rel} imports outer layer(s): {offenders}"
 
-    core_files = [
-        (path, tree) for path, _rel, tree in _source_modules()
-        if path.name != "__init__.py"
-        and not any(part in {"content", "composition", "app_contracts"} for part in path.parts)
-        and path.name not in {"bootstrap.py", "persistence.py"}
-        and not path.name.startswith("application")
-    ]
-    current_content_ids = {
-        value
-        for name, value in vars(base_ids).items()
-        if name.isupper() and isinstance(value, str)
-    }
-    assert current_content_ids
-    for path, tree in core_files:
-        embedded = {
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value in current_content_ids
-        }
-        assert not embedded, (
-            f"{path.relative_to(PACKAGE)} embeds concrete Content IDs: {sorted(embedded)}"
-        )
+        # The same scan also finds concrete Content identifiers in Core source.
+        # A second ast.walk over all Core modules doubles the traversal cost
+        # without checking a distinct contract.
+        if (rel.name != "__init__.py"
+                and not any(part in {"content", "composition", "app_contracts"} for part in rel.parts)
+                and rel.name not in {"bootstrap.py", "persistence.py"}
+                and not rel.name.startswith("application")):
+            assert not embedded, (
+                f"{rel} embeds concrete Content IDs: {sorted(embedded)}"
+            )
 
 
 def test_peer_extensions_join_generic_registries_without_central_enum_or_simulation_switches():

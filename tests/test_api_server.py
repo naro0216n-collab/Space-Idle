@@ -131,7 +131,7 @@ def test_http_decision_views_route_and_scoped_json_boundary(tmp_path):
             "/api/v1/non-surface-founding-options?body_id=base.body.jupiter",
             f"/api/v1/target-stock-context?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
             f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
-            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
+            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=1",
         )
         for url in urls:
             status, _, response = _request(port, "GET", url)

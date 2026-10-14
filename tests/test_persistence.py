@@ -618,12 +618,24 @@ def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
         "invalid_utf8",
         "non_finite_number",
     )
+    # Envelope syntax/schema errors must fail *before* any Simulation is
+    # composed. Runtime/domain errors still take the real load + validation
+    # path. Rebuilding the full World for malformed JSON only retests setup.
+    envelope_errors = {
+        "unexpected_envelope_field", "invalid_timestamp", "duplicate_json_key",
+        "invalid_utf8", "non_finite_number",
+    }
+
+    def unexpected_factory():
+        pytest.fail("invalid save envelope reached the application factory")
+
     for case in cases:
         path = tmp_path / f"invalid-{case}.json"
         path.write_bytes(baseline)
         _corrupt_saved_snapshot(path, case)
+        factory = unexpected_factory if case in envelope_errors else build_game_application_for_load
         try:
-            load_game(path, build_game_application_for_load)
+            load_game(path, factory)
         except SaveFormatError:
             continue
         pytest.fail(f"load accepted invalid persisted snapshot: {case}")
