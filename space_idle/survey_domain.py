@@ -172,8 +172,9 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
             # target availability and prevents observation of barren cells.
             _require(target.resource_id in sim.inventory.resource_definitions, f"survey target references unknown resource: {key}")
         _require(len(target.thresholds) == 3, f"survey target must define three knowledge thresholds: {key}")
-        _require(all(v >= 0 for v in target.thresholds), f"negative survey threshold: {key}")
-        _require(tuple(sorted(target.thresholds)) == target.thresholds, f"unsorted survey thresholds: {key}")
+        _require(all(v > 0 for v in target.thresholds), f"non-positive survey threshold: {key}")
+        _require(target.thresholds[0] < target.thresholds[1] < target.thresholds[2],
+                 f"non-increasing survey thresholds: {key}")
     facility_owners: dict[DefinitionId, DefinitionId] = {}
     for provider_id, provider in sim.survey.providers.items():
         _require(provider_id == provider.id, f"survey provider key mismatch: {provider_id}")

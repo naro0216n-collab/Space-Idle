@@ -27,7 +27,38 @@ class ScientificExplorationProjectorMixin:
             max(0.0, sim.research.storage_capacity(power_by_location, sim.day) - sim.research.stored_points),
         )
         rows: list[ScientificExplorationRow] = []
+        # One derived index for the query, not a separate Knowledge authority.
+        survey_subjects = sim.surface_knowledge.resource_ids_by_cell
+        observation_counts: dict[tuple, tuple[int, int]] = {}
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
+            observation_key = (
+                definition.observation_body_id,
+                definition.observation_resource_level,
+                definition.observation_attribute_level,
+            )
+            if observation_key not in observation_counts:
+                observed_cells = (
+                    sim.graph.cells_for_body(definition.observation_body_id)
+                    if definition.observation_body_id is not None else ()
+                )
+                missing = sum(
+                    1 for cell in observed_cells
+                    if (
+                        definition.observation_attribute_level > 0 and any(
+                            sim.surface_knowledge.attribute_level(cell.id, attribute)
+                            < definition.observation_attribute_level
+                            for attribute in ("terrain", "environment")
+                        )
+                    ) or (
+                        definition.observation_resource_level > 0 and any(
+                            sim.surface_knowledge.knowledge_level(cell.id, resource_id)
+                            < definition.observation_resource_level
+                            for resource_id in survey_subjects.get(cell.id, ())
+                        )
+                    )
+                )
+                observation_counts[observation_key] = (len(observed_cells), missing)
+            observation_cell_count, observation_cells_with_new_knowledge = observation_counts[observation_key]
             state = service.campaigns.get(definition.id)
             commitment = None
             physical_target = service._physical_target(definition)
@@ -233,6 +264,13 @@ class ScientificExplorationProjectorMixin:
                         "surface_cell" if physical_target.physical_target_cell_id is not None else
                         "non_surface_spatial_node"
                     ),
+                    observation_body_id=(None if definition.observation_body_id is None
+                                         else str(definition.observation_body_id)),
+                    observation_resource_level=int(definition.observation_resource_level),
+                    observation_attribute_level=definition.observation_attribute_level,
+                    observation_estimate_uncertainty_fraction=definition.observation_estimate_uncertainty_fraction,
+                    observation_cell_count=observation_cell_count,
+                    observation_cells_with_new_knowledge=observation_cells_with_new_knowledge,
                     fleet_location_kind=fleet_location_kind,
                     fleet_location_id=fleet_location_id,
                     movement_operations=movement_operations,

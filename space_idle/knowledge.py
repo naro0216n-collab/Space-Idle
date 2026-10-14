@@ -124,12 +124,18 @@ class SurfaceKnowledgeState:
         self.cell_attribute_levels[key] = max(level, self.cell_attribute_levels.get(key, 0))
 
     def observe_body(self, body_id: CelestialBodyId, *, resource_level: KnowledgeLevel,
-                     attribute_level: int = 0) -> None:
+                     attribute_level: int = 0,
+                     observation_source_id: DefinitionId | None = None,
+                     estimate_uncertainty_fraction: float | None = None) -> None:
         """A finite orbital campaign settles one consistent regional observation.
 
         The truth is still owned by World; settlement only improves what the
         player knows. This never creates Survey Intent or RP.
         """
+        if resource_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            if (observation_source_id is None or estimate_uncertainty_fraction is None
+                    or not 0.0 < estimate_uncertainty_fraction <= 1.0):
+                raise ValueError("estimated science observation requires authored uncertainty and source")
         resources_by_cell = self.resource_ids_by_cell
         for cell in self.graph.cells_for_body(body_id):
             if attribute_level:
@@ -137,7 +143,15 @@ class SurfaceKnowledgeState:
                     self.observe_attribute(cell.id, attribute, attribute_level)
             if resource_level is not KnowledgeLevel.UNKNOWN:
                 for resource_id in resources_by_cell.get(cell.id, ()):
-                    self.observe_resource(cell.id, resource_id, resource_level, precision=0.0)
+                    estimate = None
+                    precision = 0.0
+                    if resource_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+                        precision = estimate_uncertainty_fraction
+                        estimate = self._estimated_potential_from_observation(
+                            cell.id, resource_id, str(observation_source_id), precision
+                        )
+                    self.observe_resource(cell.id, resource_id, resource_level,
+                                          precision=precision, estimate=estimate)
 
     @property
     def resource_ids_by_cell(self) -> dict[SurfaceCellId, tuple[DefinitionId, ...]]:
@@ -157,9 +171,23 @@ class SurfaceKnowledgeState:
         current_level = self.knowledge_level(*key)
         if level is KnowledgeLevel.UNKNOWN or current_level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
             return
-        if (level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-                and key not in self.estimated_potential and estimate is None):
-            raise ValueError("estimated observation requires an uncertainty-bearing result")
+        if level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            if not 0.0 < precision <= 1.0 or estimate is None or estimate < 0.0:
+                raise ValueError("estimated observation requires positive uncertainty and an estimate")
+        elif level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL and precision < 0.0:
+            raise ValueError("measurement precision must be nonnegative")
+        # At equal quality, select one observation deterministically instead
+        # of letting the Survey/Science execution order choose the estimate.
+        previous_precision = self.knowledge_precision_fraction.get(key)
+        previous_estimate = self.estimated_potential.get(key)
+        replace_estimate = (
+            level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and
+            (current_level < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+             or previous_precision is None
+             or precision < previous_precision
+             or (precision == previous_precision and previous_estimate is not None
+                 and estimate < previous_estimate))
+        )
         self.knowledge_progress[key] = max(self.progress(*key), target.thresholds[int(level) - 1])
         if level < KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
             # Evidence is settled once; reading it must not re-sample World truth.
@@ -167,10 +195,13 @@ class SurfaceKnowledgeState:
         else:
             self.observed_presence_probability.pop(key, None)
         if level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
-            old_precision = self.knowledge_precision_fraction.get(key)
-            self.knowledge_precision_fraction[key] = precision if old_precision is None else min(old_precision, precision)
-            if level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and key not in self.estimated_potential:
-                self.estimated_potential[key] = max(0.0, estimate)
+            if level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+                self.knowledge_precision_fraction[key] = min(
+                    precision, self.knowledge_precision_fraction.get(key, precision)
+                )
+            elif replace_estimate:
+                self.knowledge_precision_fraction[key] = precision
+                self.estimated_potential[key] = estimate
             if self.knowledge_level(*key) is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
                 self.estimated_potential.pop(key, None)
 
@@ -271,30 +302,28 @@ class SurfaceKnowledgeState:
             observed_false = reliability * (1.0 - prior)
         return observed_true / (observed_true + observed_false)
 
-    def _estimated_potential_for_mode(
-        self,
-        cell_id: SurfaceCellId,
-        resource_id: DefinitionId,
-        provider_id: DefinitionId,
-        mode: SurveyObservationModeSpec,
+    def _estimated_potential_from_observation(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+        source_key: str, uncertainty_fraction: float,
     ) -> float:
-        """Create a stable observation result without exposing static ground truth.
+        """Settle a source-specific estimate once, independently of registration order.
 
-        The uncertainty width is Content-owned. Core only derives a stable signed
-        observation error from the observation identity so results are independent
-        of registration order and survive Save / Load exactly once stored.
+        A measured observation bypasses this estimator and reports World truth.
         """
-
         actual = self.actual_potential(cell_id, resource_id)
-        uncertainty = mode.estimate_uncertainty_fraction
-        if actual <= 0.0 or uncertainty <= 1e-12:
-            return actual
-        digest = sha256(
-            f"{cell_id}\0{resource_id}\0{provider_id}\0{mode.id}".encode("utf-8")
-        ).digest()
+        digest = sha256(f"{cell_id}\0{resource_id}\0{source_key}".encode("utf-8")).digest()
         unit = int.from_bytes(digest[:8], "big") / float((1 << 64) - 1)
         signed_error = (unit * 2.0) - 1.0
-        return max(0.0, actual * (1.0 + signed_error * uncertainty))
+        return max(0.0, actual * (1.0 + signed_error * uncertainty_fraction))
+
+    def _estimated_potential_for_mode(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+        provider_id: DefinitionId, mode: SurveyObservationModeSpec,
+    ) -> float:
+        return self._estimated_potential_from_observation(
+            cell_id, resource_id, f"{provider_id}\0{mode.id}",
+            mode.estimate_uncertainty_fraction,
+        )
 
     def visible_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float | None:
         level = self.knowledge_level(cell_id, resource_id)

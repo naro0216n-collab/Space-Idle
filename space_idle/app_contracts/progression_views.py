@@ -188,6 +188,12 @@ class ScientificExplorationRow:
     origin_id: str
     destination_id: str
     destination_kind: str
+    observation_body_id: str | None
+    observation_resource_level: int
+    observation_attribute_level: int
+    observation_estimate_uncertainty_fraction: float | None
+    observation_cell_count: int
+    observation_cells_with_new_knowledge: int
     fleet_location_kind: str | None
     fleet_location_id: str | None
     movement_operations: tuple[tuple[str, float], ...]

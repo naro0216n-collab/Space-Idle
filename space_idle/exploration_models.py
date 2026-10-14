@@ -77,10 +77,10 @@ class SurveyTarget:
     presence_detection_reliability: float = 0.85
 
     def __post_init__(self) -> None:
-        if len(self.thresholds) != 3 or any(v < 0 for v in self.thresholds):
-            raise ValueError("survey target requires three non-negative knowledge thresholds")
-        if tuple(sorted(self.thresholds)) != self.thresholds:
-            raise ValueError("survey knowledge thresholds must be sorted")
+        if len(self.thresholds) != 3 or any(v <= 0 for v in self.thresholds):
+            raise ValueError("survey target requires three positive knowledge thresholds")
+        if not self.thresholds[0] < self.thresholds[1] < self.thresholds[2]:
+            raise ValueError("survey knowledge thresholds must be strictly increasing")
         if not 0.0 <= self.prior_presence_probability <= 1.0:
             raise ValueError("survey presence probability must be within 0..1")
         if not 0.5 < self.presence_detection_reliability < 1.0:
@@ -113,6 +113,9 @@ class SurveyObservationModeSpec:
             raise ValueError("survey observation mode max knowledge level must be positive")
         if not 0.0 <= self.estimate_uncertainty_fraction <= 1.0:
             raise ValueError("survey estimate uncertainty must be within 0..1")
+        if (self.max_knowledge_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+                and self.estimate_uncertainty_fraction == 0.0):
+            raise ValueError("estimated Survey observations require positive uncertainty")
         if not 0.0 <= self.measurement_precision_fraction <= 1.0:
             raise ValueError("survey measurement precision must be within 0..1")
         if self.minimum_source_units <= 0:

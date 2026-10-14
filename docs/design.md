@@ -689,7 +689,7 @@ Survey CampaignはActivity PriorityとPause / Resumeを持てる。PauseはCampa
 
 ### 14.1 観測情報と物理Worldの区別
 
-Worldが真の地質・地形・代表環境・Resource Potentialを所有し、Knowledgeは観測対象・属性・品質・公開範囲を一意に管理する。観測前のResource値・地質・環境・Site適格性をMapやFounding／Extraction／Power Previewから迂回して開示しない。未知はゼロ・不可能とは別状態で、観測により知り得る推定値と未測定条件を区別する。観測済み情報の品質は単調に改善し、同時SurveyとExplorationで同一Knowledge成果を二重に加算しない。Research Pointおよび運用経験はこれら地理Knowledgeとは別の型・用途のまま維持する。
+Worldが真の地質・地形・代表環境・Resource Potentialを所有し、Knowledgeは観測対象・属性・品質・公開範囲を一意に管理する。観測前のResource値・地質・環境・Site適格性をMapやFounding／Extraction／Power Previewから迂回して開示しない。未知はゼロ・不可能とは別状態で、観測により知り得る推定値と未測定条件を区別する。観測済み情報の品質は単調に改善し、同時SurveyとExplorationで同一Knowledge成果を二重に加算しない。推定結果と観測精度は同じ取得成果として保存し、再観測は品質改善・既知情報の確認であり、観測回数に比例したResource Potentialを加算しない。Research Pointおよび運用経験はこれら地理Knowledgeとは別の型・用途のまま維持する。
 
 ## 15. Location開発とロケーション産業自立
 

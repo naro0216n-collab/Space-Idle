@@ -341,6 +341,11 @@ def test_scientific_exploration_save_load_preserves_fleet_commitment_and_future_
     moon_before = next(row for row in app.query(GetSurfaceMap(str(ids.MOON))).cells
                        if row.id == str(observed_cell))
     assert moon_before.terrain_knowledge_level == 0
+    before_science = _row(app)
+    assert before_science.observation_body_id == str(ids.MOON)
+    assert before_science.observation_cell_count > 0
+    assert before_science.observation_cells_with_new_knowledge > 0
+    assert before_science.observation_resource_level == int(KnowledgeLevel.PRESENCE_PROBABILITY)
     survey_before = capture_state(app._simulation)["survey"]
 
     _advance_outbound_campaign_to_completion(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
@@ -352,6 +357,9 @@ def test_scientific_exploration_save_load_preserves_fleet_commitment_and_future_
                       if row.id == str(observed_cell))
     assert moon_after.terrain_knowledge_level == 1
     assert moon_after.environment_knowledge_level == 1
+    after_science = _row(app)
+    assert after_science.observation_cells_with_new_knowledge == 0
+    assert after_science.observation_cell_count == before_science.observation_cell_count
     assert moon_after.terrain and "terrain_factor" not in dict(moon_after.terrain)
     assert all(row.knowledge_level >= 1 and row.visible_potential is None
                and 0 <= row.presence_probability <= 1 for row in moon_after.resources)
@@ -864,3 +872,93 @@ def test_crewed_exploration_keeps_population_and_onboard_resources_until_physica
     assert loaded_mission.phase.value == 'complete'
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(sim)
+
+
+def test_science_and_survey_estimates_share_monotone_order_independent_knowledge(tmp_path):
+    """An estimated science payload is a real observation, not an RP-only flag."""
+    subject = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    resource = ids.VOLATILE_BEARING_MATERIAL
+    science_id = ids.CISLUNAR_SCIENCE_EXPLORATION
+    science_precision = 0.25
+    survey_precision = 0.35
+    outputs = []
+    for science_first in (True, False):
+        app = build_game_application()
+        sim = app._simulation
+        sim.scientific_exploration.definitions[science_id] = replace(
+            sim.scientific_exploration.definitions[science_id],
+            observation_resource_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+            observation_estimate_uncertainty_fraction=science_precision,
+        )
+        validate_simulation_configuration(sim)
+        knowledge = sim.surface_knowledge
+        survey_mode = next(
+            mode for mode in sim.survey.providers[ids.ORBITAL_RESOURCE_MAPPING_PROVIDER].observation_modes
+            if mode.max_knowledge_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+        )
+        assert survey_mode.estimate_uncertainty_fraction == survey_precision
+        def science():
+            _seed_exploration_movement_resources(app)
+            app.execute(StartScientificExploration(str(science_id)))
+            app.execute(AssignExplorationFleet(
+                str(science_id), str(ids.REUSABLE_ORBITAL_CARGO_TUG),
+            ))
+            app.execute(AdvanceTime(2))
+            _advance_outbound_campaign_to_completion(app, science_id)
+            assert sim.scientific_exploration.campaigns[science_id].research_points_awarded > 0
+        def survey():
+            knowledge.settle_survey_work(
+                subject, resource, knowledge.targets[(subject, resource)].thresholds[1],
+                KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+                ids.ORBITAL_RESOURCE_MAPPING_PROVIDER, survey_mode,
+            )
+        if science_first:
+            science()
+            survey()
+        else:
+            survey()
+            science()
+        assert knowledge.knowledge_level(subject, resource) is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+        assert knowledge.visible_potential_precision_fraction(subject, resource) == pytest.approx(science_precision)
+        assert knowledge.visible_potential(subject, resource) is not None
+        assert sim.survey.campaigns == {}
+        outputs.append(capture_state(sim)["surface_knowledge"])
+        validate_runtime_state(sim)
+        # The observed estimate and its uncertainty survive serialization.
+        path = tmp_path / f"estimate-{science_first}.json"
+        save_game(app, path)
+        loaded, _ = load_game(path, build_game_application_for_load)
+        assert capture_state(loaded._simulation)["surface_knowledge"] == outputs[-1]
+    assert outputs[0] == outputs[1]
+
+    with pytest.raises(ValueError, match="uncertainty"):
+        replace(sim.scientific_exploration.definitions[science_id],
+                observation_estimate_uncertainty_fraction=0.0)
+
+
+def test_knowledge_estimate_tiebreak_and_positive_threshold_contract():
+    from space_idle.exploration_models import SurveyTarget
+    from space_idle.shared import SurfaceCellId
+    with pytest.raises(ValueError, match="positive"):
+        SurveyTarget(SurfaceCellId("test.surface"), DefinitionId("test.resource"), (0.0, 1.0, 2.0))
+    with pytest.raises(ValueError, match="strictly"):
+        SurveyTarget(SurfaceCellId("test.surface"), DefinitionId("test.resource"), (1.0, 1.0, 2.0))
+
+    subject, resource = ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.METAL_ORE
+    # One real World definition suffices: the test varies independent
+    # observation State, not scenario setup or World registration.
+    from space_idle.knowledge import SurfaceKnowledgeState
+    original = build_game_application()._simulation.surface_knowledge
+    states = []
+    for reversed_order in (False, True):
+        knowledge = SurfaceKnowledgeState(original.targets, original.graph)
+        observations = [(0.4, 0.9), (0.4, 1.1)]
+        for precision, estimate in reversed(observations) if reversed_order else observations:
+            knowledge.observe_resource(
+                subject, resource, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+                precision=precision, estimate=estimate,
+            )
+        assert knowledge.visible_potential_precision_fraction(subject, resource) == 0.4
+        assert knowledge.visible_potential(subject, resource) == 0.9
+        states.append((knowledge.progress(subject, resource), knowledge.visible_potential(subject, resource)))
+    assert states[0] == states[1]

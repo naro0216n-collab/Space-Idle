@@ -17,7 +17,7 @@ from ..spatial import (
     IlluminationField, ThermalField, PhysicalSurface, SpatialGraph, StaticFacetStore,
     SurfaceCellDef, SurfaceTerrain, great_circle_distance_km,
 )
-from ..surface_partition import adjacent_bounds, ring_partition, surface_partition_adjacency, validate_surface_partitions
+from ..surface_partition import adjacent_bounds, ring_partition, surface_partition_adjacency
 
 
 def _ring_count(radius_km: float) -> int:
@@ -253,4 +253,5 @@ def register_complete_surface_world(graph: SpatialGraph, facets: StaticFacetStor
         facets.set(cell_id, field)
     for cell_id, field in climate.items():
         facets.set(cell_id, field)
-    validate_surface_partitions(graph, require_all_solid=True)
+    # Spatial configuration validation checks full area coverage and topology.
+    # Do not validate the unchanged partition again during Content registration.

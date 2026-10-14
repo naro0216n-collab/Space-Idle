@@ -48,12 +48,20 @@ class ScientificExplorationDefinition:
     observation_body_id: CelestialBodyId | None = None
     observation_resource_level: KnowledgeLevel = KnowledgeLevel.UNKNOWN
     observation_attribute_level: int = 0
+    observation_estimate_uncertainty_fraction: float | None = None
 
     def __post_init__(self) -> None:
         if self.observation_body_id is None and (self.observation_resource_level != KnowledgeLevel.UNKNOWN or self.observation_attribute_level):
             raise ValueError("science observation must identify a physical subject")
         if self.observation_attribute_level not in (0, 1, 2):
             raise ValueError("science attribute observation level must be 0, 1 or 2")
+        object.__setattr__(self, "observation_resource_level", KnowledgeLevel(self.observation_resource_level))
+        if self.observation_resource_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            value = self.observation_estimate_uncertainty_fraction
+            if value is None or not 0.0 < value <= 1.0:
+                raise ValueError("estimated science observation requires uncertainty within (0,1]")
+        elif self.observation_estimate_uncertainty_fraction is not None:
+            raise ValueError("science estimate uncertainty is only meaningful for estimated observations")
         if self.origin_id == self.destination_id:
             raise ValueError("scientific exploration endpoints must differ")
         if isinstance(self.destination, MovementEndpoint) and self.destination.operational_node_id is not None:
@@ -1429,6 +1437,8 @@ class ScientificExplorationService:
             definition.observation_body_id,
             resource_level=definition.observation_resource_level,
             attribute_level=definition.observation_attribute_level,
+            observation_source_id=definition.id,
+            estimate_uncertainty_fraction=definition.observation_estimate_uncertainty_fraction,
         )
 
     def _complete_at_destination(
