@@ -154,7 +154,9 @@ class ScenarioDefinition:
             )
         if sim.survey is not None:
             for cell_id, resource_id in self.known_surface_resources:
-                sim.survey.initialize_known(cell_id, resource_id)
+                sim.surface_knowledge.initialize_known(cell_id, resource_id)
+                sim.surface_knowledge.observe_attribute(cell_id, "terrain", 2)
+                sim.surface_knowledge.observe_attribute(cell_id, "environment", 2)
         sim.technology.replace(set(self.completed_technologies))
         # Initial intent goes through the same capability and Technology
         # eligibility used by later Application Commands; Scenario does not

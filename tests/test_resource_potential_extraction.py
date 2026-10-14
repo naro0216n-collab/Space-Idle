@@ -50,14 +50,14 @@ def test_extraction_requires_content_defined_knowledge_without_mutating_static_p
         for cell_id, cell in sim.graph.surface_cells.items()
     }
 
-    sim.survey.knowledge_progress[key] = 0.0
+    sim.surface_knowledge.knowledge_progress[key] = 0.0
     unknown = _resource_snapshot(sim, ids.METAL_ORE)
     assert unknown.static_opportunity > 0.0
     assert unknown.effective_opportunity == 0.0
     assert unknown.knowledge_blocked_cell_count == 1
     assert unknown.output_t_per_day == 0.0
 
-    sim.survey.initialize_known(*key)
+    sim.surface_knowledge.initialize_known(*key)
     known = _resource_snapshot(sim, ids.METAL_ORE)
     assert known.static_opportunity == unknown.static_opportunity
     assert known.effective_opportunity > 0.0
@@ -163,9 +163,9 @@ def test_application_queries_expose_surface_knowledge_and_extraction_decision_st
     industrial = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL))
     metal = next(row for row in industrial.resources if row.resource_id == str(ids.METAL_ORE))
     sim = app._simulation
-    assert metal.knowledge_level == sim.survey.knowledge_level(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
-    assert metal.visible_potential == sim.survey.visible_potential(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
-    assert metal.visible_potential_precision_fraction == sim.survey.visible_potential_precision_fraction(
+    assert metal.knowledge_level == sim.surface_knowledge.knowledge_level(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
+    assert metal.visible_potential == sim.surface_knowledge.visible_potential(ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE)
+    assert metal.visible_potential_precision_fraction == sim.surface_knowledge.visible_potential_precision_fraction(
         ids.EARTH_CELL_INDUSTRIAL, ids.METAL_ORE
     )
 

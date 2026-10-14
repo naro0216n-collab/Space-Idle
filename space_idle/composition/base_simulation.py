@@ -20,6 +20,7 @@ from ..storage import StorageService
 from ..surface_infrastructure import SurfaceInfrastructureService
 from ..spatial_claims import SurfaceCellClaimRegistry
 from ..survey import ExtractionService, SurveyService
+from ..knowledge import SurfaceKnowledgeState
 from ..technology import TechnologyState
 from ..scientific_exploration import ScientificExplorationService
 from ..shared import DefinitionId, EntityId, SpatialNodeId
@@ -103,7 +104,8 @@ def build_base_simulation(
     surface_infrastructure = SurfaceInfrastructureService(
         graph, facilities, service_capacity_registry
     )
-    survey = SurveyService(build_survey_targets(graph), build_survey_providers(), facilities, graph, transport, technology)
+    knowledge = SurfaceKnowledgeState(build_survey_targets(graph), graph, terrain_overview_resolution=0.5)
+    survey = SurveyService(knowledge.targets, build_survey_providers(), facilities, graph, transport, technology, knowledge)
 
     storage = StorageService(authored.storage, inventory, facilities)
 
@@ -124,7 +126,7 @@ def build_base_simulation(
         service_capacity_registry=service_capacity_registry,
         procurement_wait_days=procurement_wait_days(),
         surface_infrastructure=surface_infrastructure,
-        knowledge_requirement_failures=survey.knowledge_requirement_failures,
+        knowledge_requirement_failures=knowledge.knowledge_requirement_failures,
         technology_state=technology,
         construction_resource_providers=build_construction_resource_providers(),
         spatial_recipes=build_spatial_development_recipes(),
@@ -136,7 +138,7 @@ def build_base_simulation(
     founding = OperationalNodeFoundingService(
         build_deployment_recipes(), facilities, inventory, power, transport, storage,
         service_capacity_registry,
-        knowledge_requirement_failures=survey.knowledge_requirement_failures,
+        knowledge_requirement_failures=knowledge.knowledge_requirement_failures,
         surface_cell_claim_registry=surface_cell_claim_registry,
     )
     maintenance = FacilityMaintenanceService(facilities, inventory)
@@ -214,6 +216,7 @@ def build_base_simulation(
     scientific_exploration = ScientificExplorationService(
         build_scientific_exploration_definitions(),
         facilities, inventory, power, transport, research, service_capacity_registry, population, technology,
+        surface_knowledge=knowledge,
     )
     transport.register_fleet_commitment_owner_resolver(
         'passenger_transfer', lambda owner_id: owner_id in population.transfer_orders,
@@ -224,7 +227,7 @@ def build_base_simulation(
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
         projects=projects, technology=technology, founding=founding,
         service_capacity_registry=service_capacity_registry, population=population,
-        research=research, survey=survey, extraction=extraction,
+        research=research, survey=survey, surface_knowledge=knowledge, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,
         surface_infrastructure=surface_infrastructure,
     )

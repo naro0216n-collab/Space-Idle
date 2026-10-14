@@ -459,7 +459,7 @@ Applicationがresolved provider / observation modeと実際のFacility / Vehicle
 
 Map Layerは代表気候・Environment、Knowledge、Resource Potential、Location territory、Movement accessibility等を切り替え、全情報を常時重ねない。選択Cell Inspectorでは判断情報を統合する。
 
-Presence probability、Estimated Potential + uncertainty、Measured Potential、goal Knowledge Level、current Knowledge Levelを区別し、Knowledge進展をResource量の増減のように表現しない。
+Presence probability、Estimated Potential + uncertainty、Measured Potential、goal Knowledge Level、current Knowledge Levelを区別し、Knowledge進展をResource量の増減のように表現しない。初期観測の存在確率は観測装置の検出信頼度・事前分布・実際の観測結果から導出し、単なる事前確率の再表示としない。Cellの地形・環境は属性別Knowledge Levelに応じて公開し、概略観測では幅を持つ区間、測定済みでは精密な数値とする。設立用Vehicle・Package・Resource・設備構成は地形測定前も表示し、現地依存のPower見込みや精密Site条件と区別する。Site環境条件が未測定の計画候補は、真値由来のblockerを表示せず「現地条件未確認・試行可能・成立保証なし」を区別して示す。必要なKnown Technology、Fleet、Resource等の確定blockerは引き続き表示する。
 
 Survey Inspectorではselected scope、Resource scope、goal、completed / remaining target、resolved provider / observation mode、Fleet commitment、estimated completion、blocker、strategic alternativesを確認できるようにする。
 

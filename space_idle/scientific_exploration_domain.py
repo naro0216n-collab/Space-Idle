@@ -105,6 +105,11 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition.prerequisite_technologies.issubset(ctx.known_technologies),
                  f"scientific exploration references unknown Technology: {definition_id}")
         graph = sim.graph
+        if definition.observation_body_id is not None:
+            _require(definition.observation_body_id in graph.bodies,
+                     f"science observation references unknown Body: {definition_id}")
+            _require(bool(graph.cells_for_body(definition.observation_body_id)),
+                     f"science observation references body without Surface Cells: {definition_id}")
         _require(definition.origin_id in nodes or graph.has_operational_node(definition.origin_id),
                  f"scientific exploration origin is not a configured spatial context: {definition_id}")
         _require(definition.destination_id in nodes or definition.destination_id in graph.surface_cells,

@@ -31,20 +31,24 @@ from space_idle.founding import (
     NonSurfaceOperationalNodeTargetSpec,
 )
 from space_idle.facilities import FacilityDef
+from space_idle.exploration_models import KnowledgeLevel
 from space_idle.power import FixedGeneration, PowerSpec
 from space_idle.storage import StorageProviderSpec
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
-from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
+from space_idle.spatial import SpatialNodeDef, SpatialNodeKind, ThermalField
+from space_idle.site import FacetValueRange, SiteRequirements
 from space_idle.spatial_claims import SurfaceCellClaim
 
 
 def _survey_cell_to_l2(sim, cell_id):
-    target = sim.survey.targets[(cell_id, ids.MINERAL_FEEDSTOCK)]
-    key = (target.cell_id, target.resource_id)
-    sim.survey.knowledge_progress[key] = target.thresholds[1]
-    sim.survey.estimated_potential[key] = sim.survey.actual_potential(*key) * 0.9
-    sim.survey.knowledge_precision_fraction[key] = 0.35
-    assert sim.survey.knowledge_level(cell_id, ids.MINERAL_FEEDSTOCK) >= 2
+    # This test is about Founding settlement, not Survey capacity. Seed the
+    # required prior observation through Knowledge's canonical settlement API.
+    sim.surface_knowledge.observe_resource(
+        cell_id, ids.MINERAL_FEEDSTOCK, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        precision=0.35,
+        estimate=sim.surface_knowledge.actual_potential(cell_id, ids.MINERAL_FEEDSTOCK) * 0.9,
+    )
+    assert sim.surface_knowledge.knowledge_level(cell_id, ids.MINERAL_FEEDSTOCK) >= 2
 
 
 def _surface_target(sim, body_id, cell_id):
@@ -109,7 +113,7 @@ def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowl
 
     earth_cell = ids.EARTH_CELL_COASTAL
     for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER):
-        sim.survey.knowledge_progress[(earth_cell, resource_id)] = 0.0
+        sim.surface_knowledge.knowledge_progress[(earth_cell, resource_id)] = 0.0
     development_failures = sim.projects.surface_cell_development_failures(
         ids.EARTH, earth_cell, sim.day
     )
@@ -120,7 +124,7 @@ def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowl
     for resource_id in (
         ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.VOLATILE_BEARING_MATERIAL
     ):
-        sim.survey.knowledge_progress[(lunar_cell, resource_id)] = 0.0
+        sim.surface_knowledge.knowledge_progress[(lunar_cell, resource_id)] = 0.0
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT,
         _surface_target(sim, ids.MOON, lunar_cell),
@@ -356,6 +360,43 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         stock_before_cancel + staged
     )
 
+def test_surface_founding_preview_does_not_expose_unmeasured_site_truth():
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    recipe_id = DefinitionId("test.founding.observation_eligibility")
+    base = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    physical_condition = FacetValueRange(
+        ThermalField, "nominal_temperature_k", "environment:thermal_eligibility",
+        "the equipment cannot operate at this temperature", minimum=10000.0,
+    )
+    sim.founding.deployment_recipes[recipe_id] = replace(
+        base, id=recipe_id,
+        target_requirements=SiteRequirements(environment=(physical_condition,)),
+    )
+    target = sim.founding.surface_target_spec(ids.MOON, cell)
+    physical_blockers = sim.founding.planning_failures(
+        ids.LUNAR_ORBIT, target, recipe_id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    )
+    assert any(row.code == "target:environment:thermal_eligibility" for row in physical_blockers)
+
+    def option():
+        surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell),)))
+        row = next(item for item in surface.cells if item.id == str(cell))
+        return next(item for item in row.foundation_options
+                    if item.deployment_recipe_id == str(recipe_id)
+                    and item.staging_node_id == str(ids.LUNAR_ORBIT)
+                    and item.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
+
+    unknown = option()
+    assert unknown.site_knowledge_unverified
+    assert all(blocker.code != "target:environment:thermal_eligibility" for blocker in unknown.blockers)
+    sim.surface_knowledge.observe_attribute(cell, "environment", 2)
+    measured = option()
+    assert not measured.site_knowledge_unverified
+    assert any(blocker.code == "target:environment:thermal_eligibility" for blocker in measured.blockers)
+
+
 def test_founding_target_preflight_uses_facility_site_and_powered_inventory_contracts_atomically():
     app = build_game_application()
     sim = app._simulation
@@ -483,7 +524,11 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     assert len(comparison_keys) == len(surface.founding_comparison_axes)
     option_values = {value.axis_key: value.number_value for value in option.comparison_values}
     assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}
-    assert option_values["terrain_factor"] == pytest.approx(dict(cell.terrain)["terrain_factor"])
+    # Undiscovered physical terrain must not be available through the Founding
+    # comparison even though the true World remains executable.
+    assert cell.terrain_knowledge_level == 0
+    assert not cell.terrain
+    assert option_values["terrain_factor"] is None
 
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):

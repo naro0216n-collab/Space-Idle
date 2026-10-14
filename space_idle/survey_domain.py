@@ -19,29 +19,8 @@ from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 
 def capture_survey(sim: Any) -> dict[str, Any]:
     if sim.survey is None:
-        return {"knowledge_progress": [], "knowledge_precision_fraction": [], "estimated_potential": [], "campaigns": [], "campaign_counter": 0, "provider_assignment_counter": 0, "provider_assignments": []}
+        return {"campaigns": [], "campaign_counter": 0, "provider_assignment_counter": 0, "provider_assignments": []}
     return {
-        "knowledge_progress": [
-            {"cell_id": str(cell), "resource_id": str(res), "progress": progress}
-            for (cell, res), progress in sorted(
-                sim.survey.knowledge_progress.items(),
-                key=lambda x: (str(x[0][0]), str(x[0][1])),
-            )
-        ],
-        "knowledge_precision_fraction": [
-            {"cell_id": str(cell), "resource_id": str(res), "precision_fraction": precision}
-            for (cell, res), precision in sorted(
-                sim.survey.knowledge_precision_fraction.items(),
-                key=lambda x: (str(x[0][0]), str(x[0][1])),
-            )
-        ],
-        "estimated_potential": [
-            {"cell_id": str(cell), "resource_id": str(res), "estimated_potential": estimate}
-            for (cell, res), estimate in sorted(
-                sim.survey.estimated_potential.items(),
-                key=lambda x: (str(x[0][0]), str(x[0][1])),
-            )
-        ],
         "campaigns": [
             {
                 "id": str(c.id),
@@ -76,35 +55,9 @@ def capture_survey(sim: Any) -> dict[str, Any]:
     }
 
 
-def _restore_knowledge_map(
-    value: Any, metric_field: str, metric_label: str
-) -> dict[tuple[SurfaceCellId, DefinitionId], float]:
-    fields = {"cell_id", "resource_id", metric_field}
-    restored: dict[tuple[SurfaceCellId, DefinitionId], float] = {}
-    for index, raw in enumerate(decode_list(value, f"survey {metric_label}")):
-        row = require_fields(raw, fields, f"survey {metric_label}[{index}]")
-        key = (
-            SurfaceCellId(decode_str(row["cell_id"], "survey cell_id")),
-            DefinitionId(decode_str(row["resource_id"], "survey resource_id")),
-        )
-        if key in restored:
-            raise ValueError(f"duplicate survey {metric_label} key: {key}")
-        restored[key] = decode_float(row[metric_field], f"survey {metric_label}")
-    return restored
-
-
 def restore_survey(sim: Any, data: dict[str, Any]) -> None:
     if sim.survey is None:
         return
-    sim.survey.knowledge_progress = _restore_knowledge_map(
-        data["knowledge_progress"], "progress", "progress"
-    )
-    sim.survey.knowledge_precision_fraction = _restore_knowledge_map(
-        data["knowledge_precision_fraction"], "precision_fraction", "precision_fraction"
-    )
-    sim.survey.estimated_potential = _restore_knowledge_map(
-        data["estimated_potential"], "estimated_potential", "estimated_potential"
-    )
     sim.survey.campaigns.clear()
     sim.survey.provider_assignments.clear()
     sim.survey._campaign_counter = decode_int(data["campaign_counter"], "survey campaign_counter")
@@ -306,31 +259,6 @@ def validate_survey_runtime(sim: Any) -> None:
         sim.survey._provider_assignment_counter, sim.survey.provider_assignments,
         "survey.provider_assignment.", "survey provider assignment",
     )
-    for key, progress in sim.survey.knowledge_progress.items():
-        _require(key in sim.survey.targets, f"knowledge references unknown survey target: {key}")
-        _require(progress >= -1e-9, f"negative survey knowledge progress: {key}")
-        if key in sim.survey.targets:
-            _require(progress <= sim.survey.targets[key].thresholds[-1] + 1e-8, f"survey knowledge exceeds final threshold: {key}")
-    for key, precision in sim.survey.knowledge_precision_fraction.items():
-        _require(key in sim.survey.targets, f"survey precision references unknown target: {key}")
-        _require(0.0 <= precision <= 1.0, f"survey precision outside 0..1: {key}")
-        _require(sim.survey.knowledge_level(*key) >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, f"survey precision exists before estimated knowledge: {key}")
-    for key, estimate in sim.survey.estimated_potential.items():
-        _require(key in sim.survey.targets, f"survey estimate references unknown target: {key}")
-        _require(estimate >= 0.0, f"negative survey estimated potential: {key}")
-        _require(sim.survey.knowledge_level(*key) >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL, f"survey estimate exists before estimated knowledge: {key}")
-    for key in sim.survey.targets:
-        level = sim.survey.knowledge_level(*key)
-        if level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
-            _require(
-                key in sim.survey.knowledge_precision_fraction,
-                f"Survey Knowledge lacks uncertainty/precision metadata: {key}",
-            )
-        if level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
-            _require(
-                key in sim.survey.estimated_potential,
-                f"estimated Survey Knowledge lacks an estimated potential value: {key}",
-            )
     provider_node_keys: set[tuple[DefinitionId, SpatialNodeId, DefinitionId]] = set()
     for assignment_id, assignment in sim.survey.provider_assignments.items():
         _require(assignment.id == assignment_id, f"Survey Provider assignment key mismatch: {assignment_id}")

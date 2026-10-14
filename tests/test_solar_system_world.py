@@ -371,4 +371,4 @@ def test_geographic_diversity_and_survey_eligibility_do_not_depend_on_actual_dep
         assert row.knowledge_level == 0
         assert row.presence_probability is None
         assert row.visible_potential is None
-    assert sim.survey.actual_potential(barren.id, resource) == 0
+    assert sim.surface_knowledge.actual_potential(barren.id, resource) == 0

@@ -126,7 +126,7 @@ def _make_nontrivial_state():
         )
     )
     target = sim.survey.targets[survey_key]
-    sim.survey.knowledge_progress[survey_key] = target.thresholds[0] / 2.0
+    sim.surface_knowledge.knowledge_progress[survey_key] = target.thresholds[0] / 2.0
 
     target_id = app.execute(SetTargetStock(str(LEO), str(ids.MACHINERY), 1.0, priority=4)).created_id
     assert target_id is not None
@@ -352,10 +352,10 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     movement_geometry_before = sim.transport.movement_geometry(movement_before[0].id)
     assert infrastructure_before is not None
     assert capture_state(sim) == before
-    assert before["survey"]["knowledge_progress"]
+    assert before["surface_knowledge"]["knowledge_progress"]
     assert all(
         "cell_id" in row and "resource_id" in row and "location_id" not in row
-        for row in before["survey"]["knowledge_progress"]
+        for row in before["surface_knowledge"]["knowledge_progress"]
     )
 
     path = tmp_path / "derived-projections.json"

@@ -124,15 +124,15 @@ def test_survey_method_technology_blocks_progress_without_discarding_campaign():
         unlock.kind == "survey_mode" and unlock.id == f"{provider_id}:{mode_id}"
         for row in app.query(GetResearch()).items for unlock in row.unlocks
     )
-    before = sim.survey.progress(cell_id, resource_id)
+    before = sim.surface_knowledge.progress(cell_id, resource_id)
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(cell_id, resource_id) == before
+    assert sim.surface_knowledge.progress(cell_id, resource_id) == before
 
     sim.technology.completed.update(mode.prerequisite_technologies)
     candidate, blockers = sim.survey.resolve_campaign_candidate(campaign, day=sim.day)
     assert blockers == () and candidate is not None
     app.execute(AdvanceTime(1))
-    progress = sim.survey.progress(cell_id, resource_id)
+    progress = sim.surface_knowledge.progress(cell_id, resource_id)
     assert progress > before
     # Revoking a completed Technology directly is not a supported gameplay
     # transition. Pausing/resuming a Campaign is covered by its owning tests.

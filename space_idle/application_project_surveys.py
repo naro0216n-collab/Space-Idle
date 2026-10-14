@@ -216,14 +216,14 @@ class SurveyProgressionProjectorMixin:
         for cell_id, resource_id in campaign.target_pairs():
             target = sim.survey.targets[(cell_id, resource_id)]
             threshold = target.thresholds[int(campaign.goal_knowledge_level) - 1]
-            progress = sim.survey.progress(cell_id, resource_id)
-            complete = sim.survey.knowledge_level(cell_id, resource_id) >= campaign.goal_knowledge_level
+            progress = sim.surface_knowledge.progress(cell_id, resource_id)
+            complete = sim.surface_knowledge.knowledge_level(cell_id, resource_id) >= campaign.goal_knowledge_level
             if not complete:
                 remaining_progress += max(0.0, threshold - progress)
             target_rows.append(SurveyCampaignTargetRow(
                 cell_id=str(cell_id),
                 resource_id=str(resource_id),
-                current_knowledge_level=int(sim.survey.knowledge_level(cell_id, resource_id)),
+                current_knowledge_level=int(sim.surface_knowledge.knowledge_level(cell_id, resource_id)),
                 goal_knowledge_level=int(campaign.goal_knowledge_level),
                 progress=progress,
                 target_threshold=threshold,
@@ -357,11 +357,11 @@ class SurveyProgressionProjectorMixin:
                 location_id=None if owner is None else str(owner),
                 resource_id=str(resource_id),
                 resource_name=self._resource_name(resource_id),
-                progress=sim.survey.progress(cell_id, resource_id),
-                knowledge_level=int(sim.survey.knowledge_level(cell_id, resource_id)),
-                presence_probability=sim.survey.visible_presence_probability(cell_id, resource_id),
-                visible_potential=sim.survey.visible_potential(cell_id, resource_id),
-                visible_potential_precision_fraction=sim.survey.visible_potential_precision_fraction(cell_id, resource_id),
+                progress=sim.surface_knowledge.progress(cell_id, resource_id),
+                knowledge_level=int(sim.surface_knowledge.knowledge_level(cell_id, resource_id)),
+                presence_probability=sim.surface_knowledge.visible_presence_probability(cell_id, resource_id),
+                visible_potential=sim.surface_knowledge.visible_potential(cell_id, resource_id),
+                visible_potential_precision_fraction=sim.surface_knowledge.visible_potential_precision_fraction(cell_id, resource_id),
             ))
         campaign_rows = tuple(
             self._survey_campaign_row(campaign, execution_plan, service_plan, powers)

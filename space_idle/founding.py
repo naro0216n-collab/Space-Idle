@@ -886,23 +886,25 @@ class OperationalNodeFoundingService:
     @staticmethod
     def _installation_requirement_failures(
         facilities: FacilityBook, facility_ids: tuple[EntityId, ...], day: int
-    ) -> tuple[str, ...]:
-        failures: list[str] = []
+    ) -> tuple[FoundingBlocker, ...]:
+        failures: list[FoundingBlocker] = []
         for facility_id in facility_ids:
             facility = facilities.facilities[facility_id]
             definition = facilities.definitions[facility.definition_id]
             context_id = facilities.facility_environment_context(facility)
-            failures.extend(
-                f"{facility.definition_id}:{failure.code}:{failure.detail}"
-                for failure in evaluate_site_requirements(
-                    definition.installation_requirements,
-                    facility.operational_node_id,
-                    day,
-                    facilities.environment,
-                    facilities,
-                    environment_context_id=context_id,
-                )
-            )
+            environment_codes = {condition.code for condition in definition.installation_requirements.environment}
+            for failure in evaluate_site_requirements(
+                definition.installation_requirements,
+                facility.operational_node_id,
+                day,
+                facilities.environment,
+                facilities,
+                environment_context_id=context_id,
+            ):
+                failures.append(FoundingBlocker(
+                    "facility_environment" if failure.code in environment_codes else "facility_installation",
+                    f"{facility.definition_id}:{failure.code}:{failure.detail}",
+                ))
         return tuple(failures)
 
     def _target_settlement_failures(
@@ -983,12 +985,9 @@ class OperationalNodeFoundingService:
         ):
             failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
 
-        failures.extend(
-            FoundingBlocker("facility_installation", detail)
-            for detail in self._installation_requirement_failures(
-                preview_facilities, facility_ids, day
-            )
-        )
+        failures.extend(self._installation_requirement_failures(
+            preview_facilities, facility_ids, day
+        ))
 
         target_power = preview_power.snapshot(target_node_id, preview_facilities, day)
         preview_storage.refresh_node(target_node_id, day, target_power)

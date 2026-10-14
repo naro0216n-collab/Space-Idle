@@ -596,7 +596,7 @@
     const rows=option.deployed_facilities||[];
     if(!rows.length)return '';
     return `<div class="cell-sub">設立後に配置される設備（公称値・稼働条件別）</div>${rows.map(row=>{
-      const power=`電源 ${fmt(row.nominal_power_generation_mw,2)} MW / 稼働負荷 ${fmt(row.nominal_power_load_mw,2)} MW${Number(row.nominal_power_standby_load_mw)>0?` / 停止負荷 ${fmt(row.nominal_power_standby_load_mw,2)} MW`:``}`;
+      const power=`電源 ${row.nominal_power_generation_mw==null?'未測定':`${fmt(row.nominal_power_generation_mw,2)} MW`} / 稼働負荷 ${row.nominal_power_load_mw==null?'未測定':`${fmt(row.nominal_power_load_mw,2)} MW`}${Number(row.nominal_power_standby_load_mw)>0?` / 停止負荷 ${fmt(row.nominal_power_standby_load_mw,2)} MW`:``}`;
       const storage=(row.storage_capacity_t||[]).map(([pool,value])=>`${esc(pool)} ${fmt(value,2)} t`).join(' · ');
       const services=(row.service_capacity_per_day||[]).map(([name,value])=>`${esc(name)} ${fmt(value,2)}/日`).join(' · ');
       const construction=row.construction_work_per_day>0?` · 施工 ${fmt(row.construction_work_per_day,2)}/日`:'';
@@ -1178,6 +1178,13 @@
     return true;
   }
 
+  function publicTerrainNumber(terrain, key){
+    if(terrain[key]!=null)return fmt(terrain[key],2);
+    if(terrain[key+'_min']!=null && terrain[key+'_max']!=null)
+      return `${fmt(terrain[key+'_min'],2)} 〜 ${fmt(terrain[key+'_max'],2)} (概略)`;
+    return '未観測';
+  }
+
   function renderFoundingCandidateInspector(id){
     const row=foundationComparisonCandidate(id);if(!row)return false;
     const axes=state.surfaceMap?.founding_comparison_axes||[];
@@ -1192,10 +1199,10 @@
       ['必要機数',`${fmt(row.required_units,0)} 機`],
       ['搭載量',`${fmt(row.payload_t,2)} t`],
       ['1機あたり搭載量',`${fmt(row.payload_t_per_unit,2)} t`],
-      ['地形係数',terrain.terrain_factor==null?'—':fmt(terrain.terrain_factor,2)],
-      ['地盤支持力',terrain.bearing_capacity_factor==null?'—':fmt(terrain.bearing_capacity_factor,2)],
-      ['粉塵負荷',terrain.dust_factor==null?'—':fmt(terrain.dust_factor,2)],
-      ['斜面負荷',terrain.slope_factor==null?'—':fmt(terrain.slope_factor,2)],
+      ['地形係数',publicTerrainNumber(terrain,'terrain_factor')],
+      ['地盤支持力',publicTerrainNumber(terrain,'bearing_capacity_factor')],
+      ['粉塵負荷',publicTerrainNumber(terrain,'dust_factor')],
+      ['斜面負荷',publicTerrainNumber(terrain,'slope_factor')],
     ]);
     setInspector(`設立候補 · ${row.target_cell_name}`,
       section('候補状態',kv([
@@ -1231,7 +1238,7 @@
       const transit=option.transit_days==null?'到達不可':`${fmt(option.transit_days,0)}日`;
       const resourceHeading=option.transit_days==null?'最低展開資材':'出発拠点で必要な資源';
       const unresolvedMovement=option.transit_days==null?'<div class="cell-sub">移動経路が未成立のため、運用資源を含む出発時総量は未確定です。</div>':'';
-      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${transit} · 搭載量 ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">${resourceHeading}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${foundingDeploymentHtml(option)}${unresolvedMovement}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}${compareActions}<div class="form-row"><label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>この地点へ拠点設立を開始</button></div>`;
+      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.staging_node_id))} · ${esc(option.recipe_display_name)} · ${esc(option.vehicle_display_name)}</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">準備工数 ${fmt(option.preparation_work,0)} · 輸送 ${transit} · 搭載量 ${fmt(option.payload_t,2)} t (${fmt(option.payload_t_per_unit,2)} t/機 × ${fmt(option.required_units,0)}機)</div><div class="cell-sub">${resourceHeading}</div><div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${foundingDeploymentHtml(option)}${option.site_knowledge_unverified?'<div class="cell-sub">現地環境の適格性は未測定です。計画開始は試行可能ですが、物理条件により成立しない場合があります。</div>':''}${unresolvedMovement}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}${compareActions}<div class="form-row"><label>拠点名<input type="text" data-new-location-name data-draft-key="${esc(scope)}:name" data-structured-draft data-draft-scope="${esc(scope)}" placeholder="新規地表拠点"></label></div>${foundingPlanControls(scope,option,disabled)}<button type="button" class="primary" data-surface-found data-staging-node-id="${esc(option.staging_node_id)}" data-recipe-id="${esc(option.deployment_recipe_id)}" data-vehicle-id="${esc(option.vehicle_definition_id)}" data-cell-id="${esc(cell.id)}" data-body-id="${esc(cell.body_id)}" ${disabled?'disabled':''}>この地点へ拠点設立を開始</button></div>`;
     }).join('')||'<div class="empty-state">この地域へ利用可能な拠点設立候補がありません。</div>';
 
     const development=(cell.development_options||[]).map((option)=>{
@@ -1239,12 +1246,12 @@
       const disabled=plan.disabled;
       const infra=option.projected_surface_infrastructure_fulfillment==null?'—':pct(option.projected_surface_infrastructure_fulfillment);
       const limiting=(option.limiting_factors||[]).map((factor)=>`<span class="badge warn">${esc(A.constraintSummary(factor))}</span>`).join(' ');
-      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.location_id))} へ編入</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · 予測地表インフラ充足率 ${infra}</div>${option.projected_surface_infrastructure_demand==null?'':`<div class="cell-sub">予測インフラ需要 ${fmt(option.projected_surface_infrastructure_demand,2)}</div>`}<div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${limiting?`<div class="cell-sub">主な制約: ${limiting}</div>`:''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}${surfacePlanControls(`development:${cell.id}:${option.location_id}`,option,disabled)}<button type="button" class="primary" data-surface-develop="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域の開発案件を作成</button></div>`;
+      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(locationName(option.location_id))} へ編入</span><span class="badge ${disabled?'warn':'ok'}">${active?'案件進行中':esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · 予測地表インフラ充足率 ${infra}</div>${option.projected_surface_infrastructure_demand==null?'':`<div class="cell-sub">予測インフラ需要 ${fmt(option.projected_surface_infrastructure_demand,2)}</div>`}<div class="surface-resource-list">${tupleResourcesHtml(option.resources)}</div>${limiting?`<div class="cell-sub">主な制約: ${limiting}</div>`:''}${option.site_knowledge_unverified?'<div class="cell-sub">現地環境の適格性は未測定です。計画開始は試行可能ですが、物理条件により成立しない場合があります。</div>':''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${active?`<div class="cell-sub">進行中の案件あり</div>`:''}${surfacePlanControls(`development:${cell.id}:${option.location_id}`,option,disabled)}<button type="button" class="primary" data-surface-develop="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域の開発案件を作成</button></div>`;
     }).join('')||'<div class="empty-state">既存拠点への開発候補なし</div>';
 
     const facilities=(cell.facility_placement_options||[]).map((option)=>{
       const plan=planningOptionState(option,'建設可'),blockers=plan.blockers,disabled=plan.disabled;
-      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'} · 資材準備 ${option.projected_material_readiness_day==null?'未確定':`Day ${fmt(option.projected_material_readiness_day,0)}`}</div><div class="cell-sub">建設資材・所在拠点の在庫と搬入</div>${section('必要資源 / 調達見込み',resourceCards(option.resources))}${section('建設後の公称能力（この地域の環境）',kv([...(Number(option.power_nominal_generation_mw)>0?[['発電公称値',`${fmt(option.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(option.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(option.power_nominal_load_mw,2)} MW`]]:[]),...(Number(option.power_nominal_standby_load_mw)>0?[['停止時Power需要',`${fmt(option.power_nominal_standby_load_mw,2)} MW`]]:[]),...(option.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(option.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(option.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(option.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[])]))}${prospectiveFacilityEffectsHtml(option)}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域へ建設案件を作成</button></div>`;
+      return `<div class="detail-card surface-action-card"><div class="mode-title"><span>${esc(option.display_name)}</span><span class="badge ${blockers.length?'warn':plan.canPlan?'ok':''}">${esc(plan.label)}</span></div><div class="cell-sub">工数 ${fmt(option.construction_required,0)} · ${option.self_deploying?'自己展開':'通常施工'} · 資材準備 ${option.projected_material_readiness_day==null?'未確定':`Day ${fmt(option.projected_material_readiness_day,0)}`}</div><div class="cell-sub">建設資材・所在拠点の在庫と搬入</div>${section('必要資源 / 調達見込み',resourceCards(option.resources))}${section('建設後の公称能力（この地域の環境）',kv([...(Number(option.power_nominal_generation_mw)>0?[['発電公称値',`${fmt(option.power_nominal_generation_mw,2)} MW`]]:[]),...(Number(option.power_nominal_load_mw)>0?[['稼働時Power需要',`${fmt(option.power_nominal_load_mw,2)} MW`]]:[]),...(Number(option.power_nominal_standby_load_mw)>0?[['停止時Power需要',`${fmt(option.power_nominal_standby_load_mw,2)} MW`]]:[]),...(option.process_nominal_throughput_per_day!=null?[['工程公称実行量',`${fmt(option.process_nominal_throughput_per_day,2)} 回/日`]]:[]),...(option.extraction_nominal_capacity_t_per_day!=null?[['採掘設備公称能力',`${fmt(option.extraction_nominal_capacity_t_per_day,2)} t/日`]]:[])]))}${prospectiveFacilityEffectsHtml(option)}${option.site_knowledge_unverified?'<div class="cell-sub">現地環境の適格性は未測定です。計画開始は試行可能ですが、物理条件により成立しない場合があります。</div>':''}${blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:''}${surfacePlanControls(`surface-build:${cell.id}:${option.facility_definition_id}`,option,disabled)}<button type="button" class="primary" data-surface-build="${esc(option.facility_definition_id)}" data-location-id="${esc(option.location_id)}" data-cell-id="${esc(cell.id)}" ${disabled?'disabled':''}>この地域へ建設案件を作成</button></div>`;
     }).join('')||'<div class="empty-state">この地域へ配置可能な位置依存設備はありません。</div>';
 
     const foundationSection=cell.developed?'':section('新拠点設立',foundation);
@@ -1261,12 +1268,13 @@
       ]))+
       foundationSection+foundationComparisonSection+developmentSection+facilitySection+
       section('資源調査情報',surfaceResourcesHtml(cell.resources,cell.id))+
-      section('代表気候・環境条件',environmentHtml(cell.environment))+
+      section('代表気候・環境条件',cell.environment_knowledge_level>=2?environmentHtml(cell.environment):'<div class="cell-sub">'+(cell.environment_knowledge_level?'概略観測済み · 精密数値は未測定':'未観測 · Survey / Scientific Explorationで取得')+'</div>')+
       section('地形',kv([
-        ['地形係数',fmt(terrain.terrain_factor,2)],
-        ['支持力係数',fmt(terrain.bearing_capacity_factor,2)],
-        ['粉塵係数',fmt(terrain.dust_factor,2)],
-        ['傾斜係数',fmt(terrain.slope_factor,2)],
+        ['観測品質',cell.terrain_knowledge_level>=2?'測定済み':cell.terrain_knowledge_level?'概略既知':'未観測'],
+        ['地形係数',publicTerrainNumber(terrain,'terrain_factor')],
+        ['支持力係数',publicTerrainNumber(terrain,'bearing_capacity_factor')],
+        ['粉塵係数',publicTerrainNumber(terrain,'dust_factor')],
+        ['傾斜係数',publicTerrainNumber(terrain,'slope_factor')],
       ]))+
       section('隣接地域',neighbors)
     );

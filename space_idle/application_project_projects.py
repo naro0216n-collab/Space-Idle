@@ -577,7 +577,7 @@ class ProjectProjectorMixin:
                 knowledge_rows = []
                 if sim.survey is not None:
                     for requirement in sim.founding.knowledge_requirements_for_target(target_spec, recipe):
-                        current = sim.survey.knowledge_level(
+                        current = sim.surface_knowledge.knowledge_level(
                             requirement.target_cell_id, requirement.subject_resource_id
                         )
                         knowledge_rows.append(ProjectKnowledgeRequirementRow(

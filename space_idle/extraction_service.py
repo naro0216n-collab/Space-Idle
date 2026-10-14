@@ -192,7 +192,7 @@ class ExtractionService:
             return True
         return (
             self.survey is not None
-            and self.survey.knowledge_level(cell_id, resource_id) >= spec.minimum_knowledge_level
+            and self.survey.knowledge.knowledge_level(cell_id, resource_id) >= spec.minimum_knowledge_level
         )
 
     def knowledge_eligibility_counts(

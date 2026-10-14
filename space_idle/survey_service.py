@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from contextlib import contextmanager
-from hashlib import sha256
 from typing import TYPE_CHECKING, Mapping
 
 from .facilities import FacilityBook
@@ -18,6 +17,7 @@ from .execution_requirements import (
     ExecutionRequirementBundle,
     ServiceCapacityRequirement,
 )
+from .knowledge import SurfaceKnowledgeState
 from .exploration_models import (
     KnowledgeLevel,
     KnowledgeRequirement,
@@ -76,9 +76,7 @@ class SurveyService:
     graph: SpatialGraph
     transport: "TransportService"
     technology_state: TechnologyState
-    knowledge_progress: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
-    knowledge_precision_fraction: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
-    estimated_potential: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    knowledge: SurfaceKnowledgeState = field(default=None)
     campaigns: dict[EntityId, SurveyCampaign] = field(default_factory=dict)
     provider_assignments: dict[EntityId, SurveyProviderAssignmentState] = field(default_factory=dict)
     _campaign_counter: int = 0
@@ -408,7 +406,7 @@ class SurveyService:
     def unfinished_targets(self, campaign: SurveyCampaign) -> tuple[tuple[SurfaceCellId, DefinitionId], ...]:
         return tuple(
             key for key in campaign.target_pairs()
-            if key in self.targets and self.knowledge_level(*key) < campaign.goal_knowledge_level
+            if key in self.targets and self.knowledge.knowledge_level(*key) < campaign.goal_knowledge_level
         )
 
     def _candidate_source_units(
@@ -540,7 +538,7 @@ class SurveyService:
         for key in pairs:
             if key not in self.targets:
                 blockers.append(f"unknown_target:{key[0]}:{key[1]}")
-        if pairs and all(key in self.targets and self.knowledge_level(*key) >= goal for key in pairs):
+        if pairs and all(key in self.targets and self.knowledge.knowledge_level(*key) >= goal for key in pairs):
             blockers.append("knowledge_goal_reached")
         for campaign_id, campaign in self.campaigns.items():
             if campaign_id == exclude_campaign_id or campaign.control_state is SurveyCampaignControlState.COMPLETED:
@@ -691,102 +689,6 @@ class SurveyService:
         if not self.unfinished_targets(campaign):
             campaign.control_state = SurveyCampaignControlState.COMPLETED
 
-    def progress(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
-        key = (cell_id, resource_id)
-        if key not in self.targets:
-            raise KeyError(key)
-        return self.knowledge_progress.get(key, 0.0)
-
-    def knowledge_level(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> KnowledgeLevel:
-        key = (cell_id, resource_id)
-        target = self.targets[key]
-        progress = self.knowledge_progress.get(key, 0.0)
-        level = KnowledgeLevel.UNKNOWN
-        for index, threshold in enumerate(target.thresholds, start=1):
-            if progress + 1e-9 >= threshold:
-                level = KnowledgeLevel(index)
-        return level
-
-    def knowledge_requirement_failures(self, requirement: KnowledgeRequirement) -> tuple[str, ...]:
-        key = (requirement.target_cell_id, requirement.subject_resource_id)
-        if key not in self.targets:
-            return ("knowledge_target_unknown",)
-        actual = self.knowledge_level(*key)
-        if actual < requirement.minimum_level:
-            return (
-                f"knowledge:{requirement.target_cell_id}:{requirement.subject_resource_id}:"
-                f"{int(actual)}/{int(requirement.minimum_level)}",
-            )
-        return ()
-
-    def initialize_known(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
-        key = (cell_id, resource_id)
-        if key not in self.targets:
-            raise KeyError(key)
-        self.knowledge_progress[key] = max(
-            self.knowledge_progress.get(key, 0.0), self.targets[key].thresholds[-1]
-        )
-        self.knowledge_precision_fraction[key] = 0.0
-        self.estimated_potential.pop(key, None)
-        for campaign in self.campaigns.values():
-            if key in campaign.target_pairs():
-                self._settle_campaign_completion(campaign)
-
-    def is_complete(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
-        return self.knowledge_level(cell_id, resource_id) >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL
-
-    def actual_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
-        if (cell_id, resource_id) not in self.targets:
-            raise KeyError((cell_id, resource_id))
-        return float(self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0))
-
-    def visible_presence_probability(
-        self, cell_id: SurfaceCellId, resource_id: DefinitionId
-    ) -> float | None:
-        if self.knowledge_level(cell_id, resource_id) < KnowledgeLevel.PRESENCE_PROBABILITY:
-            return None
-        return self.targets[(cell_id, resource_id)].prior_presence_probability
-
-    def _estimated_potential_for_mode(
-        self,
-        cell_id: SurfaceCellId,
-        resource_id: DefinitionId,
-        provider_id: DefinitionId,
-        mode: SurveyObservationModeSpec,
-    ) -> float:
-        """Create a stable observation result without exposing static ground truth.
-
-        The uncertainty width is Content-owned. Core only derives a stable signed
-        observation error from the observation identity so results are independent
-        of registration order and survive Save / Load exactly once stored.
-        """
-
-        actual = self.actual_potential(cell_id, resource_id)
-        uncertainty = mode.estimate_uncertainty_fraction
-        if actual <= 0.0 or uncertainty <= 1e-12:
-            return actual
-        digest = sha256(
-            f"{cell_id}\0{resource_id}\0{provider_id}\0{mode.id}".encode("utf-8")
-        ).digest()
-        unit = int.from_bytes(digest[:8], "big") / float((1 << 64) - 1)
-        signed_error = (unit * 2.0) - 1.0
-        return max(0.0, actual * (1.0 + signed_error * uncertainty))
-
-    def visible_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float | None:
-        level = self.knowledge_level(cell_id, resource_id)
-        if level < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
-            return None
-        if level >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
-            return self.actual_potential(cell_id, resource_id)
-        return self.estimated_potential.get((cell_id, resource_id))
-
-    def visible_potential_precision_fraction(
-        self, cell_id: SurfaceCellId, resource_id: DefinitionId
-    ) -> float | None:
-        if self.knowledge_level(cell_id, resource_id) < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
-            return None
-        return self.knowledge_precision_fraction.get((cell_id, resource_id))
-
     def capacity_for_campaign(
         self, campaign: SurveyCampaign, power: PowerSnapshot | None = None, day: int = 0,
     ) -> float:
@@ -834,7 +736,7 @@ class SurveyService:
             mode = self.observation_mode(candidate.provider_definition_id, candidate.observation_mode_id)
             for key in projection.unfinished_targets:
                 threshold = self.targets[key].thresholds[int(campaign.goal_knowledge_level) - 1]
-                remaining_progress = max(0.0, threshold - self.knowledge_progress.get(key, 0.0))
+                remaining_progress = max(0.0, threshold - self.knowledge.knowledge_progress.get(key, 0.0))
                 requested_capacity = remaining_progress / mode.survey_rate
                 if requested_capacity <= 1e-12:
                     continue
@@ -903,6 +805,12 @@ class SurveyService:
         execution_allocations: ExecutionAllocationPlan, day: int = 0,
     ) -> None:
         del power_by_location
+        # Scientific Exploration may have settled the same target immediately
+        # before Survey in the canonical day. A Campaign is an intent, not a
+        # second authority for whether observations are already complete.
+        for campaign in self.campaigns.values():
+            if campaign.control_state is not SurveyCampaignControlState.COMPLETED:
+                self._settle_campaign_completion(campaign)
         for campaign in sorted(self.campaigns.values(), key=lambda row: (-int(row.priority), str(row.id))):
             if campaign.control_state is not SurveyCampaignControlState.ACTIVE:
                 continue
@@ -918,21 +826,9 @@ class SurveyService:
                     allocated_capacity = 0.0
                 if allocated_capacity <= 1e-12:
                     continue
-                threshold = self.targets[key].thresholds[int(campaign.goal_knowledge_level) - 1]
-                before_level = self.knowledge_level(*key)
-                current = self.knowledge_progress.get(key, 0.0)
-                gain = min(allocated_capacity * mode.survey_rate, max(0.0, threshold - current))
-                if gain <= 1e-12:
-                    continue
-                self.knowledge_progress[key] = min(threshold, current + gain)
-                after_level = self.knowledge_level(*key)
-                if after_level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and after_level > before_level:
-                    if key not in self.estimated_potential:
-                        self.estimated_potential[key] = self._estimated_potential_for_mode(
-                            key[0], key[1], candidate.provider_definition_id, mode
-                        )
-                    precision = mode.precision_for_level(after_level)
-                    if precision is not None:
-                        prior = self.knowledge_precision_fraction.get(key)
-                        self.knowledge_precision_fraction[key] = precision if prior is None else min(prior, precision)
+                gain = allocated_capacity * mode.survey_rate
+                self.knowledge.settle_survey_work(
+                    key[0], key[1], gain, campaign.goal_knowledge_level,
+                    candidate.provider_definition_id, mode,
+                )
             self._settle_campaign_completion(campaign)

@@ -334,7 +334,7 @@ def test_world_definition_and_scenario_initialization_keep_static_and_runtime_st
     assert load_sim.market.funds.balance == 0.0
     assert load_sim.market.provider_states == {}
     assert load_sim.market.interfaces == {}
-    assert load_sim.survey is not None and load_sim.survey.knowledge_progress == {}
+    assert load_sim.survey is not None and load_sim.surface_knowledge.knowledge_progress == {}
 
     app = build_game_application()
     sim = app._simulation

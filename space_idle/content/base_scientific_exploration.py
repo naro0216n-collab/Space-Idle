@@ -5,12 +5,16 @@ from ..transport.models import MovementEndpoint
 from . import base_ids as ids
 from . import base_requirements as req
 from ..shared import DefinitionId
+from ..exploration_models import KnowledgeLevel
 
 
 def build_scientific_exploration_definitions() -> dict:
     """Finite science campaigns whose eligibility is based on real vehicle performance."""
     return {
         ids.CISLUNAR_SCIENCE_EXPLORATION: ScientificExplorationDefinition(
+            observation_body_id=ids.MOON,
+            observation_resource_level=KnowledgeLevel.PRESENCE_PROBABILITY,
+            observation_attribute_level=1,
             id=ids.CISLUNAR_SCIENCE_EXPLORATION,
             display_name="地月空間航法・放射線環境観測",
             origin_id=ids.LEO,
@@ -23,6 +27,9 @@ def build_scientific_exploration_definitions() -> dict:
             return_to_origin=False,
         ),
         ids.CREWED_CISLUNAR_EXPEDITION: ScientificExplorationDefinition(
+            observation_body_id=ids.MOON,
+            observation_resource_level=KnowledgeLevel.PRESENCE_PROBABILITY,
+            observation_attribute_level=1,
             id=ids.CREWED_CISLUNAR_EXPEDITION,
             display_name="地月有人科学探査",
             origin_id=ids.LEO,
@@ -39,6 +46,9 @@ def build_scientific_exploration_definitions() -> dict:
         # Crew settlement as every other expedition. The new hull's long-range
         # thermal propulsion is a Content alternative, not a mission ID rule.
         ids.MARS_ORBIT_CREW_EXPEDITION: ScientificExplorationDefinition(
+            observation_body_id=ids.MARS_BODY,
+            observation_resource_level=KnowledgeLevel.PRESENCE_PROBABILITY,
+            observation_attribute_level=1,
             id=ids.MARS_ORBIT_CREW_EXPEDITION,
             display_name="火星周回有人地質・放射線観測遠征",
             origin_id=ids.LEO,
@@ -58,6 +68,9 @@ def build_scientific_exploration_definitions() -> dict:
             return_to_origin=True,
         ),
         ids.MARS_ORBIT_SCIENCE_EXPLORATION: ScientificExplorationDefinition(
+            observation_body_id=ids.MARS_BODY,
+            observation_resource_level=KnowledgeLevel.PRESENCE_PROBABILITY,
+            observation_attribute_level=1,
             id=ids.MARS_ORBIT_SCIENCE_EXPLORATION,
             display_name="火星周回・環境観測遠征",
             origin_id=ids.LEO,

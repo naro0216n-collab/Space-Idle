@@ -74,6 +74,7 @@ class SurveyTarget:
     resource_id: DefinitionId
     thresholds: tuple[float, float, float]
     prior_presence_probability: float = 0.5
+    presence_detection_reliability: float = 0.85
 
     def __post_init__(self) -> None:
         if len(self.thresholds) != 3 or any(v < 0 for v in self.thresholds):
@@ -82,6 +83,8 @@ class SurveyTarget:
             raise ValueError("survey knowledge thresholds must be sorted")
         if not 0.0 <= self.prior_presence_probability <= 1.0:
             raise ValueError("survey presence probability must be within 0..1")
+        if not 0.5 < self.presence_detection_reliability < 1.0:
+            raise ValueError("observation reliability must be within (0.5,1)")
 
 
 @dataclass(frozen=True)

@@ -106,7 +106,7 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
     resources = (ids.MINERAL_FEEDSTOCK, ids.VOLATILE_BEARING_MATERIAL)
     outside = (ids.MOON_CELL_EQUATORIAL_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
-    outside_before = sim.survey.progress(*outside)
+    outside_before = sim.surface_knowledge.progress(*outside)
 
     campaign_id = _start_campaign(app, cells, resources)
     campaign = sim.survey.campaigns[campaign_id]
@@ -121,8 +121,8 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     assert len(bundles) == len(expected_pairs) == 4
 
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(*outside) == pytest.approx(outside_before)
-    assert all(sim.survey.progress(cell, resource) > 0 for cell, resource in expected_pairs)
+    assert sim.surface_knowledge.progress(*outside) == pytest.approx(outside_before)
+    assert all(sim.surface_knowledge.progress(cell, resource) > 0 for cell, resource in expected_pairs)
 
     remaining = (cells[1], ids.MINERAL_FEEDSTOCK)
     remaining_bundle = sim.survey.execution_bundle_id(campaign.id, *remaining)
@@ -130,7 +130,7 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
         if pair == remaining:
             continue
         target = sim.survey.targets[pair]
-        sim.survey.knowledge_progress[pair] = target.thresholds[0]
+        sim.surface_knowledge.knowledge_progress[pair] = target.thresholds[0]
 
     active_bundle_ids = {bundle.id for bundle in sim.survey.execution_requirement_bundles(sim.day)}
     assert active_bundle_ids == {remaining_bundle}
@@ -138,12 +138,12 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     assert allocation.allocated(remaining_bundle) == pytest.approx(1.0)
 
     threshold = sim.survey.targets[remaining].thresholds[0]
-    sim.survey.knowledge_progress[remaining] = threshold - 0.5
+    sim.surface_knowledge.knowledge_progress[remaining] = threshold - 0.5
     allocation = sim.tick_decision_projection().allocations.execution
     assert allocation.allocated(remaining_bundle) == pytest.approx(0.5 / 8.0)
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(*remaining) == pytest.approx(threshold)
-    assert sim.survey.knowledge_level(*remaining) == KnowledgeLevel.PRESENCE_PROBABILITY
+    assert sim.surface_knowledge.progress(*remaining) == pytest.approx(threshold)
+    assert sim.surface_knowledge.knowledge_level(*remaining) == KnowledgeLevel.PRESENCE_PROBABILITY
 
     # A completed first-level Campaign does not pin the target to its old
     # accuracy. A new goal must settle the observation mode's configured
@@ -157,13 +157,13 @@ def test_campaign_scope_progression_reallocates_capacity_without_outside_effects
     final_threshold = sim.survey.targets[remaining].thresholds[1]
     finite_rate = sim.survey.capacity_for_campaign(second, day=sim.day)
     assert finite_rate > 0
-    sim.survey.knowledge_progress[remaining] = final_threshold - min(
+    sim.surface_knowledge.knowledge_progress[remaining] = final_threshold - min(
         final_threshold / 2, finite_rate / 2
     )
     app.execute(AdvanceTime(1))
     assert second.control_state is SurveyCampaignControlState.COMPLETED
-    assert sim.survey.knowledge_level(*remaining) == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
-    assert sim.survey.visible_potential_precision_fraction(*remaining) == pytest.approx(
+    assert sim.surface_knowledge.knowledge_level(*remaining) == KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+    assert sim.surface_knowledge.visible_potential_precision_fraction(*remaining) == pytest.approx(
         mode.estimate_uncertainty_fraction
     )
 
@@ -308,17 +308,17 @@ def test_pause_suspends_campaign_demand_without_releasing_provider_fleet_commitm
     )).created_id
     assignment = next(iter(sim.survey.provider_assignments.values()))
     commitment_id = assignment.fleet_commitment_ref
-    before = sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
+    before = sim.surface_knowledge.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK)
 
     app.execute(PauseSurvey(campaign_id))
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) == pytest.approx(before)
+    assert sim.surface_knowledge.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) == pytest.approx(before)
     assert sim.transport.fleet_commitment_snapshot(commitment_id) is not None
     assert sim.survey.provider_assignment_quantity(assignment.id) == 1
 
     app.execute(ResumeSurvey(campaign_id))
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) > before
+    assert sim.surface_knowledge.progress(ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MINERAL_FEEDSTOCK) > before
 
 
 
@@ -360,7 +360,7 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert all(row.visible_potential is None for row in mars_view.items)
 
     requirement = KnowledgeRequirement(cell, resource, KnowledgeLevel.PRESENCE_PROBABILITY)
-    assert sim.survey.knowledge_requirement_failures(requirement)
+    assert sim.surface_knowledge.knowledge_requirement_failures(requirement)
     before = next(row for row in app.query(GetSurveys()).items
                   if row.cell_id == str(cell) and row.resource_id == str(resource))
     assert before.location_id is None
@@ -373,7 +373,7 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     assert blockers == ()
     assert candidate is not None
     assert candidate.max_knowledge_level == KnowledgeLevel.PRESENCE_PROBABILITY
-    assert sim.survey.knowledge_requirement_failures(requirement)
+    assert sim.surface_knowledge.knowledge_requirement_failures(requirement)
 
     # Test the remote Knowledge transition, not how many days this Content
     # needs to survey a fixed planet with today's provisional rate.
@@ -383,9 +383,9 @@ def test_distant_physical_survey_preserves_fleet_location_and_resource_ownership
     from math import ceil
     app.execute(AdvanceTime(ceil(threshold / physical_rate) + 1))
     assert campaign.control_state is SurveyCampaignControlState.COMPLETED
-    assert sim.survey.knowledge_level(cell, resource) == KnowledgeLevel.PRESENCE_PROBABILITY
-    assert sim.survey.knowledge_requirement_failures(requirement) == ()
-    assert sim.survey.visible_potential(cell, resource) is None
+    assert sim.surface_knowledge.knowledge_level(cell, resource) == KnowledgeLevel.PRESENCE_PROBABILITY
+    assert sim.surface_knowledge.knowledge_requirement_failures(requirement) == ()
+    assert sim.surface_knowledge.visible_potential(cell, resource) is None
     assert frozenset(sim.graph.operational_node_ids()) == initial_nodes
     assert dict(sim.transport.fleet_pools) == initial_fleet
     assert sim.graph.owner_of_cell(cell) is None
@@ -482,8 +482,8 @@ def test_survey_provider_separates_compatible_vehicle_commitments_modes_and_capa
         sim.survey.service_type_for_provider(provider_id, alternative_vehicle),
     }
     app.execute(AdvanceTime(1))
-    assert sim.survey.progress(target1, resource) > 0
-    assert sim.survey.progress(target2, resource) > 0
+    assert sim.surface_knowledge.progress(target1, resource) > 0
+    assert sim.surface_knowledge.progress(target2, resource) > 0
 
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     path = tmp_path / 'survey-mixed-fleet.json'

@@ -20,6 +20,7 @@ from space_idle import (
     GetLogisticsSummary,
     GetResearch,
     GetScientificExplorations,
+    GetSurfaceMap,
     GetTransportAllocations,
     PauseFacility,
     PauseScientificExploration,
@@ -33,6 +34,7 @@ from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.facilities import CapabilitySupply, FacilityDef
+from space_idle.exploration_models import KnowledgeLevel
 from space_idle.research import (
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
 )
@@ -335,8 +337,42 @@ def test_scientific_exploration_save_load_preserves_fleet_commitment_and_future_
     assert loaded_commitment.quantity == _row(loaded).required_units
     assert loaded_campaign.movement_execution_id in loaded._simulation.transport.movement_executions
 
+    observed_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    moon_before = next(row for row in app.query(GetSurfaceMap(str(ids.MOON))).cells
+                       if row.id == str(observed_cell))
+    assert moon_before.terrain_knowledge_level == 0
+    survey_before = capture_state(app._simulation)["survey"]
+
     _advance_outbound_campaign_to_completion(app, ids.CISLUNAR_SCIENCE_EXPLORATION)
     _advance_outbound_campaign_to_completion(loaded, ids.CISLUNAR_SCIENCE_EXPLORATION)
+    # Science has actually traversed space and completed finite observation:
+    # geography and probabilistic resource evidence now belong to Knowledge,
+    # without creating a second Survey campaign or copying World truth.
+    moon_after = next(row for row in app.query(GetSurfaceMap(str(ids.MOON))).cells
+                      if row.id == str(observed_cell))
+    assert moon_after.terrain_knowledge_level == 1
+    assert moon_after.environment_knowledge_level == 1
+    assert moon_after.terrain and "terrain_factor" not in dict(moon_after.terrain)
+    assert all(row.knowledge_level >= 1 and row.visible_potential is None
+               and 0 <= row.presence_probability <= 1 for row in moon_after.resources)
+    assert capture_state(app._simulation)["survey"] == survey_before
+    assert capture_state(app._simulation)["surface_knowledge"] == capture_state(loaded._simulation)["surface_knowledge"]
+    # The observation is historical evidence owned by Knowledge. Queries must
+    # not resample physical truth, and loading must preserve that evidence.
+    resource_id = ids.VOLATILE_BEARING_MATERIAL
+    knowledge = app._simulation.surface_knowledge
+    observed_probability = knowledge.visible_presence_probability(observed_cell, resource_id)
+    assert observed_probability == loaded._simulation.surface_knowledge.visible_presence_probability(
+        observed_cell, resource_id
+    )
+    actual_potential = knowledge.actual_potential
+    try:
+        knowledge.actual_potential = lambda *_args: (_ for _ in ()).throw(AssertionError("Query read World truth"))
+        assert knowledge.visible_presence_probability(observed_cell, resource_id) == observed_probability
+    finally:
+        knowledge.actual_potential = actual_potential
+    knowledge.observe_resource(observed_cell, resource_id, KnowledgeLevel.PRESENCE_PROBABILITY)
+    assert knowledge.visible_presence_probability(observed_cell, resource_id) == observed_probability
     loaded_campaign = loaded._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
     original_campaign = app._simulation.scientific_exploration.campaigns[ids.CISLUNAR_SCIENCE_EXPLORATION]
     assert loaded_campaign == original_campaign

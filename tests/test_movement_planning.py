@@ -19,6 +19,7 @@ from space_idle.spatial import (
     SpatialNodeDef,
     SpatialNodeKind,
     StarSystemDef,
+    great_circle_distance_km,
 )
 from space_idle.transport.endpoints import resolve_movement_endpoint
 
@@ -149,14 +150,35 @@ def test_surface_endpoints_use_active_gateway_identity_current_cell_geometry_and
     )
     sim.facilities.resume(gateway)
 
-    sim.graph.develop_surface_cell(location_id, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
-    sim.facilities.facilities[gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    # Development must follow the actual registered spherical topology: the
+    # earlier named regional Cell is not necessarily a physical neighbor.
+    origin_cell = sim.graph.surface_cells[ids.MOON_CELL_FARSIDE_HIGHLANDS]
+    target_cell = sim.graph.surface_cells[ids.MOON_CELL_NEARSIDE_MARE]
+    lunar_radius_km = sim.graph.bodies[ids.MOON].mean_radius_km
+    next_cell_id = min(
+        (
+            cell_id for cell_id in origin_cell.neighbor_ids
+            if sim.graph.owner_of_cell(cell_id) is None
+        ),
+        key=lambda cell_id: great_circle_distance_km(
+            sim.graph.surface_cells[cell_id].centroid,
+            target_cell.centroid,
+            lunar_radius_km,
+        ),
+    )
+    assert great_circle_distance_km(
+        sim.graph.surface_cells[next_cell_id].centroid,
+        target_cell.centroid,
+        lunar_radius_km,
+    ) < before.distance_km
+    sim.graph.develop_surface_cell(location_id, next_cell_id)
+    sim.facilities.facilities[gateway].site_cell_id = next_cell_id
     sim.transport.invalidate_movement_plans()
     after_plan = _plan_between(sim, location_id, other_id)
     after = sim.transport.movement_geometry(after_plan.id)
     assert after_plan.id == before_plan.id
     assert after.origin.node_id == before.origin.node_id == location_id
-    assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    assert after.origin.surface_cell_id == next_cell_id
     assert after.distance_km is not None and before.distance_km is not None
     assert after.distance_km < before.distance_km
 

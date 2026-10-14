@@ -16,7 +16,7 @@ from .shared import CelestialBodyId
 
 
 class SurfaceProjectorMixin:
-    def _founding_deployed_facility_rows(self, recipe, context_id) -> tuple[FoundingDeployedFacilityRow, ...]:
+    def _founding_deployed_facility_rows(self, recipe, context_id, *, environment_known: bool = True) -> tuple[FoundingDeployedFacilityRow, ...]:
         """Show the actual paid physical assets and finite nominal capacities.
 
         This is a definition projection, not an outcome forecast or an extra
@@ -33,7 +33,9 @@ class SurfaceProjectorMixin:
             storage = sim.storage.providers.get(facility_id)
             provider = sim.projects.construction_providers.get(facility_id)
             rows.append(FoundingDeployedFacilityRow(
-                str(facility_id), definition.display_name, generation, load,
+                str(facility_id), definition.display_name,
+                generation if environment_known else None,
+                load if environment_known else None,
                 () if storage is None else tuple(sorted(storage.capacity_t_by_pool.items())),
                 tuple(sorted((row.service_type, row.nominal_rate)
                              for row in definition.service_capacity_supplies)),
@@ -46,6 +48,13 @@ class SurfaceProjectorMixin:
             ))
         return tuple(rows)
 
+
+    def _surface_facility_public_effects(self, recipe, cell_id, site_known: bool) -> dict:
+        effects = self._prospective_facility_effects(recipe, cell_id)
+        if not site_known:
+            effects["power_nominal_generation_mw"] = None
+            effects["power_nominal_load_mw"] = None
+        return effects
 
     def _non_surface_founding_view(self, body_id: CelestialBodyId, *, founding_context_id: str = "") -> NonSurfaceFoundingView:
         """Scoped physical orbital targets; economic state exists only after founding."""
@@ -150,6 +159,19 @@ class SurfaceProjectorMixin:
         placement_materials = {}
         for cell in cells:
             owner = sim.graph.owner_of_cell(cell.id)
+            terrain_quality = sim.surface_knowledge.attribute_level(cell.id, "terrain")
+            environment_quality = sim.surface_knowledge.attribute_level(cell.id, "environment")
+            # Published geography is intentionally distinct from the physical
+            # World used for executable eligibility and resource settlement.
+            public_terrain = (
+                (("terrain_factor", cell.terrain.terrain_factor),
+                 ("bearing_capacity_factor", cell.terrain.bearing_capacity_factor),
+                 ("dust_factor", cell.terrain.dust_factor),
+                 ("slope_factor", cell.terrain.slope_factor))
+                if terrain_quality >= 2 else sim.surface_knowledge.terrain_overview(cell.id)
+            )
+            public_environment = self._environment_rows(cell.id) if environment_quality >= 2 else ()
+
             owner_state = None if owner is None else sim.graph.locations[owner]
             development_options_list = []
             development_recipe = (
@@ -165,7 +187,13 @@ class SurfaceProjectorMixin:
                 failures = sim.projects.surface_cell_development_failures(
                     location.operational_node_id, cell.id, sim.day, location_power
                 )
-                blockers = tuple((failure.code, failure.detail) for failure in failures)
+                unpublished = (
+                    sim.surface_knowledge.unpublished_site_condition_codes(
+                        cell.id, development_recipe.site_requirements
+                    ) if development_recipe is not None else frozenset()
+                )
+                public_failures = tuple(f for f in failures if f.code not in unpublished)
+                blockers = tuple((failure.code, failure.detail) for failure in public_failures)
                 if development_recipe is not None:
                     blockers += tuple(
                         ("technology", str(technology))
@@ -202,7 +230,8 @@ class SurfaceProjectorMixin:
                             related_entity_kind="surface_cell",
                             related_entity_id=str(cell.id),
                         ),
-                        can_plan=not failures,
+                        can_plan=not public_failures,
+                        site_knowledge_unverified=bool(unpublished),
                         projected_surface_infrastructure_demand=projected_demand,
                         projected_surface_infrastructure_fulfillment=projected_fulfillment,
                         limiting_factors=limiting_factors_from_codes(
@@ -226,10 +255,10 @@ class SurfaceProjectorMixin:
                     SurfaceResourceKnowledgeRow(
                         str(resource_id),
                         self._resource_name(resource_id),
-                        sim.survey.knowledge_level(cell.id, resource_id),
-                        sim.survey.visible_presence_probability(cell.id, resource_id),
-                        sim.survey.visible_potential(cell.id, resource_id),
-                        sim.survey.visible_potential_precision_fraction(cell.id, resource_id),
+                        sim.surface_knowledge.knowledge_level(cell.id, resource_id),
+                        sim.surface_knowledge.visible_presence_probability(cell.id, resource_id),
+                        sim.surface_knowledge.visible_potential(cell.id, resource_id),
+                        sim.surface_knowledge.visible_potential_precision_fraction(cell.id, resource_id),
                     )
                     for resource_id in sorted(survey_resources_by_cell.get(cell.id, ()), key=str)
                 )
@@ -246,6 +275,10 @@ class SurfaceProjectorMixin:
                             recipe, owner, decision.allocations.transport
                         )
                     materials, readiness_day = placement_materials[material_key]
+                    definition = sim.facilities.definitions[recipe.facility_def_id]
+                    unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                        cell.id, definition.installation_requirements, recipe.site_requirements,
+                    )
                     blockers = tuple(
                         ("technology", str(technology))
                         for technology in sorted(
@@ -256,7 +289,7 @@ class SurfaceProjectorMixin:
                         (failure.code, failure.detail)
                         for failure in sim.projects.site_failures(
                             recipe.facility_def_id, owner, sim.day, power, site_cell_id=cell.id
-                        )
+                        ) if failure.code not in unpublished
                     )
                     candidates.append(SurfaceFacilityPlacementOption(
                         facility_definition_id=str(recipe.facility_def_id),
@@ -274,9 +307,12 @@ class SurfaceProjectorMixin:
                         can_plan=not sim.projects.build_plan_failures(
                             recipe.facility_def_id, owner, site_cell_id=cell.id
                         ),
+                        site_knowledge_unverified=bool(unpublished),
                         procurement_policy_options=tuple(sim.projects.procurement_policy_options()),
                         projected_material_readiness_day=readiness_day,
-                        **self._prospective_facility_effects(recipe, cell.id),
+                        **self._surface_facility_public_effects(
+                            recipe, cell.id, terrain_quality >= 2 and environment_quality >= 2
+                        ),
                     ))
                 facility_placement_options = tuple(candidates)
             foundation_options = ()
@@ -292,6 +328,18 @@ class SurfaceProjectorMixin:
                         for vehicle in sim.transport.vehicle_definitions():
                             failures = sim.founding.planning_failures(
                                 staging_id, target_spec, recipe.id, vehicle.id, sim.day
+                            )
+                            unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                                cell.id, recipe.target_requirements,
+                            )
+                            unverified_facility = (environment_quality < 2 and any(
+                                sim.facilities.definitions[deployment.facility_def_id].installation_requirements.environment
+                                for deployment in recipe.deployed_facilities
+                            ))
+                            public_failures = tuple(
+                                failure for failure in failures
+                                if failure.code not in {f"target:{code}" for code in unpublished}
+                                and (environment_quality >= 2 or failure.code != "facility_environment")
                             )
                             try:
                                 movement_plan = sim.founding.movement_plan_for_target(
@@ -322,24 +370,26 @@ class SurfaceProjectorMixin:
                                 ),
                                 ComparisonValueRow(axis_key="payload_t", number_value=recipe.payload_t),
                                 ComparisonValueRow(
-                                    axis_key="terrain_factor", number_value=cell.terrain.terrain_factor
+                                    axis_key="terrain_factor", number_value=cell.terrain.terrain_factor if terrain_quality >= 2 else None
                                 ),
                                 ComparisonValueRow(
                                     axis_key="bearing_capacity_factor",
-                                    number_value=cell.terrain.bearing_capacity_factor,
+                                    number_value=cell.terrain.bearing_capacity_factor if terrain_quality >= 2 else None,
                                 ),
                                 ComparisonValueRow(
-                                    axis_key="dust_factor", number_value=cell.terrain.dust_factor
+                                    axis_key="dust_factor", number_value=cell.terrain.dust_factor if terrain_quality >= 2 else None
                                 ),
                                 ComparisonValueRow(
-                                    axis_key="slope_factor", number_value=cell.terrain.slope_factor
+                                    axis_key="slope_factor", number_value=cell.terrain.slope_factor if terrain_quality >= 2 else None
                                 ),
                             )
                             foundation_rows.append(FoundingOption(
                                 staging_node_id=str(staging_id),
                                 deployment_recipe_id=str(recipe.id),
                                 recipe_display_name=recipe.display_name,
-                                deployed_facilities=self._founding_deployed_facility_rows(recipe, cell.id),
+                                deployed_facilities=self._founding_deployed_facility_rows(
+                                    recipe, cell.id, environment_known=environment_quality >= 2
+                                ),
                                 vehicle_definition_id=str(vehicle.id),
                                 vehicle_display_name=vehicle.display_name,
                                 preparation_work=recipe.preparation_work,
@@ -351,12 +401,13 @@ class SurfaceProjectorMixin:
                                     (str(req.resource_id), req.amount_t) for req in founding_resources
                                 ),
                                 blockers=constraints_from_pairs(
-                                    tuple((failure.code, failure.detail) for failure in failures),
+                                    tuple((failure.code, failure.detail) for failure in public_failures),
                                     affected_action="plan_founding",
                                     related_entity_kind="surface_cell",
                                     related_entity_id=str(cell.id),
                                 ),
-                                can_plan=not failures,
+                                can_plan=not public_failures,
+                                site_knowledge_unverified=bool(unpublished) or unverified_facility,
                                 active_project_id=None if active_founding is None else str(active_founding.id),
                                 comparison_key=(
                                     f"{cell.id}|{staging_id}|{recipe.id}|{vehicle.id}"
@@ -376,13 +427,8 @@ class SurfaceProjectorMixin:
                     cell.centroid.latitude_deg,
                     cell.centroid.longitude_deg,
                     tuple(sorted(map(str, cell.neighbor_ids))),
-                    (
-                        ("terrain_factor", cell.terrain.terrain_factor),
-                        ("bearing_capacity_factor", cell.terrain.bearing_capacity_factor),
-                        ("dust_factor", cell.terrain.dust_factor),
-                        ("slope_factor", cell.terrain.slope_factor),
-                    ),
-                    self._environment_rows(cell.id),
+                    public_terrain,
+                    public_environment,
                     resources,
                     owner is not None,
                     None if owner is None else str(owner),
@@ -397,8 +443,10 @@ class SurfaceProjectorMixin:
                     facility_placement_options,
                     foundation_options,
                     cell.display_name or str(cell.id),
-                    movement_accessible,
-                    minimum_transit_days,
+                    terrain_knowledge_level=terrain_quality,
+                    environment_knowledge_level=environment_quality,
+                    movement_accessible=movement_accessible,
+                    minimum_transit_days=minimum_transit_days,
                 )
             )
         founding_comparison_axes = project_comparison_axes(

@@ -16,7 +16,9 @@ from .execution_requirements import (
     ReservationAcquisitionRequirement,
 )
 from .supply import SupplyRequirement
-from .shared import DefinitionId, EntityId, SpatialNodeId
+from .shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId
+from .knowledge import SurfaceKnowledgeState
+from .exploration_models import KnowledgeLevel
 from .technology import TechnologyState
 from .site import SiteRequirements, evaluate_site_requirements
 from .transport.models import FleetActivityRef, MovementEndpoint, MovementExecutionKind
@@ -43,8 +45,15 @@ class ScientificExplorationDefinition:
     required_crew: int = 0
     required_vehicle_capabilities: tuple[str, ...] = ()
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
+    observation_body_id: CelestialBodyId | None = None
+    observation_resource_level: KnowledgeLevel = KnowledgeLevel.UNKNOWN
+    observation_attribute_level: int = 0
 
     def __post_init__(self) -> None:
+        if self.observation_body_id is None and (self.observation_resource_level != KnowledgeLevel.UNKNOWN or self.observation_attribute_level):
+            raise ValueError("science observation must identify a physical subject")
+        if self.observation_attribute_level not in (0, 1, 2):
+            raise ValueError("science attribute observation level must be 0, 1 or 2")
         if self.origin_id == self.destination_id:
             raise ValueError("scientific exploration endpoints must differ")
         if isinstance(self.destination, MovementEndpoint) and self.destination.operational_node_id is not None:
@@ -131,6 +140,7 @@ class ScientificExplorationService:
     population: "PopulationService"
     technology_state: TechnologyState
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
+    surface_knowledge: SurfaceKnowledgeState | None = None
 
     def _physical_target(self, definition: ScientificExplorationDefinition) -> MovementEndpoint | None:
         """The mission's destination kind is fixed by its Definition, not ownership."""
@@ -1373,6 +1383,7 @@ class ScientificExplorationService:
             if state.phase is not ScientificExplorationPhase.ACTIVE or state.paused:
                 continue
             if state.progress_days + 1e-9 >= definition.duration_days:
+                self._settle_observation(definition)
                 if state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                 else:
@@ -1403,10 +1414,22 @@ class ScientificExplorationService:
             state.research_points_awarded += admitted_points
             if state.progress_days + 1e-9 >= definition.duration_days:
                 state.progress_days = definition.duration_days
+                self._settle_observation(definition)
                 if state.completion_disposition is ScientificExplorationCompletionDisposition.RETURN_TO_ORIGIN:
                     state.phase = ScientificExplorationPhase.RETURN_PREPARING
                 else:
                     self._complete_at_destination(definition, state, day)
+
+    def _settle_observation(self, definition: ScientificExplorationDefinition) -> None:
+        if definition.observation_body_id is None:
+            return
+        if self.surface_knowledge is None:
+            raise RuntimeError("science observation lacks Knowledge owner")
+        self.surface_knowledge.observe_body(
+            definition.observation_body_id,
+            resource_level=definition.observation_resource_level,
+            attribute_level=definition.observation_attribute_level,
+        )
 
     def _complete_at_destination(
         self,

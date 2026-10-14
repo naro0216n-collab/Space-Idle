@@ -13,7 +13,7 @@ from .facilities import FacilityBook
 from .founding import OperationalNodeFoundingService
 from .industry import IndustryService
 from .inventory import InventoryBook
-from .knowledge import DomainActivity
+from .knowledge import DomainActivity, SurfaceKnowledgeState
 from .logistics import LogisticsService
 from .transport.service import TransportService
 from .transport.models import DirectionalCapacity
@@ -165,6 +165,7 @@ class Simulation:
     founding: OperationalNodeFoundingService | None = None
     research: ResearchService | None = None
     survey: SurveyService | None = None
+    surface_knowledge: SurfaceKnowledgeState | None = None
     extraction: ExtractionService | None = None
     scientific_exploration: ScientificExplorationService | None = None
     maintenance: FacilityMaintenanceService | None = None
