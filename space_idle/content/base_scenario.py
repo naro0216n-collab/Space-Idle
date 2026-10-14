@@ -20,8 +20,8 @@ STANDARD_SCENARIO_ID = "base.scenario.standard"
 def build_standard_scenario_definition() -> ScenarioDefinition:
     S, M, E = ids.STRUCTURAL_COMPONENTS, ids.MACHINERY, ids.PRECISION_ELECTRONICS
     facilities = (
-        ScenarioFacility(ids.BREATHABLE_SURFACE_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
-        ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0))),
+        ScenarioFacility(ids.BREATHABLE_SURFACE_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0), (E, 1.0))),
+        ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0), (E, 2.0))),
         ScenarioFacility(ids.GENERAL_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
         # A finite, physically installed cold store rather than free capacity
         # at every initial node. Its cooling and maintenance remain operational.
@@ -35,7 +35,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioFacility(ids.MINERAL_QUARRY, ids.EARTH, invested_resources=((S, 5.0), (M, 7.0))),
         ScenarioFacility(ids.METAL_ORE_MINE, ids.EARTH, invested_resources=((S, 6.0), (M, 8.0))),
         ScenarioFacility(ids.INDUSTRIAL_WATER_INTAKE, ids.EARTH, invested_resources=((S, 5.0), (M, 5.0))),
-        ScenarioFacility(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, invested_resources=((S, 8.0), (M, 8.0))),
+        ScenarioFacility(ids.BASIC_STRUCTURAL_MATERIAL_PLANT, ids.EARTH, invested_resources=((S, 8.0), (M, 8.0), (E, 1.0))),
         ScenarioFacility(ids.BASIC_MACHINERY_WORKS, ids.EARTH, invested_resources=((S, 8.0), (M, 10.0), (E, 1.0))),
     )
     inventory = (

@@ -144,6 +144,23 @@ class SurfaceKnowledgeState:
             for condition in requirement.environment
         )
 
+    def public_site_blockers(
+        self, context_id: object, failures: tuple[tuple[str, str], ...],
+        *requirements: object, code_prefix: str = "",
+    ) -> tuple[tuple[tuple[str, str], ...], bool]:
+        """Publish typed physical failures only where their observations justify it.
+
+        All Site-facing Application views use this contract; the physical
+        evaluator continues to use true conditions independently. The
+        uncertainty marker is not a verdict of ineligibility.
+        """
+        hidden = {code_prefix + code for code in
+                  self.unpublished_site_condition_codes(context_id, *requirements)}
+        visible = tuple(row for row in failures if row[0] not in hidden)
+        if hidden:
+            visible += (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
+        return visible, bool(hidden)
+
     def terrain_overview(self, cell_id: SurfaceCellId) -> tuple[tuple[str, float], ...]:
         """Content-granularity intervals, never a midpoint that reveals true value."""
         if self.attribute_level(cell_id, "terrain") < 1:

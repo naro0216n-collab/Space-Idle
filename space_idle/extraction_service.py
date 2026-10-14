@@ -218,7 +218,7 @@ class ExtractionService:
 
     def surface_distribution_activities(
         self, location_id: SpatialNodeId, facilities: FacilityBook, day: int,
-    ) -> tuple[tuple[SurfaceCellId, float], ...]:
+    ) -> tuple[tuple[EntityId, SurfaceCellId, float, ActivityPriority], ...]:
         """Physical Cell workloads for actually selected extraction methods.
 
         A prospective Resource deposit is not an operating Activity. Divide
@@ -229,7 +229,7 @@ class ExtractionService:
         location = self.graph.locations.get(location_id)
         if location is None:
             return ()
-        by_cell: dict[SurfaceCellId, float] = {}
+        rows: list[tuple[EntityId, SurfaceCellId, float, ActivityPriority]] = []
         cells = tuple(sorted(location.developed_cell_ids, key=str))
         for facility in facilities.active_compatible_at(location_id, day):
             if self.nominal_capacity(facility) <= 0:
@@ -248,8 +248,9 @@ class ExtractionService:
             quantity = self.nominal_capacity(facility)
             for cell_id, amount in weighted:
                 if amount > 0:
-                    by_cell[cell_id] = by_cell.get(cell_id, 0.0) + quantity * amount / available
-        return tuple(sorted(by_cell.items(), key=lambda row: str(row[0])))
+                    rows.append((facility.id, cell_id, quantity * amount / available,
+                                 facility.activity_priority))
+        return tuple(sorted(rows, key=lambda row: (str(row[0]), str(row[1]))))
 
     def static_opportunity(self, location_id: SpatialNodeId, resource_id: DefinitionId) -> float:
         location = self.graph.locations.get(location_id)

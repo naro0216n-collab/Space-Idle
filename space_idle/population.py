@@ -294,6 +294,25 @@ class PopulationService:
         life_support = max(0, math.floor(support + 1e-8) - occupants - reserved)
         return housing, life_support, reserved
 
+    def natural_growth_current_blockers(self, node_id: SpatialNodeId, day: int, power: object) -> tuple[str, ...]:
+        """Current physical blockers, independent of the previous day's settlement.
+
+        Daily settled Life Support and received living Resource are intentionally
+        *not* predicted: their unconfirmed allocation must remain distinct from
+        these known constraints and from last day's actual outcome.
+        """
+        blockers = []
+        if not self.is_natural_growth_enabled(node_id):
+            blockers.append('natural_growth_disabled')
+        if self.count_at(node_id) <= 0:
+            blockers.append('population_absent')
+        housing, support, _ = self.natural_growth_capacity_context(node_id, day, power)
+        if housing <= 0:
+            blockers.append('housing_reserved_or_full')
+        if support <= 0:
+            blockers.append('life_support_capacity_limited')
+        return tuple(blockers)
+
     @staticmethod
     def natural_growth_blocker_detail(code: str) -> str:
         return {
@@ -1655,8 +1674,12 @@ class PopulationService:
             added = 0
             if not blockers and self.rules.natural_growth_rate_per_person_per_day > 0:
                 credit = self.growth_credit.get(node_id, 0.0) + count * self.rules.natural_growth_rate_per_person_per_day
-                added = min(math.floor(credit + 1e-10), housing_spare, life_support_spare, resource_spare)
-                self.growth_credit[node_id] = max(0.0, credit - added)
+                whole = math.floor(credit + 1e-10)
+                added = min(whole, housing_spare, life_support_spare, resource_spare)
+                # Only fractional accumulation is authoritative. A person who
+                # could not be admitted is not a deferred person waiting for a
+                # later capacity expansion; admission is settled once per day.
+                self.growth_credit[node_id] = max(0.0, min(credit - whole, 1.0 - 1e-12))
                 if added:
                     self.initialize(node_id, added)
             self.growth_last_added[node_id] = int(added)
@@ -1702,7 +1725,7 @@ class PopulationService:
             if not self.graph.has_operational_node(node_id) or type(enabled) is not bool:
                 raise ValueError('invalid natural growth switch')
         for node_id, credit in self.growth_credit.items():
-            if (not self.graph.has_operational_node(node_id) or not math.isfinite(credit) or credit < 0):
+            if (not self.graph.has_operational_node(node_id) or not math.isfinite(credit) or not 0 <= credit < 1):
                 raise ValueError('invalid natural growth credit')
         for node_id, count in self.growth_last_added.items():
             if not self.graph.has_operational_node(node_id) or type(count) is not int or count < 0:

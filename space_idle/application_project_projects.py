@@ -195,6 +195,15 @@ class ProjectProjectorMixin:
                 if abs(target - current) > 1e-9:
                     rows.append(FacilityUpgradeDifferenceRow(kind, label, current, target, unit))
 
+        if provider is not None and provider.crew_person_days_per_research_point > 0:
+            crew_rate = provider.crew_person_days_per_research_point
+            rows.append(FacilityUpgradeDifferenceRow(
+                "demand", "研究RP生成時Crew最大需要",
+                provider.level_spec(facility.level).generation_points_per_day * crew_rate,
+                provider.level_spec(target_level).generation_points_per_day * crew_rate,
+                "人日/日",
+            ))
+
         # Installed unit additions alter both nominal output and physical demand.
         per_unit = definition.process_throughput_per_day
         if sim.industry.compatible_processes(facility.definition_id) and per_unit > 0:
@@ -213,16 +222,18 @@ class ProjectProjectorMixin:
         power_spec = sim.power.specs.get(facility.definition_id)
         if power_spec is not None:
             context = sim.facilities.facility_environment_context(facility)
+            environment_known = sim.surface_knowledge.publishes_environment(context)
             generation, load = sim.power.nominal_for_definition_at_context(facility.definition_id, context)
-            for label, amount, unit in (
-                ("発電Capacity", generation, "MW"),
-                ("Power需要", load, "MW"),
-                ("停止中Power需要", power_spec.standby_load_mw, "MW"),
+            for label, amount, unit, site_dependent in (
+                ("発電Capacity", generation, "MW", True),
+                ("Power需要", load, "MW", True),
+                ("停止中Power需要", power_spec.standby_load_mw, "MW", False),
             ):
-                if amount:
+                if amount or (site_dependent and not environment_known):
                     rows.append(FacilityUpgradeDifferenceRow(
                         "capacity" if "Capacity" in label else "demand", label,
-                        amount * facility.level, amount * target_level, unit))
+                        (amount * facility.level if environment_known or not site_dependent else "未測定"),
+                        (amount * target_level if environment_known or not site_dependent else "未測定"), unit))
         for supply in definition.service_capacity_supplies:
             rows.append(FacilityUpgradeDifferenceRow(
                 "service", f"Service供給 · {supply.service_type}",
@@ -294,13 +305,20 @@ class ProjectProjectorMixin:
         site_failures = sim.projects.upgrade_site_failures(
             facility.id, recipe.target_level, sim.day, snapshot
         )
+        context_id = facility.site_cell_id or facility.operational_node_id
+        definition = sim.facilities.definitions[facility.definition_id]
+        public_site_failures, _ = sim.surface_knowledge.public_site_blockers(
+            context_id,
+            tuple((failure.code, failure.detail) for failure in site_failures),
+            definition.installation_requirements, recipe.site_requirements,
+        )
         blockers = tuple(
             ("technology", str(technology))
             for technology in sorted(
                 recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
                 key=str,
             )
-        ) + tuple((failure.code, failure.detail) for failure in site_failures)
+        ) + public_site_failures
         for failure in plan_failures:
             row = (failure.code, failure.detail)
             if row not in blockers:
@@ -433,22 +451,23 @@ class ProjectProjectorMixin:
             # Its real blockers govern simulation; the player's read model must
             # not reveal an unobserved Cell through an in-progress Project.
             if isinstance(project.target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
-                hidden = sim.surface_knowledge.unpublished_site_condition_codes(
-                    project.target.cell_id, recipe.site_requirements,
+                blockers, _ = sim.surface_knowledge.public_site_blockers(
+                    project.target.cell_id, blockers, recipe.site_requirements,
                 )
-                if hidden:
-                    blockers = tuple(row for row in blockers if row[0] not in hidden) + (
-                        ("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),
-                    )
             elif isinstance(project.target, NewFacilityTarget):
                 definition = sim.facilities.definitions[project.target.facility_def_id]
-                context_id = project.site_cell_id or project.operational_node_id
-                hidden = sim.surface_knowledge.unpublished_site_condition_codes(
-                    context_id, definition.installation_requirements, recipe.site_requirements,
+                blockers, _ = sim.surface_knowledge.public_site_blockers(
+                    project.site_cell_id or project.operational_node_id, blockers,
+                    definition.installation_requirements, recipe.site_requirements,
                 )
-                if hidden:
-                    blockers = tuple(row for row in blockers if row[0] not in hidden) + (
-                        ("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),
+            elif isinstance(project.target, FacilityUpgradeTarget):
+                existing = sim.facilities.facilities.get(project.target.facility_id)
+                if existing is not None:
+                    definition = sim.facilities.definitions[existing.definition_id]
+                    blockers, _ = sim.surface_knowledge.public_site_blockers(
+                        existing.site_cell_id or existing.operational_node_id,
+                        blockers, definition.installation_requirements,
+                        recipe.site_requirements,
                     )
             resources = []
             for requirement in recipe.resources:
@@ -811,8 +830,9 @@ class ProjectProjectorMixin:
             site_failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day, powers[location_id]
             )
-            unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
-                location_id, definition.installation_requirements, recipe.site_requirements,
+            public_site_failures, site_unknown = sim.surface_knowledge.public_site_blockers(
+                location_id, tuple((failure.code, failure.detail) for failure in site_failures),
+                definition.installation_requirements, recipe.site_requirements,
             )
             blockers = tuple(
                 ("technology", str(technology))
@@ -820,8 +840,7 @@ class ProjectProjectorMixin:
                     recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
                     key=str,
                 )
-            ) + tuple((failure.code, failure.detail) for failure in site_failures
-                      if failure.code not in unpublished)
+            ) + public_site_failures
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
             )
@@ -840,7 +859,7 @@ class ProjectProjectorMixin:
                 can_plan=not plan_failures,
                 placement_scope=definition.placement_scope.value,
                 projected_material_readiness_day=material_readiness_day,
-                site_knowledge_unverified=bool(unpublished),
+                site_knowledge_unverified=site_unknown,
                 **self._surface_facility_public_effects(
                     recipe, location_id, sim.surface_knowledge.publishes_environment(location_id)
                 ),

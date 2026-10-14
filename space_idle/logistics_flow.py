@@ -326,19 +326,17 @@ class LogisticsFlowMixin:
             ratios: list[float] = []
             row_limits: list[str] = []
             for location_id in dependency.surface_service_locations:
-                request_id = EntityId(f"service.surface_distribution:{location_id}")
-                try:
-                    request = service_allocations.request(request_id)
-                    allocated = service_allocations.allocated(request_id)
-                except KeyError:
-                    request = None
-                    allocated = 0.0
-                if request is None:
+                # The owning geographical Service may have many requests at
+                # different Activity priorities. Never reconstruct a private
+                # root request ID or invent a second allocation path here.
+                summary = service_allocations.summary(location_id, 'surface_distribution')
+                if summary.enabled_rate <= 1e-12:
                     ratio = 0.0
-                elif request.requested_rate <= 1e-12:
+                elif summary.requested_rate <= 1e-12:
                     ratio = 1.0
                 else:
-                    ratio = max(0.0, min(1.0, allocated / request.requested_rate))
+                    ratio = max(0.0, min(1.0,
+                        summary.allocated_rate / summary.requested_rate))
                 ratios.append(ratio)
                 if ratio < 1.0 - 1e-12:
                     row_limits.append(f"surface_infrastructure:{location_id}")

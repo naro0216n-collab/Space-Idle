@@ -243,14 +243,15 @@ class LocationProjectorMixin:
         ):
             definition = sim.facilities.definitions[facility.definition_id]
             activation_failures = sim.facilities.activation_failures(facility, sim.day)
-            hidden = sim.surface_knowledge.unpublished_site_condition_codes(
-                sim.facilities.facility_environment_context(facility), definition.operating_requirements,
+            public_activation_failures, site_unknown = sim.surface_knowledge.public_site_blockers(
+                sim.facilities.facility_environment_context(facility),
+                tuple(activation_failures), definition.operating_requirements,
             )
-            hidden_operating_sites[facility.id] = hidden
-            public_activation_failures = tuple((code, detail) for code, detail in activation_failures
-                                               if code not in hidden)
-            if hidden:
-                public_activation_failures += (("site_knowledge_unverified", "現地稼働環境は未測定・再測定待ち"),)
+            hidden_operating_sites[facility.id] = (
+                sim.surface_knowledge.unpublished_site_condition_codes(
+                    sim.facilities.facility_environment_context(facility), definition.operating_requirements,
+                )
+            )
             active_and_compatible = not activation_failures
             research_provider = (
                 None
@@ -830,6 +831,13 @@ class LocationProjectorMixin:
                 natural_growth_constraints=constraints_from_pairs(
                     tuple((code, pop.natural_growth_blocker_detail(code))
                           for code in pop.growth_last_blockers.get(location_id, ())),
+                    affected_action="natural_population_growth",
+                    related_entity_kind="operational_node",
+                    related_entity_id=str(location_id),
+                ),
+                natural_growth_current_constraints=constraints_from_pairs(
+                    tuple((code, pop.natural_growth_blocker_detail(code))
+                          for code in pop.natural_growth_current_blockers(location_id, sim.day, power)),
                     affected_action="natural_population_growth",
                     related_entity_kind="operational_node",
                     related_entity_id=str(location_id),

@@ -510,7 +510,7 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
         ),
         # SURFACE_LAUNCH_SUPPORT
         FacilityAsset(
-            definition=FacilityDef(ids.SURFACE_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations", "surface_access_anchor"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0)),
+            definition=FacilityDef(ids.SURFACE_LAUNCH_SUPPORT, "打上げ・回収整備設備", req._capabilities("cargo_transfer", "vehicle_refueling", "launch_vehicle_servicing", "launch_operations", "surface_access_anchor"), surface, surface, placement_scope=FacilityPlacementScope.SURFACE_CELL, service_capacity_supplies=req._services(cargo_transfer=1.0, launch_vehicle_servicing=1.0, surface_distribution=10.0)),
             construction=req._surface_recipe(
                         ids.SURFACE_LAUNCH_SUPPORT, 10, 8, 2, 54,
                     ),
@@ -740,7 +740,7 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         surface,
                         surface,
                         placement_scope=FacilityPlacementScope.SURFACE_CELL,
-                        service_capacity_supplies=req._services(surface_distribution=1.0),
+                        service_capacity_supplies=req._services(surface_distribution=12.0),
                     ),
             construction=req._surface_recipe(
                         ids.SURFACE_DISTRIBUTION_HUB, 5, 4, 1, 28

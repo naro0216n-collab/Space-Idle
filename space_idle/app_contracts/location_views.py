@@ -262,6 +262,7 @@ class PopulationView:
     natural_growth_last_added: int = 0
     natural_growth_blockers: tuple[str, ...] = ()
     natural_growth_constraints: tuple[DecisionConstraintRow, ...] = ()
+    natural_growth_current_constraints: tuple[DecisionConstraintRow, ...] = ()
     natural_growth_housing_spare: int = 0
     natural_growth_life_support_spare: int = 0
     natural_growth_reserved_arrivals: int = 0

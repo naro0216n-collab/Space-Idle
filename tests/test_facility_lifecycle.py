@@ -708,3 +708,42 @@ def test_common_facility_unit_investment_and_maintenance_apply_to_unbounded_leve
         resource: amount * 3 for resource, amount in unit.items()
     })
     assert sim.facilities.maintenance_requirements_per_day(grouped) == pytest.approx(expected)
+
+
+def test_initial_scenario_facility_unit_investments_match_ordinary_acquisition():
+    """No initial Scenario facility is an alternate, discounted physical asset."""
+    sim = build_game_application()._simulation
+    for facility in sim.facilities.facilities.values():
+        recipe = sim.projects.recipes[facility.definition_id]
+        unit_investment = {
+            requirement.resource_id: requirement.amount_t
+            for requirement in recipe.resources
+        }
+        assert facility.level == 1
+        assert facility.invested_resources == pytest.approx(unit_investment), facility.definition_id
+        assert sim.facilities.maintenance_requirements_per_day(facility.id) == pytest.approx(
+            sim.facilities.maintenance_requirements_for_investment(
+                facility.definition_id, unit_investment,
+            )
+        )
+
+
+def test_unmeasured_environment_does_not_leak_through_upgrade_power_differences():
+    app = build_game_application()
+    sim = app._simulation
+    facility = next(row for row in sim.facilities.all_at(ids.EARTH)
+                    if row.definition_id == ids.GRID_POWER_SUPPLY)
+    cell = facility.site_cell_id
+    assert cell is not None
+    sim.surface_knowledge.cell_attribute_levels[(cell, 'environment')] = 0
+    option = next(row.next_upgrade for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                  if row.id == str(facility.id))
+    assert option is not None
+    hidden = [row for row in option.differences if row.label in {'発電Capacity', 'Power需要'}]
+    assert hidden
+    assert all(row.current_value == '未測定' and row.target_value == '未測定' for row in hidden)
+    sim.surface_knowledge.observe_attribute(cell, 'environment', 2)
+    revealed = next(row.next_upgrade for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                    if row.id == str(facility.id))
+    assert any(row.label == '発電Capacity' and isinstance(row.target_value, (int, float))
+               for row in revealed.differences)

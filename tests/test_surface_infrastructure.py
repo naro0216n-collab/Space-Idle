@@ -18,6 +18,19 @@ from space_idle.surface_infrastructure import SURFACE_DISTRIBUTION_SERVICE
 from space_idle.service_capacity import allocate_service_capacity
 
 
+def _remove_local_distribution_supply(sim) -> None:
+    """Make a physically constrained scenario without changing global Content."""
+    from dataclasses import replace
+    definition = sim.facilities.definitions[ids.SURFACE_LAUNCH_SUPPORT]
+    sim.facilities.definitions[ids.SURFACE_LAUNCH_SUPPORT] = replace(
+        definition,
+        service_capacity_supplies=tuple(
+            supply for supply in definition.service_capacity_supplies
+            if supply.service_type != SURFACE_DISTRIBUTION_SERVICE
+        ),
+    )
+
+
 def _ensure_project_materials_on_hand(sim, *project_ids: str) -> None:
     required = {}
     for project_id in project_ids:
@@ -38,13 +51,14 @@ def _ensure_project_materials_on_hand(sim, *project_ids: str) -> None:
 def _snapshot(sim, maintenance_factors=None):
     physical = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
     power = sim.power.resolve_snapshot(physical, maintenance_factors)
-    request = sim.surface_infrastructure.service_request(ids.EARTH)
+    requests = tuple(row for row in sim.surface_infrastructure.service_capacity_requests(sim.day)
+                     if row.operational_node_id == ids.EARTH)
     key = (ids.EARTH, sim.surface_infrastructure.service_type)
     nominal, enabled = sim.service_capacity_registry.supply_at(
         ids.EARTH, key[1], sim.facilities, power, sim.day
     )
     plan = allocate_service_capacity(
-        (request,), nominal_supply={key: nominal}, enabled_supply={key: enabled}
+        requests, nominal_supply={key: nominal}, enabled_supply={key: enabled}
     )
     return sim.surface_infrastructure.snapshot(
         ids.EARTH, sim.facilities, power, sim.day, allocation_plan=plan
@@ -53,9 +67,11 @@ def _snapshot(sim, maintenance_factors=None):
 
 def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provider_health():
     sim = build_game_application()._simulation
+    _remove_local_distribution_supply(sim)
     initial = _snapshot(sim)
-    assert initial.demand == 0.0
-    assert initial.fulfillment == 1.0
+    # Activity in an anchor Cell still performs finite local handling work.
+    assert initial.demand > 0
+    assert initial.fulfillment == 0.0
 
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     one_remote = _snapshot(sim)
@@ -64,7 +80,7 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
     assert one_remote.available_capacity == pytest.approx(0.0)
     assert one_remote.fulfillment == pytest.approx(0.0)
     assert one_remote.limiting_factors == ("surface_infrastructure",)
-    assert any(row.code == "activity_distance" for row in one_remote.load_sources)
+    assert any(row.code.startswith("activity:") for row in one_remote.load_sources)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.operational_node_ids()
     assert all(
         location_id != ids.EARTH_CELL_COASTAL
@@ -123,6 +139,7 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
 
 def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_execution_is_limited_once():
     sim = build_game_application()._simulation
+    _remove_local_distribution_supply(sim)
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
@@ -148,9 +165,9 @@ def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_
     assert constrained.effective_opportunity == pytest.approx(physical_opportunity)
     assert "service_capacity" in constrained.limiting_factors
 
-    sim.facilities.install(
+    hub = sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL, level=20,
     )
     decision = sim.tick_decision_projection()
     power = decision.allocations.power_by_location[ids.EARTH]
@@ -174,6 +191,7 @@ def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_
 def test_location_query_exposes_surface_infrastructure_decision_state_and_improvement():
     app = build_game_application()
     sim = app._simulation
+    _remove_local_distribution_supply(sim)
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
 
     view = app.query(GetOperationalNode(str(ids.EARTH)))
@@ -222,6 +240,7 @@ def test_location_query_exposes_surface_infrastructure_decision_state_and_improv
 
 def test_surface_infrastructure_limits_remote_service_execution_without_disabling_capability():
     sim = build_game_application()._simulation
+    _remove_local_distribution_supply(sim)
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     station_id = sim.facilities.install(
         ids.ROBOTIC_GEOLOGY_STATION,
@@ -277,6 +296,7 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
 def test_surface_cell_development_projection_execution_and_completion_share_one_infrastructure_contract():
     app = build_game_application()
     sim = app._simulation
+    _remove_local_distribution_supply(sim)
 
     surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
     coastal = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_COASTAL))
@@ -340,9 +360,9 @@ def test_surface_cell_development_projection_execution_and_completion_share_one_
     assert tuple(factor.code for factor in project.limiting_factors) == ("surface_infrastructure",)
     assert ids.EARTH_CELL_COASTAL not in sim.graph.locations[ids.EARTH].developed_cell_ids
 
-    sim.facilities.install(
+    hub = sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
-        site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+        site_cell_id=ids.EARTH_CELL_INDUSTRIAL, level=20,
     )
     decision = sim.tick_decision_projection()
     bundle_id = sim.projects.construction_execution_bundle_id(project_id)
@@ -399,8 +419,8 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     sim.graph.found_location(b, "B", ids.MOON, ids.MOON_CELL_NEARSIDE_MARE)
     sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, a)
     sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, b)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, a, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE)
-    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, b, site_cell_id=ids.MOON_CELL_NEARSIDE_MARE)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, a, site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE, level=3)
+    sim.facilities.install(ids.SURFACE_DISTRIBUTION_HUB, b, site_cell_id=ids.MOON_CELL_NEARSIDE_MARE, level=3)
     sim.transport.add_fleet_units(ids.SURFACE_CARGO_HAULER, 1, a)
     sim.transport.invalidate_movement_plans()
     allocation_id = sim.transport.create_transport_allocation(
@@ -424,7 +444,7 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
                      and sim.graph.owner_of_cell(cell) is None)
     sim.graph.develop_surface_cell(a, next_cell)
     # Merely declaring an unoccupied territory does not consume distribution.
-    assert sim.surface_infrastructure.demand(a) == 0.0
+    assert sim.surface_infrastructure.demand(a) > 0.0
     # Actual active equipment in a remote Cell creates finite local distribution
     # work, regardless of whether the Cell hosts extraction or a site facility.
     sim.facilities.install(ids.SURFACE_POWER_GRID, a, site_cell_id=next_cell)
@@ -437,7 +457,7 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     assert expected_load > 0
     sim.facilities.definitions[ids.SURFACE_DISTRIBUTION_HUB] = replace(
         hub, service_capacity_supplies=tuple(
-            ServiceCapacitySupply(row.service_type, expected_load / 2)
+            ServiceCapacitySupply(row.service_type, expected_load / 6)
             if row.service_type == 'surface_distribution' else row
             for row in hub.service_capacity_supplies
         ),
@@ -717,3 +737,70 @@ def test_surface_distribution_uses_physical_area_and_distance_not_cell_count():
         single = sum(x.demand for x in service.physical_load_sources_for_cells(body_id, cells, cells[:1]))
         two = sum(x.demand for x in service.physical_load_sources_for_cells(body_id, cells, cells[:2]))
         assert 0 <= two <= single
+
+
+def test_surface_activity_priority_and_ownership_survive_shared_service_allocation():
+    from dataclasses import replace
+    from space_idle.priority import ActivityPriority
+
+    sim = build_game_application()._simulation
+    high = sim.facilities.install(
+        ids.GRID_POWER_SUPPLY, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+        activity_priority=ActivityPriority(5),
+    )
+    low = sim.facilities.install(
+        ids.GRID_POWER_SUPPLY, ids.EARTH, site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
+        activity_priority=ActivityPriority(1),
+    )
+    source = sim.facilities.definitions[ids.SURFACE_LAUNCH_SUPPORT]
+    sim.facilities.definitions[ids.SURFACE_LAUNCH_SUPPORT] = replace(
+        source, service_capacity_supplies=tuple(
+            replace(supply, nominal_rate=1.5)
+            if supply.service_type == SURFACE_DISTRIBUTION_SERVICE else supply
+            for supply in source.service_capacity_supplies
+        ),
+    )
+    allocations = sim.tick_decision_projection().allocations.services
+    requests = [
+        sim.surface_infrastructure.service_request_id(ids.EARTH, facility_id)
+        for facility_id in (high, low)
+    ]
+    assert allocations.request(requests[0]).priority == ActivityPriority(5)
+    assert allocations.request(requests[1]).priority == ActivityPriority(1)
+    assert allocations.allocated(requests[0]) == pytest.approx(allocations.request(requests[0]).requested_rate)
+    assert allocations.allocated(requests[1]) == pytest.approx(0)
+    assert allocations.summary(ids.EARTH, SURFACE_DISTRIBUTION_SERVICE).requested_rate > 1.5
+
+
+def test_surface_shortest_paths_are_reused_until_world_or_anchor_changes(monkeypatch):
+    import space_idle.surface_infrastructure as infrastructure_module
+
+    sim = build_game_application()._simulation
+    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    service = sim.surface_infrastructure
+    calls = 0
+    original = infrastructure_module.great_circle_distance_km
+
+    def count_calls(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(infrastructure_module, 'great_circle_distance_km', count_calls)
+    assert service.demand(ids.EARTH, sim.day) > 0
+    assert calls > 0
+    first = calls
+    service.service_capacity_requests(sim.day)
+    service.physical_load_sources_for_cells(
+        sim.graph.locations[ids.EARTH].body_id,
+        sim.graph.locations[ids.EARTH].developed_cell_ids,
+        service.active_access_anchor_cells(ids.EARTH, sim.day),
+    )
+    assert calls == first
+    frontier = next(
+        cell for cell in sorted(sim.graph.surface_cells[ids.EARTH_CELL_COASTAL].neighbor_ids)
+        if cell not in sim.graph.locations[ids.EARTH].developed_cell_ids
+    )
+    sim.graph.develop_surface_cell(ids.EARTH, frontier)
+    service.demand(ids.EARTH, sim.day)
+    assert calls > first

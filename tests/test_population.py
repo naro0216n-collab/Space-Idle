@@ -676,3 +676,27 @@ def test_natural_growth_requires_confirmed_replenishment_not_just_large_stock():
     assert sim.population.count_at(ids.EARTH) == 0
     assert sim.population.growth_credit[ids.EARTH] == pytest.approx(0.9)
     assert 'population_absent' in sim.population.growth_last_blockers[ids.EARTH]
+
+
+def test_natural_growth_credit_never_banks_unadmitted_people_and_current_constraints_are_not_yesterdays():
+    from dataclasses import replace
+    from space_idle import AdvanceTime, SetNaturalPopulationGrowth
+
+    app = build_game_application()
+    sim = app._simulation
+    node = str(ids.EARTH)
+    sim.population.rules = replace(sim.population.rules, natural_growth_rate_per_person_per_day=5.0)
+    original = sim.population.count_at(ids.EARTH)
+    app.execute(AdvanceTime(1))
+    grown = sim.population.count_at(ids.EARTH)
+    assert grown > original
+    assert 0 <= sim.population.growth_credit.get(ids.EARTH, 0.0) < 1
+    sim.population.validate()
+    yesterday = sim.population.growth_last_blockers[ids.EARTH]
+    app.execute(SetNaturalPopulationGrowth(node, False))
+    current = app.query(GetOperationalNode(node)).population
+    assert any(row.code == 'natural_growth_disabled' for row in current.natural_growth_current_constraints)
+    assert sim.population.growth_last_blockers[ids.EARTH] == yesterday
+    sim.population.growth_credit[ids.EARTH] = 1.0
+    with pytest.raises(ValueError, match='natural growth credit'):
+        sim.population.validate()

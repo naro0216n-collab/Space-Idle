@@ -135,11 +135,8 @@ class ResearchProgressionProjectorMixin:
                     blockers = sim.research.demonstration_site_blockers(definition.id, node.id, sim.day, power_by_location.get(node.id), surface_cell_id)
                     can_select = sim.research.can_select_demonstration_site(definition.id, node.id, sim.day, surface_cell_id)
                 context_id = surface_cell_id if surface_cell_id is not None else node.id
-                unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
-                    context_id, spec.site_requirements,
-                )
-                public_blockers = tuple(
-                    blocker for blocker in blockers if blocker[0] not in unpublished
+                public_blockers, site_unknown = sim.surface_knowledge.public_site_blockers(
+                    context_id, blockers, spec.site_requirements,
                 )
                 resource_status = (
                     sim.research.prototype_site_resources(
@@ -177,7 +174,7 @@ class ResearchProgressionProjectorMixin:
                     )
                     service_work_capacity = min(1.0, service_work_capacity)
                 estimated_days = (
-                    None if public_blockers or unpublished or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
+                    None if public_blockers or resource_shortfall > 1e-9 or service_work_capacity <= 1e-12
                     else float(remaining_work) / service_work_capacity
                 )
                 comparison_values = (
@@ -200,7 +197,7 @@ class ResearchProgressionProjectorMixin:
                     comparison_key=f"{node.id}|{surface_cell_id or ''}",
                     comparison_values=comparison_values,
                     resources=resource_rows,
-                    site_knowledge_unverified=bool(unpublished),
+                    site_knowledge_unverified=site_unknown,
                 ))
         return tuple(rows)
 
@@ -402,14 +399,9 @@ class ResearchProgressionProjectorMixin:
             ) and state.execution_context is not None:
                 site = state.execution_context
                 context_id = site.surface_cell_id or site.operational_node_id
-                unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
-                    context_id, current_spec.site_requirements,
+                current_blockers, _ = sim.surface_knowledge.public_site_blockers(
+                    context_id, current_blockers, current_spec.site_requirements,
                 )
-                if unpublished:
-                    current_blockers = tuple(
-                        blocker for blocker in current_blockers
-                        if blocker[0] not in unpublished
-                    ) + (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
             priority = 3 if state is None else state.priority
             stage_progress = 0.0
             stage_required = 0.0
