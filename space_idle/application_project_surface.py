@@ -136,6 +136,14 @@ class SurfaceProjectorMixin:
         )
         rows: list[SurfaceCellRow] = []
         founding_comparison_values: list[tuple[ComparisonValueRow, ...]] = []
+        # Survey targets are static; index only once for this map projection.
+        # Per-Cell scans of all World targets make geographic resolution an
+        # accidental UI cost and risk encouraging unrealistically few Cells.
+        survey_resources_by_cell = {}
+        if sim.survey is not None:
+            for cell_id, resource_id in sim.survey.targets:
+                if sim.graph.surface_cells[cell_id].body_id == body_id:
+                    survey_resources_by_cell.setdefault(cell_id, []).append(resource_id)
         # Materials belong to the Operational Node, not each Surface Cell.
         # Several Cell candidates at the same owner share one preview; local
         # physical effects and site blockers still use the selected Cell.
@@ -223,14 +231,7 @@ class SurfaceProjectorMixin:
                         sim.survey.visible_potential(cell.id, resource_id),
                         sim.survey.visible_potential_precision_fraction(cell.id, resource_id),
                     )
-                    for (target_cell_id, resource_id) in sorted(
-                        (
-                            key
-                            for key in sim.survey.targets
-                            if key[0] == cell.id
-                        ),
-                        key=lambda key: str(key[1]),
-                    )
+                    for resource_id in sorted(survey_resources_by_cell.get(cell.id, ()), key=str)
                 )
             facility_placement_options = ()
             if owner is not None:

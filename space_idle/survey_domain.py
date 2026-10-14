@@ -214,7 +214,10 @@ def validate_survey_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(target.cell_id in sim.graph.surface_cells, f"survey target references unknown surface cell: {key}")
         if target.cell_id in sim.graph.surface_cells:
             cell = sim.graph.surface_cells[target.cell_id]
-            _require(target.resource_id in cell.resource_potential_by_resource, f"survey target resource has no static potential entry: {key}")
+            # Zero physical opportunity is a legitimate measurement result.
+            # Requiring a positive World entry here leaks deposits through
+            # target availability and prevents observation of barren cells.
+            _require(target.resource_id in sim.inventory.resource_definitions, f"survey target references unknown resource: {key}")
         _require(len(target.thresholds) == 3, f"survey target must define three knowledge thresholds: {key}")
         _require(all(v >= 0 for v in target.thresholds), f"negative survey threshold: {key}")
         _require(tuple(sorted(target.thresholds)) == target.thresholds, f"unsorted survey thresholds: {key}")

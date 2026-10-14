@@ -47,11 +47,14 @@ def build_survey_targets(graph: SpatialGraph) -> dict:
             targets[(cell_id, resource_id)] = SurveyTarget(
                 cell_id, resource_id, (15.0, 45.0, 110.0), 0.5,
             )
-    # Every registered Resource Potential has exactly one Survey target. The
-    # physical world defines what could exist; this Content supplies only the
-    # initial observation prior and knowledge thresholds, not player Knowledge.
+    # Observation eligibility must never reveal either Cell- or body-scale
+    # absence. Any extractable geologic resource class may be surveyed on any
+    # solid surface, including places where the true opportunity is zero.
+    # Extraction and Survey remain independent operations; their shared
+    # resource catalogue is authored Content, not discovered geology.
+    surveyable_resources = sorted({spec.resource_id for spec in build_extraction_specs().values()})
     for cell in graph.surface_cells.values():
-        for resource_id in cell.resource_potential_by_resource:
+        for resource_id in surveyable_resources:
             targets.setdefault((cell.id, resource_id), SurveyTarget(
                 cell.id, resource_id, (25.0, 75.0, 160.0), 0.5,
             ))

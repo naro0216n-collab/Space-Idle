@@ -25,6 +25,7 @@ from ..spatial import (
 )
 from . import base_ids as ids
 from .solar_system_bodies import register_solar_system_bodies, register_solar_system_environment, register_solar_system_regions, register_giant_orbital_contexts, register_giant_orbital_environment
+from .surface_world import register_complete_surface_world
 
 
 def _earth_cell(
@@ -251,6 +252,7 @@ def build_world_definition() -> tuple[SpatialGraph, EnvironmentResolver]:
     register_solar_system_environment(graph, facets)
     register_giant_orbital_environment(graph, facets)
     register_solar_system_regions(graph, facets)
+    register_complete_surface_world(graph, facets)
 
     # Body-global Physical Environment is defined once per body.  Surface Cell
     # local fields/overlays remain explicit below; Surface Locations never copy

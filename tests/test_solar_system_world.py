@@ -279,3 +279,96 @@ def test_founding_projections_are_scoped_to_explicit_targets_without_losing_othe
     assert set(sim.graph.operational_node_ids()) == owned
     assert sim.transport.fleet_pools == fleet
     assert sim.inventory.stock == stock
+
+
+def test_static_world_partitions_cover_each_solid_body_without_multiplying_opportunity(monkeypatch):
+    """Geometry, quantity and topology follow registration, not authored Cell count."""
+    from collections import defaultdict
+    from math import isclose, pi
+    from space_idle.content.base_spatial import build_world_definition
+    from space_idle.content import surface_world
+    from space_idle.surface_partition import validate_surface_partitions
+
+    def totals(world):
+        quantities = defaultdict(float)
+        for cell in world.surface_cells.values():
+            for resource_id, potential in cell.resource_potential_by_resource.items():
+                quantities[(cell.body_id, resource_id)] += potential
+        return quantities
+
+    first, _ = build_world_definition()
+    validate_surface_partitions(first, require_all_solid=True)
+    body_counts = defaultdict(int)
+    for cell in first.surface_cells.values():
+        body_counts[cell.body_id] += 1
+    for body_id, body in first.bodies.items():
+        cells = first.cells_for_body(body_id)
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            assert not cells
+            continue
+        assert len(cells) == body_counts[body_id]
+        assert len(cells) > 1
+        surface_area = 4 * pi * body.mean_radius_km ** 2
+        assert isclose(sum(cell.area_km2 for cell in cells), surface_area, rel_tol=1e-10)
+        assert all(isclose(cell.area_km2, surface_area / len(cells), rel_tol=1e-10) for cell in cells)
+        # Connectivity is a topological requirement, not a body-specific script.
+        reached = {cells[0].id}
+        frontier = [cells[0].id]
+        while frontier:
+            current = frontier.pop()
+            newly_reached = first.surface_cells[current].neighbor_ids - reached
+            reached.update(newly_reached)
+            frontier.extend(newly_reached)
+        assert reached == {cell.id for cell in cells}
+
+    original_ring_count = surface_world._ring_count
+    monkeypatch.setattr(surface_world, "_ring_count", lambda radius: original_ring_count(radius) + 2)
+    finer, _ = build_world_definition()
+    validate_surface_partitions(finer, require_all_solid=True)
+    assert len(finer.surface_cells) > len(first.surface_cells)
+    first_totals, finer_totals = totals(first), totals(finer)
+    assert first_totals.keys() == finer_totals.keys()
+    for key, amount in first_totals.items():
+        assert finer_totals[key] == pytest.approx(amount, rel=1e-10, abs=1e-10)
+
+
+def test_geographic_diversity_and_survey_eligibility_do_not_depend_on_actual_deposits():
+    """Regional choice must survive the World generator and Knowledge boundary."""
+    app = build_game_application()
+    sim = app._simulation
+    for body in sim.graph.bodies.values():
+        if body.physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            continue
+        cells = sim.graph.cells_for_body(body.id)
+        possible = {resource for cell in cells for resource in cell.resource_potential_by_resource}
+        # Absence on an entire celestial body is likewise not free Knowledge.
+        # Survey eligibility is the same Content-level resource catalogue on
+        # every solid body, regardless of its actual deposited resources.
+        surveyable = {spec.resource_id for spec in sim.extraction.specs.values()}
+        target_resources = {resource for (cell, resource) in sim.survey.targets
+                            if sim.graph.surface_cells[cell].body_id == body.id}
+        assert target_resources == surveyable
+        for cell in cells:
+            assert {(cell.id, resource) for resource in surveyable} <= sim.survey.targets.keys()
+        # The same world has different geology and construction geography.
+        # Generic Content must not just replicate one reference tuple across
+        # arbitrarily many equal-area Cells.
+        assert len({round(cell.terrain.bearing_capacity_factor, 5) for cell in cells}) > 1
+        if len(possible) > 1:
+            assert len({tuple(sorted(cell.resource_potential_by_resource)) for cell in cells}) > 1
+
+    # One genuinely barren Cell and one bearing the same Resource must be
+    # indistinguishable by the list of surveyable Resource types before survey.
+    moon = sim.graph.cells_for_body(ids.MOON)
+    resource = ids.VOLATILE_BEARING_MATERIAL
+    bearing = next(cell for cell in moon if cell.resource_potential_by_resource.get(resource, 0) > 0)
+    barren = next(cell for cell in moon if cell.resource_potential_by_resource.get(resource, 0) == 0)
+    moon_map = app.query(GetSurfaceMap(str(ids.MOON)))
+    views = {row.id: row for row in moon_map.cells}
+    for cell in (bearing, barren):
+        row = next(resource_row for resource_row in views[str(cell.id)].resources
+                   if resource_row.resource_id == str(resource))
+        assert row.knowledge_level == 0
+        assert row.presence_probability is None
+        assert row.visible_potential is None
+    assert sim.survey.actual_potential(barren.id, resource) == 0

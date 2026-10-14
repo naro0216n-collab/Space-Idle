@@ -134,10 +134,15 @@ def test_authored_prototype_and_operational_experience_link_physical_site_alloca
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(sim)
 
-    for _ in range(4):
+    # Physical site conditions and operating productivity are Content values;
+    # the contract is that the same research completes and persists without
+    # diverging after Save / Load, not that it takes a fixed number of days.
+    for _ in range(90):
+        if target in sim.technology.completed:
+            break
         app.execute(AdvanceTime(1))
         loaded.execute(AdvanceTime(1))
-    assert capture_state(loaded._simulation) == capture_state(sim)
+        assert capture_state(loaded._simulation) == capture_state(sim)
     assert target in sim.technology.completed
     assert _research_row(app, target).status == "complete"
     # Stage inputs are permanently consumed once, not duplicated by Load.

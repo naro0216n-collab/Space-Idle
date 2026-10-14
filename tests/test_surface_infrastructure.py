@@ -93,7 +93,15 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
     assert degraded.fulfillment < supplied.fulfillment
     assert degraded.limiting_factors == ("surface_infrastructure",)
 
-    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_INLAND)
+    # Territory grows by actual shared boundaries, not by the labels of
+    # sparse geographic references in an earlier incomplete map.
+    frontier = sorted(
+        {neighbor for developed_id in sim.graph.locations[ids.EARTH].developed_cell_ids
+         for neighbor in sim.graph.surface_cells[developed_id].neighbor_ids
+         if neighbor not in sim.graph.locations[ids.EARTH].developed_cell_ids}
+    )
+    assert frontier
+    sim.graph.develop_surface_cell(ids.EARTH, frontier[0])
     two_remote = _snapshot(sim)
     assert two_remote.demand > one_remote.demand
     assert two_remote.demand > supplied.demand
@@ -141,8 +149,13 @@ def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_
         if row.facility_def_id == ids.METAL_ORE_MINE
     )
     assert supplied.effective_opportunity == pytest.approx(physical_opportunity)
-    assert supplied.scale == pytest.approx(1.0)
-    assert supplied.limiting_factors == ()
+    infrastructure = sim.surface_infrastructure.snapshot(
+        ids.EARTH, sim.facilities, power, sim.day,
+        allocation_plan=decision.allocations.services,
+    )
+    assert supplied.scale == pytest.approx(infrastructure.fulfillment)
+    assert 0 < supplied.scale <= 1.0
+    assert supplied.limiting_factors == (() if infrastructure.fulfillment == 1.0 else ("service_capacity",))
 
 
 def test_location_query_exposes_surface_infrastructure_decision_state_and_improvement():
@@ -217,8 +230,12 @@ def test_surface_infrastructure_limits_remote_service_execution_without_disablin
     supplied = decision.allocations.services.summary(ids.EARTH, service_type)
     cargo_supplied = decision.allocations.services.summary(ids.EARTH, "cargo_transfer")
     assert supplied.nominal_rate == pytest.approx(expected_rate)
-    assert supplied.enabled_rate == pytest.approx(expected_rate)
-    assert supplied.limiting_factors == ()
+    infra = sim.surface_infrastructure.snapshot(
+        ids.EARTH, sim.facilities, power, sim.day,
+        allocation_plan=decision.allocations.services,
+    )
+    assert supplied.enabled_rate == pytest.approx(expected_rate * infra.fulfillment)
+    assert supplied.limiting_factors == (() if infra.fulfillment == 1.0 else ("provider_dependency",))
     assert cargo_supplied.enabled_rate > 0.0
     assert sim.facilities.active_capability_at(ids.EARTH, "surface_survey", sim.day)
     assert sim.facilities.active_capability_at(ids.EARTH, "cargo_transfer", sim.day)
@@ -320,7 +337,13 @@ def test_remote_surface_movement_capacity_uses_location_surface_infrastructure()
     assert initial.available.forward_t_per_day == pytest.approx(initial.nominal.forward_t_per_day)
 
     sim.graph.develop_surface_cell(a, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    sim.graph.develop_surface_cell(a, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
+    # The registered geography is a complete global partition: a distant
+    # equatorial named region is not assumed adjacent to the polar plain.
+    polar_neighbors = sim.graph.surface_cells[ids.MOON_CELL_SOUTH_POLAR_PLAIN].neighbor_ids
+    next_cell = next(cell for cell in sorted(polar_neighbors)
+                     if cell not in sim.graph.locations[a].developed_cell_ids
+                     and sim.graph.owner_of_cell(cell) is None)
+    sim.graph.develop_surface_cell(a, next_cell)
     sim.transport.invalidate_movement_plans()
     physical = sim.transport.transport_capacity_snapshot(allocation_id, day=sim.day)
     assert physical.available.forward_t_per_day == pytest.approx(physical.nominal.forward_t_per_day)

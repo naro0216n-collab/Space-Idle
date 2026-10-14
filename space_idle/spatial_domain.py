@@ -5,6 +5,7 @@ from typing import Any
 from .domain import DomainExtension, StateCodec, decode_list, decode_str, require_fields
 from .shared import CelestialBodyId, DefinitionId, SpatialNodeId, SurfaceCellId
 from .spatial import OperationalNodeState, PhysicalSurface, SurfaceLocationState
+from .surface_partition import validate_surface_partitions
 from .validation_support import ValidationContext, require as _require
 
 
@@ -126,6 +127,8 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
             )
         for resource_id, potential in cell.resource_potential_by_resource.items():
             _require(potential >= 0, f"surface cell has negative resource potential: {cell_id}/{resource_id}")
+
+    validate_surface_partitions(sim.graph)
 
     for (context_id, facet_type), facet in sim.environment.static.facets.items():
         _require(

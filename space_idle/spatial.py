@@ -323,6 +323,7 @@ class SurfaceCellDef:
     static_geology: Mapping[str, float] = field(default_factory=dict)
     resource_potential_by_resource: Mapping[DefinitionId, float] = field(default_factory=dict)
     display_name: str = ""
+    spherical_bounds: "SphericalCellBounds | None" = None
 
     def __post_init__(self) -> None:
         if self.area_km2 <= 0:
