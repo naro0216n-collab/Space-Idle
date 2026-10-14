@@ -33,7 +33,6 @@ from .app_contracts.progression_views import (
     ResearchProviderRow, ResearchProviderFleetRow, ResearchPrototypeResourceRow, ResearchExperienceRow, ResearchKnowledgeRow,
     ResearchStageRow, ResearchUnlockRow, ResearchRow, ResearchView, ScientificExplorationFleetOptionRow,
     ScientificExplorationRow, ScientificExplorationsView, SurveyProviderFleetRow, SurveyCandidateRow, SurveyCampaignTargetRow, SurveyCampaignRow, SurveyRow, SurveyCampaignIntentPreviewView, SurveysView,
-    ContractRow, ContractsView,
 )
 from .app_contracts.ui_reports import DecisionContextTarget, IssueRow, ResourceFlowRow, FlowReportView, BottlenecksView
 from .app_contracts.analytics_views import (
@@ -61,7 +60,7 @@ QueryResult: TypeAlias = (
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |
     TransportAllocationOptionsView | TransportAllocationPreviewView | TargetStockContextView | ResearchView |
-    ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | ContractsView | MarketView |
+    ScientificExplorationsView | SurveysView | SurveyCampaignIntentPreviewView | MarketView |
     PassengerTransferPreviewView | PassengerTransfersView
 )
 

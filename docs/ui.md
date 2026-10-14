@@ -352,7 +352,7 @@ Locationを開いた後は設備、建設、Inventory、依存関係等を同じ
 
 ### 8.3 Population / 居住と生命維持
 
-Location Overviewでは現在人数、任意の人口目標、Activity拘束人員、Inbound / Outbound、Housingの物理／利用可能／占有数、Life Supportの人数比例需要と実割当、生活Resourceごとの正味消費・現地在庫・補給中量、累積不足・翌日Crew能力、受入blockerを表示する。Earth外部人員供給元には有限残員・日次上限・当日取得可能数を表示する。現在値、次tick配分見込み、到着時点期待人数、将来Forecastを区別する。人口目標設定・解除の位置は固定し、目標を下げても人口消去や自動退去を意味しない。人口目標Previewには人数の出所、既Inbound、輸送時間・座席・質量、必要生活Resource、到着先Housing / Life Support、競合するCapacityを示す。
+Location Overviewでは拠点別の自然増加の有効／停止トグル、当日の実増加人数と累積credit、増加可否とHousing・生活Service・生活Resourceの各制約、現在人数、任意の外部補充人口目標、Activity拘束人員、Inbound / Outbound、Housingの物理／利用可能／占有数、Life Supportの人数比例需要と実割当、生活Resourceごとの正味消費・現地在庫・補給中量、累積不足・翌日Crew能力、受入blockerを表示する。Earth外部人員供給元には有限残員・日次上限・当日取得可能数を表示する。現在値、次tick配分見込み、到着時点期待人数、将来Forecastを区別する。人口目標設定・解除の位置は固定し、目標を下げても人口消去や自動退去を意味しない。人口目標Previewには人数の出所、既Inbound、輸送時間・座席・質量、必要生活Resource、到着先Housing / Life Support、競合するCapacityを示す。
 
 Location OverviewとTransportの双方で、任意のorigin / destinationと正の整数人数を指定する一回限りの旅客移送を独立操作として提供する。未設定の人口目標やMission作成を要求しない。Transport Serviceの便とfree Fleetによる専用便を選択候補として並べ、所要日数、使用Fleet・Service、出発確定人数、未出発待機人数、共通Cargo Capacityへの影響、必要Resource、到着先受入余力、出発元の人口目標への影響、blockerをApplication Previewから表示する。Order一覧には要求／未出発／Transit／到着受入済み／取消済み人数を示し、未発送人数の取消操作を固定位置に置く。明示した輸送方法が使えなくなれば別の方法へ無断切替しない。
 
@@ -412,7 +412,7 @@ Process候補は同一Facility内でも異なるResourceを生産・消費し得
 
 ### 10.2 Upgrade
 
-Current LevelとUpgrade後の主要差を同じInspectorで示し、変化しない詳細値より差分を優先する。
+Current Levelは設置unit数であることを明示し、Upgrade後のunit増分・能力／Crew／Power／Service／Resource／Maintenanceの差、必要Resourceとworkを同じInspectorに示す。Process選択は全unitに共通で、異なるProcessの並行運用には別instanceが必要と分かるようにする。
 
 ### 10.3 Decommission / Retirement
 
@@ -453,7 +453,7 @@ active Researchでは完了済みStage詳細より、次に必要なStage条件�
 
 Surface Mapを主要Canvasとし、Cellまたは地域scope、Resource scope、goal Knowledge Levelを直接指定する。
 
-Surface MapとSurveyのCell選択は共通の地理的概略配置を使う。緯度・経度の表示点に可変サイズの操作カードを直接重ねるのではなく、各Cellの操作領域が重複しない配置を導出し、隣接関係を示す。表示の間隔・画面上の距離は実際の距離や移動所要時間を意味しない。Cellが増加した場合も隣の操作領域を覆わせず、Canvas内のスクロールと全Cellに到達できる選択一覧を提供する。選択一覧とMapは同一のCell選択／調査scopeを操作し、別の正本を持たない。地表の再描画や同期で選択、フォーカス、マップ内スクロール、調査Draftを失わない。
+Surface MapとSurveyのCell選択は共通の全域等面積地理を使う。多Cellの表示LOD、可視範囲／Body限定Queryを用いても、未選択Cellを物理Worldから削除せず、全域の選択へ到達できるようにする。未知Cellには真値由来の地形・環境・Resource・Site Previewを出さず、未知・概略・推定・測定済みの属性別品質と観測手段を示す。緯度・経度の表示点に可変サイズの操作カードを直接重ねるのではなく、各Cellの操作領域が重複しない配置を導出し、隣接関係を示す。表示の間隔・画面上の距離は実際の距離や移動所要時間を意味しない。Cellが増加した場合も隣の操作領域を覆わせず、Canvas内のスクロールと全Cellに到達できる選択一覧を提供する。選択一覧とMapは同一のCell選択／調査scopeを操作し、別の正本を持たない。地表の再描画や同期で選択、フォーカス、マップ内スクロール、調査Draftを失わない。
 
 Applicationがresolved provider / observation modeと実際のFacility / Vehicle供給元、拠点、配備数、利用可能Service Capacityを提示し、戦略差のある候補が複数ある場合だけ比較とhard constraint操作を提示する。異なる機種の候補や排他的Fleet Commitmentは同じProvider名にまとめて隠さず、供給元のhard constraintはCampaignの他の設定とともに保持する。
 
@@ -465,7 +465,7 @@ Survey Inspectorではselected scope、Resource scope、goal、completed / remai
 
 ### 12.2 Scientific Exploration
 
-科学活動の実行可否はRequirementとFleet・Crew実在状態から示す。確率的成功率・事故率ではなく、進行量・Crew充足・船内Resourceと帰還blockerを判断地点で公開する。
+科学活動が獲得できる対象・属性・Knowledge品質とRP、既取得品質、Survey等で得られる同一情報を区別し、観測価値、到達、Fleet拘束、所要時間を提示する。科学活動の実行可否はRequirementとFleet・Crew実在状態から示す。確率的成功率・事故率ではなく、進行量・Crew充足・船内Resourceと帰還blockerを判断地点で公開する。
 
 帰還後に船内Resourceの荷卸し待ちとなった場合は、Crewの降機済み状態とFleetの特殊Resource保管blockerを別々に示す。
 

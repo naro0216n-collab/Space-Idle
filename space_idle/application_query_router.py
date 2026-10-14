@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_commands import (
     ApplicationError, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
+    GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, Query,
@@ -164,8 +164,6 @@ class ApplicationQueryRouterMixin:
             )
         if isinstance(query, GetSurveyCampaignIntentPreview):
             return self._survey_campaign_intent_preview_view(query)
-        if isinstance(query, GetContracts):
-            return self._contracts_view()
         if isinstance(query, GetMarket):
             return self._market_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")

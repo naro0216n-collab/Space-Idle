@@ -356,17 +356,3 @@ class SurveysView:
     campaigns: tuple[SurveyCampaignRow, ...]
 
 
-@dataclass(frozen=True)
-class ContractRow:
-    id: str
-    template_id: str
-    display_name: str
-    status: str
-    deadline_day: int
-    target_operational_node_id: str | None
-    blockers: tuple[DecisionConstraintRow, ...]
-
-
-@dataclass(frozen=True)
-class ContractsView:
-    items: tuple[ContractRow, ...]

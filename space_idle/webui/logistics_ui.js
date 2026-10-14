@@ -24,7 +24,7 @@
   let relocationPreviewSerial=0;
   let relocationPreviewKey=null;
 
-  const ownerLabels={project:'建設',founding:'拠点設立',target_stock:'追加備蓄',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査',contract:'契約'};
+  const ownerLabels={project:'建設',founding:'拠点設立',target_stock:'追加備蓄',research:'研究',industry:'産業',facility_maintenance:'設備維持',vehicle_production:'機体建造',scientific_exploration:'科学探査'};
   const priorityLabels={1:'最低',2:'低',3:'標準',4:'高',5:'最高'};
   const priorityControl=(selected,inputAttributes,label='優先度',disabled=false)=>A.prioritySegmentedHtml(selected,{inputAttributes,label,disabled});
   const priorityText=(value)=>`${Number(value)} ${priorityLabels[Number(value)]||''}`.trim();

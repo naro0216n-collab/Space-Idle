@@ -33,7 +33,6 @@ from .app_contracts.population import (
     SetPopulationTarget, ClearPopulationTarget, RequestPassengerTransfer,
     CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
-from .app_contracts.contracts import AcceptContract, DeclineContract
 from .app_contracts.economy import (
     CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
 )
@@ -41,7 +40,7 @@ from .app_contracts.queries import (
     GetCatalog, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext,
-    GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
+    GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetMarket,
 )
 
 Command: TypeAlias = (
@@ -61,15 +60,14 @@ Command: TypeAlias = (
     ClearTransportMovementConstraint |
     PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
-    SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | AcceptContract |
-    DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
+    SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (
     GetPassengerTransferPreview | GetPassengerTransfers |
     GetCatalog | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockContext |
-    GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket
+    GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetMarket
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

@@ -1055,14 +1055,6 @@ class ApplicationReportProjectorMixin:
                     operational_node_id=issue_location, entity_id=row.id,
                 ))
 
-        if location_filter is None:
-            contracts = self._contracts_view()
-            for row in contracts.items:
-                for blocker in row.blockers:
-                    issues.append(self._issue_from_constraint(
-                        blocker, category="contract", source="contract",
-                        entity_id=row.id, definition_id=row.template_id, attention_required=False,
-                    ))
         return tuple(issues)
 
     def _bottlenecks_view(self, location_id: SpatialNodeId | None) -> BottlenecksView:

@@ -3,12 +3,12 @@
 from .version import VERSION as __version__
 from .bootstrap import build_game_application, build_game_application_for_scenario
 from .application import (
-    AcceptContract, AdvanceTime, ApplicationError, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CancelBuild,
+     AdvanceTime, ApplicationError, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CancelBuild,
     CreateTradeOrder, UpdateTradeOrder, CancelTradeOrder,
     ClearTransportMovementConstraint, CreateTransportAllocation, SetTransportMovementConstraint,
-    DeclineContract, DeleteTransportAllocation,
+     DeleteTransportAllocation,
     SetResearchPriority, GameApplication, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog,
-    GetCargoFlows, GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
+    GetCargoFlows,  GetDependencyAnalytics, GetDetailedForecast, GetMarket, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext,
     GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, PauseBuild, PauseFacility, PauseResearch,

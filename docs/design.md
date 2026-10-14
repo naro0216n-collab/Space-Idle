@@ -216,6 +216,12 @@ Process変更はPlayer Commandとしてcanonical boundaryから反映し、既�
 
 生産設備についてUIは最低限、現在選択Process、選択可能な候補、投入資源と実効消費量/日、産出資源と実効生産量/日、稼働率、limiting factor / blockerを設備単位で表示する。資源画面の地点合計フローだけで済ませず、「どの建築物が何を消費し何を作るか」を設備画面から直接確認できるようにする。
 
+### 6.1.1 Facility Levelの設備数量
+
+Facility Levelは同一Definition・同一世代の設備単位数を一つのinstanceへ集約する正の整数とする。同一条件のLevel Nは、Level 1をN個設置した場合と、各設備単位から生じる名目処理能力・投入消費・Crew需要・維持投資が一致する。設備単位能力と設置数を分離し、Industry、Extraction、Power、Research、Construction、Survey、Housing、Life Support、Storage、Site Infrastructure等に二重倍率をかけない。集約instanceのProcessは全設置単位へ一つだけ選択し、並行Processが必要な場合は別instanceを建設する。Level変更ではTechnology世代・互換Process・Site適格性を変えない。
+
+Level増設は追加単位のResource投資とConstruction workを要求し、累積投入へ加算し、完了後の次のPhysical snapshotから能力と維持負担へ反映する。複数unitの無償強化ボーナスは標準契約に含めない。共用設備の物理的な効率向上が必要になった設備群だけContentに上限付き係数を定義でき、その場合も投入・産出execution双方へ同一倍率を適用する。Research、Housing、Life Support、Storage等へ一律ボーナスを広げない。
+
 ### 6.2 建造投入物
 
 建築物は明示的な実ResourceとConstruction workを消費して建造する。Contentの各Construction Recipeは投入Resourceを最大3種類とし、簡易設備では必要に応じて1〜2種類とする。高度設備に複数の専門部品が必要な場合は、その部品の製造Processに上流投入を集約する。Generic Core側にはResource種類数の固定上限を設けず、このContent設計契約をCore Validationへ混入させない。
@@ -252,7 +258,7 @@ Content側は設備ごと、または設備群ごとに維持率を持つ。具�
 
 ### 6.4 Upgrade
 
-Levelアップは同一世代設備への増設・拡張・改良として扱う。Upgradeも明示ResourceとConstruction workを投入し、その投入分を以後の累積投入Resourceと維持需要へ反映する。Upgrade Recipeの投入Resourceも最大3種類とし、Generic Coreの固定上限にはしない。
+Levelアップは同型設備の設置単位の追加として扱う。Upgradeも追加単位の明示ResourceとConstruction workを投入し、その投入分を以後の累積投入Resourceと維持需要へ反映する。一回の完了で一回だけLevelを進め、投入中断・部分進捗・解体回収でも実投入量を保存する。Upgrade Recipeの投入Resourceも最大3種類とし、Generic Coreの固定上限にはしない。
 
 ### 6.5 Decommission
 
@@ -325,7 +331,9 @@ Surface Infrastructure不足はResource Opportunityを書き換えず、採掘ex
 
 すべてのSpatial NodeがOperational Nodeである必要はない。単なる軌道上の位置や未開発Surface Cellは物理的targetにはなれても、Inventoryや通常物流のNodeにはならない。一方、軌道研究所・Depot・Service Station等が存在する地点はnon-surface Spatial contextに結び付いたOperational Nodeとして扱える。
 
-地表をSurface Cellへ分割し、資源・地形・環境・Survey・開発領域の正準単位とする。UIではヘックス主体の天体マップとして表現してよいが、球面を完全な六角形だけで覆うことや、全Cellが同面積・常に6隣接であることをCore仕様にはしない。天体ごとにSurface Cell数を変えてよく、各Cellは面積、隣接関係、天体上の位置を持つ。
+地表をSurface Cellへ分割し、資源・地形・環境・Survey・開発領域の正準単位とする。UIではヘックス主体の天体マップとして表現してよいが、正準地理は球面全域を被覆する、天体内で原則等面積のSurface Cell分割とする。すべて同じ形や隣接次数である必要はない。Cell数と境界は天体の物理規模・地理解像度と計算量から開発前に確定し、研究・開発・施設数で再分割しない。物理的に固体地表を持つ天体には、設立開始地点や隣接拡張の選択が実質的に残る数のCellを設け、巨大ガス惑星など固体地表のない天体にはSurface Cellを登録しない。Geometryは被覆・非重複・面積総和・隣接対称性を登録時に検証可能な表現または生成仕様を持つ。描画LODは正準地理を変更しない。
+
+各CellのResource PotentialはCellごとの量であり、新規Cellへ既存値を複製しない。面積・地質・地域分布に応じて天体全域のOpportunityを配賦し、Surface Infrastructure距離・spread負担も同じ面積／距離単位で評価する。地形、建設適性、採掘量、代表環境、アクセス負担には地域差を持たせる。代表気候・長期日照は明示的な環境改変以外で日々変化させない。
 
 ```text
 Star System
@@ -554,6 +562,10 @@ CampaignをPauseした場合は新たな科学executionを進めないが、開�
 
 これにより、Fleetを建造する → 輸送能力へ投入するか探査へ割り当てるか選ぶ → 探査でResearch Pointを得る → 新技術を研究する → より高性能なFleet・研究設備・探査手段を成立させる、という資産配分のループを作る。
 
+### 11.1 物理探査による地理Knowledge取得
+
+Scientific ExplorationはFleetの有限拘束・実Movementと到着後観測の実行成果として、対象天体・Cell集合の地形、環境、資源等のKnowledgeを取得可能にする。RPは科学作業から得る追加の有限成果であり、RPだけを探査の全成果とはしない。Surveyによる継続観測も同じ対象・属性のKnowledgeを向上でき、既に得た測定済み情報を別手段で再取得する儀式にしない。Missionと継続観測の差は接近・到達・滞在、Fleet拘束、消費、観測範囲・時間による実質的な差として設計する。
+
 ## 12. 研究システム
 
 研究は本作の中心的な成長システムとする。
@@ -675,6 +687,10 @@ PlayerはSurvey Campaignへ単一Cell × ResourceのJobを一件ずつ登録す�
 
 Survey CampaignはActivity PriorityとPause / Resumeを持てる。PauseはCampaignの観測需要を停止するがProvider Assignmentを変更しない。Founding、Development、Extraction等はSurvey内部progressを直接参照せず、対象subjectとminimum Knowledge Levelを明示するKnowledge Requirementを通じて利用する。
 
+### 14.1 観測情報と物理Worldの区別
+
+Worldが真の地質・地形・代表環境・Resource Potentialを所有し、Knowledgeは観測対象・属性・品質・公開範囲を一意に管理する。観測前のResource値・地質・環境・Site適格性をMapやFounding／Extraction／Power Previewから迂回して開示しない。未知はゼロ・不可能とは別状態で、観測により知り得る推定値と未測定条件を区別する。観測済み情報の品質は単調に改善し、同時SurveyとExplorationで同一Knowledge成果を二重に加算しない。Research Pointおよび運用経験はこれら地理Knowledgeとは別の型・用途のまま維持する。
+
 ## 15. Location開発とロケーション産業自立
 
 Locationの発展は「到達したか」「基地が存在するか」という一段階ではなく、Survey、Founding、領域開発、資源利用、加工、研究維持、現地製造、自己拡張能力を段階的に成立させる過程として扱う。
@@ -713,6 +729,12 @@ Life Support不足の当日割合は人口Groupへ同条件で公平に配分す
 旅客はCargo Inventory上のResourceではなく、物理Movementを行うPopulationである。移送は成立済みTransport Serviceの座席・共通質量余力を利用する方法と、free Fleetを明示指定してone-shot Movementへcommitする専用便の双方が可能である。いずれも人数・座席・旅客質量・航行用Resource・Fleet・所要日数・到着先Housing / Life Supportを同じ物理能力で制限する。定常輸送Capacityのtargetは貨物と旅客の共通搭載質量（t/日）を維持し、旅客専用の追加Transport Networkや人数/日targetを新設しない。有限Orderは指定総人数を一度だけ輸送し、部分dispatch可能とする。出発済み乗員は取消で即時帰還・消去されず、未発送分だけが取消可能である。中継地で直接乗継できなければ実在する前便の船内に留まり、能力・生活Resourceの拘束と不足を反映する。到着地で人員を受け入れられる場合、余剰船内Resourceの入庫が不能でも降機できるが、Fleet・Serviceの回収義務は物理Resourceとともに残る。未受入の到着人員は実在する船内待機・Resource制約へ残し、無償滞留させない。
 
 人口由来の生活物資需要は共通Supply RequirementとDependency AnalyticsのCURRENT / FORECASTへ統合する。人口自立度を独立のLevel・判定・Stockにはせず、生活Resourceの現地生産、外部補給、枯渇見通し、Earthの外部人員供給への依存を別々の測定値で示す。
+
+### 15.2 拠点別人口の自然増加
+
+成立済みOperational Nodeごとに自然増加の有効／停止をPlayerが設定する。既存人口が正で、Housing、実際に充足しているLife Support、生活Resourceの実在供給・配分に既存人口維持後の余裕がある場合だけ、ゆっくりと人口が純増する。生活Resourceの一時在庫や将来の生産予測だけを供給余力としない。人口0のNodeや航行中Fleet、未設立Targetでは自然増加しない。人数の端数creditはNode単位で保持し、停止中は加算しない。人口減耗判定後の当日末でのみ人数を確定し、当日Crew・Allocationへ遡及させない。
+
+人口は設備稼働の有限Crew Serviceまたは排他的整数Crew Commitmentを供給する。人的稼働率は実在人日と各活動の必要人日から導出し、将来世代の生産性向上は設備単位処理量／人日で表す。すべての設備へ一律Crewを要求せず、無人Life Support等の自明な循環依存も作らない。自然増加は外部人員取得・一回限りの旅客移送とは別に計上し、不可逆な受入義務が使用する居住余力を奪わない。人口Targetは外部補充の希望数であり自然増加の停止・上限ではない。
 
 ## 16. 自動進行と自動化
 

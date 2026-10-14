@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..application_commands import (
     ApplicationError, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
+    GetDependencyAnalytics, GetDetailedForecast, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetOperationalNode,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans, GetSurveys, GetSurveyCampaignIntentPreview,
     GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetTransportAllocations, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions,
     GetPassengerTransferPreview, GetPassengerTransfers,
@@ -400,9 +400,6 @@ class SpaceIdleRequestHandler(BaseHTTPRequestHandler):
                 goal_knowledge_level=int(_required(params, "goal_knowledge_level")),
                 campaign_id=_one(params, "campaign_id"),
             ))
-            return
-        if path == "/api/v1/contracts":
-            self._query_result(GetContracts())
             return
 
         prefix = "/api/v1/operational-nodes/"

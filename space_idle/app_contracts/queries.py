@@ -102,6 +102,4 @@ class GetSurveyCampaignIntentPreview:
     goal_knowledge_level: int
     campaign_id: str | None = None
 @dataclass(frozen=True)
-class GetContracts: pass
-@dataclass(frozen=True)
 class GetMarket: pass

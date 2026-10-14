@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .domain_extensions import BASE_DOMAIN_EXTENSIONS
-from ..contracts import ContractService
 from ..market import FundsState, MarketService
 from ..facilities import FacilityBook
 from ..facility_lifecycle import FacilityLifecycleRegistry
@@ -32,7 +31,6 @@ from ..content.base_construction import (
     build_spatial_development_recipes,
     procurement_wait_days,
 )
-from ..content.base_contracts import build_contract_templates
 from ..content.base_assets import build_base_assets
 from ..content.asset_content import AssetDefinitions
 from ..content.base_founding import build_deployment_recipes
@@ -206,12 +204,6 @@ def build_base_simulation(
     )
     extraction = ExtractionService(build_extraction_specs(), graph, environment, surface_infrastructure, survey, facilities.definitions, technology)
 
-    # Keep the Contract Domain composed and available for future events,
-    # collaboration, or scenario content. Base Game starts with no offers.
-    contracts = ContractService(
-        build_contract_templates(), facilities, power, service_capacity_registry
-    )
-
     population = PopulationService(
         facilities, inventory, graph, population_rules,
         {source.id: source for source in external_population_sources},
@@ -230,7 +222,7 @@ def build_base_simulation(
     sim = Simulation(
         day=0, market=market, graph=graph, environment=environment, inventory=inventory,
         facilities=facilities, power=power, storage=storage, industry=industry, transport=transport, logistics=logistics,
-        projects=projects, technology=technology, founding=founding, contracts=contracts,
+        projects=projects, technology=technology, founding=founding,
         service_capacity_registry=service_capacity_registry, population=population,
         research=research, survey=survey, extraction=extraction,
         scientific_exploration=scientific_exploration, maintenance=maintenance,

@@ -4,7 +4,7 @@
   const state = {
     revision:null, session:null, world:null, catalog:null, operationalNodeId:null, operationalNode:null,
     flow:null, dependencyAnalyticsCurrent:null, dependencyAnalyticsForecast:null, globalIssues:null, bottlenecks:null, projects:null, buildOptions:null,
-    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, selectedNonSurfaceContextId:null, foundingPinnedCellIds:[], contracts:null, logisticsSummary:null, logistics:null, movementPlans:null,
+    research:null, scientificExplorations:null, surveys:null, surfaceMap:null, nonSurfaceFounding:null, selectedNonSurfaceContextId:null, foundingPinnedCellIds:[], logisticsSummary:null, logistics:null, movementPlans:null,
     fleet:null, transportAllocations:null, cargoFlows:null, market:null, inspectedNode:null, inspectedFlow:null,
     selectedMovementPlanId:null, selectedGlobalNodeId:null, selectedSurfaceBodyId:null, systemMapResourceId:null, decisionContext:null, activeSection:'global', activeView:'global', activeTab:'overview', inspector:null,
     inspectorExpanded:false, sectionContexts:{location:null,research:null,exploration:null},
@@ -94,7 +94,7 @@
   const genericValueLabels={
     facility:'設備',fleet:'Fleet',project:'建設案件',research:'研究',survey:'地表調査',scientific_exploration:'科学探査',
     construction:'建設',maintenance:'維持',process:'生産工程',extraction:'採掘',transport:'輸送',market:'市場',
-    target_stock:'目標在庫',trade_order:'取引注文',contract:'契約',founding:'拠点設立',relocation:'移動',retirement:'退役',
+    target_stock:'目標在庫',trade_order:'取引注文',founding:'拠点設立',relocation:'移動',retirement:'退役',
     surface_location:'地表拠点',non_surface_operational_node:'宇宙拠点',organization:'組織共有',operational_node:'拠点',
     fixed:'固定',auto:'自動',vehicle:'機体',provider:'提供元',manual:'手動',
   };
@@ -363,7 +363,7 @@
 
   function applyUiSnapshot(data){
     state.session=data.session; state.world=data.world; state.globalIssues=data.global_issues;
-    state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.contracts=data.contracts; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
+    state.research=data.research; state.scientificExplorations=data.scientific_explorations; state.logisticsSummary=data.logistics_summary; state.logistics=data.logistics;
     state.movementPlans=data.movement_plans; state.fleet=data.fleet; state.transportAllocations=data.transport_allocations; state.cargoFlows=data.cargo_flows;
     state.inspectedNode=data.inspected_node??null; state.inspectedFlow=data.inspected_flow??null;
     state.market=data.market??state.market;
@@ -474,7 +474,7 @@
     const related=row.related_entity_id?definitionName(row.related_entity_id):'';
     if(related&&related!==row.related_entity_id)parts.push(related);
     if(row.category){
-      const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',contract:'契約',logistics:'物流',construction:'建設',research:'研究',exploration:'科学探査',survey:'探査',storage:'保管',power:'電力'};
+      const categoryLabels={technology:'技術条件',capability:'能力条件',environment:'環境条件',logistics:'物流',construction:'建設',research:'研究',exploration:'科学探査',survey:'探査',storage:'保管',power:'電力'};
       const category=categoryLabels[row.category];if(category)parts.unshift(category);
     }
     return [...new Set(parts)].join(' · ');

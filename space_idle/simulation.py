@@ -6,7 +6,6 @@ from collections.abc import Callable
 import math
 
 from .allocation_graph import AllocationDependency, allocation_dependency_order
-from .contracts import ContractService
 from .domain import DomainExtension
 from .market import MarketBuyAllocationPlan, MarketService
 from .population import PopulationService
@@ -164,7 +163,6 @@ class Simulation:
     service_capacity_registry: ServiceCapacityRegistry
     population: PopulationService | None = None
     founding: OperationalNodeFoundingService | None = None
-    contracts: ContractService | None = None
     research: ResearchService | None = None
     survey: SurveyService | None = None
     extraction: ExtractionService | None = None
@@ -1635,10 +1633,6 @@ class Simulation:
         ):
             self.transport.invalidate_movement_plans()
         next_day = self.day + 1
-        if self.contracts is not None:
-            self.contracts.advance_day(
-                next_day, allocations.power_by_location
-            )
         self.day = next_day
         # Phase 8 may refresh derived state only from allocations already
         # settled for the completed day. Do not project the next day's

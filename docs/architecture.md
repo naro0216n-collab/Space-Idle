@@ -108,7 +108,7 @@ Generic Coreへ `if location == MoonSouthPole`、`if vehicle_type == lunar_lande
 - World Definition / Scenario Definition / Deployment Recipe / Founding target spec
 - 表示名
 
-外部組織、Contract、Event等はContent / Application側の拡張として追加できるが、FundsをResource売買以外の報酬・一般支払手段として変更しない。Research Point中心の成長ループや通常SimulationのGeneric Core必須Domainにも含めない。
+ゲーム内の契約オファー・受諾・辞退・期限・達成状態は独立Domainとして保持しない。資源取引のFundsもResource売買の対価であり、汎用報酬・通貨へ拡大しない。Domain間typed Requirement・Commitment、Fleet/Cargo/Buy Commitment、Application API契約はそれぞれの物理的責務として維持する。
 
 FacilityとVehicleの具体的なContentは、資産ごとに必要な型付きDefinitionをまとまった登録行として記述し、Compositionがそれを各所有DomainのDefinition集合へ展開する。Facilityの建設・改修・解体Recipe、Power、特殊Storage、施工供給等を同じ資産の記述から組み立て、個別ファイルへの同一IDの並列登録を追加条件にしない。新規の施設・機体も標準Contentと数量実験で同じ登録処理を用い、実験専用の第二のDefinition所有経路は作らない。これは可変Game Stateや各Domainの所有権の統合を意味しない。
 
@@ -184,6 +184,7 @@ Applicationがtick間に受理したPlayer Commandは、次のPhysical snapshot�
    進行中Cargo / one-shot Movement Executionを1 game day進める。
 
 8. State transition / derived refresh
+   Population不足・死亡settlement後に、その日実際に維持可能な拠点の自然増加を確定する。
    Technology Unlock、Project completion、Founding、Asset removal等の状態遷移を確定し、
    派生Query状態を再導出してtickを進める。
 ```
@@ -313,7 +314,9 @@ SurfaceCellState / overlays
 
 代表Transferの近似は円軌道間の半楕円Transferを基本とする。恒星系中心の重力パラメータ、惑星公転長半径、衛星の母天体周回長半径と親の重力基準から移動日数・ΔV・代表航行距離を一組で導出する。異惑星圏の衛星端点では、同じ物理投影内で衛星圏からの出発・到着に対応する局所legを含める。軌道傾斜・打上げ窓・瞬間的な位置は再現しない。抽象的な座標関係だけを持つStar Systemでは既存characteristic geometryを利用できるが、同一天体の軌道物理と直交座標を独立正本として同時登録しない。
 
-地表を `SurfaceCell` graphとして表現する。UIはヘックス主体で表示してよいが、Coreは完全六角格子、同一Cell面積、常時6隣接を仮定しない。Celestial BodyごとにCell数を変えてよい。
+地表を、開発前に確定した球面全域の `SurfaceCell` graphとして表現する。同一BodyのCellは原則等面積で、非重複、全面積被覆、連結な隣接、隣接対称を登録時に検証する。球面の完全六角格子は仮定しない。Geometryには面積・境界または同等に検証可能な正準生成仕様を持たせ、中心点集合だけを全域被覆の証拠としない。Celestial Bodyごとの物理規模に応じてCell数を変えるが、Scenario進行によって正準Cellを増減・再分割しない。Cell数は、異なる候補地と隣接拡張を選択できる規模を満たし、Game tickは参照Body/Locationに限定した索引から対象を得る。固体地表のないBodyは地表Cellを持たない。
+
+Resource PotentialはCellごとの有限Opportunity量であり、登録時に面積・地質・地理分布から配賦する。Cell分割だけでBody総量を増加させない。Physical Surface Geometryの距離とActivity spreadに基づくLocal Distribution単位は、Opportunityに同じ地理負荷を重複適用しない。
 
 Surface CellはInventory Nodeではなく、Facility一般の配置スロットでもない。資源、地形、可変Environment、Survey Knowledge、Surface Location開発領域の物理単位とする。
 
@@ -391,6 +394,8 @@ Facilityは同一Domainのまま配置種別を持つ。
 - `SURFACE_CELL`: 物理的位置が性能、Movement接続、局所Environment、環境改変等へ本質的に影響する位置依存Facility。
 
 `SURFACE_CELL` Facilityだけ `site_cell_id` を要求し、所属Operational NodeはSurface Locationで、対象CellはそのLocationのdeveloped領域でなければならない。
+
+Facility Levelは同型の設置済みunit数で、Facility Stateが正の整数と累積実Resource投資を所有する。各Definitionは一unitのNominal Service、Process Throughput、Extraction、Power、Housing、Life Support、Storage、Infrastructure、Crew Requirement等を定義し、所有Domainが一度だけ `per_unit × level` へ展開する。Maintenanceは累積実投資から導出する。増設work・Resource settlementは追加unit分だけ行い、Project完了後の次Physical snapshotから新能力を使用できる。Process入出力比と設備能力を混同せず、同じ単位数を各Domainで二度乗じない。単なるLevel上昇ではTechnology、Site、互換Processを変更しない。共通の一律効率ボーナスは導入しない。
 
 Facility Definitionは互換Process集合を持てる。通常一Facility instanceが同時に実行するProcessは一つとする。互換Processが一つなら選択はDefinitionから導出でき、複数ある場合だけFacility Stateが `selected_process_id` をauthoritativeに所有する。登録順やID順で暗黙選択せず、Requirement不足時にも別Processへ自動切替しない。
 
@@ -521,7 +526,7 @@ FacilityそのものとProcessを分離する。Processはinputs、outputs、基
 
 一Facility instanceが通常同時に実行するProcessは一つとする。Facility Definitionに互換Processが一つしかなければProcess selectionはDefinitionから導出し、複数ある場合だけFacility Stateが `selected_process_id` をauthoritativeに所有する。登録順・ID順で暗黙選択せず、Requirement不足時に別Processへ自動切替しない。
 
-互換性はFacility Definitionが供給するContent定義のinstalled Capabilityと、Process Definitionの必要Capabilityの充足で評価する。Processは単一Facility IDを参照せず、複数CapabilityのAND条件を指定できる。Facility Definitionのinstalled process throughputを選択Processのrequested executionに使い、Process DefinitionのResource入出力比率とStorage admissionを一単位executionあたりのRequirementとする。日次実行で消費・生成する物量はallocationのallocated executionから導出する。Facility Levelに伴う能力拡張を暗黙に全Capabilityへ適用せず、Contentで実際の工程処理能力の差を持たせる。
+互換性はFacility Definitionが供給するContent定義のinstalled Capabilityと、Process Definitionの必要Capabilityの充足で評価する。Processは単一Facility IDを参照せず、複数CapabilityのAND条件を指定できる。Facility Definitionのinstalled process throughputを選択Processのrequested executionに使い、Process DefinitionのResource入出力比率とStorage admissionを一単位executionあたりのRequirementとする。日次実行で消費・生成する物量はallocationのallocated executionから導出する。Facility Levelによる数量増分はContentの一unitあたりのinstalled throughputから導出し、categorical Capabilityの有無と有限能力の量を区別する。世代の違いは一unit能力を変え、Levelは設備数を変える。
 
 Processは一単位executionに必要なResource、Power、Process Service、output admission等をExecution Requirement Bundleとして提出する。Application Queryは選択Process、候補、実効inputs / outputs、requested / allocated execution、稼働率、limiting factorを返す。
 
@@ -582,6 +587,8 @@ Queryは少なくとも `CURRENT` と `FORECAST` のtime basisを区別する。
 ### 8.5 Population / Housing / Life Support
 
 `Population` が全人数のauthoritative Stateを所有する。Groupは `id, count>0, position, activity_commitment_ref?, deprivation, mortality_remainder` を持ち、positionはOperational Node、未設立Physical Target、確定済みTransport Executionのいずれか一つとする。Mission、Movement、Fleet、Facility、Transportは乗員人数Stockを複製せず、PopulationGroup IDを参照する。Groupは所在・Activity拘束・不足値・死亡端数が一致する場合だけ集約し、分割時は不足値を継承して端数総量を決定論的に保存する。物理的な移動とGroup分割統合は人間を増減させない。
+
+PopulationはOperational Nodeごとに `natural_growth_enabled` と非負の分数 `growth_credit` をauthoritativeに持つ。既存の生命維持Allocationで既存人口を優先した後、実際に残るHousing、Life Support、生活Resourceの余力と確定済み不可逆受入義務を判定し、日次不足・死亡後の当日末にのみ整数純増をsettleする。現在ある在庫を継続供給と取り違えず、未来予測の生産量で増員を認めない。信用端数はNode単位とし、Group分割統合で重複させず、無人Node、未設立Target、移動中Fleet、停止設定では加算しない。当日のCrew・Resource allocationへ増員を遡及させない。外部人員獲得・旅客移送・死亡とは別原因として人数保存式へ記録する。
 
 PopulationはNodeごとの任意 `PopulationTarget(desired_count>=0)`、外部人員供給元の `remaining_people>=0`、有限 `PassengerTransferOrder` も所有する。外部供給元のDefinitionは接続Earth Node、有限の初期人数、日次取得上限、取得可否条件を保持する。未取得の人員をPlayer Groupへ生成せず、実際に成立した出発または同一Earth Nodeでの受入でだけ有限残員を減算する。移送や取得は新しい人口の生成ではなく所有境界の変化であり、外部残員とPlayer人口の総和は実際の死亡数だけ減少する。
 
@@ -888,10 +895,10 @@ Vehicle Definitionには座席、旅客1人あたり標準質量、船内Life Su
 
 Research Pointは通常貨物Inventoryとは分離し、組織全体の共有Knowledge PoolとしてResearch Stateが所有する。Research ProviderはOperational Node上のFacility / Fleet等のDefinition-backed providerからRP生成量と貯蔵能力を供給できるが、生成したRPをprovider所在地専用pointにはしない。
 
-Research ProviderはTierとLevelを持てる。
+Research Providerは設備の物理世代やCapability適格性によって性能が異なる。Facility Levelは物理設備単位数としてのみProvider供給量へ反映し、Provider定義の独立技術Levelと混同しない。
 
 - Tier：研究手段の世代差・基礎効率差
-- Level：同一世代設備への増設・拡張・改良
+- Facility Level：同一世代・同型設備の設置数であり、Research Providerの一unit供給を数量倍する
 
 Research Provider Tierはprovider Definitionの設備世代であり、Technologyの表示上の研究段階区分とは別概念とする。Technologyの表示段階変更や完了によってprovider Tierを暗黙更新しない。
 
@@ -983,9 +990,15 @@ Domainごとに同じExperience値を重複保存しない。Experience category
 
 科学探査と資源Surveyを別Domain状態として扱う。
 
+### 12.0 Knowledgeの単一正本と情報公開
+
+World / Environmentは真の値、Knowledge Domainは対象（Body、Cell集合等）×属性（Resource、地形、地質、代表環境等）×観測品質・必要な場合の進捗をauthoritativeに所有する。SurveyとExplorationはそれぞれ活動Intent、有限Service、Fleet／Movement／RP settlementを所有し、両者から同じKnowledge正本へ完了済み観測成果を報告する。同じ属性の品質は単調改善し、同時観測でも完了済み成果を二重計上しない。Survey Campaignに観測進捗の第二正本を設けない。Research Point PoolとOperational ExperienceはKnowledgeの地理属性とは別の型とする。
+
+公開Queryは一つのKnowledge projection／Eligibility契約を経由し、未観測の真の物理値とそれに由来するSite適格性、Resource/Power予測、Founding・Extraction blocker詳細の情報漏洩を防ぐ。未知をゼロ・物理的不適合へ変換しない。Simulationの実物理判定はWorld真値を用いる。実行前のKnowledge閾値が必要な操作だけContent側のtyped eligibilityを要求する。明示的なEnvironment改変により既知情報が古くなる場合は依存属性の再測定要否をKnowledgeが一意に決める。
+
 ### 12.1 Scientific Exploration
 
-Scientific Exploration Campaignは必要性能を満たすFleet unitをFleet Domainへ排他的にcommitし、one-shot Movement Executionとactive science executionを経て有限量のResearch Pointを得る。
+Scientific Exploration Campaignは必要性能を満たすFleet unitをFleet Domainへ排他的にcommitし、one-shot Movement Executionとactive science executionを経て対象Body / Cell / 属性の観測成果をKnowledgeへsettleする。RPは追加の有限成果であり、Fleet拘束・移動・観測を実際に成立させた範囲でのみ確定する。
 
 Definitionは対象、必要Operation / Endurance / Payload、Capability / Environment、期間、有限RP総量 / 生成率、Resource / Service requirement、完了後Fleet disposition等を持てる。
 
@@ -999,7 +1012,7 @@ Pause中は新しいscience executionを進めないが、開始済みMovement�
 
 ### 12.2 Resource Survey
 
-地表Resource Surveyは `SurfaceCell × Resource` のKnowledgeを更新する。固定Location × ResourceをSurvey正本にはしない。
+地表Resource SurveyはKnowledge Domainの `SurfaceCell × Resource` 属性へ観測成果を報告する。Survey Domainへ値・進捗・精度を重複保存せず、固定Location × Resourceも正本にしない。
 
 ```text
 UNKNOWN
@@ -1107,7 +1120,7 @@ PopulationのGroup（位置・人数・commitment・不足・死亡端数）、�
 
 SaveはApplication単位のversion付きSnapshotとする。静的Definitionは `WorldDefinition` とContentから再構築し、可変Stateだけを復元する。Save metadataは `world_definition_id` と `scenario_id` を保持し、Load時にScenario初期化処理を再実行しない。
 
-保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、明示的環境改変State、canonical game day等を含む。
+保存対象はdomain-owned authoritative StateをApplication snapshot内のdomain sectionとして保持する。ゲーム内Contract sectionは持たず、PopulationのNode別自然増加設定とcredit、Knowledgeの属性別観測成果を新たなauthoritative sectionとして保存する。少なくともOperational Node / Surface Location affiliation、Facility lifecycle / Process selection、Inventory / Reservation、Build / Development / Decommission / Founding Project、Vehicle Production、FleetPool / Fleet Commitment / Relocation / Releasing、Transport AllocationのDirectional Capacity target / Provisioning Priority / optional Movement hard constraint、Movement Execution、Target Stock、sparse Supply Routing Constraint、Cargo Flow / arrival waiting、Funds / Market State、Research Point / Technology / Research Project current Stage ID / Research Provider Assignment、Operational Experience、Exploration、Survey Knowledge / Survey Provider Assignment / Survey Campaign scope・goal・explicit constraint、明示的環境改変State、canonical game day等を含む。
 
 Static Star System / Celestial Body / Surface Cell topology / geology / Resource Potential / Resource / Facility / Extraction / Process / Research Definition / transport geometry / Market Provider DefinitionはWorld / Contentから再構築する。Dynamic StateはDefinition IDを参照し、display nameやbalance値を複製しない。Movement Plan候補、Transport Service Plan、auto-selected source / end-to-end path、Required Fleet Units、Nominal / Available Capacity、auto-selected Survey provider / observation mode、Survey未完了target展開、salvage recoverable projection、Location Environment summary、Projected Material Readiness、tick内Requirement / allocation結果、external-dependency Analytics等の派生・transient状態は保存せず再導出する。
 
