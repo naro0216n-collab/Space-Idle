@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 import heapq
 import math
 
@@ -44,15 +45,23 @@ class SurfaceInfrastructureSnapshot:
     spare_capacity: float = 0.0
 
 
+class SurfaceDistributionWorkProvider(Protocol):
+    """Physical work location supplied by an owning Activity Domain."""
+
+    def surface_distribution_activities(
+        self, location_id: SpatialNodeId, facilities: FacilityBook, day: int,
+    ) -> tuple[tuple[SurfaceCellId, float], ...]: ...
+
+
 @dataclass
 class SurfaceInfrastructureService:
-    """Aggregate intra-Location surface distribution constraint.
+    """Aggregate finite Local Distribution Service for actual geographic work.
 
-    Surface Cells remain physical geography only.  This service turns the
-    extent and spread of one Location's developed territory into a Location-
-    scoped service load and compares that load with registered Service Capacity
-    supply.  No Cell Inventory or direct Cell-to-Cell cargo links
-    are created.
+    World owns physical geometry, Activity Domains own their work quantities,
+    and this service owns only the derived Location-scoped distribution demand.
+    Unused developed Cells consume no recurring Service; expanding the physical
+    footprint can still consume finite Construction Service during its Project.
+    No Cell Inventory or direct Cell-to-Cell cargo routing is introduced.
     """
 
     graph: SpatialGraph
@@ -65,7 +74,7 @@ class SurfaceInfrastructureService:
     area_reference_km2: float = 1_000_000.0
     distance_reference_km: float = 1_000.0
     # Derived Composition wiring; not a second activity or demand State.
-    extraction_activity_source: object | None = field(default=None, repr=False, compare=False)
+    extraction_activity_source: SurfaceDistributionWorkProvider | None = field(default=None, repr=False, compare=False)
     site_facility_units_per_day: float = 1.0
     extraction_t_per_service_unit: float = 1.0
 
@@ -161,7 +170,8 @@ class SurfaceInfrastructureService:
         """World-only geography load for stated territory and stated access anchors.
 
         Does not install or activate an anchor, found a Location, or infer
-        Service fulfillment. Live Location calculation calls this same model.
+        Service fulfillment. Construction uses this geometric workload to
+        evaluate new territory; operation uses only actual Activity workload.
         """
         cells = frozenset(cell_ids)
         anchors = tuple(sorted(set(anchor_cells), key=str))

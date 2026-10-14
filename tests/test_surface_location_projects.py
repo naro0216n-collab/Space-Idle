@@ -620,6 +620,41 @@ def test_observation_foundation_and_resource_access_are_one_application_progress
     before_people = sim.population.count_at(node_id)
     assert before_people == 0
 
+    # The surveyed deposit is usable through real Facility investment and
+    # canonical extraction, not merely through its Map evidence or a spawned
+    # initial Resource grant. This scenario supplies already owned industrial
+    # construction/power capacity and a completed enabling Technology; the
+    # actual new mining asset still requires its Construction Project.
+    sim.research.technology_state.unlock(ids.RP_RESOURCE_CHAIN_02)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, node_id, level=10)
+    sim.facilities.install(ids.CONSTRUCTION_YARD, node_id, level=10)
+    mine_recipe = sim.projects.recipes[ids.VACUUM_MINERAL_HARVESTER]
+    for requirement in mine_recipe.resources:
+        add_preexisting_stock(sim, node_id, requirement.resource_id, requirement.amount_t)
+    mine_project_id = app.execute(PlanBuild(
+        str(node_id), str(ids.VACUUM_MINERAL_HARVESTER)
+    )).created_id
+    assert mine_project_id is not None
+    mine_project = next(row for row in sim.projects.projects.values()
+                        if str(row.id) == mine_project_id)
+    while mine_project.status.value != 'complete':
+        previous = (mine_project.status, mine_project.construction_done)
+        app.execute(AdvanceTime(1))
+        assert (mine_project.status, mine_project.construction_done) != previous
+    assert mine_project.completed_facility_id is not None
+    assert sim.inventory.amount(node_id, resource) == 0
+    app.execute(AdvanceTime(1))
+    # A newly invested Facility still needs real ongoing Maintenance inputs.
+    # Without those inputs the physical asset exists but cannot produce.
+    assert sim.inventory.amount(node_id, resource) == 0
+    for requirement in mine_recipe.resources:
+        add_preexisting_stock(sim, node_id, requirement.resource_id, requirement.amount_t)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(node_id, resource) > 0
+    assert sim.graph.surface_cells[cell].resource_potential_by_resource[resource] > 0
+    assert any(row.resource_id == str(resource) and row.output_t_per_day > 0
+               for row in app.query(GetOperationalNode(str(node_id))).extraction_resources)
+
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     path = tmp_path / 'observed-founded-node.json'
     save_game(app, path, saved_at=saved_at)

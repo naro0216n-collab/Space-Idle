@@ -105,12 +105,20 @@ def test_surface_infrastructure_load_and_supply_scale_with_territory_and_provide
     two_remote = _snapshot(sim)
     # Unused territory itself has no ongoing distribution Activity.
     assert two_remote.demand == pytest.approx(supplied.demand)
-    sim.facilities.install(
+    remote_facility_id = sim.facilities.install(
         ids.SURFACE_POWER_GRID, ids.EARTH, site_cell_id=frontier[0],
     )
     expanded = _snapshot(sim)
     assert expanded.demand > two_remote.demand
     assert expanded.nominal_capacity == pytest.approx(supplied.nominal_capacity)
+    # Additional installed units increase real remote Activity, not cell count.
+    sim.facilities.upgrade_to(remote_facility_id, 2)
+    doubled = _snapshot(sim)
+    assert doubled.demand == pytest.approx(expanded.demand + (expanded.demand - two_remote.demand))
+    sim.facilities.pause(remote_facility_id)
+    assert _snapshot(sim).demand == pytest.approx(two_remote.demand)
+    sim.facilities.resume(remote_facility_id)
+    assert _snapshot(sim).demand == pytest.approx(doubled.demand)
 
 
 def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_execution_is_limited_once():

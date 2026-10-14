@@ -79,6 +79,77 @@ def test_population_life_support_and_resource_allocation_share_the_normal_day():
     assert population.external_remaining == {source.id: source.remaining_people for source in before.external_sources}
 
 
+
+def test_facility_unit_investment_competes_for_crew_until_supported_population_grows():
+    """Investment, real Crew contention and natural growth share one tick ledger."""
+    from dataclasses import replace
+
+    from space_idle import AdvanceTime, PlanFacilityUpgrade, SetNaturalPopulationGrowth
+
+    app = build_game_application()
+    sim = app._simulation
+    lab = next(row for row in sim.facilities.all_at(ids.EARTH)
+               if row.definition_id == ids.GENERAL_RESEARCH_LAB)
+    provider = sim.research.facility_provider_for_definition(lab.definition_id)
+    assert provider is not None
+    people = sim.population.count_at(ids.EARTH)
+    per_unit = provider.level_spec(lab.level).generation_points_per_day
+    # Configure a physically crew-intensive research method for this Scenario.
+    # It is finite Population that limits the doubled Facility, not a hidden
+    # Level bonus or a synthetic research-progress algorithm.
+    sim.research.providers[provider.id] = replace(
+        provider, crew_person_days_per_research_point=people * 0.6 / per_unit,
+    )
+    app.execute(SetNaturalPopulationGrowth(str(ids.EARTH), False))
+    app.execute(AdvanceTime(1))
+    first = app.query(GetOperationalNode(str(ids.EARTH))).population
+    assert 0 < first.crew_service_used_per_day < first.crew_capacity
+    assert first.life_support_allocated == first.life_support_required
+
+    recipe = sim.projects.next_upgrade_recipe(lab.id)
+    assert recipe is not None
+    for requirement in recipe.resources:
+        add_preexisting_stock(sim, ids.EARTH, requirement.resource_id, requirement.amount_t * 3)
+    project_id = app.execute(PlanFacilityUpgrade(
+        str(lab.id), procurement_policy='extended_wait',
+    )).created_id
+    assert project_id is not None
+    project = next(row for row in sim.projects.projects.values()
+                   if str(row.id) == project_id)
+    while project.status.value != 'complete':
+        before = (project.status, project.construction_done)
+        app.execute(AdvanceTime(1))
+        assert (project.status, project.construction_done) != before
+
+    assert lab.level == 2
+    capped = app.query(GetOperationalNode(str(ids.EARTH))).population
+    assert capped.current_count == people
+    assert capped.crew_service_used_per_day == pytest.approx(capped.crew_capacity)
+    assert capped.crew_service_used_per_day > first.crew_service_used_per_day
+    assert capped.life_support_allocated == capped.life_support_required
+
+    # More real inhabitants increase available Crew on the following day's
+    # allocation, while Food/Water and Housing remain common constraints.
+    sim.population.rules = replace(sim.population.rules,
+                                   natural_growth_rate_per_person_per_day=0.3)
+    app.execute(SetNaturalPopulationGrowth(str(ids.EARTH), True))
+    before_points = sim.research.stored_points
+    app.execute(AdvanceTime(1))
+    constrained_points = sim.research.stored_points - before_points
+    grew = app.query(GetOperationalNode(str(ids.EARTH))).population
+    assert grew.current_count > people
+    assert grew.life_support_allocated == grew.life_support_required
+    assert grew.deprivation_person_days == 0.0
+    assert grew.natural_growth_last_added > 0
+
+    before_points = sim.research.stored_points
+    app.execute(AdvanceTime(1))
+    additional_points = sim.research.stored_points - before_points
+    assert additional_points > constrained_points
+    after = app.query(GetOperationalNode(str(ids.EARTH))).population
+    assert after.crew_service_used_per_day > capped.crew_service_used_per_day
+
+
 def test_housing_is_physical_and_facility_removal_cannot_evict_people():
     app = build_game_application()
     sim = app._simulation

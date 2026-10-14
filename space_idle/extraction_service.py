@@ -15,7 +15,7 @@ from .inventory import InventoryBook
 from .knowledge import DomainActivity
 from .power import PowerSnapshot
 from .service_capacity import ServiceCapacityScope
-from .shared import DefinitionId, EntityId, SpatialNodeId
+from .shared import DefinitionId, EntityId, SpatialNodeId, SurfaceCellId
 from .site import evaluate_physical_site_requirements
 from .spatial import EnvironmentResolver, SpatialGraph
 from .surface_infrastructure import SurfaceInfrastructureService
@@ -218,7 +218,7 @@ class ExtractionService:
 
     def surface_distribution_activities(
         self, location_id: SpatialNodeId, facilities: FacilityBook, day: int,
-    ) -> tuple[tuple[object, float], ...]:
+    ) -> tuple[tuple[SurfaceCellId, float], ...]:
         """Physical Cell workloads for actually selected extraction methods.
 
         A prospective Resource deposit is not an operating Activity. Divide
@@ -229,7 +229,7 @@ class ExtractionService:
         location = self.graph.locations.get(location_id)
         if location is None:
             return ()
-        by_cell = {}
+        by_cell: dict[SurfaceCellId, float] = {}
         cells = tuple(sorted(location.developed_cell_ids, key=str))
         for facility in facilities.active_compatible_at(location_id, day):
             if self.nominal_capacity(facility) <= 0:
