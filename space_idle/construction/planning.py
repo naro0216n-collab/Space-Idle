@@ -49,7 +49,7 @@ class ConstructionPlanningMixin:
         if facility.lifecycle is not FacilityLifecycle.NORMAL:
             return (ProjectBlocker("facility_lifecycle", "facility is not in normal operation"),)
         target_level = facility.level + 1
-        if (facility.definition_id, target_level) not in self.upgrade_recipes:
+        if self.upgrade_recipe_for_definition(facility.definition_id, target_level) is None:
             return (ProjectBlocker("upgrade_recipe", "facility has no next upgrade recipe"),)
         active = next((
             project
@@ -129,7 +129,9 @@ class ConstructionPlanningMixin:
             if site_cell_id is not None:
                 raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
-            recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
+            recipe = self.upgrade_recipe_for_definition(facility.definition_id, target.target_level)
+            if recipe is None:
+                raise ValueError("no facility upgrade recipe")
         elif isinstance(target, FacilityDecommissionTarget):
             if site_cell_id is not None:
                 raise ValueError("decommission project uses the installed facility site")

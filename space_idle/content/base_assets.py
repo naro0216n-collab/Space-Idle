@@ -396,32 +396,6 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                         ids.GENERAL_RESEARCH_LAB, 12, 10, 8, 55,
                     ),
             power=PowerSpec(None, 0.10),
-            upgrades=(
-                FacilityUpgradeRecipe(
-                            ids.GENERAL_RESEARCH_LAB,
-                            2,
-                            (
-                                req._structure_resource(1.5),
-                                req._machinery_resource(2.0),
-                                req._electronics_resource(1.2),
-                            ),
-                            20.0,
-                            SiteRequirements(),
-                            frozenset(),
-                        ),
-                FacilityUpgradeRecipe(
-                            ids.GENERAL_RESEARCH_LAB,
-                            3,
-                            (
-                                req._structure_resource(2.5),
-                                req._machinery_resource(3.0),
-                                req._electronics_resource(2.0),
-                            ),
-                            35.0,
-                            SiteRequirements(),
-                            frozenset(),
-                        ),
-            ),
         ),
         # MICROGRAVITY_EXPERIMENT_PLATFORM
         FacilityAsset(

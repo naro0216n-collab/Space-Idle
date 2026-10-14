@@ -61,7 +61,7 @@ class ConstructionRulesMixin:
         if isinstance(target, NewFacilityTarget):
             return self.recipes[target.facility_def_id]
         if isinstance(target, FacilityUpgradeTarget):
-            return self.upgrade_recipes[(self._upgrade_definition_id(target.facility_id), target.target_level)]
+            return self.upgrade_recipe_for_definition(self._upgrade_definition_id(target.facility_id), target.target_level)
         if isinstance(target, FacilityDecommissionTarget):
             return self.decommission_recipes[target.facility_definition_id]
         recipe = self.spatial_recipes[target.recipe_id]
@@ -74,9 +74,31 @@ class ConstructionRulesMixin:
         profile = graph.terrain_profile(cell_id)
         return recipe.construction_work * profile.development_work_factor
 
+    def upgrade_recipe_for_definition(
+        self, definition_id: DefinitionId, target_level: int,
+    ) -> FacilityUpgradeRecipe | None:
+        """One physical acquisition unit per Level, at every positive scale.
+
+        A Content-authored transition can specify a different physical assembly,
+        but ordinary installations reuse the per-unit construction investment.
+        No fixed Level ceiling or free scale increase is imposed by Core.
+        """
+        if type(target_level) is not int or target_level < 2:
+            return None
+        explicit = self.upgrade_recipes.get((definition_id, target_level))
+        if explicit is not None:
+            return explicit
+        base = self.recipes.get(definition_id)
+        if base is None:
+            return None
+        return FacilityUpgradeRecipe(
+            definition_id, target_level, base.resources, base.construction_work,
+            base.site_requirements, base.prerequisite_technologies,
+        )
+
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
         facility = self.facilities.facilities[facility_id]
-        return self.upgrade_recipes.get((facility.definition_id, facility.level + 1))
+        return self.upgrade_recipe_for_definition(facility.definition_id, facility.level + 1)
 
     def _facility_site_failures_for_recipe(
         self,
@@ -282,7 +304,9 @@ class ConstructionRulesMixin:
         power: PowerSnapshot | None = None,
     ):
         facility = self.facilities.facilities[facility_id]
-        recipe = self.upgrade_recipes[(facility.definition_id, target_level)]
+        recipe = self.upgrade_recipe_for_definition(facility.definition_id, target_level)
+        if recipe is None:
+            raise ValueError("no facility upgrade recipe")
         return self._facility_site_failures_for_recipe(
             recipe, facility.operational_node_id, day, power, existing_facility_id=facility_id
         )

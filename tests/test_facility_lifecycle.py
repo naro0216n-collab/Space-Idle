@@ -661,3 +661,50 @@ def test_installed_unit_count_scaling_matches_separate_identical_facilities_acro
         )
 
     assert configure([2]) == pytest.approx(configure([1, 1]))
+
+
+def test_common_facility_unit_investment_and_maintenance_apply_to_unbounded_level():
+    """A single Level transition acquires one more ordinary facility unit."""
+    app = build_game_application()
+    sim = app._simulation
+    from space_idle.content.base_assets import build_base_assets
+    from space_idle.construction.models import BuildResourceRequirement
+
+    assets, _ = build_base_assets()
+    # Test the full registered Content family, not only the research-lab upgrade.
+    for asset in assets:
+        base = sim.projects.recipes[asset.definition.id]
+        unit = {entry.resource_id: entry.amount_t for entry in base.resources}
+        for level in (2, 3, 9):
+            upgrade = sim.projects.upgrade_recipe_for_definition(asset.definition.id, level)
+            assert upgrade is not None
+            assert upgrade.target_level == level
+            assert upgrade.facility_def_id == asset.definition.id
+            assert {entry.resource_id: entry.amount_t for entry in upgrade.resources} == unit
+            assert upgrade.construction_work == pytest.approx(base.construction_work)
+            assert upgrade.self_deploying is False
+
+    # The authoritative accumulated investment yields the same maintenance
+    # demand as independently acquired identical units, without relying on
+    # the temporary numeric maintenance rate of any single Content facility.
+    lab = ids.GENERAL_RESEARCH_LAB
+    construction = sim.projects.recipes[lab]
+    unit = {item.resource_id: item.amount_t for item in construction.resources}
+    grouped = sim.facilities.install(lab, ids.EARTH, invested_resources=unit)
+    singles = [sim.facilities.install(lab, ids.EARTH, invested_resources=unit)
+               for _ in range(3)]
+    for target in (2, 3):
+        upgrade = sim.projects.next_upgrade_recipe(grouped)
+        assert upgrade.target_level == target
+        sim.facilities.upgrade_to(grouped, target, invested_resources={
+            item.resource_id: item.amount_t for item in upgrade.resources
+        })
+    expected = {
+        resource: sum(sim.facilities.maintenance_requirements_per_day(fid).get(resource, 0.0)
+                      for fid in singles)
+        for resource in unit
+    }
+    assert sim.facilities.facilities[grouped].invested_resources == pytest.approx({
+        resource: amount * 3 for resource, amount in unit.items()
+    })
+    assert sim.facilities.maintenance_requirements_per_day(grouped) == pytest.approx(expected)

@@ -338,9 +338,8 @@ def validate_runtime(sim: Any) -> None:
                 _require(removed.operational_node_id == project.operational_node_id,
                          f"historical upgrade location mismatch: {project_id}")
                 definition_id = removed.target.facility_definition_id
-            key = (definition_id, target.target_level)
-            _require(key in sim.projects.upgrade_recipes, f"upgrade project references unknown recipe: {project_id}")
-            recipe = sim.projects.upgrade_recipes[key]
+            recipe = sim.projects.upgrade_recipe_for_definition(definition_id, target.target_level)
+            _require(recipe is not None, f"upgrade project references unknown recipe: {project_id}")
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}:
                 _require(target.facility_id not in active_facility_targets,
                          f"overlapping active facility projects: {target.facility_id}")
