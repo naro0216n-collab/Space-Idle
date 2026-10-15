@@ -360,6 +360,18 @@ class ResearchProgressionProjectorMixin:
         )
 
     def _research_view(self) -> ResearchView:
+        # The global attention and research panels consume the same immutable
+        # Research projection within one composite Application query. Building
+        # the full catalog twice scales linearly with authored Research count.
+        cache = getattr(self, "_query_projection_cache", None)
+        if cache is not None and "research_view" in cache:
+            return cache["research_view"]
+        view = self._uncached_research_view()
+        if cache is not None:
+            cache["research_view"] = view
+        return view
+
+    def _uncached_research_view(self) -> ResearchView:
         sim = self._simulation
         if sim.research is None:
             return ResearchView(0.0, 0.0, 0.0, 0.0, False, (), (), (), ())
@@ -392,7 +404,15 @@ class ResearchProgressionProjectorMixin:
             else:
                 status = current_spec.stage_type.value
 
-            current_blockers = sim.research.current_blockers(definition.id, day=sim.day, power_by_location=power_by_location)
+            # An inactive project has the same current prerequisites as its
+            # start decision. Reuse the authoritative Domain result rather than
+            # asking Research to recompute it for every catalog item.
+            current_blockers = (
+                (() if complete else start_blockers)
+                if state is None else sim.research.current_blockers(
+                    definition.id, day=sim.day, power_by_location=power_by_location
+                )
+            )
             current_blockers += sim.research.allocation_blockers(definition.id, execution_allocations)
             if state is not None and current_spec is not None and isinstance(
                 current_spec, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)

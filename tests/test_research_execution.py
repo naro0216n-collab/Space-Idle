@@ -268,14 +268,15 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
             (b, a), execution_rate=execution_rate, stored_points=stored_points
         )
 
-        first_rows = {rid: _research_row(first, rid) for rid in (a, b)}
-        second_rows = {rid: _research_row(second, rid) for rid in (a, b)}
+        first_view = first.query(GetResearch())
+        second_view = second.query(GetResearch())
+        first_rows = {rid: next(row for row in first_view.items if row.id == str(rid)) for rid in (a, b)}
+        second_rows = {rid: next(row for row in second_view.items if row.id == str(rid)) for rid in (a, b)}
         if suffix == "rp":
-            research_state = second.query(GetResearch())
-            assert research_state.storage_capacity_points == 0.0
-            assert research_state.stored_points == stored_points
+            assert second_view.storage_capacity_points == 0.0
+            assert second_view.stored_points == stored_points
             assert all(
-                row.total_theory_research_point_cost > research_state.storage_capacity_points
+                row.total_theory_research_point_cost > second_view.storage_capacity_points
                 for row in second_rows.values()
             )
         for rid in (a, b):
@@ -289,16 +290,18 @@ def test_research_shared_allocation_respects_priority_fairness_and_registration_
             assert any(blocker.code == blocker_code for blocker in row.current_blockers)
 
         if suffix == "rp":
-            before_points = second.query(GetResearch()).stored_points
+            before_points = second_view.stored_points
             second.execute(AdvanceTime(1))
-            progressed = {rid: _research_row(second, rid) for rid in (a, b)}
+            progressed_view = second.query(GetResearch())
+            progressed = {rid: next(row for row in progressed_view.items if row.id == str(rid)) for rid in (a, b)}
             assert all(row.stage_progress == 0.5 for row in progressed.values())
-            assert second.query(GetResearch()).stored_points == before_points - 1.0
+            assert progressed_view.stored_points == before_points - 1.0
 
         first.execute(SetResearchPriority(str(a), 5))
         first.execute(SetResearchPriority(str(b), 1))
-        high = _research_row(first, a)
-        low = _research_row(first, b)
+        priority_view = first.query(GetResearch())
+        high = next(row for row in priority_view.items if row.id == str(a))
+        low = next(row for row in priority_view.items if row.id == str(b))
         assert high.priority == 5
         assert low.priority == 1
         assert high.execution_allocated == 1.0

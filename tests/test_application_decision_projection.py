@@ -251,10 +251,30 @@ def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_conte
     ]
     # A single composite read shares progression derivations but must preserve
     # global and location-specific issue contracts independently.
-    batched = app.query_many({
-        "attention": GetAttention(), "global": GetBottlenecks(),
-        "local": GetBottlenecks(str(EARTH)),
-    })
+    # One full Research projection is sufficient for each immutable read
+    # boundary, even when attention and the Research panel both consume it.
+    research = app._simulation.research
+    start_blockers = research.start_blockers
+    calls_per_research = {}
+
+    def counted_start_blockers(research_id, *args, **kwargs):
+        calls_per_research[research_id] = calls_per_research.get(research_id, 0) + 1
+        return start_blockers(research_id, *args, **kwargs)
+
+    with patch.object(research, "start_blockers", side_effect=counted_start_blockers):
+        standalone = app.query(GetResearch())
+        standalone_calls = dict(calls_per_research)
+        calls_per_research.clear()
+        batched = app.query_many({
+            "attention": GetAttention(), "global": GetBottlenecks(),
+            "local": GetBottlenecks(str(EARTH)), "research": GetResearch(),
+        })
+        assert calls_per_research == standalone_calls
+        calls_per_research.clear()
+        app.query(GetResearch())
+        assert calls_per_research == standalone_calls
+
+    assert batched["research"] == standalone
     assert batched["attention"].items == attention
     assert batched["global"].items == bottlenecks
     assert batched["local"] == app.query(GetBottlenecks(str(EARTH)))

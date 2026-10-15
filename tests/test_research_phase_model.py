@@ -177,8 +177,9 @@ def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_
         prerequisite_technologies=frozenset({unlock_source}),
     )
 
-    row = _research_row(app, unlock_source)
-    unlocks = {(unlock.kind, unlock.id): unlock for unlock in row.unlocks}
+    view = app.query(GetResearch())
+    rows = {row.id: row for row in view.items}
+    unlocks = {(unlock.kind, unlock.id): unlock for unlock in rows[str(unlock_source)].unlocks}
 
     immediate = unlocks[("research", str(immediate_child))]
     assert immediate.display_name == "Immediate Child"
@@ -195,12 +196,12 @@ def test_research_projection_exposes_player_facing_unlocks_without_hiding_other_
     assert facility.remaining_prerequisite_ids == ()
 
     # The same dependency graph also determines inspectable blocker state.
-    compound = _research_row(app, compound_child)
+    compound = rows[str(compound_child)]
     assert compound.status == "locked"
     assert compound.current_blockers
     assert compound.primary_blocker == compound.current_blockers[0]
     assert compound.primary_blocker.code == "prerequisite"
-    available = _research_row(app, unlock_source)
+    available = rows[str(unlock_source)]
     assert available.status == "available"
     assert available.current_blockers == () and available.primary_blocker is None
 
