@@ -31,7 +31,6 @@ boundary, and browser acceptance tests actual interaction continuity. The defaul
 | Movement, vehicles and Fleet | `tests/test_movement_planning.py`, `tests/test_vehicle_configuration.py`, `tests/test_vehicle_production.py`, `tests/test_fleet_allocations.py`, `tests/test_fleet_retirement.py` | Physical operation requirements, Fleet ownership/commitment, production/retirement |
 | Research and scientific operations | `tests/test_research_phase_model.py`, `tests/test_research_execution.py`, `tests/test_scientific_exploration.py`, `tests/test_survey_progression.py` | Research DAG and stage execution, experiment, survey, provider commitments |
 | Base Content contract | `tests/test_base_content_research_resource_integration.py`, `tests/test_solar_system_world.py` | Resource input limits, generic Research/asset eligibility and registered World geometry |
-| Content-design measurement (manual, not Core/CI) | `balance_tests/test_catalog.py`, `balance_tests/test_physical.py`, `balance_tests/test_ledger.py` | Explicit-only test suite for side-effect-free Definition/World/Scenario projections, shared physical coefficients and conditional accounting; excluded from default pytest and Fast CI |
 | Application decision state | `tests/test_application_decision_projection.py` | Player-facing blockers, options, projections, scope and read-only behavior |
 | HTTP and packaged WebUI boundary | `tests/test_api_server.py` | Command/revision/query routing, persistence endpoints, resource serving |
 | Publish Gateway transport | `development_tests/test_publish_request.py` | Snapshot restore, fixed-slot packets, transaction safety and gateway contract |
@@ -43,7 +42,7 @@ Core tests deliberately allow production or maintenance to halt from finite supp
 long-term survival of a fixed set of installed Facilities is not a contract.
 Use the quantity model for alternate equipment scales and demands; never fix individual Facility generation ratios, world-specific strategies, or Content name/value lists as regression oracles. Test
 any Core defect independently with a minimal legal state and actual transition.
-The optional evaluation suites do not set a release/CI completion threshold.
+Balance evaluation is a **design tool**, not part of this test contract index or a pass/fail acceptance suite. `python -m balance_evaluation --stage N` reports conditional stage quantities for review; the development-only `balance_evaluation/checks/` pytest checks verify only the tool's read/projection contracts. Neither its output nor those checks constitute a gameplay or balance guarantee, and neither is collected by default pytest or Fast CI.
 
 `tests/conftest.py`, `development_tests/script_harness.py`, and
 `playwright/e2e_support.py` supply test inputs and orchestration, not a separate

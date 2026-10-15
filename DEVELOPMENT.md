@@ -58,7 +58,22 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合だけを実行する。全体系Content調整は別の設計・数量評価作業とし、読取・数量整理コードを`content_balance/`、その専用検証を`balance_tests/`に分離する。調整基盤を変更した場合は`python scripts/local_test_run.py start -- balance_tests`で明示実行し、run IDを同runnerの`status`に渡して終了結果を確認する。`pytest`既定収集、Fast CI、Full Validationの通常unit jobには`balance_tests/`を含めない。Domain契約の検証は引き続き`tests/`で行い、調整用の暫定Content値や特定発展仮説をCore仕様として固定しない。
+通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合だけを実行する。全体系Content調整は別の設計・数量評価作業であり、登録Contentの読取・数量整理を`content_balance/`、段階別の評価シナリオを`balance_evaluation/`で扱う。評価シナリオはpytestの合否判定ではなく、変更可能な発展仮説に対する条件付き数量資料を出力する。次のコマンドで必要な段階を実行する。
+
+```bash
+python -m balance_evaluation --stage 1
+python -m balance_evaluation --stage 2
+# 両段階を評価する場合: python -m balance_evaluation
+```
+
+評価器そのものの計算・参照契約を確認する場合だけ、`balance_evaluation/checks/`を明示して別途pytestを実行する。これは評価プランの妥当性やバランス成立を保証するものではない。
+
+```bash
+python scripts/local_test_run.py start -- balance_evaluation/checks
+# 返されたrun IDを local_test_run.py status へ渡す
+```
+
+`balance_evaluation/`とそのchecksはpytest既定収集、Fast CI、Full Validation通常unit jobから分離する。Domainの物理法則や状態遷移の契約テストは引き続き`tests/`で行い、暫定Content値や特定発展仮説をCore仕様として固定しない。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 

@@ -96,9 +96,9 @@ SF技術は新しい研究名だけを評価しない。運動量交換・電磁
 
 ## 8. 分析手段・Gameplay検証と完了判断
 
-設計用の数量読取は `content_balance/` と `scripts/content_system_review.py` 等の開発専用経路で行い、研究・設備・輸送等の実Definitionと所有Domainの副作用のない物理係数を使う。目的が明確な目録、関係の読取、期間・Node指定の需給表を優先する。完全な仮想Player State、独立の日次Simulation、全プランの自動再生、最適化スコア、警告網羅器をバランス調整基盤に追加しない。
+設計用の数量読取は `content_balance/` と `scripts/content_system_review.py` 等の開発専用経路で行い、第1・第2段階等の評価シナリオは `balance_evaluation/` の明示実行で条件付き数量を出力する。これらはバランス保証用のテストではない。数量の算出には研究・設備・輸送等の実Definitionと所有Domainの副作用のない物理係数を使う。目的が明確な目録、関係の読取、期間・Node指定の需給表を優先する。完全な仮想Player State、独立の日次Simulation、全プランの自動再生、最適化スコア、警告網羅器をバランス調整基盤に追加しない。
 
-実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は実Domain / Applicationで必要範囲を検証する。Content評価とCore機能テストは別の証拠とし、段階プランの台数・日数・拠点・研究順を恒久テストの正解として固定しない。調整専用検証は通常テスト・Fast CIから分離する。
+実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は実Domain / Applicationで必要範囲を検証する。Content評価とCore機能テストは別の証拠とし、段階プランの台数・日数・拠点・研究順を恒久テストの正解として固定しない。評価ツールの内部的な計算・参照契約の確認は、段階別評価の合否とは切り離し、通常テスト・Fast CIから分離する。
 
 調整の進展は、次の観点で判断する。
 

@@ -1,9 +1,10 @@
-"""Editable stage 1–2 balance *scenarios*: conditional demand/production evidence.
+"""Stage 1–2 Content balance evaluation scenarios, not pass/fail tests.
 
-Run with ``python -m pytest -s -q balance_tests/test_stage_scenarios.py``.
-The selected scales and windows are design inputs, not acceptance thresholds,
-player plans, constructed locations, or simulated trajectories.
+Run ``python -m balance_evaluation --stage 1`` or ``--stage 2``.
+Selected scales and windows are revisable design inputs, not acceptance
+thresholds, constructed locations, player plans, or simulated trajectories.
 """
+import argparse
 import json
 import math
 
@@ -37,7 +38,8 @@ def _technology_closure(sim, endpoints):
     result = set()
 
     def include(tid):
-        assert tid in sim.research.definitions, f'unregistered study: {tid}'
+        if tid not in sim.research.definitions:
+            raise ValueError(f'unregistered research in evaluation input: {tid}')
         if tid in result:
             return
         result.add(tid)
@@ -119,7 +121,8 @@ def _earth_industry(sim, *, research_lab_count):
 def _candidate_leg(sim, origin, destination, vehicle_id, cargo_t):
     evidence = movement_evidence(sim, origin, destination, vehicle_id, cargo_t=cargo_t)
     # A scenario must expose a missing physical leg, rather than invent one.
-    assert evidence['forward'], f'no physical leg for {vehicle_id} {origin} -> {destination}'
+    if not evidence['forward']:
+        raise ValueError(f'no physical leg for {vehicle_id} {origin} -> {destination}')
     return evidence['forward'][0]
 
 
@@ -206,7 +209,8 @@ def _stage_two(sim):
     long_leg = sim.transport.movement_resolver()
     long_out = long_leg.physical_context_plans(ids.LEO, ids.LUNAR_ORBIT)
     long_back = long_leg.physical_context_plans(ids.LUNAR_ORBIT, ids.LEO)
-    assert long_out and long_back
+    if not long_out or not long_back:
+        raise ValueError('No usable physical LEO/lunar-orbit cycle for evaluation input')
     two_site_manifest = {
         str(rid): amount * 8 * len(LUNAR_SITES)
         for rid, amount in sim.facilities.definitions[ids.HABITAT].life_support.net_resources
@@ -235,7 +239,8 @@ def _stage_two(sim):
         resolver = sim.transport.movement_resolver()
         outbound = resolver.physical_context_plans(ids.LUNAR_ORBIT, cell)
         inbound = resolver.physical_context_plans(cell, ids.LUNAR_ORBIT)
-        assert outbound and inbound, f'no return cycle for {cell}'
+        if not outbound or not inbound:
+            raise ValueError(f'no return cycle for {cell}')
         activities.append({
             'kind': 'transport_cycle', 'node': LUNAR_ORBIT, 'destination_node': node,
             'id': ids.REUSABLE_SURFACE_CARGO_LANDER, 'units': 1,
@@ -279,7 +284,7 @@ def _stage_two(sim):
             'selected_research': sorted(map(str, selected)), 'activities': activities}
 
 
-def _print_evidence(case, result):
+def _summarize_evidence(case, result):
     """Show decision-relevant rates, preserving the distinct units and owners."""
     summary = {
         'stage': case['stage'], 'design_target_hours_cumulative': case['cumulative_target_hours'],
@@ -310,32 +315,35 @@ def _print_evidence(case, result):
         ],
         'questions': case['questions'], 'limits': result['limits'],
     }
-    print('\nBALANCE_SCENARIO ' + json.dumps(summary, ensure_ascii=False, default=str))
+    return summary
 
 
-def test_stage_one_earth_industry_and_robotic_lunar_founding():
+
+def evaluate_stage(stage: int) -> dict:
+    """Return conditional evidence, not a verdict on stage feasibility.
+
+    No gameplay State is advanced, and quoted capacities are not effective
+    allocations, fulfilled cargo, or guaranteed technology unlocks.
+    """
+    scenarios = {1: _stage_one, 2: _stage_two}
+    if stage not in scenarios:
+        raise ValueError(f'No authored evaluation scenario for stage {stage}')
     sim, _ = _setup()
-    case = _stage_one(sim)
+    case = scenarios[stage](sim)
     report = quantity_ledger(sim, period_days=case['period_days'], activities=case['activities'])
-    assert {row['node'] for row in report['resource_by_node']} >= {EARTH, LUNAR_ORBIT}
-    assert report['research_by_scope'][0]['rp_demand_per_day'] > 0
-    assert report['research_by_scope'][0]['rp_nominal_per_day'] > 0
-    assert any(row['measure'] == 'founding_payload_mass_t' for activity in report['activity_evidence']
-               for row in activity['evidence'])
-    assert sim.graph.locations == {} and sim.transport.fleet_pools == {}
-    _print_evidence(case, report)
+    return _summarize_evidence(case, report)
 
 
-def test_stage_two_lunar_habitation_and_unmanned_mars():
-    sim, _ = _setup()
-    case = _stage_two(sim)
-    report = quantity_ledger(sim, period_days=case['period_days'], activities=case['activities'])
-    assert len(report['habitation_by_node']) >= 3  # Earth + two prospective lunar contexts
-    assert len([r for r in report['habitation_by_node'] if r['node'] != EARTH]) == 2
-    assert any(row['source'] == f'vehicle_production:{ids.CREWED_LOW_GRAVITY_LANDER}'
-               for row in report['activity_evidence'])
-    # Source-side cargo and founding requirements cannot create destination supply.
-    assert all(row['supply_t_per_day'] == 0 for row in report['resource_by_node']
-               if row['node'] in {str(site) for site in LUNAR_SITES})
-    assert sim.graph.locations == {} and sim.transport.fleet_pools == {}
-    _print_evidence(case, report)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        description='Inspect revisable stage balance assumptions and quantity evidence; not a test suite.')
+    parser.add_argument('--stage', type=int, choices=(1, 2), action='append',
+                        help='Stage to evaluate (repeatable). Default: both authored stages.')
+    args = parser.parse_args(argv)
+    stages = sorted(set(args.stage or (1, 2)))
+    for stage in stages:
+        print(json.dumps(evaluate_stage(stage), ensure_ascii=False, default=str))
+
+
+if __name__ == '__main__':
+    main()
