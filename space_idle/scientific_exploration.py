@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 import math
 from typing import TYPE_CHECKING
 from enum import Enum
@@ -149,6 +150,25 @@ class ScientificExplorationService:
     technology_state: TechnologyState
     campaigns: dict[DefinitionId, ScientificExplorationState] = field(default_factory=dict)
     surface_knowledge: SurfaceKnowledgeState | None = None
+    # Derived route results exist only while the owning Simulation guarantees
+    # the same physical State. They are never saved or shared across Commands.
+    _movement_path_projection_cache: dict[tuple[object, ...], tuple | str] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    _movement_path_projection_depth: int = field(default=0, init=False, repr=False, compare=False)
+
+    @contextmanager
+    def derived_projection_scope(self):
+        root = self._movement_path_projection_depth == 0
+        if root:
+            self._movement_path_projection_cache = {}
+        self._movement_path_projection_depth += 1
+        try:
+            yield
+        finally:
+            self._movement_path_projection_depth -= 1
+            if root:
+                self._movement_path_projection_cache = None
 
     def _physical_target(self, definition: ScientificExplorationDefinition) -> MovementEndpoint | None:
         """The mission's destination kind is fixed by its Definition, not ownership."""
@@ -311,6 +331,36 @@ class ScientificExplorationService:
         day: int,
         *,
         reverse: bool = False,
+    ):
+        cache = self._movement_path_projection_cache
+        # Different campaigns may request the same physical route. Mission
+        # identity is not part of Movement geometry; endpoint and payload are.
+        key = (
+            definition.origin_id, definition.destination,
+            definition.minimum_payload_t, vehicle_definition_id, day, reverse,
+        )
+        if cache is not None and key in cache:
+            cached = cache[key]
+            if isinstance(cached, str):
+                raise ValueError(cached)
+            return cached
+        try:
+            result = self._uncached_movement_path(
+                definition, vehicle_definition_id, day, reverse=reverse,
+            )
+        except ValueError as exc:
+            # An impossible path is as costly to derive as a feasible one.
+            # Query and allocation may ask the same invalid Vehicle/OD pair.
+            if cache is not None:
+                cache[key] = str(exc)
+            raise
+        if cache is not None:
+            cache[key] = result
+        return result
+
+    def _uncached_movement_path(
+        self, definition: ScientificExplorationDefinition,
+        vehicle_definition_id: DefinitionId, day: int, *, reverse: bool = False,
     ):
         physical_target = self._physical_target(definition)
         if physical_target is not None:

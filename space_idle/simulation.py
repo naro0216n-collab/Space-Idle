@@ -584,12 +584,17 @@ class Simulation:
         founding_scope = (
             nullcontext() if self.founding is None else self.founding.target_preview_scope()
         )
+        exploration_scope = (
+            nullcontext() if self.scientific_exploration is None
+            else self.scientific_exploration.derived_projection_scope()
+        )
         with (
             self.transport.derived_projection_scope(),
             self.logistics.derived_projection_scope(),
             self.industry.derived_projection_scope(),
             survey_scope,
             founding_scope,
+            exploration_scope,
         ):
             yield
 

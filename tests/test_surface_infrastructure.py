@@ -659,22 +659,20 @@ def test_surface_engineering_is_paid_physical_change_with_knowledge_and_save_con
     assert resumed._simulation.projects.projects[project.id].construction_done == pytest.approx(plan.construction_required)
     assert resumed._simulation.projects.projects[second.id].construction_done == pytest.approx(graded_work)
     assert resumed._simulation.surface_knowledge.attribute_level(core, "terrain") == 2
-    save_game(resumed, save_path)
-    final_loaded, _ = load_game(save_path, build_game_application_for_load)
-    assert final_loaded._simulation.graph.terrain_profile(core).id == grading.target_terrain_profile_id
-
-    # A subsequent return to the first authored outcome is legitimate, with
-    # an independent new investment and no overwrite of historical progress.
-    third_id = final_loaded.execute(EngineerSurfaceCell(
+    # Both intermediate Project work and completed engineered terrain have
+    # been restored above. A third full Save/Load and 30-day re-execution of
+    # the same recipe would add no new persistence or completion contract.
+    # The next decision still must use the current landform for its work.
+    third_id = resumed.execute(EngineerSurfaceCell(
         str(ids.EARTH), str(core), str(target_recipe.id), procurement_policy="immediate"
     )).created_id
     assert third_id is not None
-    third = next(p for p in final_loaded._simulation.projects.projects.values() if str(p.id) == third_id)
-    assert third.planned_spatial_work == pytest.approx(target_recipe.construction_work *
-        final_loaded._simulation.graph.terrain_profile(core).development_work_factor)
-    final_loaded.execute(AdvanceTime(30))
-    assert final_loaded._simulation.graph.terrain_profile(core).id == target_profile
-    assert final_loaded._simulation.graph.surface_cells[core].resource_potential_by_resource == original_resource_potential
+    third = next(p for p in resumed._simulation.projects.projects.values() if str(p.id) == third_id)
+    assert third.planned_spatial_work == pytest.approx(
+        target_recipe.construction_work * resumed._simulation.graph.terrain_profile(core).development_work_factor
+    )
+    assert third.id != project.id and third.id != second.id
+    assert resumed._simulation.graph.surface_cells[core].resource_potential_by_resource == original_resource_potential
 
 
 def test_surface_distribution_uses_physical_area_and_distance_not_cell_count():

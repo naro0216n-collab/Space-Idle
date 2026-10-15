@@ -387,7 +387,6 @@ def test_standard_partition_registration_conserves_resources_across_resolution()
     from collections import defaultdict
     from space_idle.content.base_spatial import build_world_registration
     from space_idle.content import surface_world
-    from space_idle.surface_partition import validate_surface_partitions
 
     def realize(*, finer):
         graph, environment = build_world_registration()
@@ -404,7 +403,8 @@ def test_standard_partition_registration_conserves_resources_across_resolution()
         finally:
             if finer:
                 surface_world._ring_count = original
-        validate_surface_partitions(graph)
+        # Geometry/adjacency is verified by the representative generator test;
+        # this independent resolution comparison only needs the Resource totals.
         quantities = defaultdict(float)
         cells = graph.cells_for_body(body.id)
         for cell in cells:

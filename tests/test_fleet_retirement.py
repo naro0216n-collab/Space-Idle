@@ -123,32 +123,26 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
             control._simulation.inventory.amount(ids.EARTH, resource_id) + quantity
         )
 
-    completed_stock = {
-        resource_id: sim.inventory.amount(ids.EARTH, resource_id)
-        for resource_id, _amount in sim.transport.vehicle_defs[
-            ids.REUSABLE_LAUNCH_VEHICLE
-        ].retirement.recovery_resources_per_unit
-    }
     completed_path = tmp_path / "retirement-complete.json"
     save_game(app, completed_path, saved_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
     reloaded, offline = load_game(completed_path, build_game_application_for_load)
     assert offline is None
-    control_after_load, offline = load_game(completed_path, build_game_application_for_load)
-    assert offline is None
-    control_after_load._simulation.transport.fleet_retirements.pop(EntityId(retirement_id))
-    reloaded.execute(AdvanceTime(1))
-    control_after_load.execute(AdvanceTime(1))
+    # Once COMPLETE has been loaded, the transition must be idempotent.
+    # Recording the actual domain flow avoids constructing a second whole
+    # Application solely to subtract baseline production from salvage.
+    from space_idle.analysis_execution import observe_canonical_day
+    with observe_canonical_day(reloaded._simulation) as trace:
+        reloaded.execute(AdvanceTime(1))
     reloaded_state = reloaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]
     assert reloaded_state.phase is FleetRetirementPhase.COMPLETE
     assert reloaded_state.salvage_recovered_fraction == pytest.approx(1.0)
     assert reloaded._simulation.transport.fleet_pool_snapshot(
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH
     ).total_units == 0
-    for resource_id in completed_stock:
-        assert reloaded._simulation.inventory.amount(ids.EARTH, resource_id) == pytest.approx(
-            control_after_load._simulation.inventory.amount(ids.EARTH, resource_id)
-        )
-
+    assert not any(
+        row.activity_id == f"vehicle_retirement_salvage:{retirement_id}"
+        for row in trace.activity_flows()
+    )
 
 
 
