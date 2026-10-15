@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import cached_property
 from enum import Enum
 import math
 from typing import TYPE_CHECKING, Mapping
@@ -104,6 +105,11 @@ class FacilityDef:
             raise ValueError("facility placement scope must be a FacilityPlacementScope")
         if not 0.0 <= self.decommission_recovery_fraction <= 1.0:
             raise ValueError("facility decommission recovery fraction must be within 0..1")
+
+    @cached_property
+    def capability_ids(self) -> frozenset[str]:
+        """Immutable Definition-local capability set, never a runtime State cache."""
+        return frozenset(supply.id for supply in self.capability_supplies)
 
     def housing_at_level(self, level: int) -> int:
         return self.housing_capacity * level

@@ -587,6 +587,7 @@ class Simulation:
         with (
             self.transport.derived_projection_scope(),
             self.logistics.derived_projection_scope(),
+            self.industry.derived_projection_scope(),
             survey_scope,
             founding_scope,
         ):

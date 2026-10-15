@@ -28,11 +28,12 @@ class ResearchCapacityMixin:
         installed asset is needed to describe nominal Research capacity.
         """
         definition = self.facilities.definitions[facility_definition_id]
+        supplied = definition.capability_ids
         matches = tuple(
             provider
             for provider in self.providers.values()
             if provider.source_kind is ResearchProviderSourceKind.FACILITY
-            and provider.accepts_source(row.id for row in definition.capability_supplies)
+            and provider.required_source_capabilities <= supplied
         )
         if len(matches) > 1:
             raise RuntimeError(
@@ -59,7 +60,7 @@ class ResearchCapacityMixin:
             return frozenset()
         return frozenset(
             definition.id for definition in self.facilities.definitions.values()
-            if provider.accepts_source(row.id for row in definition.capability_supplies)
+            if provider.required_source_capabilities <= definition.capability_ids
         )
 
     def vehicle_satisfies_provider(self, provider_definition_id: DefinitionId, vehicle_definition_id: DefinitionId) -> bool:

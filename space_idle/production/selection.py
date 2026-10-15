@@ -12,11 +12,16 @@ class ProcessSelectionMixin:
     def compatible_processes(self, facility_def_id: DefinitionId) -> tuple[ProcessSpec, ...]:
         """Content-defined interface compatibility, independent of Facility identity."""
         definition = self.facility_defs[facility_def_id]
-        capabilities = frozenset(supply.id for supply in definition.capability_supplies)
-        return tuple(sorted((
+        cache = self._compatible_process_projection
+        if cache is not None and facility_def_id in cache:
+            return cache[facility_def_id]
+        matches = tuple(sorted((
             process for process in self.processes.values()
-            if process.required_capabilities <= capabilities
+            if process.required_capabilities <= definition.capability_ids
         ), key=lambda process: str(process.id)))
+        if cache is not None:
+            cache[facility_def_id] = matches
+        return matches
 
     def process_for(self, facility: FacilityState) -> ProcessSpec | None:
         compatible = self.compatible_processes(facility.definition_id)

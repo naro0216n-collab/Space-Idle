@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from contextlib import contextmanager
 from typing import Mapping
 
 from .execution_requirements import (
@@ -30,6 +31,25 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     technology_state: TechnologyState
 
     SERVICE_TYPE_PREFIX = "process:"
+    _compatible_process_projection: dict[DefinitionId, tuple[ProcessSpec, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Reuse Process/Capability matches for one read or execution boundary.
+
+        This is a derived index, never persistent. A subsequent command or
+        definition mutation uses fresh matches and remains the authority.
+        """
+        if self._compatible_process_projection is not None:
+            yield
+            return
+        self._compatible_process_projection = {}
+        try:
+            yield
+        finally:
+            self._compatible_process_projection = None
 
     @classmethod
     def process_service_type(cls, process_id: DefinitionId) -> str:
@@ -115,9 +135,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             return frozenset()
         return frozenset(
             facility_id for facility_id, definition in self.facility_defs.items()
-            if process.required_capabilities <= frozenset(
-                capability.id for capability in definition.capability_supplies
-            )
+            if process.required_capabilities <= definition.capability_ids
         )
 
     def service_capacity_upstream_services(
