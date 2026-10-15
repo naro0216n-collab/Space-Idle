@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from enum import Enum
 from typing import Callable, Iterable, Mapping, Protocol, TYPE_CHECKING
 
@@ -77,23 +78,64 @@ class ServiceCapacityRegistry:
 
     def __init__(self) -> None:
         self._provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]] | None = None
+        self._projection_provider_index: dict[str, tuple[ServiceCapacityProvider, ...]] | None = None
+        self._projection_index_ready = False
 
     def bind_provider_source(
         self, provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]]
     ) -> None:
         self._provider_source = provider_source
+        # A composition rebinding must not retain the prior provider wiring.
+        self._projection_provider_index = None
+        self._projection_index_ready = False
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Index definition-owned Service types once per immutable execution/read boundary.
+
+        Mutable registration outside a boundary is reflected by the next lookup;
+        this is never an authoritative or persisted snapshot of provider supply.
+        """
+        if self._projection_provider_index is not None:
+            yield
+            return
+        # Most scoped reads never ask for an individual provider. Keep the
+        # index lazy so World/Research-only requests do not scan Service types.
+        self._projection_provider_index = {}
+        self._projection_index_ready = False
+        try:
+            yield
+        finally:
+            self._projection_provider_index = None
+            self._projection_index_ready = False
 
     def providers(self) -> tuple[ServiceCapacityProvider, ...]:
         if self._provider_source is None:
             return ()
         return self._provider_source()
 
+    def providers_by_type(self) -> dict[str, tuple[ServiceCapacityProvider, ...]]:
+        """One Service registration projection shared by all its Domain consumers.
+
+        Definition registration can change outside a projection boundary.  The
+        next boundary resolves the live provider source again, without keeping
+        a persistent cache or capturing mutable Service supply.
+        """
+        index = self._projection_provider_index
+        if index is None or not self._projection_index_ready:
+            grouped: dict[str, list[ServiceCapacityProvider]] = {}
+            for provider in self.providers():
+                for service_type in provider.service_capacity_types():
+                    grouped.setdefault(service_type, []).append(provider)
+            new_index = {key: tuple(rows) for key, rows in grouped.items()}
+            if index is None:
+                return new_index
+            index.update(new_index)
+            self._projection_index_ready = True
+        return index
+
     def provider_for(self, service_type: str) -> ServiceCapacityProvider | None:
-        providers = tuple(
-            provider
-            for provider in self.providers()
-            if service_type in provider.service_capacity_types()
-        )
+        providers = self.providers_by_type().get(service_type, ())
         if len(providers) > 1:
             raise RuntimeError(f"multiple service capacity providers own {service_type}")
         return providers[0] if providers else None

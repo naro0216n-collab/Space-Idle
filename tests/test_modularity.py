@@ -346,3 +346,45 @@ def test_world_definition_and_scenario_initialization_keep_static_and_runtime_st
 
     with pytest.raises(ValueError, match="initial runtime state has already been established"):
         build_standard_scenario_definition().apply(sim)
+
+
+def test_service_registration_projection_is_shared_but_rebuilt_at_next_boundary():
+    """Bounded definition enumeration never makes Provider registration authoritative."""
+    from space_idle.service_capacity import ServiceCapacityRegistry
+
+    calls = []
+
+    class Provider:
+        def __init__(self, name, types):
+            self.name = name
+            self.types = types
+
+        def service_capacity_types(self):
+            calls.append(self.name)
+            return tuple(self.types)
+
+    first = Provider("first", {"research"})
+    second = Provider("second", {"industry"})
+    providers = [first, second]
+    registry = ServiceCapacityRegistry()
+    registry.bind_provider_source(lambda: tuple(providers))
+    with registry.derived_projection_scope():
+        assert registry.provider_for("research") is first
+        assert registry.provider_for("industry") is second
+        assert registry.provider_for("research") is first
+        assert set(registry.providers_by_type()) == {"research", "industry"}
+        assert calls == ["first", "second"]
+        with registry.derived_projection_scope():
+            assert registry.provider_for("industry") is second
+        assert calls == ["first", "second"]
+    # A new definition belongs to the next boundary, not the previous snapshot.
+    first.types.add("construction")
+    assert registry.provider_for("construction") is first
+    with registry.derived_projection_scope():
+        assert registry.provider_for("construction") is first
+        assert set(registry.providers_by_type()) == {"research", "construction", "industry"}
+    second.types.add("research")
+    with registry.derived_projection_scope():
+        from pytest import raises
+        with raises(RuntimeError, match="multiple service capacity providers"):
+            registry.provider_for("research")

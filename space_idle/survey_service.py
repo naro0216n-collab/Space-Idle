@@ -133,6 +133,9 @@ class SurveyService:
         default=None, init=False, repr=False
     )
     _projection_cache_depth: int = field(default=0, init=False, repr=False)
+    _projection_compatible_sources: dict[DefinitionId, tuple[DefinitionId, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     @contextmanager
     def derived_projection_scope(self):
@@ -140,6 +143,7 @@ class SurveyService:
         root_scope = self._projection_cache_depth == 0
         if root_scope:
             self._projection_campaign_cache = {}
+            self._projection_compatible_sources = {}
         self._projection_cache_depth += 1
         try:
             yield
@@ -147,12 +151,22 @@ class SurveyService:
             self._projection_cache_depth -= 1
             if root_scope:
                 self._projection_campaign_cache = None
+                self._projection_compatible_sources = None
 
     @staticmethod
     def service_type_for_provider(provider_id: DefinitionId, source_definition_id: DefinitionId) -> str:
         return f"survey_observation:{provider_id}:{source_definition_id}"
 
     def compatible_source_definition_ids(self, provider: SurveyProviderSpec) -> tuple[DefinitionId, ...]:
+        cache = self._projection_compatible_sources
+        if cache is not None and provider.id in cache:
+            return cache[provider.id]
+        sources = self._uncached_compatible_sources(provider)
+        if cache is not None:
+            cache[provider.id] = sources
+        return sources
+
+    def _uncached_compatible_sources(self, provider: SurveyProviderSpec) -> tuple[DefinitionId, ...]:
         if provider.source_kind is SurveyProviderSourceKind.FACILITY:
             definitions = self.facilities.definitions.values()
             return tuple(sorted((row.id for row in definitions

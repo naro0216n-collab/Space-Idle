@@ -34,6 +34,9 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     _compatible_process_projection: dict[DefinitionId, tuple[ProcessSpec, ...]] | None = field(
         default=None, init=False, repr=False, compare=False,
     )
+    _process_provider_definitions_projection: dict[DefinitionId, frozenset[DefinitionId]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
     @contextmanager
     def derived_projection_scope(self):
@@ -46,10 +49,12 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             yield
             return
         self._compatible_process_projection = {}
+        self._process_provider_definitions_projection = {}
         try:
             yield
         finally:
             self._compatible_process_projection = None
+            self._process_provider_definitions_projection = None
 
     @classmethod
     def process_service_type(cls, process_id: DefinitionId) -> str:
@@ -119,30 +124,39 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             self.process_service_type(process.id) for process in self.processes.values()
         ))
 
-    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
-        if service_type not in self.service_capacity_types():
+    def _service_process(self, service_type: str) -> ProcessSpec:
+        # Match one registered Process directly, rather than re-enumerating
+        # every process Service type for each downstream dependency lookup.
+        if not service_type.startswith(self.SERVICE_TYPE_PREFIX):
             raise KeyError(service_type)
+        process = self.processes.get(DefinitionId(service_type[len(self.SERVICE_TYPE_PREFIX):]))
+        if process is None or self.process_service_type(process.id) != service_type:
+            raise KeyError(service_type)
+        return process
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        self._service_process(service_type)
         return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_provider_definition_ids(
         self, service_type: str
     ) -> frozenset[DefinitionId]:
-        if service_type not in self.service_capacity_types():
-            raise KeyError(service_type)
-        process_id = DefinitionId(service_type[len(self.SERVICE_TYPE_PREFIX):])
-        process = self.processes.get(process_id)
-        if process is None:
-            return frozenset()
-        return frozenset(
+        process = self._service_process(service_type)
+        cache = self._process_provider_definitions_projection
+        if cache is not None and process.id in cache:
+            return cache[process.id]
+        providers = frozenset(
             facility_id for facility_id, definition in self.facility_defs.items()
             if process.required_capabilities <= definition.capability_ids
         )
+        if cache is not None:
+            cache[process.id] = providers
+        return providers
 
     def service_capacity_upstream_services(
         self, service_type: str
     ) -> frozenset[str]:
-        if service_type not in self.service_capacity_types():
-            raise KeyError(service_type)
+        self._service_process(service_type)
         return frozenset()
 
     def service_capacity_supply_at(

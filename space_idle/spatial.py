@@ -1005,12 +1005,70 @@ class SpatialGraph:
         return seen == cell_ids
 
 
+class _FacetDefinitionMap(dict):
+    """Revision-tracked static definition keys, including direct map edits.
+
+    Physical values may change without changing the set of facet types;
+    insertions/removals are the only events that invalidate that index.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.key_revision = 0
+
+    def __setitem__(self, key, value):
+        added = key not in self
+        super().__setitem__(key, value)
+        if added:
+            self.key_revision += 1
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self.key_revision += 1
+
+    def pop(self, key, *default):
+        if key in self:
+            self.key_revision += 1
+        return super().pop(key, *default)
+
+    def popitem(self):
+        item = super().popitem()
+        self.key_revision += 1
+        return item
+
+    def clear(self):
+        if self:
+            super().clear()
+            self.key_revision += 1
+
+    def update(self, *args, **kwargs):
+        rows = dict(*args, **kwargs)
+        if any(key not in self for key in rows):
+            self.key_revision += 1
+        super().update(rows)
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self.key_revision += 1
+        return super().setdefault(key, default)
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
 @dataclass
 class StaticFacetStore:
     """Static Physical Environment definitions separated by authoritative scope."""
 
     facets: dict[tuple[SpatialContextId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
     body_facets: dict[tuple[CelestialBodyId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
+    _facet_type_index: frozenset[type[SpatialFacet]] | None = field(default=None, init=False, repr=False, compare=False)
+    _facet_index_revision: tuple[int, int, int, int] | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.facets = _FacetDefinitionMap(self.facets)
+        self.body_facets = _FacetDefinitionMap(self.body_facets)
 
     @staticmethod
     def _field_scope(facet_type: type[FacetT]) -> EnvironmentFieldScope:
@@ -1037,9 +1095,21 @@ class StaticFacetStore:
         self.body_facets[(body_id, type(facet))] = facet
 
     def facet_types(self) -> set[type[SpatialFacet]]:
-        return {facet_type for (_context_id, facet_type) in self.facets} | {
-            facet_type for (_body_id, facet_type) in self.body_facets
-        }
+        # Facet registration is static during a read/tick, but callers may
+        # change map membership directly while composing a World. Track keys
+        # rather than scanning every Cell for each environment observation.
+        revision = (
+            id(self.facets), self.facets.key_revision,
+            id(self.body_facets), self.body_facets.key_revision,
+        )
+        if self._facet_index_revision != revision:
+            self._facet_type_index = frozenset(
+                facet_type for (_context_id, facet_type) in self.facets
+            ) | frozenset(
+                facet_type for (_body_id, facet_type) in self.body_facets
+            )
+            self._facet_index_revision = revision
+        return set(self._facet_type_index)
 
     def field_applies_to_context(
         self, graph: SpatialGraph, context_id: SpatialContextId, facet_type: type[FacetT]

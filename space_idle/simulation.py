@@ -421,8 +421,8 @@ class Simulation:
 
     def service_capacity_scopes(self) -> dict[str, ServiceCapacityScope]:
         scopes: dict[str, ServiceCapacityScope] = {}
-        for provider in self.service_capacity_providers():
-            for service_type in provider.service_capacity_types():
+        for service_type, providers in self.service_capacity_registry.providers_by_type().items():
+            for provider in providers:
                 scope = provider.service_capacity_scope(service_type)
                 prior = scopes.get(service_type)
                 if prior is not None and prior is not scope:
@@ -440,8 +440,7 @@ class Simulation:
         self, requests: tuple[ServiceCapacityRequest, ...]
     ) -> tuple[str, ...]:
         service_types = {request.service_type for request in requests}
-        for provider in self.service_capacity_providers():
-            service_types.update(provider.service_capacity_types())
+        service_types.update(self.service_capacity_registry.providers_by_type())
         return tuple(sorted(service_types))
 
     def _allocate_service_stage(
@@ -514,11 +513,10 @@ class Simulation:
             self._active_locations() | set(self.graph.operational_node_ids()), key=str
         ))
         providers: dict[str, ServiceCapacityProvider] = {}
-        for provider in self.service_capacity_registry.providers():
-            for service_type in provider.service_capacity_types():
-                if service_type in providers:
-                    raise RuntimeError(f"multiple service capacity providers own {service_type}")
-                providers[service_type] = provider
+        for service_type, sources in self.service_capacity_registry.providers_by_type().items():
+            if len(sources) > 1:
+                raise RuntimeError(f"multiple service capacity providers own {service_type}")
+            providers[service_type] = sources[0]
         surface_dependent = (
             frozenset() if self.surface_infrastructure is None else frozenset(
                 edge.service_type for edge in dependencies
@@ -589,6 +587,7 @@ class Simulation:
             else self.scientific_exploration.derived_projection_scope()
         )
         with (
+            self.service_capacity_registry.derived_projection_scope(),
             self.transport.derived_projection_scope(),
             self.logistics.derived_projection_scope(),
             self.industry.derived_projection_scope(),

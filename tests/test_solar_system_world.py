@@ -557,3 +557,24 @@ def test_verified_static_world_rechecks_modified_geography_and_facets():
     with pytest.raises(ConfigurationError, match="survey target key mismatch"):
         validate_simulation_configuration(sim)
     sim.survey.targets[target_id] = removed
+
+
+def test_static_environment_facet_catalog_tracks_registration_and_direct_edits():
+    """Facet type discovery reflects the current World keys, not a stale projection."""
+    from space_idle.spatial import StaticFacetStore, ThermalField, RadiationField
+    from space_idle.shared import SurfaceCellId, CelestialBodyId
+
+    store = StaticFacetStore()
+    cell_id = SurfaceCellId("test.facet.cell")
+    body_id = CelestialBodyId("test.facet.body")
+    store.set(cell_id, ThermalField(290.0))
+    assert store.facet_types() == {ThermalField}
+    # A returned mutable set is not the authoritative catalog.
+    store.facet_types().clear()
+    assert store.facet_types() == {ThermalField}
+    store.set_body(body_id, RadiationField(1.0))
+    assert store.facet_types() == {ThermalField, RadiationField}
+    store.body_facets.pop((body_id, RadiationField))
+    assert store.facet_types() == {ThermalField}
+    del store.facets[(cell_id, ThermalField)]
+    assert store.facet_types() == set()
