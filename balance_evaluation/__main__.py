@@ -1,4 +1,4 @@
-"""Run stage evaluation scenarios without pytest or pass/fail assertions."""
+"""CLI entrypoint for conditional Content evidence and real Save inspection."""
 from balance_evaluation.stages import main
 
 

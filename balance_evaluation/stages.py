@@ -1,4 +1,4 @@
-"""Evaluate a common game-state snapshot; stage is metadata, not a code path."""
+"""CLI and shared evaluation entrypoints; stages do not create game assets."""
 from __future__ import annotations
 
 import argparse
@@ -37,39 +37,74 @@ def evaluate_stage(stage: int) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description='Inspect actual game-save state; no stage-specific simulation.')
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument('--stage', type=int, action='append', help='Bundled snapshot label; repeatable')
-    selection.add_argument('--scenario', type=Path, help='Read a state-backed evaluation scenario')
-    selection.add_argument('--from-save', type=Path, help='Import a genuine game Save as a scenario')
-    parser.add_argument('--to-save', type=Path, help='Export selected evaluation scenario to a genuine game Save')
-    parser.add_argument('--target', action='store_true', help='Include separate, hypothetical design worksheet')
-    parser.add_argument('--output', type=Path, help='Write imported evaluation scenario')
-    parser.add_argument('--label-stage', type=int, help='Stage annotation for --from-save (default: 1)')
-    parser.add_argument('--period-days', type=float, default=14400,
-                        help='Evaluation window annotation for --from-save')
+    """One CLI for whole-system overview, focused evidence and real Save state."""
+    from .reporting import overview, inspect, impact
+    from .targets import available_stages
+
+    parser = argparse.ArgumentParser(description='Content-design evidence, not a balance pass/fail checker.')
+    actions = parser.add_subparsers(dest='action', required=True)
+    broad = actions.add_parser('overview', help='Compact cross-stage conditional quantities')
+    broad.add_argument('--stage', type=int, action='append', help='Stage filter; default all authored profiles')
+    focus = actions.add_parser('inspect', help='Drill into stage totals and owned-Definition evidence')
+    focus.add_argument('--stage', type=int, required=True)
+    focus.add_argument('--kind', choices=('resource', 'service', 'power', 'research', 'activity'), required=True)
+    focus.add_argument('--id', help='Resource ID, service type, or research scope')
+    focus.add_argument('--node', help='Node or scope filter')
+    focus.add_argument('--activity-key', help='Stable activity key (with --kind activity)')
+    influence = actions.add_parser('impact', help='Identify direct stage worksheet references to Content ID')
+    influence.add_argument('--id', required=True)
+    influence.add_argument('--stage', type=int, action='append')
+    state = actions.add_parser('state', help='Evaluate a real Save or translate it without granting assets')
+    source = state.add_mutually_exclusive_group(required=True)
+    source.add_argument('--stage', type=int, help='Bundled real State snapshot label')
+    source.add_argument('--scenario', type=Path, help='Read state-backed evaluation scenario')
+    source.add_argument('--from-save', type=Path, help='Import genuine game Save as evaluation scenario')
+    state.add_argument('--to-save', type=Path, help='Export selected scenario as genuine game Save')
+    state.add_argument('--target', action='store_true', help='Include separate hypothetical worksheet')
+    state.add_argument('--details', action='store_true', help='Include underlying per-activity evidence')
+    state.add_argument('--output', type=Path, help='Write imported scenario to this path')
+    state.add_argument('--label-stage', type=int, default=1, help='Stage annotation for --from-save')
+    state.add_argument('--period-days', type=float, default=14400, help='Evaluation period for --from-save')
     args = parser.parse_args(argv)
-    if args.from_save:
-        scenario = scenario_from_save(args.from_save, stage=args.label_stage or 1,
-                                      period_days=args.period_days)
-        if args.output:
-            write_scenario(scenario, args.output)
-        elif not args.to_save:
-            parser.error('--from-save requires --output or --to-save')
-        scenarios = [scenario]
-    elif args.scenario:
-        scenarios = [read_scenario(args.scenario)]
+    if args.action == 'impact':
+        result = impact(args.id, tuple(args.stage) if args.stage else None)
+    elif args.action in ('overview', 'inspect'):
+        # Static design quantities rely on real owned Definition and physical
+        # rules, not on artificial stage-completed game states.
+        app = app_from_scenario(stage_scenario(available_stages()[0]))
+        sim = app._simulation
+        if args.action == 'overview':
+            result = overview(sim, tuple(args.stage) if args.stage else None)
+        else:
+            if args.activity_key and args.kind != 'activity':
+                parser.error('--activity-key requires --kind activity')
+            result = inspect(sim, args.stage, args.kind, identifier=args.id,
+                             node=args.node, activity=args.activity_key)
     else:
-        stages = args.stage or [1, 2]
-        scenarios = [stage_scenario(stage) for stage in stages]
-    if args.to_save:
-        if len(scenarios) != 1:
-            parser.error('--to-save requires exactly one evaluation scenario')
-        scenario_to_save(scenarios[0], args.to_save)
-    if not args.output or not args.from_save:
-        for scenario in scenarios:
-            print(json.dumps(evaluate_scenario(scenario, include_target=args.target or not (args.from_save or args.scenario)),
-                             ensure_ascii=False, default=str))
+        if args.from_save:
+            scenario = scenario_from_save(args.from_save, stage=args.label_stage,
+                                          period_days=args.period_days)
+            if args.output:
+                write_scenario(scenario, args.output)
+            elif not args.to_save:
+                parser.error('--from-save requires --output or --to-save')
+        else:
+            if args.output:
+                parser.error('--output is only available with --from-save')
+            scenario = read_scenario(args.scenario) if args.scenario else stage_scenario(args.stage)
+        if args.to_save:
+            scenario_to_save(scenario, args.to_save)
+        result = evaluate_scenario(scenario, include_target=args.target)
+        if not args.details:
+            result['snapshot'].pop('asset_evidence', None)
+            if args.target:
+                result['design_target_worksheet'].pop('activity_evidence', None)
+            result['detail_option'] = 'state --details preserves all per-activity evidence'
+        if args.output and args.from_save:
+            result['written_scenario'] = str(args.output)
+        if args.to_save:
+            result['written_save'] = str(args.to_save)
+    print(json.dumps(result, ensure_ascii=False, default=str, separators=(',', ':')))
 
 
 if __name__ == '__main__':

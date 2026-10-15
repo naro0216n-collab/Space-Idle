@@ -1,7 +1,7 @@
 """Generic, data-driven acquisition/operation design worksheets.
 
 These *hypotheses* are not game state. They cannot be encoded as Save assets.
-Stage evolution is an ordered delta to the preceding worksheet, interpreted
+Stage evolution uses semantic activity keys to patch the preceding worksheet, interpreted
 by the same ledger for every stage. Gameplay snapshots live in ``scenarios``.
 """
 from __future__ import annotations
@@ -12,6 +12,33 @@ from pathlib import Path
 from content_balance.ledger import quantity_ledger
 
 TARGETS = Path(__file__).with_name('target_profiles')
+
+
+# Stable activity identity is derived from the activity's physical role, not its
+# position in a stage profile. `instance` distinguishes genuinely parallel
+# activities with otherwise identical identities when necessary.
+IDENTITY_FIELDS = (
+    'kind', 'node', 'id', 'stage_id', 'portfolio', 'vehicle_id',
+    'origin_context_id', 'destination_context_id', 'target_context_id', 'instance',
+)
+
+
+def activity_key(activity: dict) -> str:
+    return '|'.join(str(activity.get(field, '')) for field in IDENTITY_FIELDS)
+
+
+def _indexed(activities: list[dict]) -> dict[str, dict]:
+    result = {}
+    for activity in activities:
+        key = activity_key(activity)
+        if key in result:
+            raise ValueError(f'duplicate balance activity identity: {key}')
+        result[key] = activity
+    return result
+
+
+def available_stages() -> tuple[int, ...]:
+    return tuple(sorted(int(p.stem) for p in TARGETS.glob('[0-9]*.json') if p.stem.isdecimal()))
 
 
 def target_profile(stage: int) -> dict:
@@ -26,24 +53,34 @@ def target_profile(stage: int) -> dict:
     if 'parent_stage' not in data:
         if stage != 1:
             raise ValueError('noninitial target profile requires a parent')
+        _indexed(data['activities'])
         return data
     if data['parent_stage'] >= stage or data['parent_stage'] < 1:
         raise ValueError('invalid target profile predecessor')
     base = target_profile(data['parent_stage'])
-    activities = base['activities'].copy()
-    # Edit offsets always refer to the previous stage and are applied in reverse.
-    last_start = len(activities)
-    for op in sorted(data['edits'], key=lambda row: row['start'], reverse=True):
-        start, count = op['start'], op['delete']
-        if not (0 <= start <= len(activities) and 0 <= count <= len(activities) - start):
-            raise ValueError('invalid target profile splice')
-        if start + count > last_start:
-            raise ValueError('overlapping target edits')
-        activities[start:start + count] = op['insert']
-        last_start = start
+    indexed = _indexed(base['activities'])
+    changes = data['changes']
+    seen = set()
+    for change in changes:
+        key = change['key']
+        if key in seen or key not in indexed:
+            raise ValueError(f'duplicate or unknown activity change: {key}')
+        seen.add(key)
+        replacement = change['activity']
+        if replacement is None:
+            del indexed[key]
+        else:
+            if activity_key(replacement) != key:
+                raise ValueError(f'activity identity changed; remove and add instead: {key}')
+            indexed[key] = replacement
+    for item in data['additions']:
+        key = activity_key(item)
+        if key in indexed or key in seen:
+            raise ValueError(f'activity already present: {key}')
+        indexed[key] = item
     return {**{k: v for k, v in base.items() if k != 'activities'},
-            **{k: v for k, v in data.items() if k not in ('parent_stage', 'edits')},
-            'activities': activities}
+            **{k: v for k, v in data.items() if k not in ('parent_stage', 'changes', 'additions')},
+            'activities': list(indexed.values())}
 
 
 def _resolved_plans(sim, activities):

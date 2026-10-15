@@ -61,16 +61,23 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 通常の契約テストは`tests/`に集約し、`pytest`の既定収集およびFast CIではこの集合だけを実行する。全体系Content調整は別の設計・数量評価作業であり、登録Contentの読取・数量整理を`content_balance/`、段階別の評価シナリオを`balance_evaluation/`で扱う。評価シナリオはpytestの合否判定ではなく、変更可能な発展仮説に対する条件付き数量資料を出力する。次のコマンドで必要な段階を実行する。
 
 ```bash
-python -m balance_evaluation --stage 1
-python -m balance_evaluation --stage 2
-# 両段階を評価する場合: python -m balance_evaluation
+# 段階横断の概観（登録済みの評価プランのみ。未設定段階は補完しない）
+python -m balance_evaluation overview
+python -m balance_evaluation overview --stage 1 --stage 2
+# 第2段階の特定ResourceのNode別数量と出典
+python -m balance_evaluation inspect --stage 2 --kind resource --id base.resource.chemical_propellant
+# 共有Contentの段階別直接参照（間接影響は別途評価）
+python -m balance_evaluation impact --id base.facility.research_laboratory
+# 実際に保存された第2段階Stateと、必要時だけ別枠の設計仮説
+python -m balance_evaluation state --stage 2 --target
+# 全Activityの明細が必要なときだけ --details を付ける
 # 実Game Save -> 評価シナリオ（注記付の正準Save Snapshot）
-python -m balance_evaluation --from-save /path/to/save.json --label-stage 2 --period-days 28800 --output /path/to/scenario.json
+python -m balance_evaluation state --from-save /path/to/save.json --label-stage 2 --period-days 28800 --output /path/to/scenario.json
 # 評価シナリオ -> 実Game Save（ゲームStateの無損失変換）
-python -m balance_evaluation --scenario /path/to/scenario.json --to-save /path/to/roundtrip-save.json
-# 実Save状態だけを数量評価。併せて段階の仮定Worksheetを比較する場合は --target
-python -m balance_evaluation --scenario /path/to/scenario.json --target
+python -m balance_evaluation state --scenario /path/to/scenario.json --to-save /path/to/roundtrip-save.json
 ```
+
+`overview` は全体の主要関係だけを出し、`inspect` は総数値から実際に寄与したActivityの原明細へ遡る。`impact` は対象IDを直接参照するWorksheetだけを列挙し、間接需給や将来の取得成立を判断しない。段階差分は意味的Activity識別子で管理し、前段階の配列順序には依存しない。各調整では対象の詳細確認後に共通需給・前後段階の再評価へ戻り、必要な実進行検証はGameApplicationで行う。
 
 段階別の評価は同じ処理を使う。`balance_evaluation/stage_snapshots/`は正準Saveで往復可能な実際のState、`balance_evaluation/target_profiles/`は未取得資産を含む設計上の数量仮説（第2段階以降は前段階との差分）である。両者は別々に表示し、想定RP等を実保有能力と解釈しない。組込SnapshotはGame Stateの比較例であって第1・第2段階の到達を保証せず、実際の進行Saveで差し替えて評価できる。
 
