@@ -213,10 +213,10 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                 'construction': site['construction'],
                 'power_climate_coefficient': site['power'],
                 'interpretation': 'not an installed Facility or a legality preflight'})
-            power[node]['nominal_generation_mw'] += gen * count
-            power[node]['nominal_active_load_mw'] += load * count
-            measurements.append({'measure': 'power', 'generation_mw': gen * count,
-                                 'active_load_mw': load * count, 'context_id': str(context),
+            power[node]['nominal_generation_mw'] += gen * count * level_of(item)
+            power[node]['nominal_active_load_mw'] += load * count * level_of(item)
+            measurements.append({'measure': 'power', 'generation_mw': gen * count * level_of(item),
+                                 'active_load_mw': load * count * level_of(item), 'context_id': str(context),
                                  'basis': 'PowerService.nominal_for_definition_at_context; long-run climate coefficient, no fulfillment'})
             level = level_of(item)
             if definition.housing_at_level(level):
@@ -228,18 +228,18 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                     definition.life_support.capacity_at_level(level) * count
                 )
             for cap in definition.service_capacity_supplies:
-                service(cap.service_type, cap.nominal_rate * count * period_days,
+                service(cap.service_type, cap.nominal_rate * count * level_of(item) * period_days,
                         'supply', scope=cap.scope.value)
             construction_provider = sim.projects.construction_providers.get(fid)
             if construction_provider is not None:
-                service('construction_work', construction_provider.work_per_day * count * period_days, 'supply')
+                service('construction_work', construction_provider.work_per_day * count * level_of(item) * period_days, 'supply')
             selected = item.get('selected_process_id')
             if selected is not None:
                 service_type = sim.industry.process_service_type(selected)
                 compatible = sim.industry.service_capacity_provider_definition_ids(service_type)
                 if fid not in compatible:
                     raise ValueError(f'Process {selected} incompatible with Facility {fid}')
-                service(service_type, count * definition.process_throughput_per_day * period_days, 'supply')
+                service(service_type, count * level_of(item) * definition.process_throughput_per_day * period_days, 'supply')
             if item.get('selected_extraction_method_id') is not None:
                 physical = site_evidence(sim, context, fid,
                     method_id=item['selected_extraction_method_id'],
@@ -256,7 +256,7 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             # not generated separately for every compatible Process.
             if definition.process_throughput_per_day:
                 measurements.append({'measure': 'shared_process_executions_per_day',
-                                     'quantity': count * definition.process_throughput_per_day})
+                                     'quantity': count * level_of(item) * definition.process_throughput_per_day})
             if definition.extraction_capacity_t_per_day:
                 measurements.append({'measure': 'extraction_installed_nominal_t_per_day',
                                      'quantity': count * definition.extraction_capacity_t_per_day,
@@ -264,16 +264,28 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
             recipe = sim.projects.recipes.get(fid)
             if recipe is not None:
                 invested = defaultdict(float)
-                for req in recipe.resources:
-                    invested[req.resource_id] += req.amount_t * count
-                # A hypothetical level > 1 includes actual registered transitions.
-                # Missing transitions cannot be treated as free equipment.
-                level = level_of(item)
-                for next_level in range(2, level + 1):
-                    upgrade = sim.projects.upgrade_recipes[(fid, next_level)]
-                    for req in upgrade.resources:
+                if 'invested_resources' in item:
+                    # Actual installed assets: maintenance is owned by the
+                    # authoritative investment, not a recreated recipe guess.
+                    if count != 1:
+                        raise ValueError('actual invested_resources requires one installed asset')
+                    for rid, amount in item['invested_resources'].items():
+                        if rid not in sim.inventory.resource_definitions:
+                            raise ValueError(f'unknown invested Resource: {rid}')
+                        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not isfinite(amount) or amount < 0:
+                            raise ValueError('invalid invested Resource amount')
+                        invested[rid] += amount
+                else:
+                    for req in recipe.resources:
                         invested[req.resource_id] += req.amount_t * count
-                for rid, rate in sim.facilities.maintenance_requirements_for_investment(fid, invested).items():
+                    # A hypothetical level > 1 includes actual registered transitions.
+                    # Missing transitions cannot be treated as free equipment.
+                    level = level_of(item)
+                    for next_level in range(2, level + 1):
+                        upgrade = sim.projects.upgrade_recipes[(fid, next_level)]
+                        for req in upgrade.resources:
+                            invested[req.resource_id] += req.amount_t * count
+                for rid, rate in sorted(sim.facilities.maintenance_requirements_for_investment(fid, invested).items()):
                     resource(rid, rate * period_days, 'demand',
                              'MaintenanceService cumulative build and level-transition investment')
                 measurements.append({'measure': 'facility_investment_for_maintenance',

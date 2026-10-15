@@ -1,0 +1,872 @@
+{
+  "format": "space-idle.balance-evaluation-state.v1",
+  "stage": 2,
+  "period_days": 28800,
+  "questions": [
+    "Early research checkpoint, not stage-two completion: investigate acquisition and expansion prerequisites."
+  ],
+  "save": {
+    "schema_version": 76,
+    "content_id": "base_game.gameplay.v0.4.5",
+    "world_definition_id": "base.world.sol",
+    "scenario_id": "base.scenario.standard",
+    "saved_at": "2026-10-16T00:00:00+00:00",
+    "state": {
+      "core": {
+        "day": 10,
+        "pending_offline_game_days": 0.0,
+        "boundary_service_usage": []
+      },
+      "environment": {
+        "locations": [
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "display_name": "地球産業拠点",
+            "body_id": "base.body.earth",
+            "core_cell_id": "base.cell.earth.industrial_core",
+            "developed_cell_ids": [
+              "base.cell.earth.industrial_core"
+            ]
+          }
+        ],
+        "operational_nodes": [
+          "base.location.earth_industrial",
+          "base.node.low_earth_orbit",
+          "base.node.lunar_orbit"
+        ],
+        "overlays": [],
+        "engineered_terrain": []
+      },
+      "technology": {
+        "completed": []
+      },
+      "market": {
+        "funds_balance_musd": 360.0,
+        "order_counter": 0,
+        "commitment_counter": 0,
+        "provider_states": [
+          {
+            "provider_id": "base.market_provider.earth_industrial",
+            "supply_available_t": {
+              "base.resource.chemical_propellant": 120.0,
+              "base.resource.construction_equipment": 36.0,
+              "base.resource.hydrogen": 25.0,
+              "base.resource.machinery": 600.0,
+              "base.resource.oxygen": 45.0,
+              "base.resource.precision_electronics": 240.0,
+              "base.resource.structural_components": 1200.0
+            },
+            "demand_available_t": {
+              "base.resource.construction_equipment": 270.0,
+              "base.resource.machinery": 450.0,
+              "base.resource.metal_feedstock": 1200.0,
+              "base.resource.precision_electronics": 180.0,
+              "base.resource.structural_components": 800.0,
+              "base.resource.water": 2400.0
+            },
+            "last_replenished_day": 10
+          }
+        ],
+        "interfaces": [
+          {
+            "id": "base.market_interface.earth_industrial",
+            "provider_id": "base.market_provider.earth_industrial",
+            "operational_node_id": "base.location.earth_industrial",
+            "enabled": true
+          }
+        ],
+        "orders": [],
+        "buy_commitments": []
+      },
+      "facilities": {
+        "counter": 16,
+        "items": [
+          {
+            "id": "facility.1",
+            "definition_id": "base.facility.breathable_surface_life_support",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 4.0,
+              "base.resource.precision_electronics": 1.0,
+              "base.resource.structural_components": 6.0
+            }
+          },
+          {
+            "id": "facility.10",
+            "definition_id": "base.facility.surface_launch_support",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": "base.cell.earth.industrial_core",
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 8.0,
+              "base.resource.precision_electronics": 2.0,
+              "base.resource.structural_components": 10.0
+            }
+          },
+          {
+            "id": "facility.11",
+            "definition_id": "base.facility.vehicle_assembly",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 10.0,
+              "base.resource.precision_electronics": 3.0,
+              "base.resource.structural_components": 10.0
+            }
+          },
+          {
+            "id": "facility.12",
+            "definition_id": "base.facility.mineral_quarry",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 7.0,
+              "base.resource.structural_components": 5.0
+            }
+          },
+          {
+            "id": "facility.13",
+            "definition_id": "base.facility.metal_ore_mine",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 8.0,
+              "base.resource.structural_components": 6.0
+            }
+          },
+          {
+            "id": "facility.14",
+            "definition_id": "base.facility.industrial_water_intake",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 5.0,
+              "base.resource.structural_components": 5.0
+            }
+          },
+          {
+            "id": "facility.15",
+            "definition_id": "base.facility.basic_structural_material_plant",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 8.0,
+              "base.resource.precision_electronics": 1.0,
+              "base.resource.structural_components": 8.0
+            }
+          },
+          {
+            "id": "facility.16",
+            "definition_id": "base.facility.basic_machinery_works",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 10.0,
+              "base.resource.precision_electronics": 1.0,
+              "base.resource.structural_components": 8.0
+            }
+          },
+          {
+            "id": "facility.2",
+            "definition_id": "base.facility.food_farm",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 4.0,
+              "base.resource.precision_electronics": 2.0,
+              "base.resource.structural_components": 6.0
+            }
+          },
+          {
+            "id": "facility.3",
+            "definition_id": "planned.facility.earth_biomass_feedstock_collector",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 0.95,
+              "base.resource.structural_components": 0.68
+            }
+          },
+          {
+            "id": "facility.4",
+            "definition_id": "base.facility.research_laboratory",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 10.0,
+              "base.resource.precision_electronics": 8.0,
+              "base.resource.structural_components": 12.0
+            }
+          },
+          {
+            "id": "facility.5",
+            "definition_id": "base.facility.cryogenic_storage",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 2.0,
+              "base.resource.precision_electronics": 0.8,
+              "base.resource.structural_components": 3.0
+            }
+          },
+          {
+            "id": "facility.6",
+            "definition_id": "base.facility.cryogenic_storage",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 2.0,
+              "base.resource.precision_electronics": 0.8,
+              "base.resource.structural_components": 3.0
+            }
+          },
+          {
+            "id": "facility.7",
+            "definition_id": "base.facility.autonomous_orbital_outpost",
+            "operational_node_id": "base.node.low_earth_orbit",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 1.9,
+              "base.resource.structural_components": 3.4
+            }
+          },
+          {
+            "id": "facility.8",
+            "definition_id": "base.facility.orbital_logistics_node",
+            "operational_node_id": "base.node.lunar_orbit",
+            "site_cell_id": null,
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 2.0,
+              "base.resource.precision_electronics": 1.0,
+              "base.resource.structural_components": 3.0
+            }
+          },
+          {
+            "id": "facility.9",
+            "definition_id": "base.facility.grid_power_supply",
+            "operational_node_id": "base.location.earth_industrial",
+            "site_cell_id": "base.cell.earth.industrial_core",
+            "paused": false,
+            "activity_priority": 3,
+            "maintenance_priority": 3,
+            "level": 1,
+            "lifecycle": "NORMAL",
+            "selected_process_id": null,
+            "selected_extraction_method_id": null,
+            "invested_resources": {
+              "base.resource.machinery": 6.0,
+              "base.resource.structural_components": 8.0
+            }
+          }
+        ]
+      },
+      "inventory": {
+        "stock": [
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "amount": 4.800480528471475
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.chemical_propellant",
+            "amount": 40.0
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.construction_equipment",
+            "amount": 60.0
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.food",
+            "amount": 503.3000000000004
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.hydrogen",
+            "amount": 2.0
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.machinery",
+            "amount": 101.2788561643834
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.metal_ore",
+            "amount": 5.995833252283716
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.mineral_feedstock",
+            "amount": 12.21958942294254
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.oxygen",
+            "amount": 5.0
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.precision_electronics",
+            "amount": 69.97095890410947
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.structural_components",
+            "amount": 120.73878904109583
+          },
+          {
+            "operational_node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.water",
+            "amount": 5007.565696836255
+          },
+          {
+            "operational_node_id": "base.node.low_earth_orbit",
+            "resource_id": "base.resource.machinery",
+            "amount": 0.9955753424657534
+          },
+          {
+            "operational_node_id": "base.node.low_earth_orbit",
+            "resource_id": "base.resource.precision_electronics",
+            "amount": 1.0
+          },
+          {
+            "operational_node_id": "base.node.low_earth_orbit",
+            "resource_id": "base.resource.structural_components",
+            "amount": 0.9920821917808222
+          },
+          {
+            "operational_node_id": "base.node.lunar_orbit",
+            "resource_id": "base.resource.chemical_propellant",
+            "amount": 2.0
+          },
+          {
+            "operational_node_id": "base.node.lunar_orbit",
+            "resource_id": "base.resource.machinery",
+            "amount": 0.9972602739726024
+          },
+          {
+            "operational_node_id": "base.node.lunar_orbit",
+            "resource_id": "base.resource.precision_electronics",
+            "amount": 0.9986301369863018
+          },
+          {
+            "operational_node_id": "base.node.lunar_orbit",
+            "resource_id": "base.resource.structural_components",
+            "amount": 0.9958904109589042
+          }
+        ],
+        "reserved": [],
+        "external_occupancy": []
+      },
+      "storage": {
+        "infrastructure_capacity": []
+      },
+      "power": {
+        "links": []
+      },
+      "transport": {
+        "transport_allocation_counter": 0,
+        "fleet_relocation_counter": 0,
+        "fleet_release_counter": 0,
+        "fleet_retirement_counter": 0,
+        "fleet_pools": [
+          {
+            "vehicle_definition_id": "base.vehicle.orbital_observation_spacecraft",
+            "operational_node_id": "base.node.low_earth_orbit",
+            "total_units": 1
+          },
+          {
+            "vehicle_definition_id": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "operational_node_id": "base.node.lunar_orbit",
+            "total_units": 1
+          },
+          {
+            "vehicle_definition_id": "base.vehicle.reusable_launch_vehicle",
+            "operational_node_id": "base.location.earth_industrial",
+            "total_units": 1
+          },
+          {
+            "vehicle_definition_id": "base.vehicle.reusable_orbital_cargo_tug",
+            "operational_node_id": "base.node.low_earth_orbit",
+            "total_units": 1
+          },
+          {
+            "vehicle_definition_id": "base.vehicle.reusable_surface_cargo_lander",
+            "operational_node_id": "base.node.lunar_orbit",
+            "total_units": 1
+          }
+        ],
+        "fleet_commitments": [
+          {
+            "id": "fleet.commitment.research_provider:research.provider_assignment.1",
+            "owner_activity_type": "research_provider_assignment",
+            "owner_activity_id": "research.provider_assignment.1",
+            "vehicle_definition_id": "base.vehicle.orbital_observation_spacecraft",
+            "quantity": 1,
+            "operational_node_id": "base.node.low_earth_orbit",
+            "movement_execution_id": null,
+            "physical_target": null,
+            "onboard_resources": {},
+            "onboard_accommodation": null
+          },
+          {
+            "id": "fleet.commitment.survey_provider:survey.provider_assignment.1",
+            "owner_activity_type": "survey_provider_assignment",
+            "owner_activity_id": "survey.provider_assignment.1",
+            "vehicle_definition_id": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "quantity": 1,
+            "operational_node_id": "base.node.lunar_orbit",
+            "movement_execution_id": null,
+            "physical_target": null,
+            "onboard_resources": {},
+            "onboard_accommodation": null
+          }
+        ],
+        "infrastructure_links": [],
+        "transport_allocations": [],
+        "fleet_relocations": [],
+        "movement_executions": [],
+        "passenger_service_transits": [],
+        "fleet_releases": [],
+        "fleet_retirements": [],
+        "vehicle_production": {
+          "counter": 0,
+          "projects": []
+        }
+      },
+      "logistics": {
+        "cargo_flow_counter": 0,
+        "arrival_waiting_counter": 0,
+        "cargo_flows": [],
+        "arrival_waiting": [],
+        "target_stocks": [],
+        "routing_constraints": []
+      },
+      "projects": {
+        "counter": 0,
+        "items": []
+      },
+      "founding": {
+        "counter": 0,
+        "projects": []
+      },
+      "research": {
+        "stored_points": 42.0,
+        "knowledge": {
+          "base.experience.extraction_operations": 54.181600039957324,
+          "base.experience.manufacturing_operations": 7.740000000000001
+        },
+        "active": [
+          {
+            "definition_id": "RP-RESOURCE-CHAIN-01",
+            "current_stage_id": "theory",
+            "stage_progress": 18.0,
+            "priority": 3,
+            "paused": false,
+            "execution_context": null,
+            "stage_started_day": 0
+          }
+        ],
+        "provider_assignment_counter": 1,
+        "provider_assignments": [
+          {
+            "id": "research.provider_assignment.1",
+            "provider_definition_id": "base.research_provider.orbital_observation",
+            "vehicle_definition_id": "base.vehicle.orbital_observation_spacecraft",
+            "operational_node_id": "base.node.low_earth_orbit",
+            "priority": 3,
+            "paused": false,
+            "fleet_commitment_ref": "fleet.commitment.research_provider:research.provider_assignment.1"
+          }
+        ]
+      },
+      "scientific_exploration": {
+        "campaigns": []
+      },
+      "surface_knowledge": {
+        "knowledge_progress": [
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "progress": 160.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.metal_ore",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.mineral_feedstock",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.water",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "progress": 160.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.metal_ore",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.mineral_feedstock",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.water",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "progress": 160.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.metal_ore",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.mineral_feedstock",
+            "progress": 3.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.water",
+            "progress": 3.0
+          }
+        ],
+        "knowledge_precision_fraction": [
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.metal_ore",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.mineral_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "resource_id": "base.resource.water",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.metal_ore",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.mineral_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "resource_id": "base.resource.water",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.metal_ore",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.mineral_feedstock",
+            "precision_fraction": 0.0
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "resource_id": "base.resource.water",
+            "precision_fraction": 0.0
+          }
+        ],
+        "observed_presence_probability": [],
+        "estimated_potential": [],
+        "environment_observation_fingerprints": [
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "fingerprint": "3d3c03b89cff6378ed7e124345dc7d2074ca920efa2f67fc1ff2407ded8621ac"
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "fingerprint": "b8db8d9431588047d88736ad606cd0c4a389285c65cf0570fef0e71706d53b88"
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "fingerprint": "3d3c03b89cff6378ed7e124345dc7d2074ca920efa2f67fc1ff2407ded8621ac"
+          }
+        ],
+        "cell_attribute_levels": [
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "attribute": "environment",
+            "level": 2
+          },
+          {
+            "cell_id": "base.cell.earth.coastal",
+            "attribute": "terrain",
+            "level": 2
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "attribute": "environment",
+            "level": 2
+          },
+          {
+            "cell_id": "base.cell.earth.industrial_core",
+            "attribute": "terrain",
+            "level": 2
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "attribute": "environment",
+            "level": 2
+          },
+          {
+            "cell_id": "base.cell.earth.inland",
+            "attribute": "terrain",
+            "level": 2
+          }
+        ]
+      },
+      "survey": {
+        "campaigns": [],
+        "campaign_counter": 0,
+        "provider_assignment_counter": 1,
+        "provider_assignments": [
+          {
+            "id": "survey.provider_assignment.1",
+            "provider_definition_id": "base.survey_provider.orbital_resource_mapping",
+            "vehicle_definition_id": "base.vehicle.orbital_resource_mapping_spacecraft",
+            "operational_node_id": "base.node.lunar_orbit",
+            "fleet_commitment_ref": "fleet.commitment.survey_provider:survey.provider_assignment.1"
+          }
+        ]
+      },
+      "population": {
+        "groups": [
+          {
+            "id": "population.group:1",
+            "count": 30,
+            "position": {
+              "kind": "operational_node",
+              "ref": "base.location.earth_industrial"
+            },
+            "activity_commitment_ref": null,
+            "deprivation": 0.0,
+            "mortality_remainder": 0.0
+          }
+        ],
+        "targets": [],
+        "transfer_orders": [],
+        "natural_growth_enabled": {},
+        "growth_credit": {
+          "base.location.earth_industrial": 0.23999999999999996
+        },
+        "growth_last_added": {
+          "base.location.earth_industrial": 0,
+          "base.node.low_earth_orbit": 0,
+          "base.node.lunar_orbit": 0
+        },
+        "growth_last_blockers": {
+          "base.location.earth_industrial": [],
+          "base.node.low_earth_orbit": [
+            "population_absent",
+            "housing_reserved_or_full",
+            "life_support_capacity_limited"
+          ],
+          "base.node.lunar_orbit": [
+            "population_absent",
+            "housing_reserved_or_full",
+            "life_support_capacity_limited"
+          ]
+        },
+        "growth_supply_day": 9,
+        "growth_supply_received": [
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.carbon_nutrient_feedstock",
+            "amount": 0.5300480528471475
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.food",
+            "amount": 0.36
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.machinery",
+            "amount": 0.16
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.metal_ore",
+            "amount": 1.5895833252283715
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.mineral_feedstock",
+            "amount": 2.301958942294254
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.structural_components",
+            "amount": 0.3
+          },
+          {
+            "node_id": "base.location.earth_industrial",
+            "resource_id": "base.resource.water",
+            "amount": 0.9965696836259561
+          }
+        ],
+        "external_remaining": {
+          "base.population.earth_recruitment": 5000
+        },
+        "external_acquisition_day": -1,
+        "external_acquired_today": {},
+        "next_group_id": 1,
+        "next_transfer_order_id": 0
+      },
+      "application": {
+        "time_paused": false,
+        "time_speed_multiplier": 1.0
+      }
+    }
+  }
+}

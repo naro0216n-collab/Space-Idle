@@ -64,7 +64,15 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 python -m balance_evaluation --stage 1
 python -m balance_evaluation --stage 2
 # 両段階を評価する場合: python -m balance_evaluation
+# 実Game Save -> 評価シナリオ（注記付の正準Save Snapshot）
+python -m balance_evaluation --from-save /path/to/save.json --label-stage 2 --period-days 28800 --output /path/to/scenario.json
+# 評価シナリオ -> 実Game Save（ゲームStateの無損失変換）
+python -m balance_evaluation --scenario /path/to/scenario.json --to-save /path/to/roundtrip-save.json
+# 実Save状態だけを数量評価。併せて段階の仮定Worksheetを比較する場合は --target
+python -m balance_evaluation --scenario /path/to/scenario.json --target
 ```
+
+段階別の評価は同じ処理を使う。`balance_evaluation/stage_snapshots/`は正準Saveで往復可能な実際のState、`balance_evaluation/target_profiles/`は未取得資産を含む設計上の数量仮説（第2段階以降は前段階との差分）である。両者は別々に表示し、想定RP等を実保有能力と解釈しない。組込SnapshotはGame Stateの比較例であって第1・第2段階の到達を保証せず、実際の進行Saveで差し替えて評価できる。
 
 評価器そのものの計算・参照契約を確認する場合だけ、`balance_evaluation/checks/`を明示して別途pytestを実行する。これは評価プランの妥当性やバランス成立を保証するものではない。
 

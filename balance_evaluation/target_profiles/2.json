@@ -1,0 +1,950 @@
+{
+  "stage": 2,
+  "period_days": 28800,
+  "cumulative_target_hours": 12,
+  "questions": [
+    "Can first-stage Earth industry sustain stage-two propellant, research, construction and spacecraft acquisition?",
+    "Are the two moon sites supported by finite transferred cargo, equipment and landing services?",
+    "Do Earth-to-LEO, LEO-to-lunar-orbit, and surface cycles share the same sourced consumables?",
+    "Does the inherited and expanded Tier 1–2 research infrastructure yield materially greater executable RP throughput, not just generation?",
+    "How much of the research progression is still gated by physical Prototype/Demonstration/Knowledge?"
+  ],
+  "selected_research": [
+    "AR-AUTONOMY-ROBOTICS-01",
+    "AR-AUTONOMY-ROBOTICS-02",
+    "AR-AUTONOMY-ROBOTICS-03",
+    "BIO-HUMAN-BIOLOGY-MEDICINE-01",
+    "BIO-HUMAN-BIOLOGY-MEDICINE-04",
+    "CO-RF-COMMUNICATIONS-02",
+    "LM-LOGISTICS-MAINTENANCE-01",
+    "LS-ATMOSPHERE-WATER-WASTE-01",
+    "MC-MANUFACTURING-CONSTRUCTION-02",
+    "MS-MATERIALS-01",
+    "MS-MATERIALS-03",
+    "PD-STORAGE-DISTRIBUTION-02",
+    "PG-SOLAR-POWER-02",
+    "RP-RESOURCE-CHAIN-01",
+    "SS-SENSING-03",
+    "SS-SENSING-04",
+    "SS-SENSING-06",
+    "X2-DATA-RETENTION",
+    "X2-REMOTE-OPERATIONS-LAB"
+  ],
+  "parallel_research": [
+    "AR-AUTONOMY-ROBOTICS-04",
+    "BIO-HUMAN-BIOLOGY-MEDICINE-02",
+    "BIO-HUMAN-BIOLOGY-MEDICINE-05",
+    "CO-RF-COMMUNICATIONS-04",
+    "CP-COMPUTING-RELIABILITY-03",
+    "CP-COMPUTING-RELIABILITY-04",
+    "CR-CRYOGENIC-STORAGE-TRANSFER-04",
+    "HB-HABITATION-PROTECTION-01",
+    "HB-HABITATION-PROTECTION-02",
+    "HB-HABITATION-PROTECTION-04",
+    "LM-LOGISTICS-MAINTENANCE-05",
+    "LS-ATMOSPHERE-WATER-WASTE-02",
+    "LS-ATMOSPHERE-WATER-WASTE-05",
+    "MC-MANUFACTURING-CONSTRUCTION-03",
+    "MS-MATERIALS-02",
+    "MS-MATERIALS-07",
+    "PG-SOLAR-POWER-01",
+    "PG-SOLAR-POWER-03",
+    "PG-SOLAR-POWER-04",
+    "PL-PLANT-FOOD-01",
+    "PL-PLANT-FOOD-02",
+    "RP-RESOURCE-CHAIN-02",
+    "RP-RESOURCE-CHAIN-03",
+    "SM-SURFACE-MOBILITY-01",
+    "SM-SURFACE-MOBILITY-02",
+    "SM-SURFACE-MOBILITY-03",
+    "SM-SURFACE-MOBILITY-04",
+    "SS-SENSING-05",
+    "TH-THERMAL-TRANSPORT-01",
+    "TH-THERMAL-TRANSPORT-02",
+    "TH-THERMAL-TRANSPORT-03"
+  ],
+  "parent_stage": 1,
+  "edits": [
+    {
+      "start": 8,
+      "delete": 4,
+      "insert": [
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.electrolysis",
+          "count": 2,
+          "context_id": "base.cell.earth.industrial_core",
+          "selected_process_id": "planned.process.earth_electrolysis_basic"
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.propellant_blending",
+          "count": 2,
+          "context_id": "base.cell.earth.industrial_core",
+          "selected_process_id": "base.process.propellant_blending"
+        },
+        {
+          "kind": "process",
+          "node": "base.location.earth_industrial",
+          "id": "planned.process.earth_electrolysis_basic",
+          "rate_per_day": 1.85
+        },
+        {
+          "kind": "process",
+          "node": "base.location.earth_industrial",
+          "id": "base.process.propellant_blending",
+          "rate_per_day": 1.75
+        }
+      ]
+    },
+    {
+      "start": 24,
+      "delete": 2,
+      "insert": [
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.industrial_water_intake",
+          "count": 2,
+          "context_id": "base.cell.earth.industrial_core",
+          "selected_extraction_method_id": "base.extraction.water_intake"
+        },
+        {
+          "kind": "extraction",
+          "node": "base.location.earth_industrial",
+          "id": "base.extraction.water_intake",
+          "facility_id": "base.facility.industrial_water_intake",
+          "facility_units": 2,
+          "context_id": "base.cell.earth.industrial_core",
+          "rate_t_per_day": 1.9863411002394704
+        }
+      ]
+    },
+    {
+      "start": 28,
+      "delete": 3,
+      "insert": [
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.earth_basic_electronics_shop",
+          "count": 1,
+          "context_id": "base.cell.earth.industrial_core",
+          "selected_process_id": "planned.process.earth_basic_electronics"
+        },
+        {
+          "kind": "process",
+          "node": "base.location.earth_industrial",
+          "id": "planned.process.earth_basic_electronics",
+          "rate_per_day": 0.8
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.basic_data_archive",
+          "count": 1,
+          "context_id": "base.cell.earth.industrial_core"
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.propulsion_test_facility",
+          "count": 1,
+          "context_id": "base.cell.earth.industrial_core"
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.remote_operations_lab",
+          "count": 2,
+          "context_id": "base.cell.earth.industrial_core"
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.remote_operations_lab",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "start": 33,
+      "delete": 27,
+      "insert": [
+        {
+          "kind": "facility_construction",
+          "node": "base.location.earth_industrial",
+          "id": "base.facility.industrial_water_intake",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.robotic_data_archive",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.location.earth_industrial",
+          "id": "planned.facility.robotic_data_archive",
+          "count": 1,
+          "context_id": "base.cell.earth.industrial_core"
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.node.low_earth_orbit",
+          "id": "planned.facility.orbital_light_assembly_cell",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.node.low_earth_orbit",
+          "id": "planned.facility.orbital_light_assembly_cell",
+          "count": 1,
+          "context_id": "base.node.low_earth_orbit"
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.microgravity_experiment_platform",
+          "count": 3
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.microgravity_experiment_platform",
+          "count": 3,
+          "context_id": "base.node.low_earth_orbit"
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.orbital_solar_array",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.facility.orbital_solar_array",
+          "count": 1,
+          "context_id": "base.node.low_earth_orbit"
+        },
+        {
+          "kind": "construction_resource",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.resource.construction_equipment",
+          "available_stock_t": 0.5
+        },
+        {
+          "kind": "vehicle_production",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.crew_transfer_spacecraft",
+          "count": 1
+        },
+        {
+          "kind": "vehicle_production",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.reusable_surface_cargo_lander",
+          "count": 2
+        },
+        {
+          "kind": "vehicle_production",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.crewed_low_gravity_lander",
+          "count": 2
+        },
+        {
+          "kind": "vehicle_production",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.radar_mapping_orbiter",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.habitat",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.surface_solar_power_grid",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "planned.facility.surface_lander_service_pad",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.robotic_geology_station",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.habitat",
+          "context_id": "base.cell.moon.south_polar_ridge",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.surface_solar_power_grid",
+          "context_id": "base.cell.moon.south_polar_ridge",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "planned.facility.surface_lander_service_pad",
+          "context_id": "base.cell.moon.south_polar_ridge",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.robotic_geology_station",
+          "context_id": "base.cell.moon.south_polar_ridge",
+          "count": 1
+        },
+        {
+          "kind": "construction_resource",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.resource.construction_equipment",
+          "available_stock_t": 0.1
+        },
+        {
+          "kind": "life_support",
+          "node": "base.cell.moon.south_polar_ridge",
+          "id": "base.facility.habitat",
+          "people": 8
+        },
+        {
+          "kind": "transport_cycle",
+          "node": "base.node.lunar_orbit",
+          "destination_node": "base.cell.moon.south_polar_ridge",
+          "id": "base.vehicle.reusable_surface_cargo_lander",
+          "units": 1,
+          "origin_context_id": "base.node.lunar_orbit",
+          "destination_context_id": "base.cell.moon.south_polar_ridge",
+          "forward_cargo_t_per_day": {
+            "base.resource.food": 0.008,
+            "base.resource.water": 0.016,
+            "base.resource.oxygen": 0.024,
+            "base.resource.chemical_propellant": 0.012,
+            "base.resource.construction_equipment": 1.7361111111111112e-06,
+            "base.resource.structural_components": 0.0007463888888888889,
+            "base.resource.machinery": 0.0004892361111111111,
+            "base.resource.precision_electronics": 0.00019083333333333333
+          }
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.lunar_orbit",
+          "id": "base.vehicle.crewed_low_gravity_lander",
+          "origin_context_id": "base.node.lunar_orbit",
+          "destination_context_id": "base.cell.moon.south_polar_ridge",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "founding",
+          "node": "base.node.lunar_orbit",
+          "id": "base.founding.robotic_surface_outpost",
+          "target_context_id": "base.cell.moon.nearside_mare",
+          "staging_context_id": "base.node.lunar_orbit",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.habitat",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.surface_solar_power_grid",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "planned.facility.surface_lander_service_pad",
+          "count": 1
+        },
+        {
+          "kind": "facility_construction",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.robotic_geology_station",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.habitat",
+          "context_id": "base.cell.moon.nearside_mare",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.surface_solar_power_grid",
+          "context_id": "base.cell.moon.nearside_mare",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "planned.facility.surface_lander_service_pad",
+          "context_id": "base.cell.moon.nearside_mare",
+          "count": 1
+        },
+        {
+          "kind": "facility_operation",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.robotic_geology_station",
+          "context_id": "base.cell.moon.nearside_mare",
+          "count": 1
+        },
+        {
+          "kind": "construction_resource",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.resource.construction_equipment",
+          "available_stock_t": 0.1
+        },
+        {
+          "kind": "life_support",
+          "node": "base.cell.moon.nearside_mare",
+          "id": "base.facility.habitat",
+          "people": 8
+        },
+        {
+          "kind": "transport_cycle",
+          "node": "base.node.lunar_orbit",
+          "destination_node": "base.cell.moon.nearside_mare",
+          "id": "base.vehicle.reusable_surface_cargo_lander",
+          "units": 1,
+          "origin_context_id": "base.node.lunar_orbit",
+          "destination_context_id": "base.cell.moon.nearside_mare",
+          "forward_cargo_t_per_day": {
+            "base.resource.food": 0.008,
+            "base.resource.water": 0.016,
+            "base.resource.oxygen": 0.024,
+            "base.resource.chemical_propellant": 0.012,
+            "base.resource.construction_equipment": 2.0833333333333336e-05,
+            "base.resource.structural_components": 0.0008488194444444445,
+            "base.resource.machinery": 0.0005482638888888888,
+            "base.resource.precision_electronics": 0.00019083333333333333
+          }
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.lunar_orbit",
+          "id": "base.vehicle.crewed_low_gravity_lander",
+          "origin_context_id": "base.node.lunar_orbit",
+          "destination_context_id": "base.cell.moon.nearside_mare",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "transport_cycle",
+          "node": "base.node.low_earth_orbit",
+          "destination_node": "base.node.lunar_orbit",
+          "id": "base.vehicle.reusable_orbital_cargo_tug",
+          "units": 1,
+          "origin_context_id": "base.node.low_earth_orbit",
+          "destination_context_id": "base.node.lunar_orbit",
+          "forward_cargo_t_per_day": {
+            "base.resource.food": 0.016,
+            "base.resource.water": 0.032,
+            "base.resource.oxygen": 0.048,
+            "base.resource.chemical_propellant": 0.079,
+            "base.resource.construction_equipment": 2.2569444444444447e-05,
+            "base.resource.structural_components": 0.0015952083333333335,
+            "base.resource.machinery": 0.0010374999999999998,
+            "base.resource.precision_electronics": 0.00038166666666666666
+          }
+        },
+        {
+          "kind": "transport_cycle",
+          "node": "base.location.earth_industrial",
+          "destination_node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.reusable_launch_vehicle",
+          "units": 1,
+          "origin_context_id": "base.cell.earth.industrial_core",
+          "destination_context_id": "base.node.low_earth_orbit",
+          "forward_cargo_t_per_day": {
+            "base.resource.food": 0.016,
+            "base.resource.water": 0.032,
+            "base.resource.oxygen": 0.048,
+            "base.resource.chemical_propellant": 0.199,
+            "base.resource.construction_equipment": 3.993055555555556e-05,
+            "base.resource.structural_components": 0.0027513194444444443,
+            "base.resource.machinery": 0.001748958333333333,
+            "base.resource.precision_electronics": 0.0010343055555555557
+          }
+        },
+        {
+          "kind": "movement",
+          "node": "base.location.earth_industrial",
+          "id": "base.vehicle.reusable_launch_vehicle",
+          "origin_context_id": "base.cell.earth.industrial_core",
+          "destination_context_id": "base.node.low_earth_orbit",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.reusable_surface_cargo_lander",
+          "origin_context_id": "base.node.low_earth_orbit",
+          "destination_context_id": "base.node.lunar_orbit",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.crewed_low_gravity_lander",
+          "origin_context_id": "base.node.low_earth_orbit",
+          "destination_context_id": "base.node.lunar_orbit",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.crew_transfer_spacecraft",
+          "origin_context_id": "base.node.low_earth_orbit",
+          "destination_context_id": "base.node.lunar_orbit",
+          "cargo_t": 0,
+          "count": 2
+        },
+        {
+          "kind": "movement",
+          "node": "base.node.low_earth_orbit",
+          "id": "base.vehicle.radar_mapping_orbiter",
+          "origin_context_id": "base.node.low_earth_orbit",
+          "destination_context_id": "base.node.mars_orbit",
+          "cargo_t": 0,
+          "count": 1
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "AR-AUTONOMY-ROBOTICS-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "AR-AUTONOMY-ROBOTICS-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "AR-AUTONOMY-ROBOTICS-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "BIO-HUMAN-BIOLOGY-MEDICINE-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "BIO-HUMAN-BIOLOGY-MEDICINE-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "CO-RF-COMMUNICATIONS-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "LM-LOGISTICS-MAINTENANCE-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "LS-ATMOSPHERE-WATER-WASTE-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MC-MANUFACTURING-CONSTRUCTION-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MS-MATERIALS-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MS-MATERIALS-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PD-STORAGE-DISTRIBUTION-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PG-SOLAR-POWER-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "RP-RESOURCE-CHAIN-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SS-SENSING-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SS-SENSING-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SS-SENSING-06",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "X2-DATA-RETENTION",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "X2-REMOTE-OPERATIONS-LAB",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "X2-REMOTE-OPERATIONS-LAB",
+          "stage_id": "prototype_2",
+          "count": 1,
+          "portfolio": "activity"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "AR-AUTONOMY-ROBOTICS-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "BIO-HUMAN-BIOLOGY-MEDICINE-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "BIO-HUMAN-BIOLOGY-MEDICINE-05",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "CO-RF-COMMUNICATIONS-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "CP-COMPUTING-RELIABILITY-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "CP-COMPUTING-RELIABILITY-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "CR-CRYOGENIC-STORAGE-TRANSFER-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "HB-HABITATION-PROTECTION-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "HB-HABITATION-PROTECTION-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "HB-HABITATION-PROTECTION-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "LM-LOGISTICS-MAINTENANCE-05",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "LS-ATMOSPHERE-WATER-WASTE-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "LS-ATMOSPHERE-WATER-WASTE-05",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MC-MANUFACTURING-CONSTRUCTION-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MS-MATERIALS-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "MS-MATERIALS-07",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PG-SOLAR-POWER-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PG-SOLAR-POWER-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PG-SOLAR-POWER-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PL-PLANT-FOOD-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "PL-PLANT-FOOD-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "RP-RESOURCE-CHAIN-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "RP-RESOURCE-CHAIN-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SM-SURFACE-MOBILITY-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SM-SURFACE-MOBILITY-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SM-SURFACE-MOBILITY-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SM-SURFACE-MOBILITY-04",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "SS-SENSING-05",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "TH-THERMAL-TRANSPORT-01",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "TH-THERMAL-TRANSPORT-02",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        },
+        {
+          "kind": "research_stage",
+          "node": "base.location.earth_industrial",
+          "id": "TH-THERMAL-TRANSPORT-03",
+          "stage_id": "theory",
+          "count": 1,
+          "portfolio": "parallel"
+        }
+      ]
+    }
+  ]
+}
