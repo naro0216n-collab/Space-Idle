@@ -1736,6 +1736,51 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
                     ),
                     maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=1.0),
                 ),
+        # CREWED_LOW_GRAVITY_LANDER
+        # Pressurized personnel delivery between vacuum surfaces and orbital
+        # infrastructure. Passenger capacity is not inferred from cargo space.
+        VehicleDef(
+            id=ids.CREWED_LOW_GRAVITY_LANDER,
+            display_name="低重力有人着陸連絡艇",
+            performance=TransportPerformanceProfile(
+                dry_mass_t=6.5, payload_t=2.0,
+                propellant_resource_id=ids.PROPELLANT, propellant_capacity_t=4.0,
+                propellant_t_per_total_t_per_km_s=0.028,
+                operation_capabilities=(
+                    SpaceflightCapability(5.0),
+                    PoweredAscentCapability(2.1, 2.0, 1000.0, 420.0),
+                    LandingCapability(2.1, 2.0, 1000.0, 420.0),
+                ),
+                resource_support_requirements=(ResourceSupportRequirement(
+                    ids.PROPELLANT, "vehicle_refueling", "refueling_interface",
+                ),),
+                endurance_days=45.0,
+                generic_capabilities=("refueling_interface", "docking_interface", "pressurized_crew_transport"),
+            ),
+            production=VehicleProductionSpec(
+                service_type="vehicle_assembly", days=7.0,
+                resources=((ids.STRUCTURAL_COMPONENTS, 4.5),
+                           (ids.MACHINERY, 2.5), (ids.PRECISION_ELECTRONICS, 2.0)),
+                prerequisite_technologies=frozenset({
+                    ids.research_id("EDL-EDL-06"),
+                    ids.research_id("BIO-HUMAN-BIOLOGY-MEDICINE-04"),
+                    ids.LS_ATMOSPHERE_WATER_WASTE_01,
+                }),
+            ),
+            retirement=VehicleRetirementSpec(
+                service_type="vehicle_assembly", work_days_per_unit=3.5,
+                recovery_resources_per_unit=((ids.STRUCTURAL_COMPONENTS, 2.25),
+                                             (ids.MACHINERY, 1.25), (ids.PRECISION_ELECTRONICS, 1.0)),
+            ),
+            maintenance=VehicleMaintenanceSpec(service_type="spacecraft_servicing", turnaround_days=2.0,
+                                               resources=((ids.BASIC_MACHINE_PARTS, 0.06),)),
+            passengers=PassengerAccommodation(
+                seats=4, life_support_person_days_per_day=4, onboard_power_mw=0.6,
+                power_mw_per_person=0.1,
+                net_resources_per_person_day=((ids.FOOD, 0.002), (ids.WATER, 0.003),
+                                              (ids.OXYGEN, 0.001)),
+            ),
+        ),
         # LOW_GRAVITY_CARGO_FERRY
         VehicleDef(
                     id=ids.LOW_GRAVITY_CARGO_FERRY,

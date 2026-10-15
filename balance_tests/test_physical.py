@@ -102,3 +102,31 @@ def test_physical_site_reports_operating_and_method_conditions_from_definitions(
     assert result['extraction']['opportunity_site'] is not None
     assert isinstance(result['extraction']['opportunity_environment_failures'], list)
     assert sim.facilities.facilities == {}
+
+
+def test_early_crewed_surface_transport_is_physical_and_not_an_orbit_only_fleet():
+    """Stage-two crew capability is a real vehicle, not a stage-based route gate.
+
+    Content-specific connectivity belongs to the optional balance suite, not
+    Generic Core tests or an assumed gameplay build order.
+    """
+    from space_idle.content import base_ids as ids
+
+    sim = _assembled()
+    vehicle = sim.transport.vehicle_defs[ids.CREWED_LOW_GRAVITY_LANDER]
+    assert vehicle.passengers.seats > 0
+    assert vehicle.passengers.life_support_person_days_per_day >= vehicle.passengers.seats
+    tech = sim.research.definitions
+    assert all(key in tech for key in vehicle.production.prerequisite_technologies)
+    assert max(tech[key].progression_stage for key in vehicle.production.prerequisite_technologies) == 2
+
+    for cell in (ids.MOON_CELL_SOUTH_POLAR_RIDGE, ids.MOON_CELL_NEARSIDE_MARE):
+        evidence = movement_evidence(sim, ids.LUNAR_ORBIT, cell, vehicle.id)
+        assert any(not leg['vehicle_physical_failures']
+                   and 'landing' in leg['operation_types'] for leg in evidence['forward'])
+    # This is a low-gravity vacuum-surface craft, not free access to all worlds.
+    mars = movement_evidence(sim, ids.MARS_ORBIT, ids.MARS_CELL_EQUATORIAL_PLAIN, vehicle.id)
+    assert mars['forward']
+    assert all(leg['vehicle_physical_failures'] for leg in mars['forward'])
+    assert sim.graph.locations == {}
+    assert sim.transport.fleet_pools == {}
