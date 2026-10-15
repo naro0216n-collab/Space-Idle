@@ -137,6 +137,48 @@ def test_transport_cycle_rates_keep_each_context_and_do_not_deliver_stock():
     assert sim.transport.transport_allocations == {}
 
 
+def test_transport_cycle_uses_requested_mean_flow_for_consumables_not_full_fleet_duty():
+    """An authored OD flow is not a demand for continuous full utilization.
+
+    This verifies the evaluation projection against owner physical coefficients,
+    without simulating cargo arrival or asserting any stage balance result.
+    """
+    sim = _sim()
+    from space_idle.transport.models import OperationAssetDisposition
+    origin, destination = tuple(sim.graph.nodes)[:2]
+    forward = sim.transport.movement_resolver().physical_context_plans(origin, destination)[0]
+    reverse = sim.transport.movement_resolver().physical_context_plans(destination, origin)[0]
+    vid = next(vid for vid, definition in sim.transport.vehicle_defs.items()
+        if definition.movement_asset_disposition(forward) is OperationAssetDisposition.DESTINATION
+        and definition.propellant_resource_id is not None)
+    physical = sim.transport.physical_cycle_coefficients(
+        vid, (forward,), (reverse,), anchor_context_id=origin)
+    target = physical.nominal_per_unit.forward_t_per_day * 0.2
+    assert target > 0
+    result = quantity_ledger(sim, period_days=10, activities=[
+        {'kind': 'transport_cycle', 'node': 'origin_stock', 'id': vid, 'units': 2,
+         'origin_context_id': origin, 'destination_context_id': destination,
+         'destination_node': 'destination_stock',
+         'forward_plan_id': str(forward.id), 'reverse_plan_id': str(reverse.id),
+         'forward_cargo_t_per_day': {'base.resource.structural_components': target}},
+    ])
+    measurements = result['activity_evidence'][0]['evidence']
+    utilization = next(e for e in measurements if e.get('measure') == 'transport_utilization')
+    assert math.isclose(utilization['equivalent_fully_utilized_units'], .2)
+    assert utilization['nominal_capacity_covers_target']
+    for context, rid, rate in physical.resource_t_per_full_utilization_day:
+        node = 'origin_stock' if context == origin else 'destination_stock'
+        consumption = next(row for row in result['resource_by_node']
+            if row['node'] == node and row['resource_id'] == str(rid))
+        expected = rate * 0.2
+        # Cargo manifest of structural components adds a distinct sourcing
+        # obligation, rather than being counted as free destination supply.
+        if context == origin and str(rid) == 'base.resource.structural_components':
+            expected += target
+        assert math.isclose(consumption['demand_t_per_day'], expected)
+    assert sim.transport.transport_allocations == {}
+
+
 def test_execution_requirement_node_pin_and_organization_scope_are_not_merged():
     sim = _sim()
     from space_idle.execution_requirements import ResourceRequirement, ServiceCapacityRequirement

@@ -469,15 +469,38 @@ def quantity_ledger(sim: Simulation, *, period_days: float, activities: list[dic
                                      'reverse_cargo_t_per_day': item.get('reverse_cargo_t_per_day'),
                                      'basis': 'TransportDomain.required_units_for_capacity on physical cycle; '
                                               'manifest is source-side demand only, not reserved Fleet or delivered Resource'})
+            # OD demand is a mean flow, not a request to run every assigned
+            # vehicle continuously. Use the owner's per-unit physical cycle
+            # coefficients at the fraction needed for the authored demand.
+            # With no OD target, explicitly evaluate full fleet utilization.
+            if target_forward is None and target_reverse is None:
+                utilized_equivalent_units = units
+            else:
+                ratios = []
+                for target, capacity in (
+                    (target_forward or 0.0, cycle.nominal_per_unit.forward_t_per_day),
+                    (target_reverse or 0.0, cycle.nominal_per_unit.reverse_t_per_day),
+                ):
+                    if target > 0:
+                        if capacity <= 0:
+                            raise ValueError('positive OD demand with zero physical directional capacity')
+                        ratios.append(target / capacity)
+                utilized_equivalent_units = max(ratios, default=0.0)
+            measurements.append({'measure': 'transport_utilization',
+                'equivalent_fully_utilized_units': utilized_equivalent_units,
+                'available_fleet_units': units,
+                'nominal_capacity_covers_target': utilized_equivalent_units <= units + 1e-9,
+                'interpretation': 'mean flow fraction of the owner physical cycle; not dispatch, '
+                                  'rounding, refueling or delivered Cargo'})
             for context, rid, rate in cycle.resource_t_per_full_utilization_day:
                 site_node = node if context == origin else destination_node if context == destination else None
                 if site_node is None:
                     raise ValueError('intermediate Movement contexts require explicit node accounting')
-                resource(rid, rate * units * period_days, 'demand',
-                    'fully loaded physical Transport cycle; without actual Service availability', at_node=site_node)
+                resource(rid, rate * utilized_equivalent_units * period_days, 'demand',
+                    'owner physical cycle scaled to conditional OD mean demand', at_node=site_node)
             if definition.turnaround_service_type is not None:
                 service(definition.turnaround_service_type,
-                    cycle.servicing_units_per_full_utilization_day * units * period_days, 'demand')
+                    cycle.servicing_units_per_full_utilization_day * utilized_equivalent_units * period_days, 'demand')
             measurements.append({'measure': 'transport_cycle_nominal',
                 'destination_node': destination_node,
                 'fleet_units_assumed_committed': units,
