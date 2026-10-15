@@ -137,6 +137,9 @@ class ResearchDefinition:
     progression_stage: int | None = None
     category: str | None = None
     series: str | None = None
+    engineering_problem: str = ""
+    technical_outcome: str = ""
+    application_domain: str = ""
 
     def __post_init__(self) -> None:
         if not self.display_name:

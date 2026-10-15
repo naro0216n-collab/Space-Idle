@@ -3,10 +3,12 @@ from __future__ import annotations
 from ..industry import ProcessSpec
 from ..shared import DefinitionId
 from . import base_ids as ids
+from .base_extended_industry import build_extended_process_specs
 
 
 def build_process_specs() -> dict:
     return {
+        **build_extended_process_specs(),
         ids.PROCESS_FOOD_PRODUCTION: ProcessSpec(
             ids.PROCESS_FOOD_PRODUCTION, '食料水耕生産', frozenset({"food_hydroponics"}),
             {ids.WATER: 0.18}, {ids.FOOD: 0.36},

@@ -23,6 +23,10 @@ PROPELLANT = DefinitionId("base.resource.chemical_propellant")
 THERMAL_CONTROL_ASSEMBLIES = DefinitionId("base.resource.thermal_control_assemblies")
 RADIATION_SHIELDING_PANELS = DefinitionId("base.resource.radiation_shielding_panels")
 OPTICAL_INSTRUMENT_PACKAGES = DefinitionId("base.resource.optical_instrument_packages")
+CARBON_NUTRIENT_FEEDSTOCK = DefinitionId("base.resource.carbon_nutrient_feedstock")
+REFRACTORY_ALLOY = DefinitionId("base.resource.refractory_alloy")
+HARDENED_ELECTRONICS = DefinitionId("base.resource.hardened_electronics")
+RECOVERY_SCRAP = DefinitionId("base.resource.recovery_scrap")
 
 # ---------------------------------------------------------------------------
 # Spatial content. Surface geography is separate from player-operated

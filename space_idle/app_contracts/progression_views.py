@@ -148,6 +148,9 @@ class ResearchRow:
     category: str | None = None
     series: str | None = None
     unlocks: tuple[ResearchUnlockRow, ...] = ()
+    engineering_problem: str = ""
+    technical_outcome: str = ""
+    application_domain: str = ""
 
 
 @dataclass(frozen=True)

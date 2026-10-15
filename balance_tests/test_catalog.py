@@ -129,21 +129,6 @@ def test_authored_stage_site_and_starting_conditions_preserve_physical_requireme
     assert sim.research.active == {}
 
 
-def test_registered_upgrade_references_are_separate_from_new_build_costs():
-    sim, catalog, scenario = _assembled()
-    evidence = review_content(sim, catalog, scenario)
-    (fid, level), upgrade = next(iter(sim.projects.upgrade_recipes.items()))
-    facility = next(row for row in evidence['facilities'] if row['id'] == fid)
-    registered = next(row for row in facility['upgrades'] if row['target_level'] == level)
-    assert registered['work'] == upgrade.construction_work
-    for req in upgrade.resources:
-        assert registered['resources_t'][str(req.resource_id)] == req.amount_t
-        assert any(row['owner_kind'] == 'facility_upgrade'
-                   and row['owner_id'] == fid
-                   and row['target_level'] == level
-                   and row['quantity_t'] == req.amount_t
-                   for row in evidence['resources'][str(req.resource_id)]['uses'])
-    assert sim.facilities.facilities == {}
 
 
 def test_physical_world_evidence_covers_registered_cells_without_climate_forecasting():

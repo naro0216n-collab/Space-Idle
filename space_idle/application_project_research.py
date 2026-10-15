@@ -507,6 +507,9 @@ class ResearchProgressionProjectorMixin:
                 category=definition.category,
                 series=definition.series,
                 unlocks=unlocks_by_id.get(definition.id, ()),
+                engineering_problem=definition.engineering_problem,
+                technical_outcome=definition.technical_outcome,
+                application_domain=definition.application_domain,
             ))
         return ResearchView(
             sim.research.stored_points, capacity, generation, admitted_generation,

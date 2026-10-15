@@ -18,6 +18,9 @@ from ..shared import DefinitionId
 from . import base_ids as ids
 from . import base_requirements as req
 from .base_research_dag import RESEARCH_DAG_ROWS
+from .base_research_details import RESEARCH_DETAILS
+from .base_research_stages import build_new_stage_specs
+from .base_extended_assets import build_extended_research_providers
 
 
 def build_experience_contribution_rules() -> tuple[ExperienceContributionRule, ...]:
@@ -288,6 +291,10 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
             ),
         ),
     }
+    authored = build_new_stage_specs()
+    if set(additional_stages) & set(authored):
+        raise ValueError("duplicated authored research Stage specifications")
+    additional_stages.update(authored)
     definitions: dict[DefinitionId, ResearchDefinition] = {}
     for code, progression_stage, category, series, display_name, prerequisites, theory_cost in RESEARCH_DAG_ROWS:
         definition_id = research_id(code)
@@ -301,11 +308,15 @@ def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
             progression_stage=progression_stage,
             category=category,
             series=series,
+            engineering_problem=RESEARCH_DETAILS[code][0],
+            technical_outcome=RESEARCH_DETAILS[code][1],
+            application_domain=RESEARCH_DETAILS[code][2],
         )
     return definitions
 
 def build_research_providers() -> dict:
     return {
+        **build_extended_research_providers(),
         ids.PROPULSION_TEST_RESEARCH_PROVIDER: ResearchProviderSpec(
             ids.PROPULSION_TEST_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
             frozenset({"propulsion_test_equipment"}), tier=2,

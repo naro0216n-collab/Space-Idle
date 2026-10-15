@@ -422,8 +422,8 @@ def test_research_source_capabilities_accept_alternative_vehicle_and_facility_de
         if row.provider_definition_id == str(provider_id)
         and row.operational_node_id == str(ids.LEO)
     ]
-    assert {row.vehicle_definition_id for row in options} == {
-        str(baseline_vehicle_id), str(alternative_id)
+    assert {str(baseline_vehicle_id), str(alternative_id)} <= {
+        row.vehicle_definition_id for row in options
     }
     assert next(row for row in options if row.vehicle_definition_id == str(alternative_id)).free_units == 1
 
