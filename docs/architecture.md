@@ -1226,6 +1226,8 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 ### 17.1 全体系Content評価の境界
 
+段階別発展仮説を用いた数量・時間の評価観点は `balance-principles.md` を参照する。本節はその評価をゲーム本体のState / Simulationへ混入させないArchitecture境界を定める。
+
 全体系バランス評価は**Contentの設計作業**であり、第二のGameplay状態管理やPlayerの最適化器ではない。何を評価するかは発展段階の工学的・ゲーム的な設計課題から決め、既存の比較器・依存Graph・診断・テストがあることを評価目的の根拠としない。Definition、World、Scenarioの値はすべて変更候補であり、表示世代、既存初期配置、特定攻略経路を正準の発展目標としない。
 
 開発用の読取処理は、登録されたResource、Facility、Vehicle、Process、Research、Construction、Maintenance、Extraction、Movement、World、Scenarioを一貫した参照元として使用する。対象全体の**Content構成と相互依存**（技術的役割、前提技術、入出力、建設・製造・維持の需要、名目能力、拠点・環境上の制約）を把握するための最小のProjectionを許す。物理係数は所有Domainの副作用のない契約またはContent Definitionにより、同じ規則を分析専用のSimulationとして再実装しない。値の出典と単位を追跡し、Assetの取得・研究解放・Cargo到着・Allocationの成立を静的な関係から推定しない。

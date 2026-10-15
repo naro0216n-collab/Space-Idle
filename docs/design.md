@@ -981,6 +981,8 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 ## 22. ゲーム性評価段階と全体系Content調整
 
+8表示段階に沿う発展仮説・累積投資・需給・時間の具体的な調整観点は `balance-principles.md` にまとめる。本節のゲーム上の意味と、`architecture.md` §17.1 の評価境界を正本とする。
+
 ### 22.1 目的と責務
 
 開発時の全体系バランス調整は、Playerの最適な攻略順・建設比率・運送計画を発見する作業ではない。研究の各成熟段階から地球圏産業、他天体進出、複数拠点での物流・大規模産業へ発展できるだけの**Contentの種類、技術的役割、数量、時間、取得・維持負担、Worldの差異**を用意し、相互に調整する作業である。研究RP・実行能力だけでなくFacility、Vehicle、Process、Extraction、Recipe、Resource、Power、Movement、Location、初期Scenarioの配置・在庫、World物理パラメータまで可変の設計候補とする。現行登録Content、表示研究世代、初期設備数、既存Scenario、過去の評価指標を正解として固定しない。
