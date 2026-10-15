@@ -51,12 +51,12 @@ def _technology_closure(sim, endpoints):
     return result
 
 
-def _research_inputs(sim, selection, previous=()):
+def _research_inputs(sim, selection, previous=(), *, portfolio="activity"):
     """Charge chosen typed stages and direct ancestors, without gifting unlocks."""
     selected = _technology_closure(sim, selection) - set(previous)
     return [
         {'kind': 'research_stage', 'node': EARTH, 'id': tid,
-         'stage_id': stage.stage_id, 'count': 1}
+         'stage_id': stage.stage_id, 'count': 1, 'portfolio': portfolio}
         for tid in sorted(selected, key=str)
         for stage in sim.research.definitions[tid].stage_specs
     ]
@@ -234,13 +234,31 @@ def _stage_two(sim):
               'BIO-HUMAN-BIOLOGY-MEDICINE-04', 'SS-SENSING-06',
               'LS-ATMOSPHERE-WATER-WASTE-01', 'PG-SOLAR-POWER-02',
               'LM-LOGISTICS-MAINTENANCE-01', 'GN-NAVIGATION-03',
-              'MC-MANUFACTURING-CONSTRUCTION-02')
+              'MC-MANUFACTURING-CONSTRUCTION-02', 'RP-RESOURCE-CHAIN-01')
+    # A separate, revisable concurrent science portfolio represents the RP
+    # opportunity cost of continuing autonomy, habitat, sensing, logistics,
+    # industrial-material and propulsion work while the featured physical
+    # expansion occurs. This is neither a requirement to complete the display
+    # stage nor a preferred research order.
+    concurrent = (
+        'AR-AUTONOMY-ROBOTICS-04', 'LS-ATMOSPHERE-WATER-WASTE-05',
+        'HB-HABITATION-PROTECTION-04', 'CO-RF-COMMUNICATIONS-04',
+        'LM-LOGISTICS-MAINTENANCE-05', 'MC-MANUFACTURING-CONSTRUCTION-03',
+        'RP-RESOURCE-CHAIN-03', 'SM-SURFACE-MOBILITY-04',
+        'CR-CRYOGENIC-STORAGE-TRANSFER-04', 'PG-SOLAR-POWER-04',
+        'BIO-HUMAN-BIOLOGY-MEDICINE-05', 'SS-SENSING-05',
+        'TH-THERMAL-TRANSPORT-03', 'PL-PLANT-FOOD-02',
+    )
     early = _technology_closure(sim, early_endpoints)
     selected = _technology_closure(sim, chosen) - early
+    concurrent_selected = _technology_closure(sim, concurrent) - early - selected
     remote_lab = 'planned.facility.remote_operations_lab'
     archive = 'planned.facility.robotic_data_archive'
     pad = 'planned.facility.surface_lander_service_pad'
     orbital_assembly = 'planned.facility.orbital_light_assembly_cell'
+    # Reusable prior-stage assets plus distinct second-stage scientific equipment.
+    remote_lab_units = 2
+    microgravity_units = 3
     activities = _earth_industry(sim, research_lab_count=6,
                                  propellant_process_rate=1.75, electrolysis_rate=1.85,
                                  fuel_plants=2, water_intakes=2) + [
@@ -250,9 +268,12 @@ def _stage_two(sim):
         {'kind': 'process', 'node': EARTH, 'id': 'planned.process.earth_basic_electronics', 'rate_per_day': .8},
         {'kind': 'facility_operation', 'node': EARTH, 'id': 'planned.facility.basic_data_archive',
          'count': 1, 'context_id': ids.EARTH_CELL_INDUSTRIAL},
-        {'kind': 'facility_operation', 'node': EARTH, 'id': remote_lab,
+        {'kind': 'facility_operation', 'node': EARTH, 'id': ids.PROPULSION_TEST_FACILITY,
          'count': 1, 'context_id': ids.EARTH_CELL_INDUSTRIAL},
-        {'kind': 'facility_construction', 'node': EARTH, 'id': remote_lab, 'count': 1},
+        {'kind': 'facility_operation', 'node': EARTH, 'id': remote_lab,
+         'count': remote_lab_units, 'context_id': ids.EARTH_CELL_INDUSTRIAL},
+        {'kind': 'facility_construction', 'node': EARTH, 'id': remote_lab,
+         'count': remote_lab_units},
         {'kind': 'facility_construction', 'node': EARTH, 'id': ids.ELECTROLYSIS_PLANT, 'count': 1},
         {'kind': 'facility_construction', 'node': EARTH, 'id': ids.PROPELLANT_PLANT, 'count': 1},
         {'kind': 'facility_construction', 'node': EARTH, 'id': ids.INDUSTRIAL_WATER_INTAKE, 'count': 1},
@@ -266,6 +287,11 @@ def _stage_two(sim):
          'id': orbital_assembly, 'count': 1},
         {'kind': 'facility_operation', 'node': str(ids.LEO),
          'id': orbital_assembly, 'count': 1, 'context_id': ids.LEO},
+        {'kind': 'facility_construction', 'node': str(ids.LEO),
+         'id': ids.MICROGRAVITY_EXPERIMENT_PLATFORM, 'count': microgravity_units},
+        {'kind': 'facility_operation', 'node': str(ids.LEO),
+         'id': ids.MICROGRAVITY_EXPERIMENT_PLATFORM, 'count': microgravity_units,
+         'context_id': ids.LEO},
         {'kind': 'facility_construction', 'node': str(ids.LEO),
          'id': ids.ORBITAL_SOLAR_ARRAY, 'count': 1},
         {'kind': 'facility_operation', 'node': str(ids.LEO),
@@ -287,7 +313,10 @@ def _stage_two(sim):
             activities.append({'kind': 'founding', 'node': LUNAR_ORBIT,
                 'id': ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE, 'target_context_id': cell,
                 'staging_context_id': ids.LUNAR_ORBIT, 'count': 1})
-        site_assets = (ids.HABITAT, ids.SURFACE_POWER_GRID, pad)
+        # Geological science supplies a local second-tier research method at
+        # each developed surface site, rather than a free global stage buff.
+        site_assets = (ids.HABITAT, ids.SURFACE_POWER_GRID, pad,
+                       ids.ROBOTIC_GEOLOGY_STATION)
         manifest = {str(r): per_person * 8 for r, per_person
                     in sim.facilities.definitions[ids.HABITAT].life_support.net_resources}
         # Conservative replenishment envelope for low-duty-cycle landers,
@@ -343,10 +372,11 @@ def _stage_two(sim):
     leo_manifest[str(ids.PROPELLANT)] += .12
     # LEO's orbital assembly cell must itself be built and supplied from
     # Earth. Lunar craft are then physically repositioned to lunar orbit.
-    for fid in (orbital_assembly, ids.ORBITAL_SOLAR_ARRAY):
+    for fid, count in ((orbital_assembly, 1), (ids.ORBITAL_SOLAR_ARRAY, 1),
+                       (ids.MICROGRAVITY_EXPERIMENT_PLATFORM, microgravity_units)):
         for req in sim.projects.recipes[fid].resources:
             key = str(req.resource_id)
-            leo_manifest[key] = leo_manifest.get(key, 0) + req.amount_t / CISLUNAR_WINDOW_DAYS
+            leo_manifest[key] = leo_manifest.get(key, 0) + req.amount_t * count / CISLUNAR_WINDOW_DAYS
     for fid, count in ((ids.CREW_TRANSFER_SPACECRAFT, 1),
                        (ids.REUSABLE_SURFACE_CARGO_LANDER, 2),
                        (ids.CREWED_LOW_GRAVITY_LANDER, 2),
@@ -389,20 +419,59 @@ def _stage_two(sim):
          'cargo_t': 0, 'count': 1},
     ])
     activities += _research_inputs(sim, chosen, previous=early)
+    activities += _research_inputs(sim, concurrent, previous=early | selected,
+                                   portfolio='parallel')
     return {'stage': 2, 'period_days': CISLUNAR_WINDOW_DAYS,
             'cumulative_target_hours': 12,
             'questions': ('Can first-stage Earth industry sustain stage-two propellant, research, construction and spacecraft acquisition?',
                           'Are the two moon sites supported by finite transferred cargo, equipment and landing services?',
                           'Do Earth-to-LEO, LEO-to-lunar-orbit, and surface cycles share the same sourced consumables?',
+                          'Does the inherited and expanded Tier 1–2 research infrastructure yield materially greater executable RP throughput, not just generation?',
                           'How much of the research progression is still gated by physical Prototype/Demonstration/Knowledge?'),
-            'selected_research': sorted(map(str, selected)), 'activities': activities}
+            'selected_research': sorted(map(str, selected)),
+            'parallel_research': sorted(map(str, concurrent_selected)),
+            'activities': activities}
 
 
-def _summarize_evidence(case, result):
+def _summarize_evidence(sim, case, result):
     """Show decision-relevant rates, preserving the distinct units and owners."""
+    # Show stage-wide cost context *separately* from the deliberately selected
+    # technical branch. A branch average divided by differing period lengths
+    # is not a valid cross-stage comparison of the whole research system.
+    reference = [definition for definition in sim.research.definitions.values()
+                 if definition.progression_stage == case['stage']]
+    reference_theory_rp = sum(stage.research_point_cost
+        for definition in reference for stage in definition.stage_specs
+        if hasattr(stage, 'research_point_cost'))
+    theory_by_portfolio = {'activity': 0.0, 'parallel': 0.0}
+    for activity in case['activities']:
+        if activity['kind'] != 'research_stage':
+            continue
+        stage = sim.research.definitions[activity['id']].stage_spec(activity['stage_id'])
+        if hasattr(stage, 'research_point_cost'):
+            theory_by_portfolio[activity.get('portfolio', 'activity')] += (
+                stage.research_point_cost * activity['count'])
+    total_theory_rp = sum(theory_by_portfolio.values())
+    nominal = result['research_by_scope'][0]
     summary = {
+        'research_scale': {
+            'display_stage_research_count': len(reference),
+            'display_stage_theory_rp_total_reference_only': reference_theory_rp,
+            'display_stage_mean_theory_rp_per_research': (reference_theory_rp / len(reference)
+                if reference else 0),
+            'activity_branch_theory_rp_total': theory_by_portfolio['activity'],
+            'parallel_science_theory_rp_total': theory_by_portfolio['parallel'],
+            'activity_and_parallel_theory_rp_total': total_theory_rp,
+            'sampled_branch_mean_theory_rp_per_day': total_theory_rp / case['period_days'],
+            'nominal_sustained_theory_processing_bound_rp_per_day': min(
+                nominal['rp_nominal_per_day'], nominal['execution_nominal_per_day']),
+            'interpretation': 'all-stage sum is optional research, not required completion; '
+                'sampled activity plus optional parallel science rate depends on the chosen window; '
+                'sustained bound excludes stored RP drawdown, acquisition, allocation, power, RP admission and typed stages',
+        },
         'stage': case['stage'], 'design_target_hours_cumulative': case['cumulative_target_hours'],
         'sample_window_days': case['period_days'], 'technology_branch_size': len(case['selected_research']),
+        'concurrent_science_branch_size': len(case.get('parallel_research', ())),
         'research': result['research_by_scope'],
         'resources': result['resource_by_node'], 'service': result['service_by_scope'],
         'power': result['power_by_node'], 'habitation': result['habitation_by_node'],
@@ -445,7 +514,7 @@ def evaluate_stage(stage: int) -> dict:
     sim, _ = _setup()
     case = scenarios[stage](sim)
     report = quantity_ledger(sim, period_days=case['period_days'], activities=case['activities'])
-    return _summarize_evidence(case, report)
+    return _summarize_evidence(sim, case, report)
 
 
 def main(argv: list[str] | None = None) -> None:
