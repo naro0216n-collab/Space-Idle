@@ -27,6 +27,8 @@ def build_base_catalog() -> GameCatalog:
         ids.REFRACTORY_ALLOY: ResourceDef(ids.REFRACTORY_ALLOY, "耐熱・耐腐食工業合金", category="bulk"),
         ids.HARDENED_ELECTRONICS: ResourceDef(ids.HARDENED_ELECTRONICS, "耐放射線・極低温制御電子モジュール"),
         ids.RECOVERY_SCRAP: ResourceDef(ids.RECOVERY_SCRAP, "使用済み合金・機械回収材", category="bulk"),
+        ids.HELIUM4_COOLANT: ResourceDef(ids.HELIUM4_COOLANT, "ヘリウム4冷媒", storage_pool_key="cryogenic"),
+        ids.FUSION_FUEL_ISOTOPES: ResourceDef(ids.FUSION_FUEL_ISOTOPES, "分離核融合燃料同位体", storage_pool_key="cryogenic"),
         WATER: ResourceDef(WATER, "水"),
         OXYGEN: ResourceDef(OXYGEN, "酸素", storage_pool_key="cryogenic"),
         HYDROGEN: ResourceDef(HYDROGEN, "水素", storage_pool_key="cryogenic"),

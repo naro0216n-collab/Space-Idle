@@ -9,7 +9,9 @@ from ..facilities import FacilityDef, FacilityPlacementScope, LifeSupportSpec
 from .asset_content import FacilityAsset
 from . import base_ids as ids
 from .base_extended_assets import build_extended_facility_assets
+from .base_concept_assets import build_concept_facility_assets
 from .base_extended_vehicles import build_extended_vehicle_defs
+from .base_concept_vehicles import build_concept_vehicle_defs
 from . import base_requirements as req
 from ..projects import ConstructionProviderSpec, ConstructionRecipe, FacilityDecommissionRecipe, FacilityUpgradeRecipe, BuildResourceRequirement
 from ..site import SiteRequirements
@@ -1819,5 +1821,5 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
         decommission_recovery_fraction=0.5,
     ), decommission=(row.decommission or FacilityDecommissionRecipe(
         row.definition.id, construction_work=12.0)))
-                       for row in facilities + build_extended_facility_assets())
-    return facilities, vehicles + build_extended_vehicle_defs()
+                       for row in facilities + build_extended_facility_assets() + build_concept_facility_assets())
+    return facilities, vehicles + build_extended_vehicle_defs() + build_concept_vehicle_defs()

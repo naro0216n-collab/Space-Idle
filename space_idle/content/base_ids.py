@@ -27,6 +27,8 @@ CARBON_NUTRIENT_FEEDSTOCK = DefinitionId("base.resource.carbon_nutrient_feedstoc
 REFRACTORY_ALLOY = DefinitionId("base.resource.refractory_alloy")
 HARDENED_ELECTRONICS = DefinitionId("base.resource.hardened_electronics")
 RECOVERY_SCRAP = DefinitionId("base.resource.recovery_scrap")
+HELIUM4_COOLANT = DefinitionId("base.resource.helium4_coolant")
+FUSION_FUEL_ISOTOPES = DefinitionId("base.resource.fusion_fuel_isotopes")
 
 # ---------------------------------------------------------------------------
 # Spatial content. Surface geography is separate from player-operated
