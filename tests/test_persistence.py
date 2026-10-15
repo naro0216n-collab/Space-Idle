@@ -615,7 +615,11 @@ def _corrupt_saved_snapshot(path, case: str) -> None:
         resource_id = next(iter(provider["supply_available_t"]))
         provider["supply_available_t"][resource_id] = 1.0e12
     elif case == "post_rebuild_capacity_violation":
-        state["inventory"]["stock"][0]["amount"] = 1.0e12
+        # Use a physically finite storage pool; ordinary dry cargo is not
+        # subject to the special cryogenic capacity invariant.
+        next(row for row in state["inventory"]["stock"]
+             if row["operational_node_id"] == str(ids.EARTH)
+             and row["resource_id"] == str(ids.HYDROGEN))["amount"] = 1.0e12
     elif case == "non_finite_number":
         state["core"]["pending_offline_game_days"] = float("nan")
     else:

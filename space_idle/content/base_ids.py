@@ -266,5 +266,6 @@ CREWED_CISLUNAR_EXPEDITION = DefinitionId("base.scientific_exploration.crewed_ci
 EXTRACTION_CRUST_MINERAL = DefinitionId("base.extraction.crust_mineral")
 EXTRACTION_CRUST_ORE = DefinitionId("base.extraction.crust_ore")
 EXTRACTION_WATER_INTAKE = DefinitionId("base.extraction.water_intake")
+EXTRACTION_BIOMASS_FEEDSTOCK = DefinitionId("base.extraction.biomass_feedstock")
 EXTRACTION_COLD_VOLATILES = DefinitionId("base.extraction.cold_volatiles")
 EXTRACTION_VACUUM_GRANULAR = DefinitionId("base.extraction.vacuum_granular")

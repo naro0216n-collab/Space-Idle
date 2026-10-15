@@ -185,7 +185,7 @@ def test_cell_physical_opportunity_is_independent_of_surface_infrastructure_and_
     )
     assert supplied.scale == pytest.approx(infrastructure.fulfillment)
     assert 0 < supplied.scale <= 1.0
-    assert supplied.limiting_factors == (() if infrastructure.fulfillment == 1.0 else ("service_capacity",))
+    assert supplied.limiting_factors == (() if supplied.scale >= 1.0 - 1e-9 else ("service_capacity",))
 
 
 def test_location_query_exposes_surface_infrastructure_decision_state_and_improvement():

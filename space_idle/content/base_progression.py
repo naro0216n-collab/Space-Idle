@@ -183,6 +183,15 @@ def build_extraction_specs() -> dict:
             req.ATMOSPHERIC_SURFACE_SITE, "crust_accessibility", True,
             minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
         ),
+        # Organics/biomass are finite World opportunities on viable surfaces,
+        # not free Food production from water. Other World regions can support
+        # the same method only if their authored Resource potential permits it.
+        ExtractionSpec(
+            ids.EXTRACTION_BIOMASS_FEEDSTOCK, frozenset({"biomass_collection"}),
+            ids.CARBON_NUTRIENT_FEEDSTOCK, ids.CARBON_NUTRIENT_FEEDSTOCK,
+            req.ATMOSPHERIC_SURFACE_SITE, "crust_accessibility", True,
+            minimum_knowledge_level=KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        ),
         ExtractionSpec(
             ids.EXTRACTION_COLD_VOLATILES, frozenset({"volatile_extraction"}),
             ids.VOLATILE_BEARING_MATERIAL, ids.VOLATILE_BEARING_MATERIAL,

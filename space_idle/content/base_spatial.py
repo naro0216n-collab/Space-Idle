@@ -141,7 +141,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             139.0,
             (ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND),
             SurfaceTerrain("rolling"),
-            {ids.MINERAL_FEEDSTOCK: 60.0, ids.METAL_ORE: 35.0, ids.WATER: 120.0},
+            {ids.MINERAL_FEEDSTOCK: 60.0, ids.METAL_ORE: 35.0, ids.WATER: 120.0, ids.CARBON_NUTRIENT_FEEDSTOCK: 10.0},
         ),
         _earth_cell(
             ids.EARTH_CELL_COASTAL,
@@ -150,7 +150,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             150.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
             SurfaceTerrain("plain"),
-            {ids.MINERAL_FEEDSTOCK: 45.0, ids.METAL_ORE: 24.0, ids.WATER: 180.0},
+            {ids.MINERAL_FEEDSTOCK: 45.0, ids.METAL_ORE: 24.0, ids.WATER: 180.0, ids.CARBON_NUTRIENT_FEEDSTOCK: 14.0},
         ),
         _earth_cell(
             ids.EARTH_CELL_INLAND,
@@ -159,7 +159,7 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             110.0,
             (ids.EARTH_CELL_INDUSTRIAL,),
             SurfaceTerrain("plain"),
-            {ids.MINERAL_FEEDSTOCK: 72.0, ids.METAL_ORE: 52.0, ids.WATER: 75.0},
+            {ids.MINERAL_FEEDSTOCK: 72.0, ids.METAL_ORE: 52.0, ids.WATER: 75.0, ids.CARBON_NUTRIENT_FEEDSTOCK: 8.0},
         ),
     )
     moon_cells = (

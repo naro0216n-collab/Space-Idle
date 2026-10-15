@@ -23,6 +23,9 @@ from space_idle.content.base_research_stages import build_new_stage_specs
 from space_idle.content import base_ids as ids
 from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.shared import DefinitionId
+from space_idle.site import SpatialClassification
+from space_idle.research_models import ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec
+from functools import lru_cache
 
 
 def test_all_research_definitions_have_acyclic_direct_prerequisites_and_display_metadata():
@@ -164,3 +167,93 @@ def test_new_prototype_stage_uses_existing_application_stage_selection_and_reser
     assert row.stage_resources
     assert row.execution_context.operational_node_id == str(ids.EARTH)
     assert sim.research.prototype_reserved_t(target, 'prototype_2', ids.EARTH, ids.MACHINERY) > 0
+
+
+def test_research_execution_sites_have_physical_capability_supply_before_completion():
+    """A Research Stage must not rely on equipment unlocked only by itself.
+
+    Capability supply can come from several facilities at the same physical
+    context; a ground-only Facility never satisfies an orbital Stage.
+    """
+    sim = build_game_application()._simulation
+    technologies = sim.research.definitions
+    options = (SpatialClassification.SURFACE, SpatialClassification.ORBITAL,
+               SpatialClassification.NON_SURFACE)
+
+    @lru_cache(None)
+    def depends_on(start, target):
+        return start == target or any(
+            depends_on(parent, target) for parent in technologies[start].prerequisites
+        )
+
+    for identity, definition in technologies.items():
+        for stage in definition.stage_specs:
+            if not isinstance(stage, (ResearchPrototypeStageSpec, ResearchDemonstrationStageSpec)):
+                continue
+            required = {cap.capability_id for cap in stage.site_requirements.capability_requirements}
+            allowed = {rule.classification for rule in stage.site_requirements.spatial_classification_requirements}
+            if not allowed:
+                allowed = set(options)
+            candidate_sites = set()
+            for classification in allowed:
+                supplied = set()
+                for facility_id, facility in sim.facilities.definitions.items():
+                    physical = {rule.classification for rule in
+                                facility.installation_requirements.spatial_classification_requirements}
+                    if physical and classification not in physical:
+                        continue
+                    recipe = sim.projects.recipes[facility_id]
+                    if any(depends_on(technology, identity) for technology in recipe.prerequisite_technologies):
+                        continue
+                    supplied.update(cap.id for cap in facility.capability_supplies)
+                if required <= supplied:
+                    candidate_sites.add(classification)
+            assert candidate_sites, f'{identity}: {stage.stage_id} has no physically possible execution site'
+
+
+def test_initial_food_loop_uses_world_biomass_extraction_and_finite_inventory(tmp_path):
+    """The opening food chain must not synthesize Food from water alone.
+
+    A normal extraction method harvests Content-authored World opportunity,
+    then Industry consumes its output at the Node; both survive restoration.
+    """
+    from space_idle import SetFacilityExtractionMethod
+
+    app = build_game_application()
+    sim = app._simulation
+    collector = next(
+        item.id for item in sim.facilities.facilities.values()
+        if item.definition_id == DefinitionId('planned.facility.earth_biomass_feedstock_collector')
+    )
+    farm = next(
+        item.id for item in sim.facilities.facilities.values()
+        if item.definition_id == ids.FOOD_FARM
+    )
+    food_process = sim.industry.processes[ids.PROCESS_FOOD_PRODUCTION]
+    assert food_process.inputs_per_day[ids.CARBON_NUTRIENT_FEEDSTOCK] > 0
+    assert sum(food_process.inputs_per_day.values()) >= sum(food_process.outputs_per_day.values())
+    assert sim.inventory.amount(ids.EARTH, ids.CARBON_NUTRIENT_FEEDSTOCK) > 0
+    # Exhaust only the finite opening stock in this scenario to demonstrate
+    # that industry cannot produce Food without an actual upstream flow.
+    sim.inventory.stock[(ids.EARTH, ids.CARBON_NUTRIENT_FEEDSTOCK)] = 0.0
+
+    app.execute(SetFacilityProcess(str(farm), str(ids.PROCESS_FOOD_PRODUCTION)))
+    before_food = sim.inventory.amount(ids.EARTH, ids.FOOD)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, ids.FOOD) < before_food
+
+    app.execute(SetFacilityExtractionMethod(str(collector), str(ids.EXTRACTION_BIOMASS_FEEDSTOCK)))
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, ids.CARBON_NUTRIENT_FEEDSTOCK) > 0
+    before_food = sim.inventory.amount(ids.EARTH, ids.FOOD)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, ids.FOOD) > before_food
+
+    file = tmp_path / 'food-loop.json'
+    save_game(app, file, saved_at=datetime(2026, 10, 15, tzinfo=timezone.utc))
+    loaded, offline = load_game(file, build_game_application_for_load)
+    assert offline is None
+    assert capture_state(sim) == capture_state(loaded._simulation)
+    app.execute(AdvanceTime(2))
+    loaded.execute(AdvanceTime(2))
+    assert capture_state(sim) == capture_state(loaded._simulation)

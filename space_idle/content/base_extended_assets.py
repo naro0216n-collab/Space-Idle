@@ -67,6 +67,9 @@ _PHYSICAL_ROLES: dict[str, FacilityRole] = {
     'industrial_habitat120': FacilityRole(('pressurized_habitation','closed_cycle_life_support'), 9.0, housing=120),
     'extreme_environment_science_array': FacilityRole(('research_lab','extreme_radiation_science'), 23.0, research_points_tpd=1100, research_execution_tpd=77.0),
     'outer_system_science_archive': FacilityRole(('radiation_shielded_science_archive',), 7.0, storage_points=120000),
+    # Instrumented orbital baseline supplies tracking locally; a surface antenna
+    # cannot satisfy an orbital Research execution site.
+    'orbital_precision_tracking_array': FacilityRole(('deep_space_tracking_equipment', 'orbital_phase_reference'), 6.0, orbital=True),
     'cryogenic_ice_drilling_station': FacilityRole(('volatile_extraction','cryogenic_drilling'), 13.0, extraction_tpd=24.0,cell=True),
     'outer_system_fission_field': FacilityRole(('fission_reactor_control_instrumentation','low_sun_power_supply'), 5.0, power_generation_mw=120.0),
     'self_servicing_autonomy_node': FacilityRole(('industrial_disassembly','hardened_electronics_fabrication','autonomous_equipment_servicing'), 5.0, throughput=4.0, services=(('spacecraft_servicing',3.0),)),
@@ -87,7 +90,7 @@ _PHYSICAL_ROLES: dict[str, FacilityRole] = {
     'hardened_electronics_fab': FacilityRole(('hardened_electronics_fabrication','cryogenic_protected_fabrication'), 14.0, throughput=3.0),
     'screened_surface_excavator': FacilityRole(('metal_ore_extraction','mineral_extraction','surface_survey'), .45, extraction_tpd=.7,cell=True),
     'autonomous_multi_tool_excavator': FacilityRole(('metal_ore_extraction','mineral_extraction','surface_survey'), .8, extraction_tpd=2.2,cell=True),
-    'earth_biomass_feedstock_collector': FacilityRole(('carbon_nutrient_separation',), .12, throughput=.35),
+    'earth_biomass_feedstock_collector': FacilityRole(('biomass_collection','carbon_nutrient_separation'), .12, throughput=.35, extraction_tpd=.55),
     'earth_basic_electronics_shop': FacilityRole(('earth_basic_electronics',), .7, throughput=.8),
 }
 
@@ -126,6 +129,7 @@ _EXTENDED_FACILITY_ROWS = (
     ('industrial_habitat120', '工業人口用居住・水再生120人棟', 6, ('LS-ATMOSPHERE-WATER-WASTE-13',), ('base.resource.fabricated_structure', 'base.resource.machinery', 'base.resource.precision_electronics')),
     ('extreme_environment_science_array', '極端環境自律科学研究基地', 7, ('X7-REMOTE-RADIATION-SCIENCE',), ('base.resource.hardened_electronics', 'base.resource.machinery', 'base.resource.thermal_control_assemblies')),
     ('outer_system_science_archive', '極低温・高放射線冗長研究記録庫', 7, ('X7-REMOTE-RADIATION-SCIENCE',), ('base.resource.hardened_electronics', 'base.resource.machinery', 'base.resource.radiation_shielding_panels')),
+    ('orbital_precision_tracking_array', '軌道位相基準・精密追尾アレイ', 7, ('X7-DEEP-SPACE-RELAY',), ('base.resource.hardened_electronics', 'base.resource.optical_instrument_packages', 'base.resource.thermal_control_assemblies')),
     ('cryogenic_ice_drilling_station', '極低温氷殻・揮発物掘削基地', 7, ('VR-7-RESOURCE-CHAIN-01',), ('base.resource.construction_equipment', 'base.resource.thermal_control_assemblies', 'base.resource.machinery')),
     ('outer_system_fission_field', '外惑星長寿命電力炉・遮蔽設備', 7, ('X7-EXTREME-POWER',), ('base.resource.thermal_control_assemblies', 'base.resource.machinery', 'base.resource.radiation_shielding_panels')),
     ('self_servicing_autonomy_node', '長遅延自律保守・部品交換拠点', 7, ('X7-DELAY-TOLERANT-AUTONOMY',), ('base.resource.machinery', 'base.resource.hardened_electronics', 'base.resource.structural_components')),

@@ -11,6 +11,7 @@ from ..scenario import (
     ScenarioPopulation,
 )
 from . import base_ids as ids
+from ..shared import DefinitionId
 from ..population import PopulationRules, ExternalPopulationSourceDefinition
 from .base_market import EARTH_MARKET_INTERFACE, EARTH_MARKET_PROVIDER
 
@@ -22,6 +23,8 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
     facilities = (
         ScenarioFacility(ids.BREATHABLE_SURFACE_LIFE_SUPPORT, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0), (E, 1.0))),
         ScenarioFacility(ids.FOOD_FARM, ids.EARTH, invested_resources=((S, 6.0), (M, 4.0), (E, 2.0))),
+        ScenarioFacility(DefinitionId("planned.facility.earth_biomass_feedstock_collector"), ids.EARTH,
+                         invested_resources=((S, 0.68), (M, 0.95))),
         ScenarioFacility(ids.GENERAL_RESEARCH_LAB, ids.EARTH, invested_resources=((S, 12.0), (M, 10.0), (E, 8.0))),
         # A finite, physically installed cold store rather than free capacity
         # at every initial node. Its cooling and maintenance remain operational.
@@ -44,6 +47,9 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
         ScenarioInventoryStock(ids.EARTH, ids.PRECISION_ELECTRONICS, 70.0),
         ScenarioInventoryStock(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT, 60.0),
         ScenarioInventoryStock(ids.EARTH, ids.FOOD, 500.0),
+        # Initial hydroponics operates on a finite pre-positioned nutrient feed.
+        # Continued growth requires the player to activate local biomass recovery.
+        ScenarioInventoryStock(ids.EARTH, ids.CARBON_NUTRIENT_FEEDSTOCK, 2.0),
         ScenarioInventoryStock(ids.EARTH, ids.WATER, 5000.0),
         ScenarioInventoryStock(ids.EARTH, ids.OXYGEN, 5.0),
         ScenarioInventoryStock(ids.EARTH, ids.HYDROGEN, 2.0),
@@ -59,7 +65,7 @@ def build_standard_scenario_definition() -> ScenarioDefinition:
     known = tuple(
         (cell_id, resource_id)
         for cell_id in (ids.EARTH_CELL_INDUSTRIAL, ids.EARTH_CELL_COASTAL, ids.EARTH_CELL_INLAND)
-        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER)
+        for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER, ids.CARBON_NUTRIENT_FEEDSTOCK)
     )
     return ScenarioDefinition(
         id=STANDARD_SCENARIO_ID,
