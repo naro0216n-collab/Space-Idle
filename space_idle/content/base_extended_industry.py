@@ -54,6 +54,9 @@ def build_extended_process_specs() -> dict[DefinitionId, ProcessSpec]:
          {'mineral_feedstock': 1.40}, {'ceramics_glass': 0.52}, None),
         ('earth_electrolysis_basic', '地球基礎水電解・推進剤酸素水素', 'industrial_electrolysis',
          {'water': 0.60}, {'oxygen': 0.49, 'hydrogen': 0.06}, None),
+        ('automated_tool_refabrication', '回収部材による自律工具再製造', 'autonomous_tool_refabrication',
+         {'recovery_scrap': 0.55, 'basic_machine_parts': 0.20, 'hardened_electronics': 0.08},
+         {'construction_equipment': 0.52}, 'PL-SELF-REPAIR-INDUSTRIAL-ROBOTS'),
     )
     result = {}
     for name, label, capability, inputs, outputs, technology in rows:

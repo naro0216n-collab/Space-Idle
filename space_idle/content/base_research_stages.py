@@ -52,6 +52,18 @@ _SITE_STAGES = {
     "X8-CIRCULAR-MANUFACTURING": ("PROTOTYPE", "prototype_2", req.with_capabilities(req.SiteRequirements(), "industrial_machinery_assembly"), 18.0, {"base.resource.hardened_electronics": .25, "base.resource.fabricated_structure": 1.5}),
     "X8-REMOTE-CELL-REMEDIATION": ("PROTOTYPE", "prototype_2", req.with_capabilities(req.SURFACE_SITE, "construction_yard"), 18.0, {"base.resource.construction_equipment": 1.0, "base.resource.bulk_structure": 1.5}),
     "X8-DISTRIBUTED-ASTRONOMY": ("DEMONSTRATION", "demonstration_2", req.with_capabilities(req.ORBIT_SITE, "deep_space_tracking_equipment"), 20.0, {}),
+    # Staged fusion evidence uses installed, grid-powered apparatus. The
+    # required previous Technology makes the apparatus buildable before each
+    # successive stage, without making its own completion a prerequisite.
+    'SF-FUSION-02': ('PROTOTYPE', 'magnetic-plasma-ignition-trial',
+                     req.with_capabilities(req.SURFACE_SITE, 'magnetic_fusion_confinement_test'),
+                     16.0, {'base.resource.hydrogen': 0.8, 'base.resource.thermal_control_assemblies': 0.3}),
+    'SF-FUSION-05': ('PROTOTYPE', 'pulsed-fusion-blanket-trial',
+                     req.with_capabilities(req.SURFACE_SITE, 'pulsed_fusion_ignition_test'),
+                     20.0, {'base.resource.hydrogen': 1.2, 'base.resource.radiation_shielding_panels': 0.5}),
+    'SF-FUSION-04': ('PROTOTYPE', 'fusion-blanket-circulation-trial',
+                     req.with_capabilities(req.SURFACE_SITE, 'fusion_blanket_irradiation_test'),
+                     23.0, {'base.resource.hydrogen': 1.6, 'base.resource.refractory_alloy': 0.8}),
 }
 
 _EXPERIENCE_STAGES = {

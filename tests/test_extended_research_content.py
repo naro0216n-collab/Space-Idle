@@ -257,3 +257,97 @@ def test_initial_food_loop_uses_world_biomass_extraction_and_finite_inventory(tm
     app.execute(AdvanceTime(2))
     loaded.execute(AdvanceTime(2))
     assert capture_state(sim) == capture_state(loaded._simulation)
+
+
+def test_fusion_experiment_chain_exposes_real_powered_stage_requirements():
+    """Successive fusion trials need prior equipment, finite feedstock and power.
+
+    They do not silently provide electricity or turn research completion into a
+    physical experiment. The Stage remains a normal Research allocation.
+    """
+    from dataclasses import replace
+    from space_idle import StartResearch, SetResearchPrototypeSite
+    from space_idle.research import ResearchTheoryStageSpec
+
+    app = build_game_application()
+    sim = app._simulation
+    stages = (
+        ('SF-FUSION-02', 'fusion_confinement_testbed', 'magnetic-plasma-ignition-trial'),
+        ('SF-FUSION-05', 'pulsed_fusion_testbed', 'pulsed-fusion-blanket-trial'),
+        ('SF-FUSION-04', 'fusion_blanket_testbed', 'fusion-blanket-circulation-trial'),
+    )
+    for tech, apparatus, stage_id in stages:
+        definition = sim.research.definitions[DefinitionId(tech)]
+        facility_id = DefinitionId('planned.facility.' + apparatus)
+        prototype = next(spec for spec in definition.stage_specs if spec.stage_id == stage_id)
+        recipe = sim.projects.recipes[facility_id]
+        assert recipe.prerequisite_technologies <= definition.prerequisites
+        assert prototype.resources and all(amount > 0 for amount in prototype.resources.values())
+        assert sim.power.specs[facility_id].generation is None
+        assert sim.power.specs[facility_id].load_mw > 0
+
+    target = DefinitionId('SF-FUSION-02')
+    original = sim.research.definitions[target]
+    sim.technology.completed.update(original.prerequisites)
+    # Keep the real prototype and its prerequisites, shortening only Theory RP
+    # to isolate the physical-activity contract from balance quantities.
+    sim.research.definitions[target] = replace(
+        original, stage_specs=(ResearchTheoryStageSpec('theory', .5),) + original.stage_specs[1:],
+    )
+    sim.research.stored_points = 150
+    app.execute(StartResearch(str(target)))
+    app.execute(AdvanceTime(1))
+    app.execute(SetResearchPrototypeSite(str(target), 'magnetic-plasma-ignition-trial', str(ids.EARTH)))
+    app.execute(AdvanceTime(2))
+    row = next(row for row in app.query(GetResearch()).items if row.id == str(target))
+    assert row.current_stage_type == 'prototype'
+    assert row.stage_progress == 0
+
+    sim.facilities.install(DefinitionId('planned.facility.fusion_confinement_testbed'), ids.EARTH)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, ids.EARTH, level=4)
+    sim.inventory.add(ids.EARTH, ids.HYDROGEN, 2)
+    sim.inventory.add(ids.EARTH, ids.THERMAL_CONTROL_ASSEMBLIES, 2)
+    app.execute(AdvanceTime(1))
+    assert sim.research.prototype_reserved_t(
+        target, 'magnetic-plasma-ignition-trial', ids.EARTH, ids.HYDROGEN,
+    ) == 0.8
+    app.execute(AdvanceTime(1))
+    row = next(row for row in app.query(GetResearch()).items if row.id == str(target))
+    assert row.stage_progress > 0
+
+
+def test_autonomous_tool_refabrication_is_finite_and_survives_restoration(tmp_path):
+    """Self-repair is a normal powered Process, not a free Technology buff."""
+    app = build_game_application()
+    sim = app._simulation
+    tech = DefinitionId('PL-SELF-REPAIR-INDUSTRIAL-ROBOTS')
+    facility = DefinitionId('planned.facility.automated_tool_refabricator')
+    process = DefinitionId('planned.process.automated_tool_refabrication')
+    sim.technology.completed.add(tech)
+    installed = sim.facilities.install(facility, ids.EARTH)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, ids.EARTH, level=4)
+    sim.inventory.add(ids.EARTH, ids.RECOVERY_SCRAP, 8)
+    sim.inventory.add(ids.EARTH, ids.BASIC_MACHINE_PARTS, 5)
+    sim.inventory.add(ids.EARTH, ids.HARDENED_ELECTRONICS, 3)
+    definition = sim.industry.processes[process]
+    assert definition.prerequisite_technologies == frozenset({tech})
+    assert definition.required_capabilities <= sim.facilities.definitions[facility].capability_ids
+    option = next(option for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
+                  if row.facility_id == str(installed)
+                  for option in row.process_options if option.process_id == str(process))
+    assert option.can_select
+    app.execute(SetFacilityProcess(str(installed), str(process)))
+    equipment_before = sim.inventory.amount(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT)
+    scrap_before = sim.inventory.amount(ids.EARTH, ids.RECOVERY_SCRAP)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(ids.EARTH, ids.CONSTRUCTION_EQUIPMENT) > equipment_before
+    assert sim.inventory.amount(ids.EARTH, ids.RECOVERY_SCRAP) < scrap_before
+
+    path = tmp_path / 'autonomous-tool-refabrication.json'
+    save_game(app, path, saved_at=datetime(2026, 10, 15, tzinfo=timezone.utc))
+    loaded, offline = load_game(path, build_game_application_for_load)
+    assert offline is None
+    assert capture_state(sim) == capture_state(loaded._simulation)
+    app.execute(AdvanceTime(3))
+    loaded.execute(AdvanceTime(3))
+    assert capture_state(sim) == capture_state(loaded._simulation)
