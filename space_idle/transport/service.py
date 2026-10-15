@@ -38,6 +38,7 @@ from .retirement import FleetRetirementMixin
 from .models import FleetRetirementState
 from .movement import MovementResolver, SpaceflightMovementRule, SurfaceAccessMovementRule, SurfaceTransportMovementRule
 from .supply import TransportSupplyMixin
+from .infrastructure import InfrastructureFreightLink, InfrastructureTransportMethod, infrastructure_link_eligibility
 
 
 @dataclass
@@ -92,6 +93,8 @@ class TransportService(
     fleet_pools: dict[tuple[DefinitionId, SpatialNodeId], FleetPool] = field(default_factory=dict)
     fleet_commitments: dict[EntityId, FleetCommitmentState] = field(default_factory=dict)
     transport_allocations: dict[EntityId, TransportAllocation] = field(default_factory=dict)
+    infrastructure_methods: dict[DefinitionId, InfrastructureTransportMethod] = field(default_factory=dict)
+    infrastructure_links: dict[EntityId, InfrastructureFreightLink] = field(default_factory=dict)
     fleet_relocations: dict[EntityId, FleetRelocation] = field(default_factory=dict)
     movement_executions: dict[EntityId, MovementExecution] = field(default_factory=dict)
     passenger_service_transits: dict[EntityId, PassengerServiceTransit] = field(default_factory=dict)
@@ -107,6 +110,27 @@ class TransportService(
     _fleet_commitment_owner_resolvers: dict[str, Callable[[EntityId], bool]] = field(
         default_factory=dict, init=False, repr=False
     )
+
+    def set_infrastructure_freight_link(
+        self, method_id: DefinitionId, source_facility_id: EntityId,
+        destination_facility_id: EntityId, target_t_per_day: float,
+        day: int = 0,
+    ) -> EntityId:
+        method = self.infrastructure_methods[method_id]
+        link_id = EntityId(f"infrastructure.transport:{method_id}:{source_facility_id}:{destination_facility_id}")
+        candidate = InfrastructureFreightLink(
+            link_id, method_id, source_facility_id, destination_facility_id, target_t_per_day,
+        )
+        feasible, _distance = infrastructure_link_eligibility(candidate, method, self.facilities, day)
+        if not feasible:
+            raise ValueError("fixed-transport endpoints, range or equipment are not active and compatible")
+        self.infrastructure_links[link_id] = candidate
+        self._projection_service_supply_cache = None
+        return link_id
+
+    def delete_infrastructure_freight_link(self, link_id: EntityId) -> None:
+        del self.infrastructure_links[link_id]
+        self._projection_service_supply_cache = None
 
     def __post_init__(self) -> None:
         # Fleet owns exclusivity, while each activity Domain remains authoritative
@@ -171,6 +195,9 @@ class TransportService(
                 for leg in execution.legs
             ):
                 blockers.append(FacilityLifecycleBlocker("active_movement_commitment", str(execution.id)))
+        for link in self.infrastructure_links.values():
+            if facility_id in (link.origin_facility_id, link.destination_facility_id):
+                blockers.append(FacilityLifecycleBlocker("infrastructure_transport_link", str(link.id)))
         return tuple(blockers)
 
     def movement_resolver(self) -> MovementResolver:

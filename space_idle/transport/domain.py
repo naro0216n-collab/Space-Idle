@@ -37,6 +37,7 @@ from .models import (
     TransportAllocation,
 )
 from .production import VehicleProductionPhase, VehicleProductionState
+from .infrastructure import InfrastructureFreightLink
 
 
 def _capture_movement_endpoint(endpoint: MovementEndpoint) -> dict[str, Any]:
@@ -320,6 +321,13 @@ def capture_transport(sim: Any) -> dict[str, Any]:
             }
             for row in sorted(tr.fleet_commitments.values(), key=lambda row: str(row.id))
         ],
+        "infrastructure_links": [
+            {"id": str(link.id), "method_id": str(link.method_id),
+             "origin_facility_id": str(link.origin_facility_id),
+             "destination_facility_id": str(link.destination_facility_id),
+             "target_t_per_day": link.target_t_per_day, "paused": link.paused}
+            for link in sorted(tr.infrastructure_links.values(), key=lambda row: str(row.id))
+        ],
         "transport_allocations": [
             {
                 "id": str(row.id),
@@ -521,6 +529,23 @@ def restore_transport(sim: Any, data: dict[str, Any]) -> None:
                                for resource, amount in decode_dict(row["onboard_resources"], "fleet onboard Resources").items()},
             onboard_accommodation=_restore_passenger_accommodation(row["onboard_accommodation"], "fleet onboard accommodation"),
         )
+
+    tr.infrastructure_links = {}
+    infrastructure_fields = {"id", "method_id", "origin_facility_id",
+                             "destination_facility_id", "target_t_per_day", "paused"}
+    for index, raw in enumerate(decode_list(data["infrastructure_links"], "infrastructure links")):
+        row = require_fields(raw, infrastructure_fields, f"infrastructure link[{index}]")
+        link = InfrastructureFreightLink(
+            EntityId(decode_str(row["id"], "infrastructure link id")),
+            DefinitionId(decode_str(row["method_id"], "infrastructure method id")),
+            EntityId(decode_str(row["origin_facility_id"], "infrastructure origin facility")),
+            EntityId(decode_str(row["destination_facility_id"], "infrastructure destination facility")),
+            decode_float(row["target_t_per_day"], "infrastructure link target"),
+            decode_bool(row["paused"], "infrastructure paused"),
+        )
+        if link.id in tr.infrastructure_links:
+            raise ValueError(f"duplicate infrastructure link: {link.id}")
+        tr.infrastructure_links[link.id] = link
 
     tr.transport_allocations = {}
     allocation_fields = {
@@ -890,6 +915,17 @@ def _validate_transport_profile(sim: Any, profile, known_capabilities: set[str],
             f"duplicate transport resource support requirement: {label}",
         )
         resource_support_keys.add(key)
+    known_service_types = set(sim.facilities.service_types())
+    seen_service_requirements: set[tuple[str, str, str]] = set()
+    for demand in profile.operation_service_requirements:
+        _require(demand.service_type in known_service_types,
+                 f"unknown transport operation service: {label}/{demand.service_type}")
+        _require(demand.operation_type in operation_types,
+                 f"transport service requires unsupported operation: {label}/{demand.operation_type}")
+        key = (demand.operation_type, demand.location.value, demand.service_type)
+        _require(key not in seen_service_requirements,
+                 f"duplicate transport operation service: {label}/{key}")
+        seen_service_requirements.add(key)
     for capability in profile.operation_capabilities:
         _require(
             sim.transport.operation_registry.supports(capability.operation_type),
@@ -923,6 +959,14 @@ def _validate_unique_resources(resources, label: str) -> None:
 def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     known_capabilities = ctx.known_capabilities
     known_service_types = ctx.known_service_types
+
+    for method in sim.transport.infrastructure_methods.values():
+        _require(method.launch_service in known_service_types and
+                 method.capture_service in known_service_types,
+                 f"infrastructure transport method needs registered Services: {method.id}")
+        if method.payload_support_resource_id is not None:
+            _require(method.payload_support_resource_id in sim.inventory.resource_definitions,
+                     f"infrastructure method needs registered Resource: {method.id}")
 
     graph = sim.graph
     for rule in sim.transport.surface_movement_rules:
@@ -1102,6 +1146,26 @@ def validate_transport_runtime(sim: Any) -> None:
             _require(state is not None, f"retirement Fleet commitment references unknown retirement: {commitment_id}/{owner.activity_id}")
             if state is not None:
                 _require(commitment_id == state.fleet_commitment_id, f"retirement Fleet commitment id mismatch: {commitment_id}/{state.id}")
+
+    for identity, link in tr.infrastructure_links.items():
+        _require(identity == link.id, f"infrastructure transport identity mismatch: {identity}")
+        _require(link.method_id in tr.infrastructure_methods,
+                 f"unknown infrastructure transport method: {link.method_id}")
+        _require(link.origin_facility_id in sim.facilities.facilities and
+                 link.destination_facility_id in sim.facilities.facilities,
+                 f"orphan infrastructure transport endpoint: {identity}")
+        if link.origin_facility_id in sim.facilities.facilities and link.destination_facility_id in sim.facilities.facilities:
+            origin = sim.facilities.facilities[link.origin_facility_id]
+            dest = sim.facilities.facilities[link.destination_facility_id]
+            method = tr.infrastructure_methods[link.method_id]
+            _require(origin.operational_node_id != dest.operational_node_id,
+                     f"same-node infrastructure link: {identity}")
+            _require(any(row.service_type == method.launch_service for row in
+                         sim.facilities.definitions[origin.definition_id].service_capacity_supplies),
+                     f"invalid infrastructure launch equipment: {identity}")
+            _require(any(row.service_type == method.capture_service for row in
+                         sim.facilities.definitions[dest.definition_id].service_capacity_supplies),
+                     f"invalid infrastructure capture equipment: {identity}")
 
     for allocation_id, allocation in tr.transport_allocations.items():
         _require(allocation_id == allocation.id, f"transport allocation key mismatch: {allocation_id}")

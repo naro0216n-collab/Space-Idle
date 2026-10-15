@@ -3,7 +3,7 @@ from __future__ import annotations
 from .application_commands import (
     AdvanceTime, ApplicationError, CancelBuild, ClearTransportMovementConstraint,
     CreateTransportAllocation, SetTransportMovementConstraint,
-    DeleteTransportAllocation, SetResearchPriority, GetAttention, GetBottlenecks,
+    DeleteTransportAllocation, SetInfrastructureFreightLink, DeleteInfrastructureFreightLink, SetResearchPriority, GetAttention, GetBottlenecks,
     GetBuildOptions, GetCatalog, GetCargoFlows,  GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast,
     GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
     GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
@@ -15,7 +15,7 @@ from .application_commands import (
     ResumeVehicleProduction, SetFacilityProcess, SetFacilityExtractionMethod, SetMaintenancePriority,
     SetFacilityActivityPriority, SetProjectPriority, SetProjectProcurementPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
-    SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
+    SetTimeControl, SetPowerLink, DeletePowerLink, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
     SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,

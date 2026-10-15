@@ -49,10 +49,13 @@ def test_concept_assets_use_physical_construction_and_power_without_generic_unlo
         assert all(rate > 0 for rate in definition.inputs_per_day.values())
         assert all(rate > 0 for rate in definition.outputs_per_day.values())
         assert sum(definition.outputs_per_day.values()) <= sum(definition.inputs_per_day.values()) + 1e-9
-    # Neither Fusion studies nor the isotope separator mint Power from Fuel.
+    # Power-generation equipment must consume real upstream fuel through the
+    # common daily Resource allocation; research completion is not free Power.
     assert ids.FUSION_FUEL_ISOTOPES in resources
     assert ids.HELIUM4_COOLANT in resources
-    assert not any(asset.definition.id == DefinitionId('planned.facility.fusion_power_station') for asset in assets)
+    generator = sim.facilities.definitions[DefinitionId('planned.facility.fusion_power_station')]
+    assert dict(generator.operating_resources_per_day)[ids.FUSION_FUEL_ISOTOPES] > 0
+    assert dict(generator.operating_resources_per_day)[ids.HELIUM4_COOLANT] > 0
 
 
 def test_concept_recovery_is_technology_gated_and_physically_consumes_stock(tmp_path):

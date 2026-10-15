@@ -66,3 +66,20 @@ class SetTimeControl:
 @dataclass(frozen=True)
 class AdvanceTime:
     days: int
+
+
+@dataclass(frozen=True)
+class SetPowerLink:
+    source_facility_id: str
+    receiver_facility_id: str
+    target_mw: float
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.target_mw) or self.target_mw <= 0:
+            raise ValueError("power transfer target must be positive and finite")
+
+
+@dataclass(frozen=True)
+class DeletePowerLink:
+    source_facility_id: str
+    receiver_facility_id: str

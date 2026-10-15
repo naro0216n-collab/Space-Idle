@@ -34,6 +34,20 @@ class FacilityMaintenanceService:
         if self.reorder_point_days >= self.target_stock_days:
             raise ValueError("maintenance reorder point must be below target stock")
 
+    def _daily_inputs(self, facility) -> dict[DefinitionId, float]:
+        """One physical bundle for upkeep and active operation per installed unit.
+
+        A fuel-dependent generator must not supply the same tick's Power if
+        another activity wins the scarce fuel allocation. Paused facilities
+        retain upkeep, but do not burn their operating feedstock.
+        """
+        amounts = self.facilities.maintenance_requirements_per_day(facility.id)
+        if not facility.paused and facility.lifecycle.value == "NORMAL":
+            definition = self.facilities.definitions[facility.definition_id]
+            for resource_id, rate in definition.operating_resources_per_day:
+                amounts[resource_id] = amounts.get(resource_id, 0.0) + rate * facility.level
+        return amounts
+
     @staticmethod
     def _requirement_id(facility_id: EntityId, resource_id: DefinitionId) -> EntityId:
         return EntityId(f"requirement.maintenance:{facility_id}:{resource_id}")
@@ -58,7 +72,7 @@ class FacilityMaintenanceService:
         per_facility: dict[EntityId, dict[DefinitionId, float]] = {}
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for facility in self.facilities.facilities.values():
-            requirements = self.facilities.maintenance_requirements_per_day(facility.id)
+            requirements = self._daily_inputs(facility)
             per_facility[facility.id] = requirements
             for resource_id, amount in requirements.items():
                 key = (facility.operational_node_id, resource_id)
@@ -99,7 +113,7 @@ class FacilityMaintenanceService:
             requirements = tuple(
                 ResourceRequirement(resource_id, required)
                 for resource_id, required in sorted(
-                    self.facilities.maintenance_requirements_per_day(facility.id).items(),
+                    self._daily_inputs(facility).items(),
                     key=lambda row: str(row[0]),
                 )
                 if required > 1e-12
@@ -124,7 +138,7 @@ class FacilityMaintenanceService:
         """Project facility maintenance fulfillment from one common bundle."""
         satisfaction: dict[EntityId, float] = {}
         for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
-            if not self.facilities.maintenance_requirements_per_day(facility.id):
+            if not self._daily_inputs(facility):
                 satisfaction[facility.id] = 1.0
                 continue
             try:
@@ -163,7 +177,7 @@ class FacilityMaintenanceService:
         for facility in sorted(self.facilities.facilities.values(), key=lambda row: str(row.id)):
             factor = satisfaction[facility.id]
             for resource_id, required in sorted(
-                self.facilities.maintenance_requirements_per_day(facility.id).items(),
+                self._daily_inputs(facility).items(),
                 key=lambda row: str(row[0]),
             ):
                 amount = required * factor

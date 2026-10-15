@@ -112,6 +112,20 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
             body_center_orbit_radius_km=6_771.0,
         )
     )
+    # Player-founded transfer orbit: a second independently operable endpoint
+    # permits real same-body orbital infrastructure links and cargo routing.
+    graph.add(
+        SpatialNodeDef(
+            ids.EARTH_TRANSFER_ORBIT,
+            "地球遷移軌道",
+            ids.SOL_SYSTEM,
+            None,
+            body_id=ids.EARTH_BODY,
+            kind=SpatialNodeKind.ORBITAL,
+            inherits_parent_environment=False,
+            body_center_orbit_radius_km=10000.0,
+        )
+    )
     graph.add(
         SpatialNodeDef(
             ids.LUNAR_ORBIT,
@@ -299,6 +313,14 @@ def _assemble_world(*, realize_surface: bool) -> tuple[SpatialGraph, Environment
     facets.set(ids.LEO, ThermalField(270.0))
     facets.set(ids.LEO, RadiationField(0.5))
     facets.set(ids.LEO, CommunicationField(0.02, 0.98))
+
+    facets.set(ids.EARTH_TRANSFER_ORBIT, OrbitalField(6200.0))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, GravityField(4.0, 10800.0))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, AtmosphereField(0.0, 0.0, {}))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, IlluminationField(graph.representative_solar_flux_w_m2(ids.EARTH_BODY), 0.72))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, ThermalField(258.0))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, RadiationField(0.65))
+    facets.set(ids.EARTH_TRANSFER_ORBIT, CommunicationField(0.03, 0.95))
 
     facets.set(ids.LUNAR_ORBIT, OrbitalField(7200.0))
     facets.set(ids.LUNAR_ORBIT, GravityField(1.4, 2300.0))

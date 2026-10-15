@@ -8,6 +8,7 @@ from ..execution_requirements import ExecutionAllocationPlan, ExecutionRequireme
 from ..supply import SupplyRequirement
 from ..service_capacity import ServiceCapacityRequest
 from ..shared import DefinitionId, EntityId, MovementPlanId, SpatialNodeId
+from .infrastructure import infrastructure_operation_requirements
 from .models import (
     DirectionalCapacity,
     FleetPool,
@@ -1235,6 +1236,12 @@ class FleetAllocationMixin:
             blockers.append("relocation_path:empty")
 
         definition = carrier_definition or self.vehicle_defs[vehicle_definition_id]
+        # One-shot relocation cannot silently use a Vehicle's external thrust:
+        # unlike Cargo, this activity currently has no shared facility-Service
+        # reservation. Expose that structural prerequisite at the planning
+        # boundary rather than creating an impossible Fleet commitment.
+        if definition.performance.operation_service_requirements:
+            blockers.append("operation_service:assisted_movement_requires_service_settlement")
         operating_units = carrier_units if carrier_definition is not None else units
         payload_t_per_unit = (payload_mass_t / carrier_units
             if carrier_definition is not None and carrier_units > 0 else 0.0)
@@ -1613,6 +1620,8 @@ class FleetAllocationMixin:
 
     def record_transport_operation(self, allocation_id: EntityId, day: int) -> None:
         """Record Transport activity through the Transport-owned state contract."""
+        if allocation_id in self.infrastructure_links:
+            return  # Infrastructure consumes a finite Service, not a Fleet commitment.
         allocation = self.transport_allocations[allocation_id]
         if self.transport_active_units(allocation_id) <= 0:
             raise RuntimeError(
@@ -1640,6 +1649,11 @@ class FleetAllocationMixin:
             cached = cache.get(cache_key)
             if cached is not None:
                 return cached
+        infrastructure = self.infrastructure_links.get(allocation_id)
+        if infrastructure is not None:
+            return infrastructure_operation_requirements(
+                infrastructure, self.infrastructure_methods[infrastructure.method_id], self.facilities,
+            )
         allocation = self.transport_allocations[allocation_id]
         definition = self.vehicle_defs[allocation.vehicle_definition_id]
         plan = self.derive_transport_service_plan(allocation_id, day)
@@ -1714,6 +1728,46 @@ class FleetAllocationMixin:
             if reverse_amount > 1e-12:
                 reverse_resources.append((location_id, resource_id, reverse_amount))
 
+        # An assisted spaceflight consumes finite provider Service at each
+        # physical endpoint. Split shared empty-cycle loads with the same
+        # reference utilization as propulsion Resource, including returns.
+        empty_assist: dict[tuple[SpatialNodeId, str], float] = {}
+        forward_assist: dict[tuple[SpatialNodeId, str], float] = {}
+        reverse_assist: dict[tuple[SpatialNodeId, str], float] = {}
+        if definition.performance.operation_service_requirements and plan.cycle_days > 1e-12:
+            for direction, path_ids, payload_t in (
+                ("forward", plan.forward_path, plan.nominal_per_unit.forward_t_per_day * plan.cycle_days),
+                ("reverse", plan.reverse_path, plan.nominal_per_unit.reverse_t_per_day * plan.cycle_days),
+            ):
+                for movement_plan_id in path_ids:
+                    movement = self.require_movement_plan(movement_plan_id)
+                    for demand in definition.performance.operation_service_requirements:
+                        matching = sum(operation.delta_v_km_s for operation in movement.operations
+                                       if operation.operation_type == demand.operation_type)
+                        if matching <= 1e-12:
+                            continue
+                        location = (movement.origin_id if demand.location is OperationSupportLocation.ORIGIN
+                                    else movement.destination_id)
+                        key = (location, demand.service_type)
+                        coefficient = matching * demand.units_per_tonne_per_km_s / plan.cycle_days
+                        empty_assist[key] = empty_assist.get(key, 0.0) + definition.dry_mass_t * coefficient
+                        increment = forward_assist if direction == 'forward' else reverse_assist
+                        increment[key] = increment.get(key, 0.0) + payload_t * coefficient
+
+        forward_services = []
+        reverse_services = []
+        for location, service in sorted(set(empty_assist) | set(forward_assist) | set(reverse_assist),
+                                        key=lambda key: (str(key[0]), key[1])):
+            key = (location, service)
+            forward = (empty_assist.get(key, 0.0) * shared_forward_scale
+                       + forward_assist.get(key, 0.0) * forward_increment_scale)
+            reverse = (empty_assist.get(key, 0.0) * shared_reverse_scale
+                       + reverse_assist.get(key, 0.0) * reverse_increment_scale)
+            if forward > 1e-12:
+                forward_services.append((location, service, forward))
+            if reverse > 1e-12:
+                reverse_services.append((location, service, reverse))
+
         servicing = plan.servicing_units_per_full_utilization_day
         forward_turnaround = (
             0.0
@@ -1733,6 +1787,8 @@ class FleetAllocationMixin:
             allocation.anchor_node_id,
             forward_turnaround,
             reverse_turnaround,
+            tuple(forward_services),
+            tuple(reverse_services),
         )
         if cache is not None:
             cache[cache_key] = result

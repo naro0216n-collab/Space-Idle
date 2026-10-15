@@ -369,6 +369,41 @@
       <div class="cell-sub">人口目標は希望数の指定です。設定・解除だけでは人口の増減や強制転出は行いません。</div>
       <div id="passengerLocationMount" class="passenger-controls" data-passenger-origin="${esc(loc.id)}"></div></section>`:'';
 
+    const transmitters=loc.power_transmitters||[],receivers=loc.power_receivers||[];
+    const currentLinks=(loc.power_links||[]).filter(([, , ,sourceNode,receiverNode])=>sourceNode===loc.id||receiverNode===loc.id);
+    const powerLinkRows=currentLinks.map(([source,receiver,target,sourceNode,receiverNode])=>
+      `<div class="detail-card"><div class="mode-title"><span>${esc(locationName(sourceNode))} → ${esc(locationName(receiverNode))}</span><span>${fmt(target,2)} MW送出目標</span></div><div class="cell-sub">送信 ${esc(source)} · 受信 ${esc(receiver)}</div><button type="button" data-delete-power-link data-source="${esc(source)}" data-receiver="${esc(receiver)}">給電リンクを解除</button></div>`
+    ).join('')||'<div class="empty-state compact-empty">この拠点の指向性給電リンクは未設定</div>';
+    const powerOptions=(rows)=>rows.map(([id,node,name,capacity,active])=>
+      `<option value="${esc(id)}">${esc(locationName(node))} · ${esc(name)} · ${fmt(capacity,1)} MW${active?'':'（停止・不適格）'}</option>`
+    ).join('');
+    const powerLinkCard=`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">電力</span><h3>拠点間指向性給電</h3></div></div>
+      <div class="capacity-quad"><div><span>受電</span><strong>${fmt(loc.power_imported_mw,2)} MW</strong></div><div><span>送電</span><strong>${fmt(loc.power_exported_mw,2)} MW</strong></div><div><span>供給</span><strong>${fmt(loc.power_generation_mw,2)} MW</strong></div><div><span>需要</span><strong>${fmt(loc.power_demand_mw,2)} MW</strong></div></div>
+      <div class="cell-sub">送信元は現地電力需要を確保した余力から送電し、受信地への供給には伝送損失が発生します。装置の停止・電力不足・距離制限により送電量は低下します。</div>
+      ${powerLinkRows}
+      <div class="form-row"><label>送信設備<select data-power-link-source>${powerOptions(transmitters)}</select></label><label>受信設備<select data-power-link-receiver>${powerOptions(receivers)}</select></label><label>送出目標 MW<input data-power-link-target type="number" min="0.001" step="any" value="20" data-draft-key="power-link:${esc(loc.id)}:target" data-structured-draft data-draft-scope="power-link:${esc(loc.id)}"></label><button type="button" data-set-power-link ${!transmitters.length||!receivers.length?'disabled':''}>給電リンクを設定</button></div>
+      ${!transmitters.length||!receivers.length?'<div class="cell-sub">送信設備と受信設備を建設すると設定可能になります。</div>':''}
+      </section>`;
+
+    const fixedMethods=loc.infrastructure_methods||[];
+    const fixedLaunchers=loc.infrastructure_launchers||[];
+    const fixedCatchers=loc.infrastructure_catchers||[];
+    const fixedLinks=(loc.infrastructure_links||[]).filter(([, ,origin,destination])=>
+      fixedLaunchers.some(([id,node])=>id===origin&&node===loc.id)||fixedCatchers.some(([id,node])=>id===destination&&node===loc.id));
+    const transportMethodOptions=fixedMethods.map(([id,start,end,range])=>
+      `<option value="${esc(id)}">${esc(id)} · ${esc(serviceName(start))} → ${esc(serviceName(end))} · 最大${fmt(range,0)} km</option>`).join('');
+    const facilityOptionRows=(rows)=>rows.map(([id,node,name,services,active])=>
+      `<option value="${esc(id)}" data-service-types="${esc(services.join(','))}">${esc(locationName(node))} · ${esc(name)}${active?'':'（停止・立地制約）'}</option>`).join('');
+    const fixedLinkRows=fixedLinks.map(([id,method,origin,destination,target,paused])=>
+      `<div class="detail-card"><div class="mode-title"><span>${esc(method)}</span><span>${fmt(target,2)} t/日</span></div><div class="cell-sub">送出設備 ${esc(origin)} · 捕捉設備 ${esc(destination)} · ${paused?'一時停止':'稼働条件で配分'}</div><button type="button" data-delete-infrastructure-link="${esc(id)}">固定設備輸送を解除</button></div>`
+    ).join('')||'<div class="empty-state compact-empty">この拠点に接続された固定設備輸送は未設定</div>';
+    const fixedTransportCard=`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">物流</span><h3>固定設備による貨物移送</h3></div></div>
+      <div class="cell-sub">射出設備と捕捉設備の双方が稼働し、距離・輸送方式・電力・維持資材条件を満たす場合だけCargoを移送します。設備ごとのService・消耗材は通常の配分で競合します。旅客は対象外です。</div>
+      ${fixedLinkRows}
+      <div class="form-row"><label>輸送方式<select data-fixed-transport-method>${transportMethodOptions}</select></label><label>出発設備<select data-fixed-transport-source>${facilityOptionRows(fixedLaunchers)}</select></label><label>捕捉設備<select data-fixed-transport-destination>${facilityOptionRows(fixedCatchers)}</select></label><label>輸送目標 t/日<input type="number" min="0.001" step="any" value="1" data-fixed-transport-target data-draft-key="fixed-freight:${esc(loc.id)}:target" data-structured-draft data-draft-scope="fixed-freight:${esc(loc.id)}"></label><button type="button" data-set-infrastructure-link ${!fixedMethods.length||!fixedLaunchers.length||!fixedCatchers.length?'disabled':''}>固定設備輸送を設定</button></div>
+      ${!fixedLaunchers.length||!fixedCatchers.length?'<div class="cell-sub">射出側と捕捉側の設備建設が必要です。選択候補は他拠点の設備も含みます。</div>':''}
+    </section>`;
+
     const infra=loc.surface_infrastructure;
     const infraCard=infra?`<section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">地表</span><h3>地表インフラ</h3></div><span class="badge ${infra.fulfillment<0.999999?'warn':'ok'}">${pct(infra.fulfillment)}</span></div><div class="capacity-quad"><div><span>基準能力</span><strong>${fmt(infra.nominal_capacity,2)}</strong></div><div><span>利用可能</span><strong>${fmt(infra.available_capacity,2)}</strong></div><div><span>需要</span><strong>${fmt(infra.requested_capacity,2)}</strong></div><div><span>余力</span><strong>${fmt(infra.spare_capacity,2)}</strong></div></div>${(infra.limiting_factors||[]).length?`<div class="issue-stack compact-issues">${infra.limiting_factors.map((factor)=>`<div class="issue"><div class="issue-title">${esc(blockerText(factor))}</div></div>`).join('')}</div>`:''}</section>`:'';
 
@@ -379,6 +414,8 @@
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">案件</span><h3>進行中案件</h3></div><button type="button" class="small-action" data-tab="construction">建設へ</button></div><div class="overview-project-list">${projectRows}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">設備</span><h3>停止・制約のある設備</h3></div><button type="button" class="small-action" data-tab="facilities">設備へ</button></div><div class="overview-project-list">${facilityRows}</div></section>
       <section class="decision-card"><div class="decision-card-heading"><div><span class="eyebrow">依存</span><h3>生産差・未充足</h3></div><button type="button" class="small-action" data-tab="inventory">分析</button></div><div class="overview-dependency-list">${dependencyRows}</div></section>
+      ${powerLinkCard}
+      ${fixedTransportCard}
       ${populationCard}
       ${infraCard}
     </div>`;
@@ -816,6 +853,7 @@
     }else upgradeSection=section('次の更新','<div class="empty-state">現在定義されている次Levelの更新はありません。</div>');
     const investment=(f.invested_resources||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a)} t</div>`).join('')||'<div class="empty-state">投入履歴なし</div>';
     const maintenance=(f.maintenance_demand_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('')||'<div class="empty-state">維持資源要求なし</div>';
+    const activeInputs=(f.operating_resources_per_day||[]).map(([r,a])=>`<div class="cell-sub">${esc(resourceName(r))}: ${fmt(a,4)} t/日</div>`).join('');
     const salvagePotential=(f.expected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし';
     const salvageProjected=(f.projected_salvage||[]).map(([r,a])=>`${resourceName(r)} ${fmt(a,2)}t`).join(' / ')||'なし';
     const decommissionBlockers=f.decommission_blockers||[];
@@ -826,7 +864,7 @@
       ? `<span class="badge warn">撤去案件進行中</span><button type="button" data-inspect="project" data-id="${esc(f.active_decommission_project_id)}">案件を開く</button>`
       : f.can_decommission?'<span class="badge ok">撤去計画可</span>':'<span class="badge warn">撤去不可</span>';
     const decommissionSection=section('設備撤去',kv([['状態',decommissionStatus],['回収可能量',esc(salvagePotential)],['見込回収率',pct(f.projected_salvage_fraction??1)],['見込回収量',esc(salvageProjected)]])+`<h4>撤去条件</h4>${decommissionBlockers.length?`<div class="issue-stack">${decommissionBlockers.map(issueHtml).join('')}</div>`:'<span class="badge ok">制約なし</span>'}${decommissionControls}<button type="button" class="danger-button" data-decommission="${esc(f.id)}" data-plan-prefix="decommissionPlan" ${decommissionDisabled?'disabled':''}>${f.active_decommission_project_id?'撤去案件進行中':'設備撤去案件を作成'}</button>`);
-    setInspector(f.display_name,section('状態',kv([['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['稼働時Power需要',`${fmt(f.power_active_load_mw,3)} MW`],...(Number(f.power_standby_load_mw)>0?[['停止時Power需要',`${fmt(f.power_standby_load_mw,3)} MW`]]:[]),['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['活動優先度',esc(priorityName(f.activity_priority))],['維持優先度',esc(priorityName(f.maintenance_priority??3))],...researchRows]))+section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row">${priorityControl(f.activity_priority??3,`id="facilityPriorityInput" data-priority-direct="facility-activity" data-priority-id="${esc(f.id)}"`,'活動優先度')}</div><div class="form-row">${priorityControl(f.maintenance_priority??3,`id="maintenancePriorityInput" data-priority-direct="maintenance" data-priority-id="${esc(f.id)}"`,'維持優先度')}</div></div>`)+productionSection+upgradeSection+decommissionSection+section('建造・更新投入資源',investment)+section('維持資源需要',maintenance));
+    setInspector(f.display_name,section('状態',kv([['Level',fmt(f.level,0)],['運転',f.paused?'手動停止':'稼働'],['稼働時Power需要',`${fmt(f.power_active_load_mw,3)} MW`],...(Number(f.power_standby_load_mw)>0?[['停止時Power需要',`${fmt(f.power_standby_load_mw,3)} MW`]]:[]),['電力利用率',pct(f.power_utilization)],['維持充足率',pct(f.maintenance_satisfaction)],['実効稼働率',pct(f.operational_utilization)],['活動優先度',esc(priorityName(f.activity_priority))],['維持優先度',esc(priorityName(f.maintenance_priority??3))],...researchRows]))+section('現在の制約',blockers.length?`<div class="issue-stack">${blockers.map(issueHtml).join('')}</div>`:'<div class="badge ok">なし</div>')+section('運用操作',`<div class="action-stack"><button type="button" data-command="${f.paused?'ResumeFacility':'PauseFacility'}" data-facility-id="${esc(f.id)}">${f.paused?'設備を再開':'設備を停止'}</button><div class="form-row">${priorityControl(f.activity_priority??3,`id="facilityPriorityInput" data-priority-direct="facility-activity" data-priority-id="${esc(f.id)}"`,'活動優先度')}</div><div class="form-row">${priorityControl(f.maintenance_priority??3,`id="maintenancePriorityInput" data-priority-direct="maintenance" data-priority-id="${esc(f.id)}"`,'維持優先度')}</div></div>`)+productionSection+upgradeSection+decommissionSection+section('建造・更新投入資源',investment)+section('維持資源需要',maintenance)+(activeInputs?section('運転投入資源',activeInputs):''));
     return true;
   }
   const observedValue=(value,decimals=3)=>value==null?'未測定':fmt(value,decimals);
@@ -1365,6 +1403,34 @@
 
   document.addEventListener('click',async(event)=>{
     if(state.activeView!=='operations')return;
+    if(event.target.closest('[data-set-infrastructure-link]')){
+      const method=$('[data-fixed-transport-method]')?.value;
+      const origin=$('[data-fixed-transport-source]')?.value;
+      const destination=$('[data-fixed-transport-destination]')?.value;
+      const raw=$('[data-fixed-transport-target]')?.value;
+      const target=Number(raw);
+      if(!method||!origin||!destination||!raw||!Number.isFinite(target)||target<=0){banner('輸送方式と送出・捕捉設備、正の輸送目標を指定してください','error');return;}
+      try{await command('SetInfrastructureFreightLink',{method_id:method,source_facility_id:origin,destination_facility_id:destination,target_t_per_day:target});banner('固定設備輸送を設定しました');}catch{}
+      return;
+    }
+    const removedLink=event.target.closest('[data-delete-infrastructure-link]');
+    if(removedLink){
+      try{await command('DeleteInfrastructureFreightLink',{link_id:removedLink.dataset.deleteInfrastructureLink});banner('固定設備輸送を解除しました');}catch{}
+      return;
+    }
+    if(event.target.closest('[data-set-power-link]')){
+      const source=$('[data-power-link-source]')?.value,receiver=$('[data-power-link-receiver]')?.value;
+      const raw=$('[data-power-link-target]')?.value;
+      const target=Number(raw);
+      if(!source||!receiver||source===receiver||!raw||!Number.isFinite(target)||target<=0){banner('送受信設備と正の送出目標を指定してください','error');return;}
+      try{await command('SetPowerLink',{source_facility_id:source,receiver_facility_id:receiver,target_mw:target});banner('給電リンクを設定しました');}catch{}
+      return;
+    }
+    const deletePowerLink=event.target.closest('[data-delete-power-link]');
+    if(deletePowerLink){
+      try{await command('DeletePowerLink',{source_facility_id:deletePowerLink.dataset.source,receiver_facility_id:deletePowerLink.dataset.receiver});banner('給電リンクを解除しました');}catch{}
+      return;
+    }
     const growthToggle=event.target.closest('[data-toggle-natural-growth]');
     if(growthToggle){
       try{await command('SetNaturalPopulationGrowth',{operational_node_id:state.operationalNodeId,enabled:growthToggle.dataset.enabled==='true'});}catch{}

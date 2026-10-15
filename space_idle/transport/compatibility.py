@@ -184,6 +184,22 @@ class TransportCompatibilityMixin:
                     f"operation:{operation.operation_type}:asset_returns_before_movement_complete"
                 )
 
+        # Assisted operations must obey their actual movement relation, not
+        # only the same-body surface geometry used by ground transport.
+        distance_km = (geometry.distance_km if geometry.distance_km is not None
+                       else plan.relation.characteristic_distance_km)
+        for assistance in performance.operation_service_requirements:
+            if assistance.operation_type not in present_operations:
+                continue
+            if assistance.max_distance_km is not None:
+                if distance_km is None:
+                    failures.append(f"operation_service:{assistance.service_type}:range_unknown")
+                elif distance_km > assistance.max_distance_km + 1e-9:
+                    failures.append(
+                        f"operation_service:{assistance.service_type}:range:"
+                        f"{distance_km:g}/{assistance.max_distance_km:g}"
+                    )
+
         failures.extend(performance.endurance_failures(context.transit_days))
 
         if include_operation_support:

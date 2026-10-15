@@ -8,7 +8,7 @@ from .application_commands import (
     SetFacilityProcess, SetFacilityExtractionMethod,
     SetFacilityActivityPriority,
     SetMaintenancePriority,
-    SetTimeControl,
+    SetTimeControl, SetPowerLink, DeletePowerLink,
     SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
     CancelPassengerTransfer,
 )
@@ -71,6 +71,17 @@ class OperationsCommandHandlerMixin:
         if isinstance(command, SetMaintenancePriority):
             sim.facilities.set_maintenance_priority(
                 EntityId(command.facility_id), command.priority
+            )
+            return CommandResult()
+        if isinstance(command, SetPowerLink):
+            sim.power.configure_link(
+                EntityId(command.source_facility_id), EntityId(command.receiver_facility_id),
+                command.target_mw, sim.facilities,
+            )
+            return CommandResult()
+        if isinstance(command, DeletePowerLink):
+            sim.power.delete_link(
+                EntityId(command.source_facility_id), EntityId(command.receiver_facility_id),
             )
             return CommandResult()
         if isinstance(command, SetTimeControl):

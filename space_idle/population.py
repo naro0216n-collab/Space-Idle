@@ -834,6 +834,8 @@ class PopulationService:
             occupied[leg.service_key] = occupied.get(leg.service_key, 0) + count
         capacities = {}
         for edge in self.logistics._service_edges(day):
+            if edge.allocation_id in self.transport.infrastructure_links:
+                continue  # Fixed cargo installations have no passenger seats.
             accommodation = self.transport.service_vehicle(edge.allocation_id).passengers
             supply = accommodation.supportable_seats(self.transport.transport_active_units(edge.allocation_id))
             capacities[pool_constraint(edge.key, scope_id='passenger_service_seats')] = float(

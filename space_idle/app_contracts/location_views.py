@@ -89,6 +89,7 @@ class FacilityRow:
     active_decommission_project_id: str | None = None
     power_active_load_mw: float = 0.0
     power_standby_load_mw: float = 0.0
+    operating_resources_per_day: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -302,3 +303,13 @@ class OperationalNodeView:
     projects: tuple[ProjectRow, ...]
     surface_location: SurfaceLocationDecisionRow | None = None
     population: PopulationView | None = None
+    power_imported_mw: float = 0.0
+    power_exported_mw: float = 0.0
+    # Available physical equipment remains visible even before a link can operate.
+    power_transmitters: tuple[tuple[str, str, str, float, bool], ...] = ()
+    power_receivers: tuple[tuple[str, str, str, float, bool], ...] = ()
+    power_links: tuple[tuple[str, str, float, str, str], ...] = ()
+    infrastructure_methods: tuple[tuple[str, str, str, float], ...] = ()
+    infrastructure_launchers: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = ()
+    infrastructure_catchers: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = ()
+    infrastructure_links: tuple[tuple[str, str, str, str, float, bool], ...] = ()

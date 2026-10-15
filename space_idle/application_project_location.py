@@ -383,6 +383,10 @@ class LocationProjectorMixin:
                         sim.power.specs[facility.definition_id].standby_load_mw * facility.level
                         if facility.definition_id in sim.power.specs else 0.0
                     ),
+                    operating_resources_per_day=tuple(
+                        (str(resource_id), rate * facility.level)
+                        for resource_id, rate in definition.operating_resources_per_day
+                    ),
                 )
             )
 
@@ -880,4 +884,45 @@ class LocationProjectorMixin:
             self._project_rows(location_id),
             self._surface_location_decision_row(location_id),
             population_view,
+            power.imported_mw,
+            power.exported_mw,
+            tuple(sorted((str(facility.id), str(facility.operational_node_id),
+                          sim.facilities.definitions[facility.definition_id].display_name,
+                          sim.power.specs[facility.definition_id].beam_transmit_capacity_mw * facility.level,
+                          not facility.paused and sim.facilities.is_environmentally_compatible(facility, sim.day))
+                         for facility in sim.facilities.facilities.values()
+                         if facility.definition_id in sim.power.specs
+                         and sim.power.specs[facility.definition_id].beam_transmit_capacity_mw > 0)),
+            tuple(sorted((str(facility.id), str(facility.operational_node_id),
+                          sim.facilities.definitions[facility.definition_id].display_name,
+                          sim.power.specs[facility.definition_id].beam_receive_capacity_mw * facility.level,
+                          not facility.paused and sim.facilities.is_environmentally_compatible(facility, sim.day))
+                         for facility in sim.facilities.facilities.values()
+                         if facility.definition_id in sim.power.specs
+                         and sim.power.specs[facility.definition_id].beam_receive_capacity_mw > 0)),
+            tuple(sorted((str(link.source_facility_id), str(link.receiver_facility_id),
+                          link.requested_mw,
+                          str(sim.facilities.facilities[link.source_facility_id].operational_node_id),
+                          str(sim.facilities.facilities[link.receiver_facility_id].operational_node_id))
+                         for link in sim.power.links.values())),
+            tuple(sorted((str(method.id), method.launch_service, method.capture_service,
+                          method.max_distance_km)
+                         for method in sim.transport.infrastructure_methods.values())),
+            tuple(sorted((str(asset.id), str(asset.operational_node_id),
+                          sim.facilities.definitions[asset.definition_id].display_name,
+                          tuple(sorted(s.service_type for s in sim.facilities.definitions[asset.definition_id].service_capacity_supplies)),
+                          not asset.paused and sim.facilities.is_environmentally_compatible(asset, sim.day))
+                         for asset in sim.facilities.facilities.values()
+                         if any(s.service_type in {method.launch_service for method in sim.transport.infrastructure_methods.values()}
+                                for s in sim.facilities.definitions[asset.definition_id].service_capacity_supplies))),
+            tuple(sorted((str(asset.id), str(asset.operational_node_id),
+                          sim.facilities.definitions[asset.definition_id].display_name,
+                          tuple(sorted(s.service_type for s in sim.facilities.definitions[asset.definition_id].service_capacity_supplies)),
+                          not asset.paused and sim.facilities.is_environmentally_compatible(asset, sim.day))
+                         for asset in sim.facilities.facilities.values()
+                         if any(s.service_type in {method.capture_service for method in sim.transport.infrastructure_methods.values()}
+                                for s in sim.facilities.definitions[asset.definition_id].service_capacity_supplies))),
+            tuple(sorted((str(link.id), str(link.method_id), str(link.origin_facility_id),
+                          str(link.destination_facility_id), link.target_t_per_day, link.paused)
+                         for link in sim.transport.infrastructure_links.values())),
         )

@@ -87,6 +87,12 @@ class MovementExecutionMixin:
         if resource_payload_t > payload_t_per_unit * units + 1e-9:
             raise ValueError("movement execution resource payload exceeds total payload")
         vehicle = self.vehicle_defs[vehicle_definition_id]
+        # An isolated Movement cannot claim the external momentum delivered by
+        # a powered Facility. Ordinary Cargo dispatch settles these demands in
+        # its root ExecutionBundle; one-shot owners must add a corresponding
+        # Service reservation before this API can support assisted propulsion.
+        if vehicle.performance.operation_service_requirements:
+            raise ValueError("assisted movement requires settled operation service")
         legs: list[MovementExecutionLeg] = []
         expected_origin = plans[0].origin
         for index, plan in enumerate(plans):

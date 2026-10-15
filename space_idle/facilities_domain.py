@@ -108,6 +108,9 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
         _require(definition.maintenance_fraction_per_year >= 0, f"negative maintenance fraction: {definition.id}")
         _require(0 <= definition.decommission_recovery_fraction <= 1, f"invalid decommission recovery fraction: {definition.id}")
         _require(isinstance(definition.placement_scope, FacilityPlacementScope), f"invalid facility placement scope: {definition.id}")
+        for resource_id, amount in definition.operating_resources_per_day:
+            _require(resource_id in sim.inventory.resource_definitions, f"unknown facility operating resource: {definition.id}/{resource_id}")
+            _require(amount > 0, f"invalid facility operating rate: {definition.id}/{resource_id}")
         seen_caps: set[str] = set()
         for supply in definition.capability_supplies:
             _require(supply.id not in seen_caps, f"duplicate capability {supply.id} on {definition.id}")

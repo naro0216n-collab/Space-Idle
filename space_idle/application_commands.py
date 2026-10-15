@@ -7,7 +7,7 @@ from .app_contracts.construction import (
 )
 from .app_contracts.operations import (
     PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityExtractionMethod, SetFacilityActivityPriority,
-    SetMaintenancePriority, SetTimeControl, AdvanceTime,
+    SetMaintenancePriority, SetTimeControl, AdvanceTime, SetPowerLink, DeletePowerLink,
 )
 from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
@@ -24,7 +24,7 @@ from .app_contracts.transport import (
     SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
     SetTransportMovementConstraint, ClearTransportMovementConstraint,
     PauseTransportAllocation, ResumeTransportAllocation,
-    DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
+    DeleteTransportAllocation, SetInfrastructureFreightLink, DeleteInfrastructureFreightLink, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
@@ -48,7 +48,7 @@ Command: TypeAlias = (
     PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | EngineerSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectProcurementPolicy |
     PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityExtractionMethod | SetFacilityActivityPriority | SetMaintenancePriority |
-    SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
+    SetPowerLink | DeletePowerLink | SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | UpdateSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
     ResumeScientificExploration | AbortScientificExploration | ReturnScientificExploration | SetScientificExplorationCompletionDisposition | AssignExplorationFleet | UnassignExplorationFleet |
@@ -58,7 +58,7 @@ Command: TypeAlias = (
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | SetTransportMovementConstraint |
     ClearTransportMovementConstraint |
-    PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
+    PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | SetInfrastructureFreightLink | DeleteInfrastructureFreightLink | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
     SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )

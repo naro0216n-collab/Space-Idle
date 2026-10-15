@@ -187,8 +187,18 @@ class SupplyPlanningMixin:
             if node_id == scope.destination_id:
                 raise ValueError("routing constraint destination cannot also be a required via node")
         for allocation_id in constraint.required_transport_allocation_ids:
-            if self.transport.transport_allocation_snapshot(allocation_id) is None:
+            if (self.transport.transport_allocation_snapshot(allocation_id) is None
+                    and allocation_id not in self.transport.infrastructure_links):
                 raise KeyError(allocation_id)
+
+    def transport_link_references(self, allocation_id: EntityId) -> tuple[SupplyRoutingConstraintScope, ...]:
+        """Routing owns its explicit link dependencies, independent of Fleet or fixed infrastructure."""
+        return tuple(sorted(
+            (row.scope for row in self.routing_constraints.values()
+             if allocation_id in row.required_transport_allocation_ids),
+            key=lambda scope: (str(scope.destination_id), str(scope.owner_kind or ''),
+                               str(scope.owner_id or ''), str(scope.resource_id or '')),
+        ))
 
     def set_supply_routing_constraint(
         self,

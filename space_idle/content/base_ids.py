@@ -45,6 +45,7 @@ EARTH = SpatialNodeId("base.location.earth_industrial")
 
 # Non-surface spatial nodes.
 LEO = SpatialNodeId("base.node.low_earth_orbit")
+EARTH_TRANSFER_ORBIT = SpatialNodeId("base.node.earth_transfer_orbit")
 LUNAR_ORBIT = SpatialNodeId("base.node.lunar_orbit")
 MARS_ORBIT = SpatialNodeId("base.node.mars_orbit")
 

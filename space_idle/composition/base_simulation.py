@@ -48,6 +48,7 @@ from ..content.base_research import (
 )
 from ..content.base_scientific_exploration import build_scientific_exploration_definitions
 from ..content.base_spatial import BASE_WORLD_DEFINITION_ID, instantiate_standard_world
+from ..content.base_infrastructure_transport import build_infrastructure_transport_methods
 from ..content.base_transport import (
     build_spaceflight_movement_rules,
     build_surface_access_movement_rules,
@@ -93,6 +94,7 @@ def build_base_simulation(
         technology_state=technology,
     )
     transport.vehicle_defs.update(authored.vehicles)
+    transport.infrastructure_methods.update({row.id: row for row in build_infrastructure_transport_methods()})
 
     logistics = LogisticsService(
         transport=transport,
@@ -116,6 +118,7 @@ def build_base_simulation(
     facility_lifecycle_registry = FacilityLifecycleRegistry()
     facility_lifecycle_registry.register_blocker_provider("transport", transport)
     facility_lifecycle_registry.register_blocker_provider("storage", storage)
+    facility_lifecycle_registry.register_blocker_provider("power", power)
 
     surface_cell_claim_registry = SurfaceCellClaimRegistry()
 

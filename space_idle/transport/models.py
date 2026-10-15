@@ -453,6 +453,8 @@ class TransportOperationUsageRequirements:
     turnaround_node_id: SpatialNodeId
     forward_turnaround_per_t: float = 0.0
     reverse_turnaround_per_t: float = 0.0
+    forward_service_per_t: tuple[tuple[SpatialNodeId, str, float], ...] = ()
+    reverse_service_per_t: tuple[tuple[SpatialNodeId, str, float], ...] = ()
 
 
 class OperationSupportLocation(str, Enum):
@@ -474,6 +476,31 @@ class OperationSupportRequirement:
     @property
     def kind(self) -> str:
         return self.operation_type
+
+
+@dataclass(frozen=True)
+class OperationServiceRequirement:
+    """Finite installed support consumed by a Transport operation.
+
+    Rate is a service-unit requirement per tonne of accelerated mass and
+    kilometre/second of the authored Movement. Providers own the actual power,
+    maintenance and service envelope at the stated endpoint; service is never
+    an invented Vehicle fuel stock. This requirement is charged to the whole
+    Fleet cycle, including its empty vehicle return.
+    """
+    operation_type: str
+    location: OperationSupportLocation
+    service_type: str
+    units_per_tonne_per_km_s: float
+    max_distance_km: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.operation_type or not self.service_type:
+            raise ValueError("operation service type is required")
+        if not math.isfinite(self.units_per_tonne_per_km_s) or self.units_per_tonne_per_km_s <= 0:
+            raise ValueError("operation service cost must be positive and finite")
+        if self.max_distance_km is not None and (not math.isfinite(self.max_distance_km) or self.max_distance_km <= 0):
+            raise ValueError("operation service range must be positive and finite")
 
 
 @dataclass(frozen=True)
@@ -796,6 +823,7 @@ class TransportPerformanceProfile:
     propellant_t_per_total_t_per_km_s: float = 0.0
     operation_capabilities: tuple[OperationCapability, ...] = ()
     operation_support_requirements: tuple[OperationSupportRequirement, ...] = ()
+    operation_service_requirements: tuple[OperationServiceRequirement, ...] = ()
     resource_support_requirements: tuple[ResourceSupportRequirement, ...] = ()
     endurance_days: float | None = None
     generic_capabilities: tuple[str, ...] = ()

@@ -9,9 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..facilities import FacilityDef, FacilityPlacementScope, LifeSupportSpec
-from ..power import PowerSpec, SolarGeneration
+from ..power import PowerSpec, SolarGeneration, FixedGeneration
 from ..projects import ConstructionRecipe, BuildResourceRequirement, ConstructionProviderSpec
 from ..shared import DefinitionId
+from ..site import SiteRequirements
 from .asset_content import FacilityAsset
 from . import base_requirements as req
 from . import base_ids as ids
@@ -32,6 +33,11 @@ class ConceptEquipment:
     solar_mw: float = 0.0
     housing: int = 0
     orbital: bool = False
+    site_independent: bool = False
+    fixed_generation_mw: float = 0.0
+    beam_transmit_mw: float = 0.0
+    beam_receive_mw: float = 0.0
+    operating_resources_per_day: tuple[tuple[str, float], ...] = ()
 
 
 # Material requirements are tonnes per installed unit, never a stage-based
@@ -49,12 +55,45 @@ _EQUIPMENT = (
         (('machinery', 15), ('precision_components', 13), ('fabricated_structure', 17)),
         110, ('robotic_orbital_construction', 'orbital_precision_module_fabrication'),
         6.5, throughput=4.0, construction_tpd=8.0, orbital=True),
+    ConceptEquipment('electromagnetic_mass_driver', '電磁貨物射出設備', ('SF-MASS-01',),
+        (('refractory_alloy', 64), ('fabricated_structure', 70), ('thermal_control_assemblies', 31)),
+        365, ('mass_driver_launch_interface',), 90.0,
+        services=(('mass_driver_launch', 38.0),),
+        operating_resources_per_day=(('thermal_control_assemblies', .012),)),
+    ConceptEquipment('kinetic_cargo_receiver', '射出貨物捕捉設備', ('SF-MASS-02',),
+        (('fabricated_structure', 72), ('machinery', 44), ('hardened_electronics', 28)),
+        340, ('kinetic_capture_interface',), 32.0,
+        services=(('kinetic_cargo_capture', 40.0),), orbital=True,
+        operating_resources_per_day=(('thermal_control_assemblies', .015),)),
+    ConceptEquipment('momentum_exchange_tether', '運動量交換テザーハブ',
+        ('SF-TETHER-01', 'SF-TETHER-02', 'SF-TETHER-03', 'SF-TETHER-04'),
+        (('refractory_alloy', 92), ('fabricated_structure', 145), ('hardened_electronics', 41)),
+        710, ('tether_catch_release_interface',), 85.0,
+        services=(('tether_momentum_exchange', 22.0),), orbital=True,
+        operating_resources_per_day=(('thermal_control_assemblies', .035),)),
+    ConceptEquipment('phased_energy_array', '位相合成ビーム送信設備',
+        ('SF-BEAM-01', 'SF-BEAM-03', 'SF-BEAM-04'),
+        (('optical_instrument_packages', 92), ('refractory_alloy', 73), ('thermal_control_assemblies', 86)),
+        690, ('phased_beam_emitter',), 210.0,
+        services=(('beam_momentum_transfer', 18.0),), site_independent=True,
+        beam_transmit_mw=65.0,
+        operating_resources_per_day=(('thermal_control_assemblies', .02),)),
+    ConceptEquipment('beamed_power_receiver', '指向性光電力受信設備',
+        ('VR-8-SOLAR-POWER-01', 'X8-DISTRIBUTED-POWER'),
+        (('optical_instrument_packages', 58), ('thermal_control_assemblies', 65), ('hardened_electronics', 33)),
+        430, ('directed_light_receiving_aperture',), 8.0, orbital=True,
+        beam_receive_mw=50.0),
     ConceptEquipment('engineered_bioculture_containment', '合成微生物封じ込め設備', ('SF-BIO-01',),
         (('fabricated_structure', 8), ('precision_electronics', 7), ('thermal_control_assemblies', 5)),
         90, ('bioculture_containment',), 5.0),
     ConceptEquipment('engineered_bioculture_reactor', '合成微生物閉鎖培養槽', ('EC-06', 'EC-07', 'EC-08', 'SF-BIO-01'),
         (('fabricated_structure', 9), ('machinery', 11), ('precision_electronics', 6)),
         95, ('engineered_bioculture', 'bioculture_containment', 'controlled_nutrient_cultivation'), 8.0, throughput=3.0),
+    ConceptEquipment('fusion_power_station', '核融合燃料循環・熱回収発電施設', ('SF-FUSION-04',),
+        (('refractory_alloy', 78), ('radiation_shielding_panels', 52), ('thermal_control_assemblies', 66)),
+        540, ('fusion_thermal_generation', 'fusion_fuel_handling'), 36.0,
+        fixed_generation_mw=210.0,
+        operating_resources_per_day=(('fusion_fuel_isotopes', .18), ('helium4_coolant', .025))),
     ConceptEquipment('high_field_magnet_testbed', '高磁場コイル試験装置', ('SF-MAGNET-01',),
         (('refractory_alloy', 10), ('thermal_control_assemblies', 12), ('hardened_electronics', 7)),
         108, ('high_field_magnetic_testing',), 16.0),
@@ -96,7 +135,8 @@ def build_concept_facility_assets() -> tuple[FacilityAsset, ...]:
     rows = []
     for row in _EQUIPMENT:
         identity = DefinitionId('planned.facility.' + row.slug)
-        site = req.ORBIT_SITE if row.orbital else req.SURFACE_SITE
+        site = (SiteRequirements() if row.site_independent else
+                req.ORBIT_SITE if row.orbital else req.SURFACE_SITE)
         definition = FacilityDef(
             identity, row.name, req._capabilities(*row.capabilities),
             site, site, maintenance_fraction_per_year=.07,
@@ -106,6 +146,10 @@ def build_concept_facility_assets() -> tuple[FacilityAsset, ...]:
             life_support=(LifeSupportSpec(row.housing, ((ids.FOOD, .001), (ids.WATER, .002), (ids.OXYGEN, .003)))
                           if row.housing else None),
             process_throughput_per_day=row.throughput,
+            operating_resources_per_day=tuple(
+                (DefinitionId('base.resource.' + resource), rate)
+                for resource, rate in row.operating_resources_per_day
+            ),
         )
         recipes = tuple(BuildResourceRequirement(DefinitionId('base.resource.' + item), quantity)
                         for item, quantity in row.materials)
@@ -116,9 +160,12 @@ def build_concept_facility_assets() -> tuple[FacilityAsset, ...]:
                 frozenset(DefinitionId(t) for t in row.technologies),
             ),
             power=PowerSpec(
-                SolarGeneration(row.solar_mw / .62, 1361.0) if row.solar_mw else None,
+                (SolarGeneration(row.solar_mw / .62, 1361.0) if row.solar_mw
+                 else FixedGeneration(row.fixed_generation_mw) if row.fixed_generation_mw else None),
                 row.power_load_mw,
                 standby_load_mw=.12 * row.power_load_mw,
+                beam_transmit_capacity_mw=row.beam_transmit_mw,
+                beam_receive_capacity_mw=row.beam_receive_mw,
             ),
             construction_provider=ConstructionProviderSpec(identity, row.construction_tpd)
                 if row.construction_tpd else None,

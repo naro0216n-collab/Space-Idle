@@ -672,12 +672,13 @@ class Simulation:
         bundles = cargo_bundles + buy_bundles
         if bundles:
             locations = self._active_locations() | set(self.graph.operational_node_ids())
-            power_by_location = {
-                location_id: self.power.resolve_snapshot(
-                    self.power.physical_snapshot(location_id, self.facilities, self.day)
-                )
-                for location_id in locations
-            }
+            power_by_location = self.power.resolve_network_snapshots(
+                {
+                    location_id: self.power.physical_snapshot(
+                        location_id, self.facilities, self.day
+                    ) for location_id in locations
+                }, self.facilities, self.day,
+            )
             # Boundary obligations are consumers in the same common Execution
             # allocation below.  Derive provider supply/dependencies only here;
             # pre-allocating the same Cargo/Buy consumer as a Service request would
@@ -1268,12 +1269,10 @@ class Simulation:
         physical_capacity_cache: dict[AllocationConstraintKey, float] = {}
 
         def resolve_for_maintenance(maintenance_factors):
-            power_by_location = {
-                location_id: self.power.resolve_snapshot(
-                    snapshot.power_inputs_by_location[location_id], maintenance_factors
-                )
-                for location_id in snapshot.ordered_locations
-            }
+            power_by_location = self.power.resolve_network_snapshots(
+                snapshot.power_inputs_by_location, self.facilities, self.day,
+                maintenance_factors,
+            )
 
             # Provider dependencies are derived from the current upstream
             # fulfillment estimate. Consumer Service requirements join the same

@@ -243,6 +243,11 @@ class LogisticsFlowMixin:
                 else:
                     resource_rows = operation.reverse_resource_per_t
                     turnaround = operation.reverse_turnaround_per_t
+                assist_rows = (operation.forward_service_per_t if edge.direction == "forward"
+                               else operation.reverse_service_per_t)
+                for node_id, service_type, amount in assist_rows:
+                    key = (node_id, service_type)
+                    services[key] = services.get(key, 0.0) + amount
                 for node_id, resource_id, amount in resource_rows:
                     resource_key = (node_id, resource_id)
                     resources[resource_key] = resources.get(resource_key, 0.0) + amount
@@ -369,6 +374,12 @@ class LogisticsFlowMixin:
                                 resource_id, amount, constraint_node_id=node_id
                             ).constraint_key(node_id)
                         )
+            for rows in (operation.forward_service_per_t, operation.reverse_service_per_t):
+                for node_id, service_type, amount in rows:
+                    if amount > 1e-12:
+                        keys.add(ServiceCapacityRequirement(
+                            service_type, 1.0, constraint_node_id=node_id,
+                        ).constraint_key(node_id))
             if operation.turnaround_service_type is not None:
                 if (
                     operation.forward_turnaround_per_t > 1e-12
@@ -445,6 +456,13 @@ class LogisticsFlowMixin:
 
         for allocation_id in support_limited:
             usage = used_by_allocation.get(allocation_id, DirectionalCapacity())
+            if allocation_id in self.transport.infrastructure_links:
+                # The finite Cargo service is a Facility pair, not a Fleet
+                # allocation. Cargo Bundle service inputs already constrain it.
+                capacity = self.transport.infrastructure_links[allocation_id].target_t_per_day
+                factors[allocation_id] = min(factors.get(allocation_id, 1.0),
+                    min(1.0, max(0.0, usage.forward_t_per_day / capacity)))
+                continue
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=usage
             )
@@ -694,6 +712,7 @@ class LogisticsFlowMixin:
         edges = tuple(edge for edge in self._service_edges(day)
                       if edge.capacity_t_per_day > 1e-12
                       and (allowed_allocation_ids is None or edge.allocation_id in allowed_allocation_ids)
+                      and edge.allocation_id not in self.transport.infrastructure_links
                       and self.transport.service_vehicle(edge.allocation_id).passengers.seats > 0)
         return self._automatic_service_path(origin, destination, edges, None)
 
@@ -865,6 +884,8 @@ class LogisticsFlowMixin:
     ) -> dict[tuple[SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
+            if allocation_id in self.transport.infrastructure_links:
+                continue  # Infrastructure inputs settle in each Cargo Execution Bundle.
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
@@ -892,6 +913,8 @@ class LogisticsFlowMixin:
     ) -> dict[tuple[EntityId, SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
+            if allocation_id in self.transport.infrastructure_links:
+                continue  # Infrastructure inputs settle in each Cargo Execution Bundle.
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )

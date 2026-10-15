@@ -352,7 +352,8 @@ def validate_logistics_runtime(sim: Any) -> None:
             )
         for allocation_id in constraint.required_transport_allocation_ids:
             _require(
-                sim.transport.transport_allocation_snapshot(allocation_id) is not None,
+                (sim.transport.transport_allocation_snapshot(allocation_id) is not None
+                 or allocation_id in sim.transport.infrastructure_links),
                 f"routing constraint references unknown transport allocation: {scope}",
             )
         for prior in seen_constraints:
