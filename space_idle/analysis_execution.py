@@ -274,10 +274,10 @@ def observe_canonical_day(
     operational_node_ids: frozenset[SpatialNodeId] | None = None,
     resource_ids: frozenset[DefinitionId] | None = None,
 ) -> Iterator[CanonicalDayTrace]:
-    """Observe Command settlement plus exactly one canonical day through owner hooks.
+    """Observe one canonical day or one Application Command's Owner settlement.
 
-    Caller must execute one day through the Application within this scope. A
-    command that fails still leaves observers detached; no State is saved.
+    The observer never applies State changes itself. A failing operation leaves
+    observers detached; neither trace nor its aggregate is authoritative State.
     """
     if sim._analysis_decision_observer is not None or sim.inventory._settlement_observer is not None:
         raise RuntimeError("nested canonical observation is not supported")

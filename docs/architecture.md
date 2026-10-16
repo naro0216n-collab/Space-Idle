@@ -1224,21 +1224,17 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
 14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
-### 17.1 全体系Content評価の境界
+### 17.1 本体開発CLIと全体系Content評価の境界
 
-段階別発展仮説を用いた数量・時間の評価観点は `balance-principles.md` を参照する。本節はその評価をゲーム本体のState / Simulationへ混入させないArchitecture境界を定める。
+設計者は正準GameApplicationをCLIでも操作できる。CLIはGameApplicationのCommand/Query、Persistence、正準Simulationと所有Domainの計測を利用するアダプターであり、Web UIと同じ物理規則・状態遷移を使う。通常Save、新規Scenario、開発用Scenarioを開始点にできるが、開始条件を明示し、その条件の成立までの前史を仮定で補わない。
 
-全体系バランス評価は**Contentの設計作業**であり、第二のGameplay状態管理やPlayerの最適化器ではない。何を評価するかは発展段階の工学的・ゲーム的な設計課題から決め、既存の比較器・依存Graph・診断・テストがあることを評価目的の根拠としない。Definition、World、Scenarioの値はすべて変更候補であり、表示世代、既存初期配置、特定攻略経路を正準の発展目標としない。
+開発用APIは実際の取得条件、名目能力、現在の割当・不足、Command実行結果と時点、期間の実決済、Activity、Fleet/Cargo/Research/Projectの変化を取得できるよう整備する。所有Domainに既存の有用な読取・観測があればそれを共通のApplication契約へ接続し、CLI固有のルールで再計算しない。Scope指定による同時点Query、任意のゲーム日の開始・区間実行・再開、終了状態Save、同じ開始Stateからの分岐、詳細実行ログと期間集計を支援する。観測範囲と観測の有無でcanonical tick、State、Offlineの結果は変わらない。
 
-開発用の読取処理は、登録されたResource、Facility、Vehicle、Process、Research、Construction、Maintenance、Extraction、Movement、World、Scenarioを一貫した参照元として使用する。対象全体の**Content構成と相互依存**（技術的役割、前提技術、入出力、建設・製造・維持の需要、名目能力、拠点・環境上の制約）を把握するための最小のProjectionを許す。物理係数は所有Domainの副作用のない契約またはContent Definitionにより、同じ規則を分析専用のSimulationとして再実装しない。値の出典と単位を追跡し、Assetの取得・研究解放・Cargo到着・Allocationの成立を静的な関係から推定しない。
+実行ログや期間集計はSaveのauthoritative Stateとは別の**派生証拠**として記録する。InventoryとOwner staging間の移管を新規生産/消費と混同しない。AttributeのないResource移動の因果を推測しない。Allocation・Service能力の量と実物量は別の測度・単位として報告し、期間集計は実際のOwner決済に基づく。実験の識別にはContent/World/Scenario・開始State・ゲーム日を用い、単に表示段階が一致するだけで同じ状態としない。大容量ログは保存先とscopeを明示し、チャットへ全量出力することを必須としない。
 
-発展段階の設計仮説は研究・産業・物流・立地・設備取得と稼働の関係を含む**見直し可能な入力**であり、固定された正解のBuildやPlanではない。何らかの数量集計を追加する場合は、それがどのContent設計判断を変えるかを先に説明する。選択案の差分、感度分析、固定Scenario群、完全なPlayer Stateの再構成、仮想Game StateのPhase遷移、警告網羅、別の最適化スコアは基盤の責務ではない。現行の全Contentで出力を機械的に増やすことを完成条件としない。
+本体CLIには研究段階専用の無償Unlock、構築済み施設の架空取得、独立Allocator/Research/Logistics Simulation、最適攻略器を設けない。一方、通常ゲームから見えるか否かという理由だけで有用な開発用Query・計測・チェックポイント・比較の追加を制限しない。バランス調整のために必要な発展仮説は実験の開始条件と選択Commandとして表現できる。対象段階・設備数・研究順をゲーム内進行ゲートにせず、同じContent・Domainを共有する。
 
-開発用CLIは共通の数量Ledgerに対する概観・選択範囲の根拠明細・直接参照と、Persistence経由の実状態読取を提供する。分析上の活動識別は位置に依存せず、段階間の差分は同一Activityの置換・削除・追加として適用する。概観や参照は別のSimulation / State / Technology解禁 / Cargo到着を意味しない。詳細出力を選択的に取り出せるようにしても、Nodeと期間ごとのResource・Power・Serviceの同時需要を省略して成立を宣言しない。
-
-実Game Saveと開発用評価シナリオを相互変換する場合、唯一の物理Stateは正準PersistenceのSave envelopeとし、読込時には通常Loadの全State検証・復元を通す。評価用の段階metadataをTechnology Stateやsave schemaへ追加しない。Design Worksheetの将来資産や想定日次需要はGame Stateと別に保持し、Saveで未建設設備を取得済みと表現しない。共通のState読取Projectionを使い、段階間の違いは実Game Stateの変化またはWorksheet入力のデータ差分として扱う。評価実行によってGame Stateを変更しない。
-
-CoreのDomain不変条件・Application契約は通常テストで確認し、Content調整の資料・仮説を正準のテストfixtureとしない。調整用の読取・数量整理・段階別Scenarioは開発用評価ツールとしてゲーム本体package・通常テスト・Fast CIの外で明示実行する。評価ツール自体の計算・参照契約の検証は区別し、その合格によってContentバランスの成立を保証しない。物理契約そのものの不変条件は所有Domainの通常テストに置き、調整基盤の実装や暫定仮説の維持のために通常テストを追加しない。評価用の一時ProjectionはSave対象でもcanonical tick中のStateでもなく、原Definition・World・ScenarioとGame Stateを変更しない。評価基盤の設計・コードを維持するためにゲーム側へ新たな例外・互換経路を設けない。
+開発用実験の記録はContentの妥当性を証明するテストではない。通常テストは正準のDomain保存則、State所有、観測の非干渉性、Save復元、CLIとApplication結果一致を検証する。特定の暫定値や攻略経路の合否を固定しない。独立評価器が重複する場合は、必要な汎用能力を本体側で成立させた後、同じ責務を持つ旧経路を撤去する。
 
 ## 18. アーキテクチャ定義の要約
 

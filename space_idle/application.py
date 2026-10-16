@@ -61,3 +61,20 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         self, elapsed_real_seconds: float, policy: OfflineProgressPolicy
     ) -> OfflineProgressResult:
         return self._simulation.advance_offline(elapsed_real_seconds, policy)
+
+
+    @property
+    def game_day(self) -> int:
+        return self._simulation.day
+
+    def observe_development_state(self, *, operational_node_ids=None, resource_ids=None):
+        """Read the authoritative state using the shared Domain observation."""
+        from .analysis_observation import observe_state
+        return observe_state(self._simulation, operational_node_ids=operational_node_ids,
+                             resource_ids=resource_ids)
+
+    def observe_development_day(self, *, operational_node_ids=None, resource_ids=None):
+        """Observe one ordinary AdvanceTime day; no alternative tick rules."""
+        from .analysis_execution import observe_canonical_day
+        return observe_canonical_day(self._simulation, operational_node_ids=operational_node_ids,
+                                     resource_ids=resource_ids)

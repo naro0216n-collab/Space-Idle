@@ -100,27 +100,29 @@ SF技術は新しい研究名だけを評価しない。運動量交換・電磁
 
 ### 7.1 全体俯瞰からContent変更へ戻る調整サイクル
 
-CLIは全段階を通じた研究能力の成長、各拠点の産業・物流規模、設備取得と維持の累積負担を、**同じ登録Definitionと数量評価契約**で把握する単一入口とする。全体概観は、対象段階・評価期間・研究RP生成/Research execution/Pool・Power・Resource・Service・活動種別と資料の成立範囲を示す。詳細調査では当該Resource・Service・研究・Powerの**供給元と消費主体、Node、期間、単位、寄与したActivity**へ遡れるようにする。原明細は保持し、チャットへ一律全量を転送しない。
+評価に必要な操作は本体の開発CLIで行う。開始時に全8段階の活動・技術・施設規模の連続性を検討し、調整する段階と論点を選び、その対象となる実Game StateとContent Definitionを観測する。Player用の一つの攻略順や段階末必修項目を基準としない。Node・研究・施設・Resource・活動のscopeを選んで詳細に掘り下げられること、変更後は同じ開始状態と関連段階・共通Resourceへ評価を戻せることを求める。
 
-Content変更の前に工学的役割と段階間の量的発展を確認し、変更箇所の直接参照、共通Resourceを消費する別のConsumer、前段階の取得負担、後段階に残る設備・維持負担を検討する。変更直後は対象の明細を再計算し、必要な範囲で**全段階の発展像へ戻って**評価する。参照箇所の一覧は間接的な需給影響を網羅する依存Graphではなく、調整範囲を定める起点とする。全体俯瞰を全世界・全研究の高負荷な詳細再計算と同義にしない。
+Contentの工学的構成を決める前に、研究費用とRP生成・Research execution・Pool、建設・製造投資、継続維持、Power、人口、輸送の需要競合を調べる。単独の余剰を他Nodeの供給可能量とみなさず、物理的な輸送とCargo到着まで確認する。変更理由と前後段階の量的成長を、同じGameApplicationの実行・観測記録から判断する。全体俯瞰は全世界の詳細ログを毎回生成することを要求しない。
 
-投入するContentや段階別発展仮説は評価対象であり、出力された数値の達成を目的化しない。研究能力の増加が停滞している場合も、RPを上げる前に研究費用、Research execution、設備世代、必要建設材、Power、維持、物流、先行技術の整合性を調べる。数値を増減させた理由と後続段階への波及を判断できることを重視する。
+### 7.2 評価開始条件・実行・証拠
 
-### 7.2 数量資料の三つの根拠
+1. **対象状態と由来**：標準Scenario、通常Save、または同じ正準Scenario構築経路による開発初期状態を選ぶ。Content/World/Scenario版、開始State、ゲーム日を識別する。開発配置済みの施設・研究・在庫は、その前史の取得費用・日数を証明しない。
+2. **取得条件とCommand**：未取得資産のRecipe、Technology、Site、資材、Service、期間は本体のBuild/Research/Vehicle/Fleet等のQueryから読み、必要なとき通常のCommandで実際に取得する。設計者が選ぶCommandの系列は実験入力であり、Coreへ最適攻略や段階専用の建造Scriptを持たせない。
+3. **正準実行記録**：研究、Construction、Industry、Transport、人口等を同じcanonical dayで進め、実Allocation、Resource決済、Cargo・Fleet等の状態変化を観測する。取得投資、継続運用、所有権移転、一時的な拘束を区別し、在庫差分だけから総消費を推定しない。値には日・Node・活動・Resource・単位・出典を付す。観測されなかった因果関係は未知とする。
+4. **記録と反復**：期間実績はゲームStateを二重に保存せず、正準処理の出力から集計する。詳細ログは必要なscope・期間だけ記録可能にする。実験のCommand履歴、開始状態の識別、途中Save、取得したQueryと期間集計は保存・再開・比較できる。記録の有無で実ゲームのState結果を変えない。
+5. **総合判断**：個別Resourceの不足だけでなく、同時に稼働する研究・産業・電力・製造・維持・人口・物流へ影響がないか確認し、前後の段階で同じState/Contentを再評価する。実行条件により未成立である場合は、その事実を残し、恣意的な完成資産や架空在庫で成功扱いしない。
 
-- **構想Worksheet**：取得予定の資産・活動を明示して算出する条件付き名目供給・需要であり、現物取得・実運転を認定しない。
-- **Game Save由来の状態**：実保有資産、進行、在庫、割当のauthoritative StateをPersistence経由で読み取る。名目係数と実Allocation・実生産・輸送成立は区別する。
-- **GameApplicationによる実行確認**：条件を満たした操作や物理的な状態遷移を、必要な局面で実Command・Query・Simulationによって確かめる。別の自動Buildや時間進行器を作らない。
+### 7.3 評価根拠の限界
 
-同じ数値に見えても根拠の異なるものを合算しない。異なる評価期間で割った研究費用の平均を段階間の比較に流用せず、取得前の施設の能力を全期間の実稼働とみなさない。供給拠点の余剰を物流なしで他拠点の在庫とみなさない。静的数量では判断できない到着・Eligibility・割当・完了時点は未確認と示して、必要なら実GameApplicationで評価する。
+実際の取得過程をCommandと正準進行で確認した記録、開発初期状態からの稼働観測、静的Definitionから得た必要費用・名目能力のQueryは、それぞれ確認した範囲が異なる。同一State由来でも名目Capabilityと実Allocationは異なる。異なる状態・Content版本からの結果の差を因果効果と断定しない。研究RPの全段階Theory合計や選定研究の期間平均を必修取得量・実効速度・バランス合否にしない。
 
-## 8. 分析手段・Gameplay検証と完了判断
+## 8. 開発CLI・Gameplay検証と完了判断
 
-設計用の数量読取は `content_balance/` を所有Domain係数の共通読取経路とし、`balance_evaluation/` のCLIを評価の単一入口として利用する。全体概観（`overview`）、Resource・Service・研究等の明細（`inspect`）、設計Worksheetの直接参照（`impact`）、実Save状態・相互変換（`state`）を同じDefinition・Ledgerへ接続し、二重の数量評価器を作らない。`impact` は間接的な影響を保証せず、全体需給の変化は再評価で判断する。段階別プランは共通Activity identityに対する差分で保持し、配列位置や段階固有のPython処理で成立させない。第3段階以降の未作成プランは未評価として扱い、架空の数量を補完しない。CLIの出力はバランス保証用のテスト結果ではない。
+バランス調整の実行・観測は、正準のGameApplicationを操作する本体開発CLIを主経路とする。通常Command・Query・Save/Load・canonical tickを使用し、必要な診断は所有Domainによる副作用のないQueryと正準Settlementの観測機構から取得する。CLIは実験入力・ログ・期間集計・チェックポイント・同条件比較を扱ってよい。これらは独立したGame Stateや第二のSimulationではない。開発用Scenarioは正準の初期化を通し、配置された資産を取得済みとして計算しても取得過程を実証したと扱わない。
 
-開発用評価では、**実際のGame Saveから取得した保有・運用State**と、**未取得資産を含む発展仮説の数量Worksheet**を明確に分離する。Save由来の評価シナリオと通常Game Saveの相互変換は、ゲーム本体の正準Persistence Save/Loadを通して検証する。表示段階・評価期間・調整上の問いはSave外の注記であり、Technology Unlock・施設建設・Fleet移送・資源到着などを生じさせない。Saveに表現できない将来の投資・運用仮定を、変換時に完成済みGame Stateとして補填したり黙って破棄したりしない。異なるSave状態は実GameApplicationとDomain遷移によって成立させ、評価器内で擬似Simulationを行わない。実SaveのSnapshotと数量Worksheetの差は、達成証明ではなく次の設計・取得課題を識別するために使う。数量の算出には研究・設備・輸送等の実Definitionと所有Domainの副作用のない物理係数を使う。目的が明確な目録、関係の読取、期間・Node指定の需給表を優先する。完全な仮想Player State、独立の日次Simulation、全プランの自動再生、最適化スコア、警告網羅器をバランス調整基盤に追加しない。
+独立した仮想Activity Ledger・段階ごとのWorksheetは必須の評価正本としない。過去の評価基盤から本体に必要な読取・決済の契約を取り込み、重複する数量計算とSave変換経路は撤去する。評価の問いから必要なAPI・期間観測の不足が見つかれば所有Domain・Application契約を改善する。Stageは開発上の成熟度区分であり、CLIを使うだけでStage完成やTechnology Unlockが発生しない。
 
-実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は実Domain / Applicationで必要範囲を検証する。Content評価とCore機能テストは別の証拠とし、段階プランの台数・日数・拠点・研究順を恒久テストの正解として固定しない。評価ツールの内部的な計算・参照契約の確認は、段階別評価の合否とは切り離し、通常テスト・Fast CIから分離する。
+実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は通常テストで検証する。開発用の実験結果はContent調整の証拠であってバランス保証テストではない。特定の到達日・施設数・研究順を恒久テストの正解として固定しない。
 
 調整の進展は、次の観点で判断する。
 
