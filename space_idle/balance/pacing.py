@@ -64,7 +64,7 @@ def _ledger(rows):
             for (node, res), amount in sorted(rows.items()) if amount]
 
 
-def _providers(defs, required_rp_per_day):
+def _providers(defs, required_rp_per_day, acquired_technologies, selected_technologies):
     options = []
     for kind, definitions, field in (("facility", defs["facilities"], "research_provider"),
                                       ("vehicle", defs["vehicles"], "research_providers")):
@@ -79,7 +79,9 @@ def _providers(defs, required_rp_per_day):
                                 "rp_generation_per_day_per_unit": gen,
                                 "rp_execution_per_day_per_unit": execution,
                                 "pool_capacity_per_unit": provider["storage_capacity_points"],
-                                "units_for_stated_theory_rate_if_sole_provider":
+                                "missing_at_start": sorted(set(item.get("prerequisites", ())) - acquired_technologies),
+                                "outside_selected_research": sorted(set(item.get("prerequisites", ())) - selected_technologies),
+                                "nominal_units_if_sole_provider_from_zero":
                                     ceil(max(required_rp_per_day / gen, required_rp_per_day / execution))})
     return options
 
@@ -149,7 +151,7 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
     for index, step in enumerate(milestones):
         _fields(step, {"name", "cumulative_hours"}, {"name", "cumulative_hours", "research_ids",
                  "research_time_share", "production_targets", "facility_targets", "vehicle_targets",
-                 "transport_targets", "population_targets", "research_provider", "resource_supply_budgets"}, f"milestone {index}")
+                 "transport_targets", "population_targets", "research_provider", "resource_supply_assumptions"}, f"milestone {index}")
         name = step["name"]
         if not isinstance(name, str) or not name or name in used_names:
             raise ValueError("milestone names must be distinct nonempty strings")
@@ -159,13 +161,15 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             raise ValueError("cumulative_hours must increase strictly")
         interval_days = (hours - previous_hours) * 3600  # canonical 1 game-day / real-second
         previous_hours = hours
-        share = _number(step.get("research_time_share", 1), "research_time_share", positive=True)
-        if share > 1:
+        share = (None if "research_time_share" not in step else
+                 _number(step["research_time_share"], "research_time_share", positive=True))
+        if share is not None and share > 1:
             raise ValueError("research_time_share must be <= 1")
         selected = step.get("research_ids", [])
         if not isinstance(selected, list) or any(not isinstance(rid, str) for rid in selected):
             raise ValueError("research_ids must be a list of IDs")
         closure = _closure(defs["research"], selected)
+        already_researched_at_start = set(already_researched)
         pending = closure - already_researched
         already_researched.update(closure)
         rp_cost = sum(s.get("rp", 0.0) for rid in pending for s in defs["research"][rid]["stages"])
@@ -183,9 +187,13 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                     demonstration_work += stage["work"]
                 elif stage["kind"] == "operational_experience":
                     experiential.append(rid)
-        required_rp = rp_cost / (interval_days * share)
-        provider_options = _providers(defs, required_rp)
+        required_rp = rp_cost / interval_days
+        conditional_rp = rp_cost / (interval_days * share) if share is not None else None
+        provider_options = _providers(defs, conditional_rp if conditional_rp is not None else required_rp,
+                                      already_researched_at_start, already_researched)
         facilities = dict(installed)
+        starting_facilities = dict(installed)
+        starting_fleet = dict(fleet)
         fleet_target = dict(fleet)
         seen_facilities = set()
         for row in step.get("facility_targets", []):
@@ -229,12 +237,18 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             _known(defs["resources"], row["resource"], "resource")
             amount = _number(row["tonnes_per_day"], "production rate", positive=True)
             options = _production_options(defs, row["resource"], amount)
+            for option in options:
+                prereqs = set(option["required_technologies"])
+                option["missing_at_start"] = sorted(prereqs - already_researched_at_start)
+                option["outside_selected_research"] = sorted(prereqs - already_researched)
             fid, method = row.get("facility"), row.get("method")
             chosen = next((item for item in options if item["facility"] == fid and item["method"] == method), None)
             if fid is not None or method is not None:
                 if chosen is None:
                     raise ValueError(f"production provider cannot supply {row['resource']}: {fid}/{method}")
                 required_facility[(row["node"], fid)] += chosen["minimum_nominal_units"]
+                if chosen["outside_selected_research"]:
+                    unresolved.append(f"{name}: {fid}/{method} relies on unplanned Technology {chosen['outside_selected_research']}")
                 if chosen["kind"] == "process":
                     spec = defs["processes"][method]
                     throughput = amount / spec["outputs_per_unit_t"][row["resource"]]
@@ -250,8 +264,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             if not options:
                 unresolved.append(f"{name}: no registered production method for {row['resource']}")
             production.append({"node": row["node"], "resource": row["resource"],
-                               "target_t_per_day": amount, "options": options,
-                               "selected": chosen, "nominal_units_if_selected":
+                               "target_t_per_day": amount, "quantity_role": "authored_goal_not_verified_supply",
+                               "options": options, "selected": chosen, "nominal_units_if_selected":
                                    None if chosen is None else chosen["minimum_nominal_units"]})
         for key, count in required_facility.items():
             facilities[key] = max(facilities.get(key, 0), count)
@@ -265,10 +279,17 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             provider = spec["research_provider"]
             if not provider or provider["generation_points_per_day"] <= 0 or provider["research_execution_per_day"] <= 0:
                 raise ValueError("selected facility is not an RP generation + execution provider")
-            goal_count = ceil(max(required_rp / provider["generation_points_per_day"],
-                                  required_rp / provider["research_execution_per_day"]))
-            key = provider_goal["node"], fid
-            facilities[key] = max(facilities.get(key, 0), goal_count)
+            # A provider selection is a design reference, not an asset purchase.
+            # Only explicit facility_targets contribute to the investment ledger.
+            provider_goal = {**provider_goal,
+                             "missing_at_start": sorted(set(spec["prerequisites"]) - already_researched_at_start),
+                             "outside_selected_research": sorted(set(spec["prerequisites"]) - already_researched),
+                             "nominal_units_if_sole_provider_from_zero": ceil(max(
+                (conditional_rp if conditional_rp is not None else required_rp) / provider["generation_points_per_day"],
+                (conditional_rp if conditional_rp is not None else required_rp) / provider["research_execution_per_day"]))}
+            if provider_goal["outside_selected_research"]:
+                unresolved.append(f"{name}: selected research provider requires unplanned Technology {provider_goal['outside_selected_research']}")
+            unresolved.append(f"{name}: selected research provider is informational; specify facility_targets for an investment hypothesis")
         seen_transport = set()
         for row in step.get("transport_targets", []):
             _fields(row, {"source", "destination", "resource", "tonnes_per_day"},
@@ -390,20 +411,24 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             capital[("unallocated_research", resource)] += quantity
         work[("unallocated_research", "prototype_work")] += prototype_work
         work[("unallocated_research", "demonstration_work")] += demonstration_work
-        generation = execution = pool = 0.0
-        for (node, fid), count in facilities.items():
-            provider = defs["facilities"][fid]["research_provider"]
-            if provider:
-                generation += count * provider["generation_points_per_day"]
-                execution += count * provider["research_execution_per_day"]
-                pool += count * provider["storage_capacity_points"]
-        for (node, vid), count in fleet_target.items():
-            for provider in defs["vehicles"][vid]["research_providers"]:
-                generation += count * provider["generation_points_per_day"]
-                execution += count * provider["research_execution_per_day"]
-                pool += count * provider["storage_capacity_points"]
-        nominal_rate = min(generation, execution)
-        budget = nominal_rate * interval_days * share
+        def research_capacity(facility_counts, fleet_counts):
+            generation = execution = pool = 0.0
+            for (_, fid), count in facility_counts.items():
+                provider = defs["facilities"][fid]["research_provider"]
+                if provider:
+                    generation += count * provider["generation_points_per_day"]
+                    execution += count * provider["research_execution_per_day"]
+                    pool += count * provider["storage_capacity_points"]
+            for (_, vid), count in fleet_counts.items():
+                for provider in defs["vehicles"][vid]["research_providers"]:
+                    generation += count * provider["generation_points_per_day"]
+                    execution += count * provider["research_execution_per_day"]
+                    pool += count * provider["storage_capacity_points"]
+            return {"generation_rp_per_day": generation,
+                    "execution_rp_per_day": execution, "pool_capacity_rp": pool}
+
+        starting_capacity = research_capacity(starting_facilities, starting_fleet)
+        end_capacity = research_capacity(facilities, fleet_target)
         construction_supply = defaultdict(float)
         for (node, fid), count in facilities.items():
             construction_supply[node] += count * defs["facilities"][fid]["construction_work_per_day"]
@@ -412,42 +437,56 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                                 "days_lower_bound_at_end_target_capacity": (
                                     amount / construction_supply[node] if construction_supply.get(node, 0) > 0 else None)}
                                for (node, service), amount in sorted(work.items()) if service == "construction_work"]
-        stated_supply = {}
-        for row in step.get("resource_supply_budgets", []):
-            _fields(row, {"node", "resource", "available_t_per_day"},
-                    {"node", "resource", "available_t_per_day"}, "resource supply budget")
-            if row["node"] not in nodes:
-                raise ValueError(f"unknown budget node: {row['node']}")
-            _known(defs["resources"], row["resource"], "budget resource")
-            key = row["node"], row["resource"]
-            if key in stated_supply:
-                raise ValueError(f"duplicate resource budget: {key}")
-            stated_supply[key] = _number(row["available_t_per_day"], "available_t_per_day")
+        supply_assumptions = {}
+        for assumption in step.get("resource_supply_assumptions", []):
+            _fields(assumption, {"node", "resource", "average_t_per_day", "basis"},
+                    {"node", "resource", "average_t_per_day", "basis"}, "supply assumption")
+            node, resource = assumption["node"], assumption["resource"]
+            if node not in nodes:
+                raise ValueError(f"unknown supply assumption node: {node}")
+            _known(defs["resources"], resource, "supply assumption resource")
+            basis = assumption["basis"]
+            if not isinstance(basis, str) or not basis.strip():
+                raise ValueError("supply assumption basis must explain independent evidence or a design hypothesis")
+            key = node, resource
+            if key in supply_assumptions:
+                raise ValueError(f"duplicate supply assumption: {key}")
+            supply_assumptions[key] = {
+                "average_t_per_day": _number(assumption["average_t_per_day"], "average_t_per_day"),
+                "basis": basis.strip()}
         resource_budget = []
-        for node, resource in sorted(set(capital) | set(daily_input) | set(nominal_output) | set(stated_supply)):
+        for node, resource in sorted(set(capital) | set(daily_input) | set(nominal_output) | set(supply_assumptions)):
             acquisition = capital.get((node, resource), 0.0)
-            daily_capital = acquisition / interval_days
             operation = daily_input.get((node, resource), 0.0)
             output = nominal_output.get((node, resource), 0.0)
-            available = stated_supply.get((node, resource))
-            total_required_rate = daily_capital + operation
-            affordable_capital = None if available is None else (available - operation) * interval_days
-            resource_budget.append({"node": node, "resource": resource,
-                                    "authored_available_average_t_per_day": available,
-                                    "required_average_total_t_per_day_at_end_target_operation": total_required_rate,
-                                    "needed_supply_capacity_scale_if_budget_stated":
-                                        (total_required_rate / available if available else None)
-                                        if available is not None else None,
-                                    "operating_input_alone_exceeds_stated_supply_budget":
-                                        (operation > available) if available is not None else None,
-                                    "affordable_capital_recipe_scale_if_budget_stated":
-                                        (max(0.0, affordable_capital) / acquisition if acquisition else None)
-                                        if available is not None else None,
-                                    "capital_investment_t": acquisition,
-                                    "average_capital_requirement_t_per_day_if_spread_over_interval": daily_capital,
-                                    "end_target_operation_input_t_per_day": operation,
-                                    "end_target_nominal_process_or_extraction_output_t_per_day": output,
-                                    "end_target_output_less_average_capital_and_running_input_t_per_day": output - daily_capital - operation})
+            assumption = supply_assumptions.get((node, resource))
+            matches_target = (assumption is not None and output > 0 and
+                              abs(assumption["average_t_per_day"] - output) < 1e-8)
+            if matches_target:
+                unresolved.append(f"{name}: {node}/{resource} supply assumption equals authored production target; independent capacity not established")
+            resource_budget.append({
+                "node": node, "resource": resource,
+                "authored_supply_assumption_t_per_day": None if assumption is None else assumption["average_t_per_day"],
+                "supply_assumption_basis": None if assumption is None else assumption["basis"],
+                "assumption_matches_conditional_production_target": matches_target,
+                "capital_investment_t": acquisition,
+                "average_capital_requirement_t_per_day_if_spread_over_interval": acquisition / interval_days,
+                "end_target_operation_input_t_per_day": operation,
+                "end_target_conditional_output_t_per_day": output,
+                "average_capital_plus_end_target_operation_input_t_per_day": acquisition / interval_days + operation,
+                "interpretation": "Investment average and end-state operating rate are different time bases; production is conditional on selected methods and is not independently verified supply. No affordable Recipe scale is inferred."})
+        # Global totals are economic *magnitudes*, not freely transferable supplies.
+        totals = defaultdict(lambda: [0.0, 0.0, 0.0])
+        for row in resource_budget:
+            columns = totals[row["resource"]]
+            columns[0] += row["capital_investment_t"]
+            columns[1] += row["end_target_operation_input_t_per_day"]
+            columns[2] += row["end_target_conditional_output_t_per_day"]
+        economy_resources = [{"resource": resource, "capital_investment_t": cols[0],
+                              "end_target_operation_input_t_per_day": cols[1],
+                              "end_target_conditional_output_t_per_day": cols[2],
+                              "not_deliverable_global_supply": True}
+                             for resource, cols in sorted(totals.items())]
         if not selected and not any(step.get(field) for field in (
                 "production_targets", "facility_targets", "vehicle_targets", "population_targets", "transport_targets", "research_provider")):
             unresolved.append(f"{name}: no new development outcome stated; only inherited targets are assessed" if index else
@@ -457,24 +496,28 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                  "interval_play_hours": interval_days / 3600, "interval_game_days_at_base_speed": interval_days,
                  "research": {"selected_ids": selected, "new_prerequisites_and_research": sorted(pending),
                               "theory_rp_cost_at_current_content": rp_cost,
-                              "rp_cost_envelope_at_end_target_nominal_capacity": budget,
-                              "theory_rp_cost_scale_to_fit_budget": budget / rp_cost if rp_cost else None,
-                              "required_generation_and_execution_rp_per_day": required_rp,
-                              "research_time_share": share, "nominal_end_target_generation_rp_per_day": generation,
-                              "nominal_end_target_execution_rp_per_day": execution,
-                              "nominal_end_target_pool_points": pool,
-                              "generation_capacity_scale_to_meet_time": required_rp / generation if generation else None,
-                              "execution_capacity_scale_to_meet_time": required_rp / execution if execution else None,
+                              "required_average_rp_per_day_if_full_interval": required_rp,
+                              "assumed_research_time_share": share,
+                              "required_average_rp_per_day_if_share_assumed": conditional_rp,
+                              "nominal_start_research_capacity": starting_capacity,
+                              "nominal_end_target_research_capacity": end_capacity,
+                              "selected_provider_reference": provider_goal,
+                              "research_capacity_is_not_available_for_whole_interval": True,
                               "prototype_resources_t": dict(sorted(prototype_materials.items())),
                               "prototype_work": prototype_work, "demonstration_work": demonstration_work,
                               "operational_experience_projects": sorted(experiential),
                               "single_provider_options": provider_options},
                  "production_targets": production,
-                 "facility_end_targets": [{"node": node, "facility": fid, "count": count}
+                 "facility_end_targets": [{"node": node, "facility": fid, "count": count,
+                                           "basis": ("explicit_target" if (node, fid) in seen_facilities else
+                                                     "conditional_minimum_for_selected_production" if (node, fid) in required_facility else
+                                                     "inherited_or_initial_asset")}
                                           for (node, fid), count in sorted(facilities.items())],
                  "fleet_end_targets": [{"node": node, "vehicle": vid, "count": count}
                                        for (node, vid), count in sorted(fleet_target.items())],
-                 "capital_resources_t": _ledger(capital), "resource_time_budget": resource_budget, "construction_and_production_work": [
+                 "capital_resources_t": _ledger(capital), "resource_time_budget": resource_budget,
+                 "economy_resources_across_nodes": economy_resources,
+                 "construction_and_production_work": [
                      {"node": node, "service": svc, "quantity": amount}
                      for (node, svc), amount in sorted(work.items()) if amount],
                  "end_target_nominal_capacity": [{"node": node, "service": service, "quantity": value}
@@ -496,4 +539,4 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
     return {"kind": "balance_pacing", "identity": defs["identity"],
             "format": FORMAT, "prospective_locations": prospective,
             "milestones": results,
-            "interpretation": "All milestones share one cumulative baseline. Game-days assume 1 game day per real second at base speed, not a promise of player completion times. All costs, facility performance, RP, transport, and milestone outcomes are editable design variables, not fixed balance contracts."}
+            "interpretation": "All milestones share one cumulative design baseline. Outputs expose Content magnitudes and optional authored assumptions, not a correct adjustment, optimized Build, feasible construction schedule, or achieved Game State. Game-days assume 1 game day per real second at base speed."}

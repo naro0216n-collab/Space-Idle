@@ -29,7 +29,7 @@ def _selection(defs):
     return pid, process["provider_facilities"][0], next(iter(process["outputs_per_unit_t"]))
 
 
-def test_time_goals_set_rp_cost_envelope_and_provider_scale_not_just_inventory_differences():
+def test_time_goals_expose_current_cost_and_capacity_without_autotuning():
     app, defs = _base()
     rid = next(rid for rid, row in defs["research"].items() if row["prerequisites"])
     plan = _plan({"name": "phase_one", "cumulative_hours": 4,
@@ -41,20 +41,25 @@ def test_time_goals_set_rp_cost_envelope_and_provider_scale_not_just_inventory_d
     assert second["interval_game_days_at_base_speed"] == 28800
     assert first["research"]["theory_rp_cost_at_current_content"] > 0
     assert second["research"]["theory_rp_cost_at_current_content"] == 0
-    assert isclose(first["research"]["required_generation_and_execution_rp_per_day"],
+    assert isclose(first["research"]["required_average_rp_per_day_if_full_interval"],
+                   first["research"]["theory_rp_cost_at_current_content"] / 14400)
+    assert isclose(first["research"]["required_average_rp_per_day_if_share_assumed"],
                    first["research"]["theory_rp_cost_at_current_content"] / 7200)
+    assert second["research"]["assumed_research_time_share"] is None
+    assert second["research"]["required_average_rp_per_day_if_share_assumed"] is None
     assert first["research"]["single_provider_options"]
-    assert all(p["units_for_stated_theory_rate_if_sole_provider"] >= 1
+    assert all(p["nominal_units_if_sole_provider_from_zero"] >= 1
                for p in first["research"]["single_provider_options"])
-    # A higher RP cost must cause a lower affordable cost scale at fixed playing time.
+    # A higher RP cost changes the required rate, not a supposedly correct Content multiplier.
     edited = {**defs, "research": {**defs["research"]}}
     edited_research = {**defs["research"][rid]}
     edited_research["stages"] = [{**s, "rp": s["rp"] * 3} if s["kind"] == "theory" else s
                                  for s in edited_research["stages"]]
     edited["research"][rid] = edited_research
     after = tune(edited, plan)["milestones"][0]
-    assert after["research"]["required_generation_and_execution_rp_per_day"] > first["research"]["required_generation_and_execution_rp_per_day"]
-    assert after["research"]["theory_rp_cost_scale_to_fit_budget"] < first["research"]["theory_rp_cost_scale_to_fit_budget"]
+    assert after["research"]["required_average_rp_per_day_if_full_interval"] > first["research"]["required_average_rp_per_day_if_full_interval"]
+    assert after["research"]["nominal_end_target_research_capacity"] == first["research"]["nominal_end_target_research_capacity"]
+    assert "theory_rp_cost_scale_to_fit_budget" not in after["research"]
 
 
 def test_production_target_derives_facilities_capital_and_time_pressure_with_cumulative_asset_growth():
@@ -69,6 +74,9 @@ def test_production_target_derives_facilities_capital_and_time_pressure_with_cum
     stage_two = {"name": "second", "cumulative_hours": 12, "production_targets": [targets(rate_b)]}
     data = tune(defs, _plan(stage_one, stage_two))["milestones"]
     assert data[0]["production_targets"][0]["nominal_units_if_selected"] == 2
+    assert data[0]["production_targets"][0]["quantity_role"] == "authored_goal_not_verified_supply"
+    assert any(r["basis"] == "conditional_minimum_for_selected_production"
+               for r in data[0]["facility_end_targets"] if r["facility"] == fid)
     assert data[1]["production_targets"][0]["nominal_units_if_selected"] == 5
     first_count = next(r["count"] for r in data[0]["facility_end_targets"] if r["facility"] == fid and r["node"] == node)
     second_count = next(r["count"] for r in data[1]["facility_end_targets"] if r["facility"] == fid and r["node"] == node)
@@ -247,25 +255,57 @@ def test_extraction_uses_output_upper_bound_without_pretending_geology_is_known(
     assert any("geology" in caveat for caveat in stage["unresolved_assumptions"])
 
 
-def test_authored_resource_supply_budget_reverses_to_cost_and_capacity_levers():
+def test_supply_assumptions_are_explicit_and_not_inferred_from_production_targets():
+    _, defs = _base()
+    pid, fid, resource = _selection(defs)
+    node = defs["world"]["nodes"][0]["id"]
+    unit_rate = (defs["facilities"][fid]["process_throughput_per_day"] *
+                 defs["processes"][pid]["outputs_per_unit_t"][resource])
+    stage = {"name": "whole_economy", "cumulative_hours": 4,
+             "production_targets": [{"node": node, "resource": resource,
+                                     "tonnes_per_day": unit_rate,
+                                     "facility": fid, "method": pid}]}
+    baseline = tune(defs, _plan(stage))["milestones"][0]
+    row = next(r for r in baseline["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
+    assert row["authored_supply_assumption_t_per_day"] is None
+    assert row["end_target_conditional_output_t_per_day"] == unit_rate
+    assert "affordable_capital_recipe_scale_if_budget_stated" not in row
+    with pytest.raises(ValueError):
+        tune(defs, _plan({**stage, "resource_supply_assumptions": [
+            {"node": node, "resource": resource, "average_t_per_day": unit_rate}]}))
+    assumed = tune(defs, _plan({**stage, "resource_supply_assumptions": [
+        {"node": node, "resource": resource, "average_t_per_day": unit_rate,
+         "basis": "Independent supply estimate, verify later"}]}))["milestones"][0]
+    row = next(r for r in assumed["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
+    assert row["assumption_matches_conditional_production_target"]
+    assert row["supply_assumption_basis"] == "Independent supply estimate, verify later"
+    assert any("independent capacity not established" in note for note in assumed["unresolved_assumptions"])
+
+
+def test_provider_reference_does_not_create_assets_or_adjust_costs():
+    _, defs = _base()
+    rid = next(rid for rid, row in defs["research"].items() if row["stages"])
+    fid = next(fid for fid, row in defs["facilities"].items() if row["research_provider"])
+    node = defs["world"]["nodes"][0]["id"]
+    result = tune(defs, _plan({"name": "reference", "cumulative_hours": 4,
+                               "research_ids": [rid],
+                               "research_provider": {"node": node, "facility": fid}}))["milestones"][0]
+    owned = {(r["node"], r["facility"]): r["count"] for r in defs["owned"]["facilities"]}
+    counted = {(r["node"], r["facility"]): r["count"] for r in result["facility_end_targets"]}
+    assert counted == owned
+    assert result["research"]["selected_provider_reference"]["nominal_units_if_sole_provider_from_zero"] >= 1
+    assert result["research"]["nominal_start_research_capacity"] == result["research"]["nominal_end_target_research_capacity"]
+    assert not result["capital_resources_t"]
+
+
+def test_full_economy_totals_include_investment_and_operating_but_not_fabricated_supply():
     _, defs = _base()
     node = defs["world"]["nodes"][0]["id"]
-    fid = next(fid for fid, row in defs["facilities"].items()
-               if row["construction_resources_t"] and row["operating_per_day_t"])
-    resource = next(iter(defs["facilities"][fid]["construction_resources_t"]))
-    stage = {"name": "whole_economy", "cumulative_hours": 4,
-             "facility_targets": [{"node": node, "facility": fid, "count": 12}],
-             "resource_supply_budgets": [{"node": node, "resource": resource,
-                                          "available_t_per_day": 1.0}]}
-    before = tune(defs, _plan(stage))["milestones"][0]
-    a = next(row for row in before["resource_time_budget"] if row["node"] == node and row["resource"] == resource)
-    assert a["authored_available_average_t_per_day"] == 1
-    assert a["needed_supply_capacity_scale_if_budget_stated"] is not None
-    changed = {**stage, "resource_supply_budgets": [{"node": node, "resource": resource,
-                                                     "available_t_per_day": 2.0}]}
-    after = tune(defs, _plan(changed))["milestones"][0]
-    b = next(row for row in after["resource_time_budget"] if row["node"] == node and row["resource"] == resource)
-    assert isclose(b["needed_supply_capacity_scale_if_budget_stated"],
-                   a["needed_supply_capacity_scale_if_budget_stated"] / 2)
-    if a["capital_investment_t"] > 0:
-        assert b["affordable_capital_recipe_scale_if_budget_stated"] >= a["affordable_capital_recipe_scale_if_budget_stated"]
+    fid = next(fid for fid, spec in defs["facilities"].items()
+               if spec["construction_resources_t"] and spec["operating_per_day_t"])
+    result = tune(defs, _plan({"name": "industry", "cumulative_hours": 4,
+                               "facility_targets": [{"node": node, "facility": fid, "count": 12}]}))["milestones"][0]
+    by_resource = {r["resource"]: r for r in result["economy_resources_across_nodes"]}
+    assert any(r["capital_investment_t"] > 0 for r in by_resource.values())
+    assert all(r["not_deliverable_global_supply"] for r in by_resource.values())
+    assert all(r["end_target_conditional_output_t_per_day"] == 0 for r in by_resource.values())

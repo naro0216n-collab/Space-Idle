@@ -1228,11 +1228,11 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 開発CLIの公開機能は、累計プレイ時間と研究・生産・施設・Fleet・物流・人口の到達目標を受け取る**単一の全体系ペーシング評価**とする。`overview`、`evaluate`、`inspect`等の局所集計・実験管理コマンド、任意Command実行・Script再生・State比較は公開しない。入力は`space-idle.pacing-targets.v1`の累計時間順milestoneとする。1 game day = 基準速度の実時間1秒の換算は表示・計画の尺度であり、Offlineや実際のプレイ操作による達成予測ではない。
 
-Applicationは研究Stage・Prerequisite、Facility/Vehicle取得Recipeと性能、Process/Extraction、World・Node・Player保有資産・完了研究、必要に応じた輸送Previewを**副作用のない数量読取契約**として提供する。Balance Analysisはこれらの係数から、選定研究の重複除去と未取得費用、区間のRP必要速度・研究費用予算、Production目標に必要な設備候補と名目台数、取得Resource・Work・継続投入・人口・物流目標を統一期間へ集計する。任意で入力された区間平均のResource供給予算から、必要な供給倍率と取得Recipe費用予算を逆算する。RP費用、Provider性能、設備・Vehicleの性能とRecipeは全て変更対象であり、どれか一つを固定して残りを合わせる最適化器を作らない。
+Applicationは研究Stage・Prerequisite、Facility/Vehicle取得Recipeと性能、Process/Extraction、World・Node・Player保有資産・完了研究、必要に応じた輸送Previewを**副作用のない数量読取契約**として提供する。Balance Analysisはこれらの係数から、選定研究の重複除去と未取得費用、区間全体の必要平均RP/dayと任意研究時間仮定、開始・期末名目研究能力、Production目標の設備候補と名目台数、取得Resource・Work・期末継続投入・人口・物流目標を共通時間軸へ集計する。Provider参照選択だけでは取得台数を変更せず、明示的な資産目標や生産方式の仮定と区別する。任意のResource供給仮定は根拠付きで別途受け取り、設計上の生産目標から独立した実供給能力であると推定しない。RP費用、Provider性能、設備・Vehicleの性能とRecipeは全て変更対象であり、どれか一つを固定して残りを合わせる最適化器を作らない。
 
-Stage間は開始Save/Scenarioの資産と実取得済みTechnologyを基準に、**目標として指定された**施設数・Fleet数・研究群を引き継ぐ。各区間の追加投資は前区間の目標から求めるが、その区間で実建設・実稼働したことは推定しない。名目日次係数と期間で平準化した資本需要を比較する場合も、これを実際の在庫推移や同時供給の保証として扱わない。選択されていない生産方式・輸送手段、未設立Nodeのサイト条件、RP PoolのAdmissionと実効Allocation、Vehicle航行・投資所要時間は未知として残す。
+Stage間は開始Save/Scenarioの資産と実取得済みTechnologyを基準に、**目標として指定された**施設数・Fleet数・研究群を引き継ぐ。選択した生産方式から導く設備数量は名目規模に条件づく設計仮説であり、研究Provider候補だけを選んで設備建設したものと扱わない。各区間の追加投資は前区間の目標から求めるが、その区間で実建設・実稼働したことは推定しない。名目日次係数と期間で平準化した資本需要を比較する場合も、これを実際の在庫推移や同時供給の保証として扱わない。選択されていない生産方式・輸送手段、未設立Nodeのサイト条件、RP PoolのAdmissionと実効Allocation、Vehicle航行・投資所要時間は未知として残す。
 
-CLIの責務は全体系の時間・物量の設計評価とレポート作成に限定する。実アプリのResearch/Logistics/Population/建設状態遷移を別実装せず、経路成立、Resource保存、Save/Load、Offlineは通常Domain/Applicationテストで保証する。数量評価後の実プレイ時間・実成長の確認は正準GameApplicationの通常進行で行い、評価用の目標数からPlayer操作や完成済み資産を創作しない。結果はGame Stateの保存正本ではない。
+CLIの責務は、全体系の時間・物量・投資・名目能力・不確定条件を設計者へ提示することに限定し、適切なContent数値や最適な構成を求める自動調整器にはしない。RP費用の許容倍率や取得Recipeの許容倍率を正解とみなす指標は出力しない。実アプリのResearch/Logistics/Population/建設状態遷移を別実装せず、経路成立、Resource保存、Save/Load、Offlineは通常Domain/Applicationテストで保証する。数量評価後の実プレイ時間・実成長の確認は正準GameApplicationの通常進行で行い、評価用の目標数からPlayer操作や完成済み資産を創作しない。結果はGame Stateの保存正本ではない。
 
 ## 18. アーキテクチャ定義の要約
 

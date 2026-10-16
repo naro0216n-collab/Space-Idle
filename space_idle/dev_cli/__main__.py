@@ -40,13 +40,15 @@ def main(argv=None) -> int:
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     summary = {"kind": report["kind"], "report": str(args.output) if args.output else None,
                "milestones": [{"name": stage["name"], "cumulative_hours": stage["target_cumulative_hours"],
-                               "required_rp_per_day": stage["research"]["required_generation_and_execution_rp_per_day"],
-                               "rp_cost_scale_to_fit_budget": stage["research"]["theory_rp_cost_scale_to_fit_budget"],
-                               "generation_capacity_scale_to_meet_time": stage["research"]["generation_capacity_scale_to_meet_time"],
-                               "execution_capacity_scale_to_meet_time": stage["research"]["execution_capacity_scale_to_meet_time"],
+                               "theory_rp_cost": stage["research"]["theory_rp_cost_at_current_content"],
+                               "required_average_rp_per_day_if_full_interval": stage["research"]["required_average_rp_per_day_if_full_interval"],
+                               "required_average_rp_per_day_if_share_assumed": stage["research"]["required_average_rp_per_day_if_share_assumed"],
+                               "nominal_start_research_capacity": stage["research"]["nominal_start_research_capacity"],
+                               "nominal_end_target_research_capacity": stage["research"]["nominal_end_target_research_capacity"],
                                "capital_resources_t": stage["capital_resources_t"],
-                               "resource_budget_pressure": [r for r in stage["resource_time_budget"]
-                                    if r["authored_available_average_t_per_day"] is not None],
+                               "economy_resource_totals": stage["economy_resources_across_nodes"],
+                               "supply_assumptions": [r for r in stage["resource_time_budget"]
+                                    if r["authored_supply_assumption_t_per_day"] is not None],
                                "work_per_day_needed": stage["required_average_work_per_day_by_service"],
                                "transport_targets": len(stage["transport_targets"]),
                                "population_targets": stage["population_targets"],

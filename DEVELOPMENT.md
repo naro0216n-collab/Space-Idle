@@ -69,15 +69,13 @@ python -m space_idle.dev_cli --targets /temp/pacing-targets.json --output /temp/
 python -m space_idle.dev_cli --targets /temp/pacing-targets.json --from-save /temp/base-save.json --output /temp/pacing-report.json
 ```
 
-`--targets`は`space-idle.pacing-targets.v1`。各milestoneの`cumulative_hours`は実プレイ時間の累計（1 game day = 基準速度の実時間1秒）。区間時間から必要RP/dayと現行Research費用の許容比率を求める。研究群は指定IDとPrerequisiteに限定し、段階全件を取得したとはみなさない。`research_time_share`は区間中に研究へ確保する時間の割合（省略時1.0で最も楽観的な下限）。Facility/Vehicle数やRP費用は入力・係数いずれも変更対象である。
-
+`--targets`は`space-idle.pacing-targets.v1`。各milestoneの`cumulative_hours`は基準速度における実プレイ時間の累計（1 game day = 実時間1秒）。選択研究群とPrerequisiteの現行Theory RP費用、区間全体を使う場合の必要平均RP/day、明示的に`research_time_share`を指定した場合の別の必要RP/day、開始時と期末の名目研究能力を区別して表示する。研究時間割合は省略でき、省略時に任意の割合を暗黙設定しない。RP費用・Provider性能・Facility/Vehicleの性能・Recipe・時間目標は全て調整変数であり、CLIが正しい数値を自動決定することはない。
 ```json
 {
   "format": "space-idle.pacing-targets.v1",
   "milestones": [
-    {"name": "early", "cumulative_hours": 4, "research_time_share": 0.5,
+    {"name": "early", "cumulative_hours": 4,
      "research_ids": ["AR-AUTONOMY-ROBOTICS-01"],
-     "resource_supply_budgets": [{"node": "base.location.earth_industrial", "resource": "base.resource.machinery", "available_t_per_day": 1.5}],
      "production_targets": [{"node": "base.location.earth_industrial",
        "resource": "base.resource.machinery", "tonnes_per_day": 6,
        "method": "base.process.basic_machinery", "facility": "base.facility.basic_machinery_works"}]},
@@ -90,9 +88,9 @@ python -m space_idle.dev_cli --targets /temp/pacing-targets.json --from-save /te
 }
 ```
 
-研究Provider候補は全登録Contentから列挙し、明示的に`research_provider: {"node": ..., "facility": ...}`を指定した場合だけRP必要速度に基づくFacility台数を目標に反映する。`facility_targets`/`vehicle_targets`は`[{"node": ..., "facility"または"vehicle": ..., "count": ...}]`の累計目標。`production_targets`で方式を選ばない場合は生産候補と名目必要台数だけ表示し、投資資材へは算入しない。生産・輸送・人口目標は次のmilestoneで変更されない限り継承する。`transport_targets`は`source`/`destination`/`resource`/`tonnes_per_day`と任意`vehicle`、`population_targets`は`node`/`people`と任意の`housing_facility`/`life_support_facility`を指定する。Provider選択時は人数から名目必要台数とLife Support Resource需要を逆算する。将来の拠点は`prospective_locations`に`id`とWorldの`body_id`を指定する。
+研究Provider候補は全登録Contentから取得条件・単位性能を表示する。`research_provider: {"node": ..., "facility": ...}`は名目台数の参考選択にすぎず、自動的に資産目標を増やさない。研究設備への投資は明示的な`facility_targets`で指定する。`facility_targets`/`vehicle_targets`は`[{"node": ..., "facility"または"vehicle": ..., "count": ...}]`の累計目標。`production_targets`で方式を選ばない場合は生産候補と名目必要台数だけ表示し、投資資材へは算入しない。生産・輸送・人口目標は次のmilestoneで変更されない限り継承する。`transport_targets`は`source`/`destination`/`resource`/`tonnes_per_day`と任意`vehicle`、`population_targets`は`node`/`people`と任意の`housing_facility`/`life_support_facility`を指定する。Provider選択時は人数から名目必要台数とLife Support Resource需要を逆算する。将来の拠点は`prospective_locations`に`id`とWorldの`body_id`を指定する。
 
-全研究8段階を同じ契約で入力できるが、ゲーム内研究Stageの自動完了や段階ごとの全研究取得を要求しない。任意の`resource_supply_budgets`でその区間に使える平均Resource供給量を指定すると、資本投資と継続稼働を合わせた必要速度・供給倍率・取得Recipe費用側に残る余地を算出する（実際の供給成立を仮定しない）。資本投資÷区間日数は**目標を満たすための平均必要資材量の目安**であり、完成日や実際の期間総生産を予測しない。輸送が正準Previewで確定できない場合、容量は不明として扱う。レポートは全段階のRP費用予算、産業目標、施設/Vehicle取得、資材・継続投入と輸送・人口を共通の時間尺度で返す。
+全研究8段階を同じ契約で入力できるが、ゲーム内研究Stageの自動完了や段階ごとの全研究取得を要求しない。任意の`resource_supply_assumptions`は`node`、`resource`、`average_t_per_day`、空でない`basis`（供給仮説の根拠）を持つ。生産目標から供給仮定を転載しても独立した供給証拠にはならず、同値の場合は警告する。供給を設定しなくても資本投資・期末継続投入・条件付き生産量を表示し、取得Recipe費用の許容倍率や自動推奨倍率を算出しない。資本投資÷区間日数は**目標を満たすための平均必要資材量の目安**であり、完成日や実際の期間総生産を予測しない。輸送が正準Previewで確定できない場合、容量は不明として扱う。レポートは全段階のRP費用予算、産業目標、施設/Vehicle取得、資材・継続投入と輸送・人口を共通の時間尺度で返す。
 
 CLIはGame Stateを変更せず、Domain経路成立のテスト器でもない。実GameApplicationの通常プレイ結果を使って時間・成長の妥当性を確認する。`overview`、`evaluate`、`inspect`、`run`、`compare`、`--observe-days`は存在しない。
 
