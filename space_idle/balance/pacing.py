@@ -330,12 +330,12 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                 entry[kind + "_options"] = options
                 entry[kind + "_facility"] = chosen
                 if chosen is not None:
-                    selected = next((opt for opt in options if opt["facility"] == chosen), None)
-                    if selected is None:
+                    selected_provider_option = next((opt for opt in options if opt["facility"] == chosen), None)
+                    if selected_provider_option is None:
                         raise ValueError(f"{key} cannot support population: {chosen}")
-                    entry[kind + "_nominal_units"] = selected["minimum_nominal_units"]
+                    entry[kind + "_nominal_units"] = selected_provider_option["minimum_nominal_units"]
                     asset_key = row["node"], chosen
-                    facilities[asset_key] = max(facilities.get(asset_key, 0), selected["minimum_nominal_units"])
+                    facilities[asset_key] = max(facilities.get(asset_key, 0), selected_provider_option["minimum_nominal_units"])
                     if kind == "life_support":
                         for resource, rate in defs["facilities"][chosen]["life_support_resources_per_person_day_t"].items():
                             population_daily[(row["node"], resource)] += people * rate

@@ -212,6 +212,27 @@ def test_population_outcome_derives_housing_and_life_support_capex_and_consumpti
         assert next(x for x in data["end_target_nominal_inputs_t_per_day"] if x["resource"] == resource and x["node"] == node)["quantity_t"] >= 200 * amount
 
 
+
+def test_population_targets_do_not_replace_research_selection_or_time_budget():
+    _, defs = _base()
+    node = defs["world"]["nodes"][0]["id"]
+    facility = next(fid for fid, row in defs["facilities"].items()
+                    if row["housing_capacity"] > 0 and
+                    (row["life_support_person_days_per_day"] or 0) > 0)
+    rid = next(rid for rid, row in defs["research"].items()
+               if row["stage"] == 1 and row["stages"])
+    milestone = {"name": "early_development", "cumulative_hours": 4,
+                 "research_ids": [rid],
+                 "population_targets": [{"node": node, "people": 120,
+                                         "housing_facility": facility,
+                                         "life_support_facility": facility}]}
+    report = tune(defs, _plan(milestone))["milestones"][0]
+    assert report["research"]["selected_ids"] == [rid]
+    assert rid in report["research"]["new_prerequisites_and_research"] or rid in defs["owned"]["completed_technologies"]
+    assert report["research"]["theory_rp_cost_at_current_content"] >= 0
+    assert report["population_targets"][0]["target_people"] == 120
+
+
 def test_extraction_uses_output_upper_bound_without_pretending_geology_is_known():
     _, defs = _base()
     eid, method = next((eid, method) for eid, method in defs["extraction"].items()
