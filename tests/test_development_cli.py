@@ -499,35 +499,82 @@ def test_whole_system_is_the_only_kpi_and_detail_remains_evidence(capsys, tmp_pa
     assert "summary" not in screen and "milestones" not in screen
     assert "single_integrated_kpi" in screen["decision"]
     assert "integrated_kpis" not in screen["decision"]
-    assert len(screen["decision"]["single_integrated_kpi"]["inseparable_dimensions"]) > 1
-    assert screen["decision"]["horizon"]["scope"] == "partial_horizon_not_whole_game"
-    assert "population" in screen["decision"]["evaluation_conditions"]["unarticulated_domains_not_assumed_zero"]
+    assert len(screen["decision"]["single_integrated_kpi"]["joint_questions"]) > 1
+    assert screen["decision"]["single_integrated_kpi"]["automatic_balance_verdict"] is None
+    assert len(screen["decision"]["trajectory"]) == 2
+    assert screen["decision"]["horizon"]["milestones"] == ["generation_one", "generation_two"]
     assert full["technical_evidence"]["milestones"][0]["research"]["theory_rp_cost_at_current_content"] >= 0
     assert full["technical_evidence"]["milestones"][1]["capital_resources_t"]
+
+
+def test_whole_horizon_cannot_be_claimed_from_empty_or_tokenized_milestones():
+    _, defs = _base()
+    hours = [4, 12, 28, 60, 124, 220, 364, 580]
+    empty = _plan(*({"name": f"stage_{i}", "cumulative_hours": h} for i, h in enumerate(hours)))
+    decision = tune(defs, empty)["decision"]
+    assert decision["horizon"]["assessment"] == "unarticulated_development_intervals"
+    assert len(decision["horizon"]["unarticulated_intervals"]) == len(hours)
+    assert decision["single_integrated_kpi"]["assessment"] == "whole_trajectory_not_evaluable_from_these_assumptions"
+
+    rid = next(iter(defs["research"]))
+    # Presence of a number in every domain at the first milestone is not a
+    # development trajectory when the remaining milestones inherit it unchanged.
+    node = defs["world"]["nodes"][0]["id"]
+    resource = next(iter(defs["resources"]))
+    token = dict(empty)
+    stages = [dict(row) for row in empty["milestones"]]
+    stages[0]["research_ids"] = [rid]
+    stages[0]["production_targets"] = [{"node": node, "resource": resource, "tonnes_per_day": 1}]
+    token["milestones"] = stages
+    view = tune(defs, token)["decision"]
+    assert view["horizon"]["unarticulated_intervals"] == [f"stage_{i}" for i in range(1, 8)]
+    assert view["single_integrated_kpi"]["automatic_balance_verdict"] is None
+    assert all(row["development_evidence"] == "no_new_development_articulated"
+               for row in view["trajectory"][1:])
+
+
+def test_joint_magnitude_profile_changes_with_system_scale_without_becoming_edit_kpis():
+    _, defs = _base()
+    node = defs["world"]["nodes"][0]["id"]
+    fid = next(f for f, item in defs["facilities"].items() if item["construction_resources_t"])
+    initial = next((row["count"] for row in defs["owned"]["facilities"]
+                    if row["node"] == node and row["facility"] == fid), 0)
+
+    def plan(count):
+        return _plan({"name": "one", "cumulative_hours": 4},
+                     {"name": "two", "cumulative_hours": 12,
+                      "facility_targets": [{"node": node, "facility": fid, "count": count}]})
+
+    small = tune(defs, plan(initial + 1))["decision"]
+    large = tune(defs, plan(initial + 100))["decision"]
+    assert small["single_integrated_kpi"]["automatic_balance_verdict"] is None
+    small_view = small["trajectory"][1]["whole_system_scale_evidence"]
+    large_view = large["trajectory"][1]["whole_system_scale_evidence"]
+    assert small_view["joint_magnitude_profile"] != large_view["joint_magnitude_profile"]
+    assert "technical_evidence" not in small
+    assert "facility" not in json.dumps(small_view).lower()
 
 
 def test_cross_domain_constraints_are_not_fragmented_into_local_kpis():
     from space_idle.balance.decision import whole_horizon_decision_view
 
-    view = whole_horizon_decision_view([
-        {"name": "a", "target_cumulative_hours": 4, "constraints": [
-            {"code": "different_construction_bottleneck", "limits": ["construction", "research", "time"]},
-            {"code": "detail_only", "limits": ["supply", "new_future_domain"]}]},
-        {"name": "b", "target_cumulative_hours": 12, "constraints": [
-            {"code": "another_construction_bottleneck", "limits": ["time", "research", "construction"]}]},
-    ], [
-        {"name": "a", "research_ids": ["research.alpha"]},
-        {"name": "b", "facility_targets": [{"facility": "facility.beta"}]},
-    ])
-    assert view["decision_unit"] == "entire_development_trajectory"
-    assert set(view["evaluation_conditions"]["authored_domains_somewhere_in_horizon"]) == {"research", "capital"}
-    assert set(view["evaluation_conditions"]["unarticulated_domains_not_assumed_zero"]) == {"industry", "logistics", "population"}
-    assert view["evaluation_conditions"]["cross_domain_relations_with_unverified_conditions"] == [
-        {"domains": ["capital", "research", "time"], "technical_evidence_milestones": ["a", "b"]}]
-    # Neither a raw problem code nor a Content edit recommendation enters the decision view.
-    serialized = json.dumps(view)
-    assert "different_construction_bottleneck" not in serialized
-    assert "another_construction_bottleneck" not in serialized
-    assert "detail_only" not in serialized
-    assert view["evaluation_conditions"]["unclassified_condition_dimensions"] == ["new_future_domain"]
-    assert "optimize" not in serialized
+    def stage(name, limits):
+        return {
+            "name": name, "interval_game_days_at_base_speed": 3600,
+            "research": {"theory_rp_cost_at_current_content": 0,
+                         "required_average_rp_per_day_if_full_interval": 0,
+                         "new_prerequisites_and_research": []},
+            "capital_resources_t": [], "required_average_work_per_day_by_service": [],
+            "end_target_nominal_inputs_t_per_day": [], "production_targets": [],
+            "transport_targets": [], "population_targets": [],
+            "end_target_reference_power": [], "quantity_evidence": [],
+            "supply_choices": [], "constraints": [
+                {"code": "implementation_detail", "limits": limits}],
+        }
+    view = whole_horizon_decision_view([stage("a", ["supply", "future_domain"]),
+                                         stage("b", ["time", "research", "construction"])],
+                                        [{"name": "a"}, {"name": "b"}])
+    assert view["horizon"]["unarticulated_intervals"] == ["a", "b"]
+    assert "implementation_detail" not in json.dumps(view)
+    assert view["single_integrated_kpi"]["automatic_balance_verdict"] is None
+    assert view["unclassified_condition_dimensions"] == ["future_domain"]
