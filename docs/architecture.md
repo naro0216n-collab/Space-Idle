@@ -1224,15 +1224,15 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
 14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
-### 17.1 バランス調整専用CLIと数量読取の境界
+### 17.1 時間起点のContentバランス調整とApplication境界
 
-CLIは実ゲームのCommand実行用端末ではなく、全体系のContent数量調整に限定したApplication adapterとする。外部公開操作は `overview`、`evaluate`、`inspect` とする。`run`、`compare`、経路再生、任意Command/Query Script実行、Checkpointの管理はCLIの責務ではない。機能成立性は通常のDomain・Application・Persistence・Offline契約テストが検証する。
+開発CLIの公開機能は、累計プレイ時間と研究・生産・施設・Fleet・物流・人口の到達目標を受け取る**単一の全体系ペーシング評価**とする。`overview`、`evaluate`、`inspect`等の局所集計・実験管理コマンド、任意Command実行・Script再生・State比較は公開しない。入力は`space-idle.pacing-targets.v1`の累計時間順milestoneとする。1 game day = 基準速度の実時間1秒の換算は表示・計画の尺度であり、Offlineや実際のプレイ操作による達成予測ではない。
 
-Applicationは所有DomainのDefinition、取得Recipe、研究Stage、有限能力、Process係数、Vehicle製造・維持、Worldおよび現在Stateの数量を副作用のない読取契約として提供する。CLIはSimulationやDomainのmutable Stateを直接所有・変更せず、同じ物理係数を計算し直さない。Balance Analysisは既に与えられた係数について、単位・Node・期間・活動・出典を明示した集約・内訳展開・取得増分と継続負担の比較のみを所有する。
+Applicationは研究Stage・Prerequisite、Facility/Vehicle取得Recipeと性能、Process/Extraction、World・Node・Player保有資産・完了研究、必要に応じた輸送Previewを**副作用のない数量読取契約**として提供する。Balance Analysisはこれらの係数から、選定研究の重複除去と未取得費用、区間のRP必要速度・研究費用予算、Production目標に必要な設備候補と名目台数、取得Resource・Work・継続投入・人口・物流目標を統一期間へ集計する。任意で入力された区間平均のResource供給予算から、必要な供給倍率と取得Recipe費用予算を逆算する。RP費用、Provider性能、設備・Vehicleの性能とRecipeは全て変更対象であり、どれか一つを固定して残りを合わせる最適化器を作らない。
 
-`overview`は登録Content全体の静的構造を集計し、必修研究・各Facilityの稼働済み供給を推定しない。`evaluate`は設計者の評価条件（対象研究群、Node別施設・Fleet規模、運用するProcessと稼働率、人口、輸送需要、期間）を受け、開始時の通常Scenarioまたは正準Saveの所有資産と区別した追加投資と、各規模の名目日次需給・Capacityを記録する。複数期間は設計仮説の対比・継承負担であって、間の実時間進行を再生・保証しない。将来拠点は独立Game Stateを作らず、評価条件内の設計上のラベルとWorld参照で表す。実在しないNodeのサイト係数や輸送成功を捏造せず未知とする。`evaluate`は任意に正準GameApplicationを既存のPlayer計画のまま指定日数だけ進め、所有Domainの実Settlement・Allocation、資産・在庫・人口・研究の変化を集約できる。これは任意Command列の汎用実験器や独立Simulationではなく、バランス調整対象の成長実績を測る処理である。開始Saveは不変とし、観測データの集計間隔を調整できるが全日分の詳細Trace保持を必須としない。仮定上の期間と実測期間は同一視しない。`inspect`は記録済み結果のSource内訳と実測増減・制約の寄与を読む。元の研究系列、施設数や攻略順を進行Gateにしない。
+Stage間は開始Save/Scenarioの資産と実取得済みTechnologyを基準に、**目標として指定された**施設数・Fleet数・研究群を引き継ぐ。各区間の追加投資は前区間の目標から求めるが、その区間で実建設・実稼働したことは推定しない。名目日次係数と期間で平準化した資本需要を比較する場合も、これを実際の在庫推移や同時供給の保証として扱わない。選択されていない生産方式・輸送手段、未設立Nodeのサイト条件、RP PoolのAdmissionと実効Allocation、Vehicle航行・投資所要時間は未知として残す。
 
-評価結果は非authoritativeな派生証拠とし、Game Stateへ保存しない。現在の配分・決済と仮定上の名目能力・資本投資は混同しない。取得不可能、輸送不能、研究未解禁といった未確認の実成立条件を数量比較だけで解消済みとは報告しない。責務重複のある旧実験管理系は撤去し、正準観測機構はバランス調整の実測と通常の状態遷移テストから利用し、同じ物理処理の複製を作らない。
+CLIの責務は全体系の時間・物量の設計評価とレポート作成に限定する。実アプリのResearch/Logistics/Population/建設状態遷移を別実装せず、経路成立、Resource保存、Save/Load、Offlineは通常Domain/Applicationテストで保証する。数量評価後の実プレイ時間・実成長の確認は正準GameApplicationの通常進行で行い、評価用の目標数からPlayer操作や完成済み資産を創作しない。結果はGame Stateの保存正本ではない。
 
 ## 18. アーキテクチャ定義の要約
 

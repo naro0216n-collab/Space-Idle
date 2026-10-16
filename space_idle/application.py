@@ -83,17 +83,3 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         """Read-only, cross-domain balance input through the Application boundary."""
         from .application_balance import project_balance_definitions
         return project_balance_definitions(self)
-
-    def balance_current(self) -> dict:
-        """Real current-state dependency evidence, not a forecast of a proposed plan."""
-        from .application_balance import project_balance_current
-        return project_balance_current(self)
-
-    def balance_growth_state(self) -> dict:
-        """Compact authoritative snapshot for longitudinal balance evidence."""
-        from .application_balance import project_balance_growth_state
-        return project_balance_growth_state(self)
-
-    def balance_site_power(self, node_id: str, facility_id: str) -> dict:
-        from .application_balance import project_balance_site_power
-        return project_balance_site_power(self, node_id, facility_id)

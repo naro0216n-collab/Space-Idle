@@ -62,36 +62,39 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ### バランス調整専用CLI
 
-- `overview`: 全登録研究・施設・Vehicle・Process・採掘方法・Resource・Worldの数量構造を集計する。Saveを指定しなくても利用できる。
-- `evaluate`: 設計者が指定した期間・研究群・地点別設備数・稼働Process・Fleet・物流・人口の数量仮説を集計する。追加設備の資本投資と名目継続需給は別尺度で報告し、実稼働の成立を保証しない。
-- `inspect`: 保存した`overview`/`evaluate`からResource・Facility・Vehicle・Research・Node・期間を絞って寄与を読む。
+時間と発展規模を先に設定してContent費用・能力を逆算する**単一の**CLIとする。個別Resource調査や施設前後比較を独立したコマンドにしない。
 
-入力は期間ごとに変更したい設備・Vehicle数量を記述する。将来の未設立Nodeはトップレベルの`prospective_locations`（`[{"id": "design.node.example", "body_id": "base.body.mars"}]`など）でWorld天体に紐付ける。これは物理的に設立済みのNodeではなく、サイト・輸送の成立は未確認として扱われる。前期間から指定されなかった資産数は引き継ぐが、これは設計上の数量仮説であり期間内に実際に建設されたことを証明しない。第1～第8段階と将来段階を同じ契約で評価し、特定の研究段階を必修ゲートにしない。
+```bash
+python -m space_idle.dev_cli --targets /temp/pacing-targets.json --output /temp/pacing-report.json
+python -m space_idle.dev_cli --targets /temp/pacing-targets.json --from-save /temp/base-save.json --output /temp/pacing-report.json
+```
 
-例（IDは実際の`overview`/Contentに存在するものを指定すること）：
+`--targets`は`space-idle.pacing-targets.v1`。各milestoneの`cumulative_hours`は実プレイ時間の累計（1 game day = 基準速度の実時間1秒）。区間時間から必要RP/dayと現行Research費用の許容比率を求める。研究群は指定IDとPrerequisiteに限定し、段階全件を取得したとはみなさない。`research_time_share`は区間中に研究へ確保する時間の割合（省略時1.0で最も楽観的な下限）。Facility/Vehicle数やRP費用は入力・係数いずれも変更対象である。
 
 ```json
 {
-  "format": "space-idle.balance-assessment.v1",
-  "periods": [
-    {"name": "initial_industry", "period_days": 120,
-     "facilities": [{"node": "base.location.earth_industrial",
-                     "facility": "base.facility.automated_construction_yard", "count": 3}]},
-    {"name": "expanded_industry", "period_days": 365,
-     "facilities": [{"node": "base.location.earth_industrial",
-                     "facility": "base.facility.automated_construction_yard", "count": 7}]}
+  "format": "space-idle.pacing-targets.v1",
+  "milestones": [
+    {"name": "early", "cumulative_hours": 4, "research_time_share": 0.5,
+     "research_ids": ["AR-AUTONOMY-ROBOTICS-01"],
+     "resource_supply_budgets": [{"node": "base.location.earth_industrial", "resource": "base.resource.machinery", "available_t_per_day": 1.5}],
+     "production_targets": [{"node": "base.location.earth_industrial",
+       "resource": "base.resource.machinery", "tonnes_per_day": 6,
+       "method": "base.process.basic_machinery", "facility": "base.facility.basic_machinery_works"}]},
+    {"name": "later", "cumulative_hours": 12,
+     "research_ids": ["AR-AUTONOMY-ROBOTICS-02"],
+     "production_targets": [{"node": "base.location.earth_industrial",
+       "resource": "base.resource.machinery", "tonnes_per_day": 20,
+       "method": "base.process.basic_machinery", "facility": "base.facility.basic_machinery_works"}]}
   ]
 }
 ```
 
-```bash
-python -m space_idle.dev_cli overview --output /temp/overview.json
-python -m space_idle.dev_cli evaluate --assessment /temp/assessment.json --output /temp/evaluation.json
-python -m space_idle.dev_cli evaluate --assessment /temp/assessment.json --from-save /temp/start.json --observe-days 120 --sample-days 30 --output /temp/growth.json
-python -m space_idle.dev_cli inspect --report /temp/evaluation.json --resource base.resource.precision_electronics --output /temp/electronics.json
-```
+研究Provider候補は全登録Contentから列挙し、明示的に`research_provider: {"node": ..., "facility": ...}`を指定した場合だけRP必要速度に基づくFacility台数を目標に反映する。`facility_targets`/`vehicle_targets`は`[{"node": ..., "facility"または"vehicle": ..., "count": ...}]`の累計目標。`production_targets`で方式を選ばない場合は生産候補と名目必要台数だけ表示し、投資資材へは算入しない。生産・輸送・人口目標は次のmilestoneで変更されない限り継承する。`transport_targets`は`source`/`destination`/`resource`/`tonnes_per_day`と任意`vehicle`、`population_targets`は`node`/`people`と任意の`housing_facility`/`life_support_facility`を指定する。Provider選択時は人数から名目必要台数とLife Support Resource需要を逆算する。将来の拠点は`prospective_locations`に`id`とWorldの`body_id`を指定する。
 
-`overview`と`evaluate`は`--from-save`で正準Saveの既存資産を開始基準にできる。`evaluate --observe-days N`はその開始Stateの既存Player計画を正準SimulationでN日進め、期間中の設備・Fleet・人口・研究解禁・在庫の実変化、Resource決済・Allocation制約を`observed_growth`に集約する。`--sample-days`は詳細なState snapshotの最大間隔であり、Asset/解禁の変化点は間隔にかかわらず記録する。元Saveは変更せず、新しい施設・研究をCLIが自動選択することもない。`inspect`では期間名を指定しない場合、同じ報告の実測Resource・施設などへ寄与を展開できる。開始時点の未取得資産の前史を実証したとは扱わない。期間末目標数量×全日数の値は目標規模の反実仮想であって、漸増中の実累計ではない。`evaluate`の詳細レポートには期間別投資、研究群とPrerequisite、日次Resource入出力、名目能力、元Definition、輸送Previewの結果、未確認条件を保存する。工程Outputは名目生産量であり、実在庫や輸送可能量とみなさない。レポートをGame Stateへ保存しない。`run`、`compare`、任意Command列の実行・Checkpoints、実験Script・TraceはCLIから撤去済みであり、経路成立は通常テストの責務である。
+全研究8段階を同じ契約で入力できるが、ゲーム内研究Stageの自動完了や段階ごとの全研究取得を要求しない。任意の`resource_supply_budgets`でその区間に使える平均Resource供給量を指定すると、資本投資と継続稼働を合わせた必要速度・供給倍率・取得Recipe費用側に残る余地を算出する（実際の供給成立を仮定しない）。資本投資÷区間日数は**目標を満たすための平均必要資材量の目安**であり、完成日や実際の期間総生産を予測しない。輸送が正準Previewで確定できない場合、容量は不明として扱う。レポートは全段階のRP費用予算、産業目標、施設/Vehicle取得、資材・継続投入と輸送・人口を共通の時間尺度で返す。
+
+CLIはGame Stateを変更せず、Domain経路成立のテスト器でもない。実GameApplicationの通常プレイ結果を使って時間・成長の妥当性を確認する。`overview`、`evaluate`、`inspect`、`run`、`compare`、`--observe-days`は存在しない。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 
