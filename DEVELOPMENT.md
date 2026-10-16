@@ -58,42 +58,39 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-通常の契約テストは`tests/`に集約し、Fast CIで正準契約を検証する。全体系Content調整は本体の開発CLIで任意の通常Saveまたは標準Scenarioから実GameApplicationを操作・観測する。実行入力と出力はJSONで扱い、物理ルールを再計算する独立Worksheetや擬似Game Stateは持たない。調整記録はバランス成立の合否テストではない。**Contentの調整と成立確認を新設テストで代替することは禁止する。** 一時JSONのCommand/Queryを`python -m space_idle.dev_cli run`へ渡し、結果JSON・Trace・Saveから研究・建設・実輸送・決済・経過時間を観察する。通常テストはDomain不変条件やCLI公開契約の検証に限り、そこで設置したテスト用資産を実取得の証拠にしない。
+通常テストは`tests/`に集約し、研究・建設・輸送の経路成立、状態遷移、Resource保存則、Save/Load、Offline同値性をそこで確認する。バランス調整は独立して専用CLI `space_idle.dev_cli` の数量結果で行い、テスト作成・経路実験Scriptを調整の代用品にしない。
 
-実際の第1・第2段階調整では、既存Saveを始点にGameApplication Query（`GetResearch` / `GetBuildOptions` / `GetDependencyAnalytics` / `GetCargoFlows`等）から取得条件と現在状態を確認し、必要なCommandで研究・設備・Fleet・輸送を変更する。同じ期間に進行したAllocation・実Resource決済・Population・Cargo等を比較し、Contentを調整した後は同じ開始状態から再評価する。段階名は実験記録であってStateの進行ゲートではない。
+### バランス調整専用CLI
 
-開発実験の入力例（`/temp/eval.json`）：
+- `overview`: 全登録研究・施設・Vehicle・Process・採掘方法・Resource・Worldの数量構造を集計する。Saveを指定しなくても利用できる。
+- `evaluate`: 設計者が指定した期間・研究群・地点別設備数・稼働Process・Fleet・物流・人口の数量仮説を集計する。追加設備の資本投資と名目継続需給は別尺度で報告し、実稼働の成立を保証しない。
+- `inspect`: 保存した`overview`/`evaluate`からResource・Facility・Vehicle・Research・Node・期間を絞って寄与を読む。
+
+入力は期間ごとに変更したい設備・Vehicle数量を記述する。将来の未設立Nodeはトップレベルの`prospective_locations`（`[{"id": "design.node.example", "body_id": "base.body.mars"}]`など）でWorld天体に紐付ける。これは物理的に設立済みのNodeではなく、サイト・輸送の成立は未確認として扱われる。前期間から指定されなかった資産数は引き継ぐが、これは設計上の数量仮説であり期間内に実際に建設されたことを証明しない。第1～第8段階と将来段階を同じ契約で評価し、特定の研究段階を必修ゲートにしない。
+
+例（IDは実際の`overview`/Contentに存在するものを指定すること）：
 
 ```json
 {
-  "format": "space-idle.development-experiment.v1",
-  "steps": [
-    {"action": "queries", "queries": {
-      "research": {"type": "GetResearch"},
-      "projects": {"type": "GetProjects"},
-      "logistics": {"type": "GetLogisticsSummary"}
-    }},
-    {"action": "advance", "days": 2},
-    {"action": "state", "scope": {"nodes": ["base.location.earth_industrial"]}},
-    {"action": "checkpoint", "name": "after-two-days"}
+  "format": "space-idle.balance-assessment.v1",
+  "periods": [
+    {"name": "initial_industry", "period_days": 120,
+     "facilities": [{"node": "base.location.earth_industrial",
+                     "facility": "base.facility.automated_construction_yard", "count": 3}]},
+    {"name": "expanded_industry", "period_days": 365,
+     "facilities": [{"node": "base.location.earth_industrial",
+                     "facility": "base.facility.automated_construction_yard", "count": 7}]}
   ]
 }
 ```
 
 ```bash
-# 正準初期Scenarioから実行。全Query・期間集計をJSON保存、標準出力は概要のみ
-python -m space_idle.dev_cli run --script /temp/eval.json --output /temp/run.json --checkpoint-dir /temp/checkpoints
-# 後期産業など、既存の正準ScenarioDefinition生成関数から開始する場合
-python -m space_idle.dev_cli run --scenario-factory space_idle.content.base_scenario:build_standard_scenario_definition --script /temp/eval.json --output /temp/scenario-run.json
-# 任意の実Saveから再開・別のコマンド列を実行し、Saveと選択的な詳細日次ログを出力
-python -m space_idle.dev_cli run --from-save /temp/checkpoints/after-two-days.json --script /temp/next.json --save-out /temp/after.json --output /temp/next-result.json --trace-file /temp/trace.ndjson
-# 結果比較（開始Content・State fingerprintの同一性も示す）
-python -m space_idle.dev_cli compare --left /temp/run-a.json --right /temp/run-b.json --output /temp/compare.json
+python -m space_idle.dev_cli overview --output /temp/overview.json
+python -m space_idle.dev_cli evaluate --assessment /temp/assessment.json --output /temp/evaluation.json
+python -m space_idle.dev_cli inspect --report /temp/evaluation.json --resource base.resource.precision_electronics --output /temp/electronics.json
 ```
 
-`steps` は `query`（型名とpayload）、`queries`（同一Snapshotの複数Query）、`command`（正準Command）、`advance`（正準1日tickを指定日数進め期間決済を集計）、`state`（所有Domainの実State指標、Node/Resource scope任意）、`checkpoint`（正準Save）で構成する。Command・Queryの型と引数はWeb APIと同じ。`AdvanceTime` は`advance`操作に統一する。`--trace-file`指定時のみ1日ごとの実決済・AllocationをNDJSON保存し、通常は日次ログを保持せず期間の厳密な実績集計とState観測結果を保存する。調整対象の細目へは各Queryや観測scopeで絞り、未観測の因果関係は未知とする。Command失敗時はそのStepと日付を報告し、後続Stepを実行せず、失敗した実験の最終Saveは自動出力しない。
-
-Saveの初期状態識別子が一致しても、違うCommand・Content・期間の結果を公平な攻略順ランキングとして扱わない。実験開始時点の開発配置資産は無償取得した実験条件であり、その前史の取得費用・時間を証明しない。必要なときは配置前Saveから通常Commandで取得・経過を観測する。
+`overview`と`evaluate`は`--from-save`で正準Saveの既存資産を開始基準にできる。`evaluate`の詳細レポートには期間別投資、研究群とPrerequisite、日次Resource入出力、名目能力、元Definition、輸送Previewの結果、未確認条件を保存する。工程Outputは名目生産量であり、実在庫や輸送可能量とみなさない。レポートをGame Stateへ保存しない。`run`、`compare`、任意Command列の実行・Checkpoints、実験Script・TraceはCLIから撤去済みであり、経路成立は通常テストの責務である。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 

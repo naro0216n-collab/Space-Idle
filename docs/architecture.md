@@ -1224,17 +1224,15 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
 14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
-### 17.1 本体開発CLIと全体系Content評価の境界
+### 17.1 バランス調整専用CLIと数量読取の境界
 
-設計者は正準GameApplicationをCLIでも操作できる。CLIはGameApplicationのCommand/Query、Persistence、正準Simulationと所有Domainの計測を利用するアダプターであり、Web UIと同じ物理規則・状態遷移を使う。通常Save、新規Scenario、開発用Scenarioを開始点にできるが、開始条件を明示し、その条件の成立までの前史を仮定で補わない。
+CLIは実ゲームのCommand実行用端末ではなく、全体系のContent数量調整に限定したApplication adapterとする。外部公開操作は `overview`、`evaluate`、`inspect` とする。`run`、`compare`、経路再生、任意Command/Query Script実行、Checkpointの管理はCLIの責務ではない。機能成立性は通常のDomain・Application・Persistence・Offline契約テストが検証する。
 
-開発用APIは実際の取得条件、名目能力、現在の割当・不足、Command実行結果と時点、期間の実決済、Activity、Fleet/Cargo/Research/Projectの変化を取得できるよう整備する。所有Domainに既存の有用な読取・観測があればそれを共通のApplication契約へ接続し、CLI固有のルールで再計算しない。Scope指定による同時点Query、任意のゲーム日の開始・区間実行・再開、終了状態Save、同じ開始Stateからの分岐、詳細実行ログと期間集計を支援する。観測範囲と観測の有無でcanonical tick、State、Offlineの結果は変わらない。
+Applicationは所有DomainのDefinition、取得Recipe、研究Stage、有限能力、Process係数、Vehicle製造・維持、Worldおよび現在Stateの数量を副作用のない読取契約として提供する。CLIはSimulationやDomainのmutable Stateを直接所有・変更せず、同じ物理係数を計算し直さない。Balance Analysisは既に与えられた係数について、単位・Node・期間・活動・出典を明示した集約・内訳展開・取得増分と継続負担の比較のみを所有する。
 
-実行ログや期間集計はSaveのauthoritative Stateとは別の**派生証拠**として記録する。InventoryとOwner staging間の移管を新規生産/消費と混同しない。AttributeのないResource移動の因果を推測しない。Allocation・Service能力の量と実物量は別の測度・単位として報告し、期間集計は実際のOwner決済に基づく。実験の識別にはContent/World/Scenario・開始State・ゲーム日を用い、単に表示段階が一致するだけで同じ状態としない。大容量ログは保存先とscopeを明示し、チャットへ全量出力することを必須としない。
+`overview`は登録Content全体の静的構造を集計し、必修研究・各Facilityの稼働済み供給を推定しない。`evaluate`は設計者の評価条件（対象研究群、Node別施設・Fleet規模、運用するProcessと稼働率、人口、輸送需要、期間）を受け、開始時の通常Scenarioまたは正準Saveの所有資産と区別した追加投資と、各規模の名目日次需給・Capacityを記録する。複数期間は設計仮説の対比・継承負担であって、間の実時間進行を再生・保証しない。将来拠点は独立Game Stateを作らず、評価条件内の設計上のラベルとWorld参照で表す。実在しないNodeのサイト係数や輸送成功を捏造せず未知とする。`inspect`は記録済み結果のSource内訳を読む。元の研究系列、施設数や攻略順を進行Gateにしない。
 
-本体CLIには研究段階専用の無償Unlock、構築済み施設の架空取得、独立Allocator/Research/Logistics Simulation、最適攻略器を設けない。一方、通常ゲームから見えるか否かという理由だけで有用な開発用Query・計測・チェックポイント・比較の追加を制限しない。バランス調整のために必要な発展仮説は実験の開始条件と選択Commandとして表現できる。対象段階・設備数・研究順をゲーム内進行ゲートにせず、同じContent・Domainを共有する。
-
-開発用実験の記録はContentの妥当性を証明するテストではない。バランス調整の実行は本体開発CLIに統一し、テスト内で作ったState・直接Domain操作・専用進行の結果をCLIの代替証拠としない。通常テストは正準のDomain保存則、State所有、観測の非干渉性、Save復元、CLIとApplication結果一致など一般的な契約を検証する。特定の暫定値や攻略経路の合否を固定しない。独立評価器が重複する場合は、必要な汎用能力を本体側で成立させた後、同じ責務を持つ旧経路を撤去する。
+評価結果は非authoritativeな派生証拠とし、Game Stateへ保存しない。現在の配分・決済と仮定上の名目能力・資本投資は混同しない。取得不可能、輸送不能、研究未解禁といった未確認の実成立条件を数量比較だけで解消済みとは報告しない。責務重複のある旧実験管理系は撤去し、観測機構は通常の状態遷移テスト等の独立した実需要がある場合にのみ保持する。
 
 ## 18. アーキテクチャ定義の要約
 

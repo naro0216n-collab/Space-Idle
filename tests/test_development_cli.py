@@ -1,112 +1,187 @@
-"""Development instrumentation must observe the same public Application state."""
+"""Balance CLI contracts; game transitions are covered by their owning Domain tests."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+from math import isclose
 
 import pytest
 
-from space_idle.api.codec import ApiPayloadError, decode_query
-from space_idle.app_contracts.operations import AdvanceTime
 from space_idle.bootstrap import build_game_application, build_game_application_for_load
-from space_idle.dev_cli.experiment import PeriodEvidence, compare_experiments, run_experiment
-from space_idle.persistence import load_game, save_game
+from space_idle.balance.analysis import overview, evaluate, inspect
+from space_idle.dev_cli.__main__ import main
+from space_idle.persistence import save_game, load_game
 
 
-def _state_json(app, path):
-    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-    return json.loads(path.read_text(encoding="utf-8"))["state"]
-
-
-def test_query_codec_and_canonical_advance_with_unintrusive_trace(tmp_path):
+def _base():
     app = build_game_application()
-    seed = tmp_path / "seed.json"
-    _state_json(app, seed)
-    control, _ = load_game(seed, build_game_application_for_load)
-    script = [
-        {"action": "query", "type": "GetResearch"},
-        {"action": "advance", "days": 2},
-        {"action": "state", "scope": {"nodes": ["base.location.earth_industrial"],
-                                      "resources": ["base.resource.water"]}},
+    return app, app.balance_definitions()
+
+
+def _assessment(periods):
+    return {"format": "space-idle.balance-assessment.v1", "periods": periods}
+
+
+def test_overview_covers_all_research_and_all_registered_generations():
+    _, defs = _base()
+    result = overview(defs)
+    assert result["counts"]["research"] == len(defs["research"])
+    assert sum(row["count"] for row in result["research_by_stage"].values()) == len(defs["research"])
+    assert set(result["research_by_stage"]) == {str(x["stage"]) for x in defs["research"].values()}
+    assert len(result["resource_links"]) == len(defs["resources"])
+    assert all(row["facility_builds"] == sorted(row["facility_builds"]) for row in result["resource_links"].values())
+
+
+def test_incremental_investment_and_nominal_daily_demand_are_distinct():
+    app, defs = _base()
+    fid = next(fid for fid, row in defs["facilities"].items() if row["construction_resources_t"])
+    node = defs["world"]["nodes"][0]["id"]
+    existing = next((row["count"] for row in defs["owned"]["facilities"] if row["node"] == node and row["facility"] == fid), 0)
+    input_data = _assessment([
+        {"name": "first", "period_days": 30, "facilities": [{"node": node, "facility": fid, "count": existing + 2}]},
+        {"name": "later", "period_days": 180, "facilities": [{"node": node, "facility": fid, "count": existing + 5}]},
+    ])
+    before = app.balance_definitions()["owned"]
+    report = evaluate(defs, input_data, current=app.balance_current(), power_site=app.balance_site_power)
+    assert app.balance_definitions()["owned"] == before
+    expected_unit = defs["facilities"][fid]["construction_resources_t"]
+    for row, units in zip(report["periods"], (2, 3)):
+        assert [item for item in row["acquisitions"] if item["id"] == fid][0]["units"] == units
+        amount = {item["resource"]: item["quantity"] for item in row["investment_by_resource"] if item["node"] == node}
+        for rid, per_unit in expected_unit.items():
+            assert isclose(amount[rid], units * per_unit)
+        assert row["period_days"] in (30, 180)
+        assert row["partial_local_nominal_balance"] is not None
+        assert all(item["measure"] == "investment_t" for item in row["investment_entries"])
+
+
+def test_research_prerequisite_closure_is_counted_once():
+    _, defs = _base()
+    rid = next(k for k, row in defs["research"].items() if row["prerequisites"])
+    first = _assessment([{"name": "research", "period_days": 50, "research_ids": [rid, rid, defs["research"][rid]["prerequisites"][0]]}])
+    result = evaluate(defs, first)["periods"][0]
+    unique = result["research"]["prerequisite_closure"]
+    assert len(unique) == len(set(unique))
+    expected = sum(stage.get("rp", 0) for key in unique for stage in defs["research"][key]["stages"])
+    assert isclose(result["research"]["theory_rp_total"], expected)
+    assert result["research"]["average_is_not_completion_or_admission_guarantee"]
+
+
+def test_process_nominal_balance_and_contributor_are_traceable():
+    _, defs = _base()
+    process_id, spec = next((pid, row) for pid, row in defs["processes"].items() if row["provider_facilities"] and row["inputs_per_unit_t"])
+    facility_id = spec["provider_facilities"][0]
+    node = defs["world"]["nodes"][0]["id"]
+    count = 4
+    period = {"name": "industry", "period_days": 25, "facilities": [
+        {"node": node, "facility": facility_id, "count": count, "process": process_id, "utilization": 0.5}
+    ]}
+    report = evaluate(defs, _assessment([period]))
+    scale = defs["facilities"][facility_id]["process_throughput_per_day"] * count * .5
+    for resource, rate in spec["inputs_per_unit_t"].items():
+        flow = [r for r in report["periods"][0]["operation_entries"] if r["source"] == process_id and r["resource"] == resource]
+        assert flow and isclose(flow[0]["quantity"], rate * scale)
+    narrowed = inspect(report, resource=next(iter(spec["inputs_per_unit_t"])), period="industry")
+    assert narrowed["periods"][0]["operation_entries"]
+    assert all(item["resource"] == next(iter(spec["inputs_per_unit_t"])) for item in narrowed["periods"][0]["operation_entries"])
+
+
+def test_unknown_and_nonfinite_inputs_are_rejected():
+    _, defs = _base()
+    node = defs["world"]["nodes"][0]["id"]
+    examples = [
+        {"name": "bad", "period_days": 0},
+        {"name": "bad", "period_days": 10, "facilities": [{"node": node, "facility": "invalid", "count": 5}]},
+        {"name": "bad", "period_days": 10, "facilities": [{"node": node, "facility": next(iter(defs["facilities"])), "count": True}]},
+        {"name": "bad", "period_days": 10, "transport_demands": [{"source": node, "destination": node, "resource": next(iter(defs["resources"])), "tonnes_per_day": float("nan")}]},
     ]
-    result = run_experiment(app, script)
-    control.execute(AdvanceTime(days=2))
-    assert "failed_step" not in result
-    assert result["end_day"] == 2
-    assert result["steps"][1]["result"]["observed_days"] == 2
-    assert result["steps"][0]["result"]
-    assert result["steps"][2]["result"]["scope"]["operational_node_ids"] == ["base.location.earth_industrial"]
-    assert _state_json(app, tmp_path / "observed.json") == _state_json(control, tmp_path / "control.json")
-    with pytest.raises(ApiPayloadError):
-        decode_query({"type": "GetResearch", "payload": {"nonexistent": 1}})
+    for period in examples:
+        with pytest.raises(ValueError): evaluate(defs, _assessment([period]))
 
 
-def test_checkpoint_and_failure_do_not_grant_assets(tmp_path):
+def test_cli_overview_evaluate_inspect_and_canonical_save_input(tmp_path, capsys):
+    from space_idle.dev_cli.__main__ import _load
     app = build_game_application()
-    original = _state_json(app, tmp_path / "start.json")
-    result = run_experiment(app, [
-        {"action": "checkpoint", "name": "before"},
-        {"action": "command", "type": "NoSuchCommand"},
-        {"action": "advance", "days": 1},
-    ], checkpoint_root=tmp_path / "checkpoints")
-    assert result["failed_step"] == 1
-    restored, _ = load_game(tmp_path / "checkpoints/before.json", build_game_application_for_load)
-    assert _state_json(restored, tmp_path / "restored.json") == original
-    assert app.game_day == 0
+    path = tmp_path / "start.json"
+    save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    over = tmp_path / "overview.json"
+    assert main(["overview", "--from-save", str(path), "--output", str(over)]) == 0
+    assert _load(over)["kind"] == "balance_overview"
+    spec = tmp_path / "assessment.json"
+    spec.write_text(json.dumps(_assessment([{"name": "future", "period_days": 120}])), encoding="utf-8")
+    out = tmp_path / "evaluated.json"
+    assert main(["evaluate", "--assessment", str(spec), "--from-save", str(path), "--output", str(out)]) == 0
+    assert main(["inspect", "--report", str(out), "--period", "future", "--output", str(tmp_path / "inspect.json")]) == 0
+    assert _load(tmp_path / "inspect.json")["kind"] == "balance_inspect"
+    restored, _ = load_game(path, build_game_application_for_load)
+    assert restored.game_day == 0
+    assert _load(out)["identity"]["game_day"] == 0
+    with pytest.raises(SystemExit): main(["run", "--script", str(spec)])
 
 
-def test_comparison_requires_same_origin_and_preserves_units():
-    metric = {"kind": "inventory_stock", "subject_id": "water", "context_id": "earth",
-              "unit": "t", "provenance": "inventory.stock"}
-    a = {"content_id": "v", "world_definition_id": "w", "scenario_id": "s", "start_day": 0,
-         "end_day": 1, "origin_state_sha256": "stateA",
-         "end_state": {"metrics": [{**metric, "quantity": 2.0}]}}
-    b = {**a, "end_day": 2, "end_state": {"metrics": [{**metric, "quantity": 3.0}]}}
-    out = compare_experiments(a, b)
-    assert out["same_start_state"]
-    assert out["state_metric_differences"][0]["difference"] == 1.0
-    assert compare_experiments(a, {**b, "origin_state_sha256": "stateB"})["same_start_state"] is False
-
-
-def test_cli_end_to_end_save_replay_and_trace(tmp_path, capsys):
-    from space_idle.dev_cli.__main__ import main
-
-    script = tmp_path / "steps.json"
-    script.write_text(json.dumps({
-        "format": "space-idle.development-experiment.v1",
-        "steps": [
-            {"action": "command", "type": "SetTimeControl", "payload": {"speed_multiplier": 2}},
-            {"action": "advance", "days": 1},
-            {"action": "checkpoint", "name": "day1"},
-        ],
-    }), encoding="utf-8")
-    output = tmp_path / "report.json"
-    restored = tmp_path / "result_save.json"
-    trace = tmp_path / "detail.ndjson"
-    assert main(["run", "--script", str(script), "--output", str(output),
-                 "--save-out", str(restored), "--trace-file", str(trace),
-                 "--checkpoint-dir", str(tmp_path / "points")]) == 0
-    report = json.loads(output.read_text())
-    assert report["end_day"] == 1
-    assert len(report["origin_state_sha256"]) == 64
-    assert "actual_settlements" in report["steps"][0]
-    assert [json.loads(line)["kind"] for line in trace.read_text().splitlines()] == ["command", "day"]
-    reloaded, _ = load_game(restored, build_game_application_for_load)
-    assert reloaded.game_day == 1
-    assert _state_json(reloaded, tmp_path / "reload.json") == _state_json(
-        load_game(tmp_path / "points/day1.json", build_game_application_for_load)[0],
-        tmp_path / "point.json")
-
-    next_run = tmp_path / "next.json"
-    assert main(["run", "--script", str(script), "--from-save", str(restored),
-                 "--output", str(next_run), "--checkpoint-dir", str(tmp_path / "other")]) == 0
-    assert json.loads(next_run.read_text())["start_day"] == 1
-
-
-def test_scenario_factory_uses_canonical_builder():
-    from space_idle.dev_cli.__main__ import _authored_scenario
-    app = _authored_scenario("space_idle.content.base_scenario:build_standard_scenario_definition")
-    assert app.content_id == build_game_application().content_id
-    assert app.game_day == 0
+def test_unestablished_future_location_can_be_assessed_without_creating_game_node():
+    app, definitions = _base()
+    body_id = definitions["world"]["bodies"][-1]["id"]
+    facility_id = next(fid for fid, spec in definitions["facilities"].items() if spec["construction_resources_t"])
+    future = "design.prospective.outer_world"
+    hypothesis = {"format": "space-idle.balance-assessment.v1",
+                  "prospective_locations": [{"id": future, "body_id": body_id}],
+                  "periods": [{"name": "industrialization", "period_days": 90,
+                               "facilities": [{"node": future, "facility": facility_id, "count": 5}]},
+                              {"name": "mature_network", "period_days": 210,
+                               "facilities": [{"node": future, "facility": facility_id, "count": 14}]}]}
+    report = evaluate(definitions, hypothesis, power_site=app.balance_site_power)
+    assert report["prospective_locations"][future] == body_id
+    assert report["periods"][0]["acquisitions"][0]["units"] == 5
+    assert report["periods"][1]["acquisitions"][0]["units"] == 9
+    assert future not in {row["id"] for row in app.balance_definitions()["world"]["nodes"]}
+    assert any("Prospective" in reason for reason in report["periods"][0]["caveats"])
     with pytest.raises(ValueError):
-        _authored_scenario("not-a-module")
+        evaluate(definitions, {**hypothesis, "prospective_locations": [{"id": future, "body_id": "invalid"}]})
+
+
+def test_population_support_materials_and_common_nominal_capacity_ledger():
+    _, definitions = _base()
+    facility_id = next(fid for fid, row in definitions["facilities"].items()
+                       if row["life_support_person_days_per_day"] is not None)
+    node = definitions["world"]["nodes"][0]["id"]
+    hypothesis = _assessment([{"name": "residents", "period_days": 15,
+                              "facilities": [{"node": node, "facility": facility_id, "count": 2}],
+                              "population": [{"node": node, "people": 20,
+                                              "life_support_facility": facility_id}]}])
+    row = evaluate(definitions, hypothesis)["periods"][0]
+    life_support = next(item for item in row["capacity_balance"] if item["node"] == node and item["service"] == "life_support")
+    assert life_support["stated_requirement"] == 20
+    assert life_support["nominal_supply"] >= 0
+    for resource_id, rate in definitions["facilities"][facility_id]["life_support_resources_per_person_day_t"].items():
+        expected = [item for item in row["operation_entries"] if item["source"] == facility_id
+                    and item["purpose"] == "population_life_support" and item["resource"] == resource_id]
+        assert expected and isclose(expected[0]["quantity"], rate * 20)
+
+
+def test_report_distinguishes_material_content_changes_despite_same_content_id():
+    app, original = _base()
+    from dataclasses import replace
+    from space_idle.shared import DefinitionId
+    from space_idle.construction.models import ConstructionRecipe
+    recipe_id = next(iter(app._simulation.projects.recipes))
+    prior = app._simulation.projects.recipes[recipe_id]
+    app._simulation.projects.recipes[recipe_id] = replace(prior, construction_work=prior.construction_work + 1)
+    modified = app.balance_definitions()
+    assert original["identity"]["content_id"] == modified["identity"]["content_id"]
+    assert original["identity"]["balance_definition_sha256"] != modified["identity"]["balance_definition_sha256"]
+
+
+def test_canonical_transport_preview_is_kept_separate_from_assumed_delivery():
+    from space_idle.dev_cli.__main__ import _transport_preview
+    app, defs = _base()
+    first, second = defs["world"]["nodes"][:2]
+    hypothesis = _assessment([{"name": "route_demand", "period_days": 20,
+                              "transport_demands": [{"source": first["id"], "destination": second["id"],
+                                                     "vehicle": next(iter(defs["vehicles"])),
+                                                     "resource": next(iter(defs["resources"])),
+                                                     "tonnes_per_day": 4.0}]}])
+    route = evaluate(defs, hypothesis, transport_preview=_transport_preview(app))["periods"][0]["transport_demands"][0]
+    assert route["capacity_status"] == "canonical_preview_not_guaranteed"
+    assert route["preview"]["target_capacity"]["forward_t_per_day"] == 4.0
+    assert route["preview"]["blockers"] is not None

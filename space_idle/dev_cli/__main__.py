@@ -1,111 +1,91 @@
-"""Canonical Space Idle development console, with recorded experiments."""
+"""Balance-design console: Content totals, authored scale evaluation, contributor drilldown.
+
+Not an interactive Command/Query runner, replay harness, or second Simulation.
+"""
 from __future__ import annotations
 
 import argparse
-from importlib import import_module
-from contextlib import ExitStack
-from datetime import datetime, timezone
-from hashlib import sha256
+from dataclasses import asdict
 import json
 from pathlib import Path
-import tempfile
 
-from ..bootstrap import (build_game_application, build_game_application_for_load,
-                         build_game_application_for_scenario)
-from ..scenario import ScenarioDefinition
-from ..persistence import load_game, save_game
-from .experiment import compare_experiments, run_experiment
+from ..bootstrap import build_game_application, build_game_application_for_load
+from ..persistence import load_game
+from ..app_contracts.queries import GetTransportAllocationPreview
+from ..balance.analysis import overview, evaluate, inspect
 
 
-def _json_dict(path: Path):
-    value = json.loads(path.read_text(encoding="utf-8"), parse_constant=lambda x: (_ for _ in ()).throw(ValueError(f"non-finite JSON: {x}")))
-    if not isinstance(value, dict):
+def _load(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"),
+                      parse_constant=lambda item: (_ for _ in ()).throw(ValueError(f"invalid JSON number: {item}")))
+    if not isinstance(data, dict):
         raise ValueError("expected a JSON object")
-    return value
+    return data
 
 
-def _origin_digest(app):
-    """Fingerprint canonical authoritative State, never wall-clock Save metadata."""
-    with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "origin.json"
-        save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
-        envelope = _json_dict(path)
-    payload = {key: envelope[key] for key in ("content_id", "world_definition_id", "scenario_id", "state")}
-    return sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+def _app(source: Path | None):
+    return load_game(source, build_game_application_for_load)[0] if source else build_game_application()
 
 
-def _authored_scenario(factory_ref: str):
-    """Use the existing validated Scenario bootstrap, not a CLI-specific State codec."""
-    module, marker, function = factory_ref.partition(":")
-    if not marker or not module or not function or "." in function:
-        raise ValueError("scenario factory must be module:function")
-    provider = getattr(import_module(module), function)
-    scenario = provider()
-    if not isinstance(scenario, ScenarioDefinition):
-        raise TypeError("scenario factory must return ScenarioDefinition")
-    return build_game_application_for_scenario(scenario)
+def _transport_preview(app):
+    def preview(vehicle, origin, destination, tonnes_per_day):
+        row = app.query(GetTransportAllocationPreview(
+            vehicle_definition_id=vehicle, source_id=origin, destination_id=destination,
+            target_forward_t_per_day=tonnes_per_day, target_reverse_t_per_day=0.0))
+        return asdict(row)
+    return preview
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Execute and observe the actual GameApplication for design evaluation")
+    parser = argparse.ArgumentParser(description="Space Idle cross-domain Content balance analysis")
     sub = parser.add_subparsers(dest="mode", required=True)
-    run = sub.add_parser("run", help="run an authored Command/Query/AdvanceTime experiment")
-    run.add_argument("--script", type=Path, required=True)
-    source = run.add_mutually_exclusive_group()
-    source.add_argument("--from-save", type=Path, help="load a normal game Save; defaults to standard new game")
-    source.add_argument("--scenario-factory", help="trusted Python module:function returning a ScenarioDefinition")
-    run.add_argument("--save-out", type=Path, help="write final normal game Save")
-    run.add_argument("--checkpoint-dir", type=Path)
-    run.add_argument("--trace-file", type=Path, help="opt-in complete NDJSON day trace")
-    run.add_argument("--output", type=Path, help="complete JSON report; summary otherwise printed to stdout")
-    cmp = sub.add_parser("compare", help="compare experiment outcomes with baseline identity")
-    cmp.add_argument("--left", type=Path, required=True)
-    cmp.add_argument("--right", type=Path, required=True)
-    cmp.add_argument("--output", type=Path)
+    show = sub.add_parser("overview", help="All registered Content quantities across research generations")
+    show.add_argument("--from-save", type=Path, help="optional canonical Save (default: standard scenario)")
+    show.add_argument("--output", type=Path, help="complete JSON report (stdout prints summary)")
+    evaluation = sub.add_parser("evaluate", help="Capital and daily quantities for authored development scales")
+    evaluation.add_argument("--assessment", type=Path, required=True, help="JSON scale hypothesis, not a Command script")
+    evaluation.add_argument("--from-save", type=Path, help="optional canonical Save as base asset state")
+    evaluation.add_argument("--output", type=Path, help="complete JSON report (stdout prints summary)")
+    drilldown = sub.add_parser("inspect", help="Show contributors from an existing balance report")
+    drilldown.add_argument("--report", type=Path, required=True)
+    for name in ("resource", "facility", "vehicle", "research", "node", "period"):
+        drilldown.add_argument("--" + name)
+    drilldown.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.mode == "compare":
-        result = compare_experiments(_json_dict(args.left), _json_dict(args.right))
+    if args.mode == "inspect":
+        result = inspect(_load(args.report), **{
+            name: getattr(args, name) for name in ("resource", "facility", "vehicle", "research", "node", "period")
+        })
     else:
-        script = _json_dict(args.script)
-        if set(script) != {"format", "steps"} or script["format"] != "space-idle.development-experiment.v1":
-            parser.error("unsupported experiment format")
-        app = (load_game(args.from_save, build_game_application_for_load)[0]
-               if args.from_save else (_authored_scenario(args.scenario_factory)
-                                       if args.scenario_factory else build_game_application()))
-        origin_fingerprint = _origin_digest(app)
-        with ExitStack() as stack:
-            trace = None
-            if args.trace_file:
-                args.trace_file.parent.mkdir(parents=True, exist_ok=True)
-                trace = stack.enter_context(args.trace_file.open("x", encoding="utf-8"))
-            result = run_experiment(app, script["steps"], trace_file=trace,
-                                    checkpoint_root=args.checkpoint_dir)
-        result["origin_state_sha256"] = origin_fingerprint
-        result["origin_kind"] = ("game_save" if args.from_save else
-                                 ("authored_scenario" if args.scenario_factory else "standard_scenario"))
-        if args.scenario_factory:
-            result["scenario_factory"] = args.scenario_factory
-        result["script_sha256"] = sha256(args.script.read_bytes()).hexdigest()
-        if args.trace_file:
-            result["detail_trace_file"] = str(args.trace_file)
-        result["end_state"] = app.observe_development_state().to_json_data()
-        if args.save_out and "failed_step" not in result:
-            args.save_out.parent.mkdir(parents=True, exist_ok=True)
-            save_game(app, args.save_out)
-            result["saved_game"] = str(args.save_out)
+        app = _app(args.from_save)
+        definitions = app.balance_definitions()
+        if args.mode == "overview":
+            result = overview(definitions)
+        else:
+            result = evaluate(definitions, _load(args.assessment), current=app.balance_current(),
+                              transport_preview=_transport_preview(app), power_site=app.balance_site_power)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-        summary = ({"result_path": str(args.output), "left_day": result["left"]["end_day"],
-                    "right_day": result["right"]["end_day"],
-                    "same_start_state": result["same_start_state"]}
-                   if args.mode == "compare" else
-                   {"result_path": str(args.output), "start_day": result["start_day"],
-                    "end_day": result["end_day"], "failed_step": result.get("failed_step")})
-        print(json.dumps(summary, ensure_ascii=False))
+        summary = {"kind": result["kind"], "report": str(args.output)}
+        if args.mode == "overview":
+            summary["counts"] = result["counts"]
+            summary["research_stage_costs"] = {k: {"research_count": row["count"],
+                "theory_rp": row["theory_rp"], "prototype_work": row["prototype_work"],
+                "demonstration_work": row["demonstration_work"]}
+                for k, row in result["research_by_stage"].items()}
+        if args.mode == "evaluate":
+            summary["periods"] = [{"name": row["name"], "period_days": row["period_days"],
+                "selected_research_theory_rp": row["research"]["theory_rp_total"],
+                "investments": row["investment_by_resource"],
+                "nominal_local_gaps": sorted(
+                    (item for item in row["partial_local_nominal_balance"] if item["local_nominal_gap_t_per_day"] > 0),
+                    key=lambda item: -item["local_nominal_gap_t_per_day"])[:12],
+                "unresolved_conditions": len(row["caveats"])} for row in result["periods"]]
+        print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
     else:
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
-    return 1 if "failed_step" in result else 0
+    return 0
 
 
 if __name__ == "__main__":
