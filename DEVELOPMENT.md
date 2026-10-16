@@ -58,7 +58,7 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ローカルpytestは`scripts/local_test_run.py`の`start`で起動し、返されたrun IDを`status`へ渡してpytestの終了コードと判定結果を確認する。対象を絞る場合は`start --`以降へpytestのtargetを指定する。実行ツールのtimeout後も、`status`でテスト結果を確認する。
 
-通常の契約テストは`tests/`に集約し、Fast CIで正準契約を検証する。全体系Content調整は本体の開発CLIで任意の通常Saveまたは標準Scenarioから実GameApplicationを操作・観測する。実行入力と出力はJSONで扱い、物理ルールを再計算する独立Worksheetや擬似Game Stateは持たない。調整記録はバランス成立の合否テストではない。
+通常の契約テストは`tests/`に集約し、Fast CIで正準契約を検証する。全体系Content調整は本体の開発CLIで任意の通常Saveまたは標準Scenarioから実GameApplicationを操作・観測する。実行入力と出力はJSONで扱い、物理ルールを再計算する独立Worksheetや擬似Game Stateは持たない。調整記録はバランス成立の合否テストではない。**Contentの調整と成立確認を新設テストで代替することは禁止する。** 一時JSONのCommand/Queryを`python -m space_idle.dev_cli run`へ渡し、結果JSON・Trace・Saveから研究・建設・実輸送・決済・経過時間を観察する。通常テストはDomain不変条件やCLI公開契約の検証に限り、そこで設置したテスト用資産を実取得の証拠にしない。
 
 実際の第1・第2段階調整では、既存Saveを始点にGameApplication Query（`GetResearch` / `GetBuildOptions` / `GetDependencyAnalytics` / `GetCargoFlows`等）から取得条件と現在状態を確認し、必要なCommandで研究・設備・Fleet・輸送を変更する。同じ期間に進行したAllocation・実Resource決済・Population・Cargo等を比較し、Contentを調整した後は同じ開始状態から再評価する。段階名は実験記録であってStateの進行ゲートではない。
 

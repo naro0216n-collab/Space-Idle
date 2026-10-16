@@ -704,11 +704,17 @@ def build_base_assets() -> tuple[tuple[FacilityAsset, ...], tuple[VehicleDef, ..
             power=PowerSpec(None, 0.25),
         ),
         # CRYOGENIC_STORAGE
+        # Modular refrigerated tanks are installable on any operational node;
+        # location-specific handling/transport requirements still apply.
         FacilityAsset(
-            definition=FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備", req._capabilities("cryogenic_storage", "vehicle_refueling"), surface, surface),
-            construction=req._surface_recipe(
-                        ids.CRYOGENIC_STORAGE, 3, 2, 0.8, 22,
-                        technologies=frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_02}),
+            definition=FacilityDef(ids.CRYOGENIC_STORAGE, "極低温貯蔵設備",
+                                   req._capabilities("cryogenic_storage", "vehicle_refueling"),
+                                   req.SiteRequirements(), req.SiteRequirements()),
+            construction=ConstructionRecipe(
+                        ids.CRYOGENIC_STORAGE,
+                        (req._structure_resource(3.0), req._machinery_resource(2.0),
+                         req._electronics_resource(0.8)), 22.0, req.SiteRequirements(),
+                        frozenset({ids.CR_CRYOGENIC_STORAGE_TRANSFER_02}),
                     ),
             power=PowerSpec(None, 0.06, standby_load_mw=0.06),
             storage=StorageProviderSpec(ids.CRYOGENIC_STORAGE, {"cryogenic": 30.0}, frozenset({"cryogenic"})),

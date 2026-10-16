@@ -36,10 +36,10 @@ class FacilityRole:
 # Equipment capabilities and physical operating envelopes are per-Facility;
 # they never apply a Technology-wide buff to another installed Facility.
 _PHYSICAL_ROLES: dict[str, FacilityRole] = {
-    'remote_operations_lab': FacilityRole(('research_lab','remote_robotics_lab'), .34, research_points_tpd=12, research_execution_tpd=2.5),
+    'remote_operations_lab': FacilityRole(('research_lab','remote_robotics_lab'), .34, research_points_tpd=5.0, research_execution_tpd=3.4),
     'robotic_data_archive': FacilityRole(('research_data_archive_robotic',), .17, storage_points=600),
-    'survey_power_microgrid': FacilityRole(('surface_microgrid',), .08, power_generation_mw=1.9),
-    'surface_lander_service_pad': FacilityRole(('vehicle_refueling','cargo_transfer','spacecraft_servicing','surface_distribution'), .12, services=(('cargo_transfer',1.2),('spacecraft_servicing',.8))),
+    'survey_power_microgrid': FacilityRole(('surface_microgrid',), .08, power_generation_mw=1.9, cell=True),
+    'surface_lander_service_pad': FacilityRole(('vehicle_refueling','cargo_transfer','spacecraft_servicing','surface_distribution','surface_access_anchor'), .12, services=(('cargo_transfer',1.2),('spacecraft_servicing',.8),('surface_distribution',2.0)), cell=True),
     'orbital_light_assembly_cell': FacilityRole(('vehicle_assembly','robotic_orbital_assembly'), .38, services=(('vehicle_assembly',.9),), orbital=True),
     'crew_biomedical_research_center': FacilityRole(('research_lab','crew_biomedical_research'), .82, research_points_tpd=29, research_execution_tpd=5.0),
     'crew_research_archive': FacilityRole(('research_archive_crew',), .34, storage_points=2200),

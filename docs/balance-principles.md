@@ -122,7 +122,7 @@ Contentの工学的構成を決める前に、研究費用とRP生成・Research
 
 独立した仮想Activity Ledger・段階ごとのWorksheetは必須の評価正本としない。過去の評価基盤から本体に必要な読取・決済の契約を取り込み、重複する数量計算とSave変換経路は撤去する。評価の問いから必要なAPI・期間観測の不足が見つかれば所有Domain・Application契約を改善する。Stageは開発上の成熟度区分であり、CLIを使うだけでStage完成やTechnology Unlockが発生しない。
 
-実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は通常テストで検証する。開発用の実験結果はContent調整の証拠であってバランス保証テストではない。特定の到達日・施設数・研究順を恒久テストの正解として固定しない。
+実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、Offline、Application Query等の機能契約は通常テストで検証する。開発用の実験結果はContent調整の証拠であってバランス保証テストではない。**調整は本体CLIのCommand・Query・正準進行と出力ログで実施し、テスト作成やテスト実行を調整作業の代替に使わない。** テスト内で構築した仮の拠点・資産から、実際の取得・貨物到着・継続運用の成立を主張しない。開発用Scenarioで事前配置した設備は開始条件であり、前史の取得費用・日数はCLIの通常Commandによる取得で別に確かめる。通常テストは一般的な機能契約を検証し、特定の到達日・施設数・研究順を恒久テストの正解として固定しない。
 
 調整の進展は、次の観点で判断する。
 

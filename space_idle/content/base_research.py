@@ -361,14 +361,14 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"general_research_equipment"}),
             tier=1,
-            levels=(ResearchProviderLevelSpec(1, 4.0, 180.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 2.2, 180.0, 1.5),),
         ),
         ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER: ResearchProviderSpec(
             ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER,
             ResearchProviderSourceKind.FLEET,
             frozenset({"optical_observation_instrument"}),
             tier=1,
-            levels=(ResearchProviderLevelSpec(1, 2.0, 120.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 1.5, 120.0, 1.0),),
             site_requirements=req.ORBIT_SITE,
         ),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ResearchProviderSpec(
@@ -376,7 +376,7 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"microgravity_experiment_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 9.0, 650.0, 2.5),),
+            levels=(ResearchProviderLevelSpec(1, 5.0, 650.0, 3.2),),
         ),
         ids.CREWED_ORBITAL_LABORATORY: ResearchProviderSpec(
             ids.CREWED_ORBITAL_LABORATORY,
@@ -391,7 +391,7 @@ def build_research_providers() -> dict:
             ResearchProviderSourceKind.FACILITY,
             frozenset({"robotic_geology_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 14.0, 1400.0, 2.5),),
+            levels=(ResearchProviderLevelSpec(1, 5.5, 1400.0, 3.5),),
         ),
         ids.SAMPLE_ANALYSIS_LABORATORY: ResearchProviderSpec(
             ids.SAMPLE_ANALYSIS_LABORATORY,
