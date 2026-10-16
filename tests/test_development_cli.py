@@ -185,3 +185,62 @@ def test_canonical_transport_preview_is_kept_separate_from_assumed_delivery():
     assert route["capacity_status"] == "canonical_preview_not_guaranteed"
     assert route["preview"]["target_capacity"]["forward_t_per_day"] == 4.0
     assert route["preview"]["blockers"] is not None
+
+
+def test_canonical_growth_observation_tracks_real_investment_and_state_without_replay():
+    from space_idle import PlanBuild, AdvanceTime
+    from space_idle.content import base_ids as ids
+    from space_idle.dev_cli.growth import observe_growth
+
+    app = build_game_application()
+    app.execute(PlanBuild(str(ids.EARTH), str(ids.CONSTRUCTION_YARD),
+                          procurement_policy="extended_wait"))
+    from space_idle.persistence import save_game, load_game
+    from tempfile import TemporaryDirectory
+    from pathlib import Path
+    with TemporaryDirectory() as folder:
+        file = Path(folder) / "queued.json"
+        save_game(app, file, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        other, _ = load_game(file, build_game_application_for_load)
+    report = observe_growth(app, 60, sample_days=20)
+    other.execute(AdvanceTime(days=60))
+    assert app.balance_growth_state() == other.balance_growth_state()
+    assert report["start_day"] == 0 and report["end_day"] == 60
+    assert report["start"] != report["end"]
+    assert report["snapshots"][0] == report["start"]
+    assert report["snapshots"][-1] == report["end"]
+    assert any(row["kind"] == "facilities" and row["facility"] == str(ids.CONSTRUCTION_YARD)
+               and row["delta"] > 0 for row in report["asset_and_technology_events"])
+    assert report["settlements_by_operation"]
+    assert report["allocation_integrals"]
+    assert report["inventory_stock_changes"]
+    assert all(row["days"] <= 60 for row in report["limiting_factor_days"])
+    assert len(report["snapshots"]) < 60  # only sampled boundaries and actual changes
+
+
+def test_balance_cli_growth_report_and_inspect_uses_real_save(tmp_path):
+    from space_idle import PlanBuild
+    from space_idle.content import base_ids as ids
+    from space_idle.dev_cli.__main__ import _load
+    app = build_game_application()
+    app.execute(PlanBuild(str(ids.EARTH), str(ids.CONSTRUCTION_YARD),
+                          procurement_policy="extended_wait"))
+    start = tmp_path / "start.json"
+    save_game(app, start, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text(json.dumps(_assessment([{"name": "design", "period_days": 60}])), encoding="utf-8")
+    report_file = tmp_path / "report.json"
+    assert main(["evaluate", "--assessment", str(assessment), "--from-save", str(start),
+                 "--observe-days", "60", "--sample-days", "25", "--output", str(report_file)]) == 0
+    report = _load(report_file)
+    assert report["observed_growth"]["end_day"] == 60
+    assert report["periods"][0]["name"] == "design"  # model and measured periods stay distinct
+    inspect_file = tmp_path / "filtered.json"
+    assert main(["inspect", "--report", str(report_file), "--facility", str(ids.CONSTRUCTION_YARD),
+                 "--output", str(inspect_file)]) == 0
+    measured = _load(inspect_file)["observed_growth"]
+    assert any(row["delta"] > 0 for row in measured["asset_and_technology_events"])
+    assert load_game(start, build_game_application_for_load)[0].game_day == 0
+    with pytest.raises(ValueError):
+        from space_idle.dev_cli.growth import observe_growth
+        observe_growth(build_game_application(), 0)

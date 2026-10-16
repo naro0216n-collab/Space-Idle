@@ -87,10 +87,11 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 ```bash
 python -m space_idle.dev_cli overview --output /temp/overview.json
 python -m space_idle.dev_cli evaluate --assessment /temp/assessment.json --output /temp/evaluation.json
+python -m space_idle.dev_cli evaluate --assessment /temp/assessment.json --from-save /temp/start.json --observe-days 120 --sample-days 30 --output /temp/growth.json
 python -m space_idle.dev_cli inspect --report /temp/evaluation.json --resource base.resource.precision_electronics --output /temp/electronics.json
 ```
 
-`overview`と`evaluate`は`--from-save`で正準Saveの既存資産を開始基準にできる。`evaluate`の詳細レポートには期間別投資、研究群とPrerequisite、日次Resource入出力、名目能力、元Definition、輸送Previewの結果、未確認条件を保存する。工程Outputは名目生産量であり、実在庫や輸送可能量とみなさない。レポートをGame Stateへ保存しない。`run`、`compare`、任意Command列の実行・Checkpoints、実験Script・TraceはCLIから撤去済みであり、経路成立は通常テストの責務である。
+`overview`と`evaluate`は`--from-save`で正準Saveの既存資産を開始基準にできる。`evaluate --observe-days N`はその開始Stateの既存Player計画を正準SimulationでN日進め、期間中の設備・Fleet・人口・研究解禁・在庫の実変化、Resource決済・Allocation制約を`observed_growth`に集約する。`--sample-days`は詳細なState snapshotの最大間隔であり、Asset/解禁の変化点は間隔にかかわらず記録する。元Saveは変更せず、新しい施設・研究をCLIが自動選択することもない。`inspect`では期間名を指定しない場合、同じ報告の実測Resource・施設などへ寄与を展開できる。開始時点の未取得資産の前史を実証したとは扱わない。期間末目標数量×全日数の値は目標規模の反実仮想であって、漸増中の実累計ではない。`evaluate`の詳細レポートには期間別投資、研究群とPrerequisite、日次Resource入出力、名目能力、元Definition、輸送Previewの結果、未確認条件を保存する。工程Outputは名目生産量であり、実在庫や輸送可能量とみなさない。レポートをGame Stateへ保存しない。`run`、`compare`、任意Command列の実行・Checkpoints、実験Script・TraceはCLIから撤去済みであり、経路成立は通常テストの責務である。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 

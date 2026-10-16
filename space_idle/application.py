@@ -89,6 +89,11 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         from .application_balance import project_balance_current
         return project_balance_current(self)
 
+    def balance_growth_state(self) -> dict:
+        """Compact authoritative snapshot for longitudinal balance evidence."""
+        from .application_balance import project_balance_growth_state
+        return project_balance_growth_state(self)
+
     def balance_site_power(self, node_id: str, facility_id: str) -> dict:
         from .application_balance import project_balance_site_power
         return project_balance_site_power(self, node_id, facility_id)

@@ -371,7 +371,7 @@ def evaluate(defs: dict, assessment: dict, *, current: dict | None = None, trans
                              "capital_requirement_t": acquired, "operating_requirement_t": recurring,
                              "nominal_process_output_t": nominal_output,
                              "net_nominal_requirement_t": acquired + recurring - nominal_output,
-                             "interpretation": "No Stock availability, equipment acquisition schedule, or Cargo delivery implied"})
+                             "interpretation": "Counterfactual: target assets operate for the ENTIRE period; not a growth-period production/consumption estimate"})
         global_pressure = defaultdict(lambda: [0., 0., 0.])
         for row in pressure:
             values = global_pressure[row["resource"]]
@@ -381,7 +381,7 @@ def evaluate(defs: dict, assessment: dict, *, current: dict | None = None, trans
         global_pressure_rows = [{"resource": r, "capital_requirement_t": values[0],
                                  "operating_requirement_t": values[1], "nominal_process_output_t": values[2],
                                  "net_nominal_requirement_t": values[0] + values[1] - values[2],
-                                 "not_deliverable_global_supply": True}
+                                 "not_deliverable_global_supply": True, "counterfactual_target_entire_period": True}
                                 for r, values in sorted(global_pressure.items())]
         capacity_levels = defaultdict(lambda: {"nominal_supply": 0.0, "stated_requirement": 0.0})
         for (node, service, measure, _), value in finite.items():
@@ -432,7 +432,7 @@ def evaluate(defs: dict, assessment: dict, *, current: dict | None = None, trans
     return {"kind": "balance_evaluation", "identity": defs["identity"],
             "assessment": assessment, "prospective_locations": hypothetical_nodes, "periods": output,
             "current_state_evidence": current,
-            "interpretation": "Capital demand is incremental against prior authored target; operation is nominal at each target. Neither implies acquisition history, allocation, sustained production, or cargo arrival."}
+            "interpretation": "Capital demand is incremental against prior authored target. Operation is nominal at the END target, not growth-period actual. Full-period pressure assumes target operation for the entire period as a counterfactual; use observed_growth for actual settlements and asset changes. No investment completion, allocation, or Cargo delivery is inferred."}
 
 
 def inspect(report: dict, *, resource: str | None = None, facility: str | None = None,
@@ -468,4 +468,22 @@ def inspect(report: dict, *, resource: str | None = None, facility: str | None =
         if research is not None: relevant["research_in_prerequisite_closure"] = research in row["research"]["prerequisite_closure"]
         periods.append({"name": row["name"], **relevant})
     if period and not periods: raise ValueError(f"unknown period: {period}")
-    return {"kind": "balance_inspect", "filters": filters, "periods": periods}
+    growth = report.get("observed_growth")
+    observed = None
+    if growth is not None and period is None:
+        def selected(item):
+            if node is not None and item.get("node", item.get("context")) != node: return False
+            if resource is not None and item.get("resource", item.get("subject")) != resource: return False
+            if facility is not None and item.get("facility") != facility: return False
+            if vehicle is not None and item.get("vehicle") != vehicle: return False
+            if research is not None and item.get("research") != research: return False
+            return True
+        observed = {"start_day": growth["start_day"], "end_day": growth["end_day"],
+                    **{key: [item for item in growth[key] if selected(item)]
+                       for key in ("inventory_stock_changes", "asset_and_technology_events",
+                                   "settlements_by_operation", "attributed_activity_flows",
+                                   "unattributed_settlements", "limiting_factor_days", "allocation_integrals")}}
+        # Activity IDs do not necessarily identify a specific Resource owner;
+        # neither inferred causality nor implicit resource attribution is added.
+    return {"kind": "balance_inspect", "filters": filters, "periods": periods,
+            "observed_growth": observed}

@@ -1,7 +1,7 @@
 """Explicit, non-authoritative observations of canonical Allocation and Inventory settlement.
 
 No alternative allocator, stock-difference approximation of gross flow, or
-permanent domain history. Observers are installed only by an experiment scope.
+permanent domain history. Observers are installed only within an explicit scope.
 """
 from __future__ import annotations
 

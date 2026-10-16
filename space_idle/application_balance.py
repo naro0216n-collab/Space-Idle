@@ -254,3 +254,48 @@ def project_balance_site_power(app, node_id: str, facility_id: str) -> dict:
     generation, load = sim.power.nominal_for_definition_at_context(
         DefinitionId(facility_id), SpatialNodeId(node_id))
     return {"generation_mw": generation, "load_mw": load, "status": "nominal_site_coefficient"}
+
+
+def project_balance_growth_state(app) -> dict:
+    """Compact authoritative growth snapshot; avoids full World/Content catalog scans.
+
+    Returns only domain-owned current quantities. An observation is not a Save,
+    forecast, or evidence of how pre-existing assets were acquired.
+    """
+    sim = app._simulation
+    facilities = defaultdict(int)
+    for asset in sim.facilities.facilities.values():
+        facilities[(str(asset.operational_node_id), str(asset.definition_id))] += asset.level
+    fleets = []
+    for vehicle_id, node_id in sim.transport.fleet_pool_keys():
+        pool = sim.transport.fleet_pool_snapshot(vehicle_id, node_id)
+        if pool.total_units:
+            fleets.append({"node": str(node_id), "vehicle": str(vehicle_id),
+                           "count": pool.total_units, "free": pool.free_units})
+    population = []
+    if sim.population is not None:
+        for node in sim.graph.operational_node_ids():
+            people = sim.population.count_at(node)
+            if people:
+                population.append({"node": str(node), "people": people})
+    stock = []
+    for node, resource in sorted(sim.inventory.stock):
+        amount = sim.inventory.amount(node, resource)
+        if amount:
+            stock.append({"node": str(node), "resource": str(resource), "stock_t": amount,
+                          "available_t": sim.inventory.available(node, resource)})
+    return {
+        "day": sim.day,
+        "facilities": [{"node": node, "facility": facility, "count": count}
+                       for (node, facility), count in sorted(facilities.items())],
+        "fleet": sorted(fleets, key=lambda x: (x["node"], x["vehicle"])),
+        "population": sorted(population, key=lambda x: x["node"]),
+        "inventory": stock,
+        "research_points_stored": None if sim.research is None else sim.research.stored_points,
+        "completed_technologies": sorted(str(key) for key in sim.technology.completed),
+        "active_research": [] if sim.research is None else [
+            {"research": str(key), "stage": state.current_stage_id,
+             "progress": state.stage_progress or 0.0, "paused": state.paused}
+            for key, state in sorted(sim.research.active.items())
+        ],
+    }

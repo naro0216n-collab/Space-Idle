@@ -102,6 +102,8 @@ SF技術は新しい研究名だけを評価しない。運動量交換・電磁
 
 全8段階にわたる発展像とContent構成を`overview`で俯瞰し、必要な活動・研究群・拠点・施設・Vehicle・期間を設計仮説として指定して`evaluate`で共通数量を比較する。`inspect`で不足・過剰・世代断絶の寄与を特定し、数値に加えて研究・施設・工程・Worldの構成や活動規模自体を変更する。変更後は同じ数量体系で隣接段階を含めて再評価する。
 
+同じ目標施設数でも、期間初日からすべて稼働する場合と順次増設する場合では実効Resource物量・投資可能量が異なる。期間末目標の名目日次量は到達時点の設計比較に用い、期間全体の生産・消費量として扱わない。必要なとき既存の研究・建設・輸送計画を正準GameApplicationで進めて、施設数・人口・RP・在庫の変化、期間決済、Allocation制約を観測する。これらの実測はScriptによる経路成立試験ではなく漸増する経済の数量根拠とする。
+
 ### 7.2 評価条件と数量証拠
 
 開始Stateは標準Scenarioまたは通常Saveから取得できるが、事前配置済み資産が実取得された前史を示すことはない。追加取得と既存資産、投資総量と継続日次負担、研究Theory RPとtyped Stage、名目能力と有限Allocation、同Node需給と輸送可能な供給を区別する。評価期間や発展段階は設計者の入力であり、特定Researchの全件取得や一つのPlayer攻略手順を意味しない。
@@ -114,7 +116,7 @@ SF技術は新しい研究名だけを評価しない。運動量交換・電磁
 
 ## 8. バランス調整CLI・機能検証と完了判断
 
-全体系Contentの数量調整は専用CLIの`overview`、`evaluate`、`inspect`で行う。CLIは数量の統合・寄与追跡に限定し、実ゲームを模した独立Activity Ledger、別のSimulation、任意Command列再生、最適Build探索、実験CheckpointやState差分比較を持たない。設計者が対象規模を変更した際には、評価条件から同一のDefinition・Domain係数で再計算し、取得の累積負担と継続需給・有限能力の変化を確認する。
+全体系Contentの数量調整は専用CLIの`overview`、`evaluate`、`inspect`で行う。実測が必要な場合、`evaluate`は正準Saveまたは通常Scenarioにすでに存在するPlayer計画を進めて期間変化を観測し、名目の設計数量と区別して示す。CLIは数量の統合・寄与追跡に限定し、実ゲームを模した独立Activity Ledger、別のSimulation、任意Command列再生、最適Build探索、実験CheckpointやState差分比較を持たない。設計者が対象規模を変更した際には、評価条件から同一のDefinition・Domain係数で再計算し、取得の累積負担と継続需給・有限能力の変化を確認する。
 
 ゲーム内での実行可否、Resource保存、Allocation、Fleet commitment、Technology eligibility、Save/Load、OfflineおよびApplication Queryは通常テストの責務とする。恒久テストはCLIの数量契約と所有Domainの不変条件を検証し、暫定のFacility数・研究日数・理想Buildを固定しない。バランス調整そのものはCLIによる実データ評価を用いて実施する。
 

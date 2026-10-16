@@ -995,11 +995,11 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 全登録ContentとWorldを俯瞰してから、設計者が指定する活動規模における研究需要、資本取得、継続運用、有限能力、物流、人口および時間を共通尺度で照合する。分析は全8表示段階と前後の継承投資を対象とし、表示段階を実進行ゲートや研究の全件取得条件にはしない。後期の多拠点化・大型化も初期と同じ分析契約で扱う。
 
-バランス調整専用CLIの役割は、登録Definitionの全体構造を得る `overview`、設計者が仮定した発展規模・期間から取得投資と名目継続需給・能力を得る `evaluate`、それらの数量からSource Definition・地点・用途を追跡する `inspect` とする。設計者は全体の不均衡を発見し、研究、Facility、Vehicle、Process、Resource、World、初期条件および発展規模を再評価し、変更後に全体系へ戻る。CLIが最適Build、標準攻略、研究順や自動資産配置を決めない。
+バランス調整専用CLIの役割は、登録Definitionの全体構造を得る `overview`、設計者が仮定した発展規模・期間から取得投資と名目継続需給・能力を得る `evaluate`、それらの数量からSource Definition・地点・用途を追跡する `inspect` とする。`evaluate`は必要に応じて通常Scenario/Saveの正準GameApplicationを指定期間進め、実際の施設・Fleet・人口・研究解禁・在庫の変化、実決済、Allocation制約を集約して設計数量と併記する。現行のGame Stateにある建設・研究・輸送計画を進めるが、CLIは設計者の目標設備数を自動建設したり、Player判断の列を生成しない。設計者は全体の不均衡を発見し、研究、Facility、Vehicle、Process、Resource、World、初期条件および発展規模を再評価し、変更後に全体系へ戻る。CLIが最適Build、標準攻略、研究順や自動資産配置を決めない。
 
 登録全研究のRP合計は体系の分布値であり必修需要ではない。想定研究群とPrerequisiteを選んだ評価でも、RP生成・Research execution・Pool admissionと、Prototype、Demonstration、Operational Experienceの負担を分離する。建設・製造の一時投資と持続的な消費は別の測度として集計し、同じ期間の能力競合と照合する。中間材のProcess投入・出力を外部供給へ二重計上しない。Node間余剰と輸送成立を同一視しない。
 
-分析値はDefinition/所有Domain由来の名目係数、設計者の数量仮定、実Game State由来の現在値、未確認の要件を区別する。評価条件では実在するOperational Nodeのほか、設計上の将来拠点をWorldの天体と結び付くラベルとして指定できる。ただし将来拠点の設立・搬入・環境適合が成立したとみなさず、取得できない地点固有係数は未知とする。評価条件から未建設Facilityの実稼働、研究完了、Cargo到着、将来の実Allocationや実効所要日数を予言しない。未確定の数量は未知として残し、調整判断に必要なら所有Domainの副作用のない係数Queryを整備する。期間・地点・単位・寄与元を保持し、同じ物理規則を別のSimulationとして再実装しない。
+分析値はDefinition/所有Domain由来の名目係数、設計者の数量仮定、実Game State由来の現在値、未確認の要件を区別する。評価条件では実在するOperational Nodeのほか、設計上の将来拠点をWorldの天体と結び付くラベルとして指定できる。ただし将来拠点の設立・搬入・環境適合が成立したとみなさず、取得できない地点固有係数は未知とする。評価条件から未建設Facilityの実稼働、研究完了、Cargo到着、将来の実Allocationや実効所要日数を予言しない。未確定の数量は未知として残し、調整判断に必要なら所有Domainの副作用のない係数Queryを整備する。期間・地点・単位・寄与元を保持し、同じ物理規則を別のSimulationとして再実装しない。期間末目標施設数の名目日次数量を、増設期間全体の実績量に換算しない。実効な漸増・途中投資・在庫推移を必要とするときは正準Applicationの期間観測で確認する。
 
 経路成立、Resource保存、State ownership、研究・建設・輸送の実状態遷移、Persistence、Offline、Application契約は通常テストで検証する。バランス調整CLIに任意Command列の実行管理、経路テスト、チェックポイント、終了State差分比較を持たせない。Content調整をテスト作成で代替せず、実際の数量評価をCLIの出力で実施する。
 

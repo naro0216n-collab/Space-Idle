@@ -13,6 +13,7 @@ from ..bootstrap import build_game_application, build_game_application_for_load
 from ..persistence import load_game
 from ..app_contracts.queries import GetTransportAllocationPreview
 from ..balance.analysis import overview, evaluate, inspect
+from .growth import observe_growth
 
 
 def _load(path: Path) -> dict:
@@ -46,6 +47,8 @@ def main(argv=None) -> int:
     evaluation.add_argument("--assessment", type=Path, required=True, help="JSON scale hypothesis, not a Command script")
     evaluation.add_argument("--from-save", type=Path, help="optional canonical Save as base asset state")
     evaluation.add_argument("--output", type=Path, help="complete JSON report (stdout prints summary)")
+    evaluation.add_argument("--observe-days", type=int, help="measure canonical growth of the source State and its existing plans")
+    evaluation.add_argument("--sample-days", type=int, default=30, help="maximum days between measured State samples")
     drilldown = sub.add_parser("inspect", help="Show contributors from an existing balance report")
     drilldown.add_argument("--report", type=Path, required=True)
     for name in ("resource", "facility", "vehicle", "research", "node", "period"):
@@ -64,6 +67,8 @@ def main(argv=None) -> int:
         else:
             result = evaluate(definitions, _load(args.assessment), current=app.balance_current(),
                               transport_preview=_transport_preview(app), power_site=app.balance_site_power)
+            if args.observe_days is not None:
+                result["observed_growth"] = observe_growth(app, args.observe_days, sample_days=args.sample_days)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
@@ -74,6 +79,18 @@ def main(argv=None) -> int:
                 "theory_rp": row["theory_rp"], "prototype_work": row["prototype_work"],
                 "demonstration_work": row["demonstration_work"]}
                 for k, row in result["research_by_stage"].items()}
+        if args.mode == "evaluate" and "observed_growth" in result:
+            measured = result["observed_growth"]
+            summary["measured_growth"] = {
+                "start_day": measured["start_day"], "end_day": measured["end_day"],
+                "asset_events": len(measured["asset_and_technology_events"]),
+                "asset_changes": measured["asset_and_technology_events"][:12],
+                "largest_stock_changes": sorted(measured["inventory_stock_changes"],
+                    key=lambda item: -abs(item["delta_stock_t"]))[:12],
+                "limiting_factors": len(measured["limiting_factor_days"]),
+                "most_persistent_limiters": sorted(measured["limiting_factor_days"],
+                    key=lambda item: -item["days"])[:8],
+            }
         if args.mode == "evaluate":
             summary["periods"] = [{"name": row["name"], "period_days": row["period_days"],
                 "selected_research_theory_rp": row["research"]["theory_rp_total"],
