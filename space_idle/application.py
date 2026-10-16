@@ -78,8 +78,3 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         from .analysis_execution import observe_canonical_day
         return observe_canonical_day(self._simulation, operational_node_ids=operational_node_ids,
                                      resource_ids=resource_ids)
-
-    def balance_definitions(self) -> dict:
-        """Read-only, cross-domain balance input through the Application boundary."""
-        from .application_balance import project_balance_definitions
-        return project_balance_definitions(self)

@@ -374,7 +374,8 @@ class ResearchProgressionProjectorMixin:
     def _uncached_research_view(self) -> ResearchView:
         sim = self._simulation
         if sim.research is None:
-            return ResearchView(0.0, 0.0, 0.0, 0.0, False, (), (), (), ())
+            return ResearchView(0.0, 0.0, 0.0, 0.0, False, (), (), (), (),
+                                completed_technologies=tuple(sorted(map(str, sim.technology.completed))))
         decision = self._tick_decision_projection()
         power_by_location = decision.allocations.power_by_location
         generation = sim.research.generation_rate(power_by_location, sim.day)
@@ -535,4 +536,5 @@ class ResearchProgressionProjectorMixin:
             sim.research.stored_points, capacity, generation, admitted_generation,
             sim.research.stored_points > capacity + 1e-9, providers,
             provider_fleet, knowledge, tuple(rows),
+            completed_technologies=tuple(sorted(map(str, sim.technology.completed))),
         )

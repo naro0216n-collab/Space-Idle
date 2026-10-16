@@ -451,6 +451,14 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                                    "resource": row["resource"], "target_t_per_day": quantity,
                                    "limits": ["logistics"]})
             transport.append(result)
+        # Desired cargo movements are a demand at origin, not a delivered
+        # inventory credit at destination. Inbound is shown separately as a
+        # conditional envelope so a route cannot manufacture supply.
+        transport_outbound = defaultdict(float)
+        transport_inbound = defaultdict(float)
+        for row in transport:
+            transport_outbound[(row["source"], row["resource"])] += row["target_t_per_day"]
+            transport_inbound[(row["destination"], row["resource"])] += row["target_t_per_day"]
         population_daily = defaultdict(float)
         population_evidence = []
         seen_population = set()
@@ -501,7 +509,12 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             daily_input[key] += value
         nominal_output = defaultdict(float)
         work = defaultdict(float)
-        quantity_evidence = prototype_details + population_evidence
+        quantity_evidence = prototype_details + population_evidence + [
+            {"kind": "authored_transport_target", "id": (row["source"], row["destination"], row["resource"]),
+             "source": row["source"], "destination": row["destination"],
+             "resource": row["resource"], "target_t_per_day": row["target_t_per_day"],
+             "delivery_is_unverified": True}
+            for row in transport]
         # Quantity of the milestone asset inventory is a target, not a build schedule.
         capacity = defaultdict(float)
         power = defaultdict(lambda: [0.0, 0.0])
@@ -579,6 +592,15 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
 
         starting_capacity = research_capacity(starting_facilities, starting_fleet)
         end_capacity = research_capacity(facilities, fleet_target)
+        reference_rate = conditional_rp if conditional_rp is not None else required_rp
+        if (reference_rate > end_capacity["generation_rp_per_day"] + 1e-9 or
+                reference_rate > end_capacity["execution_rp_per_day"] + 1e-9):
+            conditions.append({"code": "planned_end_research_rate_below_interval_reference",
+                               "required_reference_rp_per_day": reference_rate,
+                               "nominal_end_generation_rp_per_day": end_capacity["generation_rp_per_day"],
+                               "nominal_end_execution_rp_per_day": end_capacity["execution_rp_per_day"],
+                               "not_an_actual_timing_or_rp_stock_verdict": True,
+                               "limits": ["research", "time"]})
         construction_supply = defaultdict(float)
         for (node, fid), count in facilities.items():
             construction_supply[node] += count * defs["facilities"][fid]["construction_work_per_day"]
@@ -620,6 +642,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             reference_demand[key] += amount / interval_days
         for key, amount in daily_input.items():
             reference_demand[key] += amount
+        for key, amount in transport_outbound.items():
+            reference_demand[key] += amount
         upstream_demand, selected_output, chosen_processes, reference_units, supply_issues = _selected_supply(
             defs, list(running_supply.values()), reference_demand, interval_days,
             nodes, known_nodes, already_researched, already_researched_at_start)
@@ -634,7 +658,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                          for r in defs["owned"]["available_inventory"]} if index == 0 else {})
         resource_budget = []
         for node, resource in sorted(set(capital) | set(daily_input) | set(upstream_demand) |
-                                     set(selected_output) | set(supply_assumptions) | set(initial_stock)):
+                                     set(selected_output) | set(supply_assumptions) | set(initial_stock) |
+                                     set(transport_outbound) | set(transport_inbound)):
             key = (node, resource)
             acquisition = capital.get(key, 0.0)
             operation = daily_input.get(key, 0.0)
@@ -660,6 +685,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                 "capital_investment_t": acquisition,
                 "average_capital_requirement_t_per_day_if_spread_over_interval": acquisition / interval_days,
                 "end_target_operation_input_t_per_day": operation,
+                "authored_transport_outbound_t_per_day": transport_outbound[key],
+                "conditional_transport_inbound_t_per_day_not_delivered": transport_inbound[key],
                 "conditional_reference_output_t_per_day": output,
                 "direct_reference_requirement_t_per_day": reference,
                 "upstream_intermediate_input_t_per_day": max(0.0, all_demand - reference),
@@ -668,7 +695,7 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                 "remaining_unestablished_supply_t_per_day": max(0.0, all_demand - output),
                 "average_capital_plus_end_target_operation_input_t_per_day": reference,
                 "quantity_status": "conditional_reference_not_delivery",
-                "interpretation": "Capital is spread only to compare scales; conditional processes, start stock and authored supply assumptions do not establish delivered supply or a construction schedule."})
+                "interpretation": "Capital is spread only to compare scales; outbound transport is an origin demand, inbound transport is not delivered supply, and conditional processes, start stock and authored supply assumptions do not establish delivery or a construction schedule."})
         for (node, fid), count in sorted(reference_units.items()):
             chosen = facilities.get((node, fid), 0)
             if count > chosen:
@@ -710,7 +737,7 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                                       "node": node, "nominal_generation_mw": generation,
                                       "nominal_load_mw": load, "limits": ["power", "supply", "research"]})
         # Global totals are economic *magnitudes*, not freely transferable supplies.
-        totals = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
+        totals = defaultdict(lambda: [0.0] * 7)
         for row in resource_budget:
             columns = totals[row["resource"]]
             columns[0] += row["capital_investment_t"]
@@ -718,11 +745,15 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             columns[2] += row["conditional_reference_output_t_per_day"]
             columns[3] += row["upstream_intermediate_input_t_per_day"]
             columns[4] += row["remaining_unestablished_supply_t_per_day"]
+            columns[5] += row["authored_transport_outbound_t_per_day"]
+            columns[6] += row["conditional_transport_inbound_t_per_day_not_delivered"]
         economy_resources = [{"resource": resource, "capital_investment_t": cols[0],
                               "end_target_operation_input_t_per_day": cols[1],
                               "conditional_reference_output_t_per_day": cols[2],
                               "conditional_upstream_input_t_per_day": cols[3],
                               "remaining_unestablished_supply_t_per_day": cols[4],
+                              "authored_transport_outbound_t_per_day": cols[5],
+                              "conditional_transport_inbound_t_per_day_not_delivered": cols[6],
                               "not_deliverable_global_supply": True}
                              for resource, cols in sorted(totals.items())]
         if not selected and not any(step.get(field) for field in (
@@ -813,6 +844,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                 {"node": r["node"], "resource": r["resource"],
                  "capital_t": r["capital_investment_t"],
                  "operating_t_per_day": r["end_target_operation_input_t_per_day"],
+                 "transport_outbound_t_per_day": r["authored_transport_outbound_t_per_day"],
+                 "conditional_transport_inbound_t_per_day": r["conditional_transport_inbound_t_per_day_not_delivered"],
                  "conditional_upstream_t_per_day": r["upstream_intermediate_input_t_per_day"]}
                 for r in stage["resource_time_budget"]],
             "transport_routes": len(stage["transport_targets"]),

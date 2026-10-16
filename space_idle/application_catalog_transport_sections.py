@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .application_catalog_support import operation_capability_definition, site_requirements_definition
+from .application_catalog_support import (operation_capability_definition, site_requirements_definition, research_provider_definition)
 from .application_transport_support import vehicle_concept
 from .application_views import MovementPlanDefinitionRow, VehicleDefinitionRow
 
@@ -19,6 +19,11 @@ def project_vehicles(projector):
             definition.turnaround_service_type, definition.turnaround_days,
             tuple((str(resource_id), amount_t) for resource_id, amount_t in definition.turnaround_resources),
             tuple(operation_capability_definition(capability) for capability in definition.performance.operation_capabilities),
+            tuple(research_provider_definition(provider) for provider in sorted(
+                (p for p in sim.research.providers.values()
+                 if p.source_kind.value == "fleet" and p.accepts_source(definition.generic_capabilities)),
+                key=lambda item: str(item.id),
+            )) if sim.research is not None else (),
         )
         for definition in sim.transport.vehicle_definitions()
     )

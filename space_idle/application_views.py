@@ -6,7 +6,7 @@ from .app_contracts.catalog_views import (
     OperationCapabilityDefinitionRow, ResourceDefinitionRow, FacilityDefinitionRow,
     ProcessDefinitionRow, ResearchDefinitionRow, ResearchStageDefinitionRow, VehicleDefinitionRow, MovementPlanDefinitionRow,
     CelestialBodyDefinitionRow, OperationalNodeDefinitionRow,
-    ServiceCapacityDefinitionRow, CatalogView, OperationalNodeSummary, WorldView,
+    ServiceCapacityDefinitionRow, CatalogView, OperationalNodeSummary, WorldView, DevelopmentWorldReferenceView,
 )
 from .app_contracts.project_views import (
     ProjectResourceRow, BuildResourceOption, BuildOptionRow, BuildProcessOptionRow, BuildResearchCapacityRow, BuildSurveyModeRow, BuildSurveyProviderRow, FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
@@ -55,7 +55,7 @@ from .app_contracts.passenger_views import (
 )
 
 QueryResult: TypeAlias = (
-    CatalogView | WorldView | SurfaceMapView | NonSurfaceFoundingView | OperationalNodeView | FlowReportView | BottlenecksView |
+    CatalogView | DevelopmentWorldReferenceView | WorldView | SurfaceMapView | NonSurfaceFoundingView | OperationalNodeView | FlowReportView | BottlenecksView |
     DependencyAnalyticsView | DetailedForecastView |
     ProjectsView | BuildOptionsView | LogisticsView | LogisticsSummaryView |
     MovementPlansView | FleetView | FleetRelocationPreviewView | TransportAllocationsView | CargoFlowsView |

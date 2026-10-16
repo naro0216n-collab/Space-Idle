@@ -164,6 +164,7 @@ class ResearchView:
     provider_fleet: tuple[ResearchProviderFleetRow, ...]
     knowledge: tuple[ResearchKnowledgeRow, ...]
     items: tuple[ResearchRow, ...]
+    completed_technologies: tuple[str, ...] = ()
 
 
 

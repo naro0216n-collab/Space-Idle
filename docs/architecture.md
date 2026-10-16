@@ -1228,14 +1228,14 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 
 開発CLIは累計プレイ時間と活動規模から全8段階の研究・資本・継続運用・供給・物流・人口を評価する**一つの公開操作**だけを提供する。入力は累計順の`space-idle.pacing-targets.v1`で、基準速度の1 game day = 実時間1秒を換算尺度とする。これはGame State遷移、実完了日、実行可能Buildの予測ではない。
 
-正準GameApplicationは研究StageとPrerequisite、Facility/Vehicle Recipeと能力、Process/Extraction、World/Node、Inventory/Facility/Fleet/Technology/Populationの開始実State、必要に応じてTransport Previewを副作用のないProjectionとして提供する。CLIはDomain Stateを所有せず、その係数と設計者入力を用いて数量だけを導出する。生産・建設・研究・物流・人口のEligibility、Allocation、Inventory会計、Save/Load、Offline進行を独立実装しない。
+正準GameApplicationは研究StageとPrerequisite、Facility/Vehicle Recipeと能力、Process/Extraction、World/Node、Inventory/Facility/Fleet/Technology/Populationの開始実State、必要に応じてTransport Previewを副作用のないProjectionとして提供する。GUIとCLIは**同一のApplication Query投影**からこれらを取得する。Definitionは`GetCatalog`、実資産・在庫・人口・選択済み工程は`GetOperationalNode`、Fleetは`GetFleet`、研究実状態は`GetResearch`を使用する。Worldの全セル物理分布は非Player用の`GetDevelopmentWorldReference`で区別し、HTTP/UIへ公開しない。完了TechnologyはResearch表示行から推測せず、同じResearch Queryのauthoritativeな完了Technology一覧を使う。Projectorは所有DomainのDefinition/Stateから投影する唯一の経路とし、GUI表示と開発CLIが二重に係数やStateを再構成しない。CLIはDomain Stateを所有せず、その係数と設計者入力を用いて数量だけを導出する。開発側の`balance/application_inputs.py`はApplication Query DTOからバランス数量入力への整形のみを担当し、Simulation/private Domainを参照しない。取得対象の登録追加に手動のCLI側配線を要しないこと、投影未定義の係数は暗黙のゼロにしないことを契約とする。生産・建設・研究・物流・人口のEligibility、Allocation、Inventory会計、Save/Load、Offline進行を独立実装しない。
 
 数量計算の基礎は次の関係とする。
 
 1. 研究群・施設/Fleet取得・人口/輸送・稼働条件から、地点別の最終用途Resource需要、一時的取得負担、Workと期末継続需要を取得する。研究Prototypeの投入地点が未選択なら未割当として保持する。
 2. 設計者が選択した供給方式についてのみ、Resource需要に対するProcess/Extractionの条件付き稼働量を算出する。同一Processの複数産出物・副産物は一回の稼働量から計上し、その投入を上流需要へ接続する。供給方式未選択、地質・技術・投入資材が未成立、循環依存の開始条件不明は供給成立として扱わず未確定情報を保持する。
 3. 供給方式から計算される参考必要設備数、Transport Previewの参考Fleet数、人口支援設備参考台数、研究Provider参考台数は**資本取得に加算しない**。取得投資に算入するのは開始実資産との差として設計者が明示したFacility/Vehicle目標のみ。段階間に引き継ぐその資産と選択研究は、明示された**計画状態**であって実完了Stateではない。
-4. 資材の初期Stock・一時的資本需要・期末継続投入・条件付き中間投入/産出・Resource別地点別の輸送を区別する。期末設備を区間全体で運転したと仮定せず、取得総量を期間で除した値は供給規模の比較尺度に限定する。Power、Work、Service、Fleet、研究RP生成・execution・Pool容量、技術解禁・建設先行条件を同時性の制約として表示するが、最適な成長過程を求めない。
+4. 資材の初期Stock・一時的資本需要・期末継続投入・条件付き中間投入/産出・Resource別地点別の輸送を区別する。明示された輸送目標は出発NodeのResource需要に含め、到着Nodeへの搬入は未成立の条件付き参考量として別計上する。これを実Inventoryや供給成立とみなさず、往復Fleet・移動所要時間等は正準Transport Preview/実Applicationに委ねる。期末設備を区間全体で運転したと仮定せず、取得総量を期間で除した値は供給規模の比較尺度に限定する。Power、Work、Service、Fleet、研究RP生成・execution・Pool容量、技術解禁・建設先行条件を同時性の制約として表示するが、最適な成長過程を求めない。
 5. 一度のCLI出力は全体サマリー、各段階の数量、Definition ID・使用係数へ辿れる根拠から構成する。実State/設計仮説/選択方式に依存する条件付き量/実成立未検証を区別し、未確定要因が制限する数量・分野・地点を保持する。独立した`inspect`、`evaluate`、`run`、`compare`等を復活させない。
 
 正準GameApplicationの通常Commandによって研究・建設・生産・輸送・人口の具体的進行を検証し、そこで発見したContent上の問題を全体系評価へ戻す。CLIは自動適正値算出、攻略計画生成、Game Stateの創作、第二のSimulationを行わない。Calculation契約とContent調整判断の妥当性は別々に検証する。特定の段階日数、Facility数量、選択研究群の値を恒久Coreテストへ固定しない。

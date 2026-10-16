@@ -10,6 +10,7 @@ from ..bootstrap import build_game_application, build_game_application_for_load
 from ..persistence import load_game
 from ..app_contracts.queries import GetTransportAllocationPreview
 from ..balance.pacing import tune
+from ..balance.application_inputs import collect_application_inputs
 
 
 def _load(path: Path) -> dict:
@@ -34,7 +35,7 @@ def main(argv=None) -> int:
             vehicle_definition_id=vehicle, source_id=origin, destination_id=destination,
             target_forward_t_per_day=rate, target_reverse_t_per_day=0.0)))
 
-    report = tune(app.balance_definitions(), _load(args.targets), transport_preview=transport_preview)
+    report = tune(collect_application_inputs(app), _load(args.targets), transport_preview=transport_preview)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")

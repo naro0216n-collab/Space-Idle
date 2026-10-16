@@ -383,6 +383,8 @@ class LocationProjectorMixin:
                         sim.power.specs[facility.definition_id].standby_load_mw * facility.level
                         if facility.definition_id in sim.power.specs else 0.0
                     ),
+                    selected_process_id=None if facility.selected_process_id is None else str(facility.selected_process_id),
+                    selected_extraction_method_id=None if facility.selected_extraction_method_id is None else str(facility.selected_extraction_method_id),
                     operating_resources_per_day=tuple(
                         (str(resource_id), rate * facility.level)
                         for resource_id, rate in definition.operating_resources_per_day

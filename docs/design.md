@@ -1001,6 +1001,8 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 実Scenario/Saveに存在する資産とTechnology、設計者が明示した取得目標と研究群、CLIが必要量から導いた参考設備・Fleet台数を区別する。段階をまたぐ設計目標は**計画上の開始条件**として引き継ぐが、実ゲームでの取得実績には変換しない。研究Provider、産業Process、Transport Preview、人口維持の参考台数を明示的な取得目標へ昇格させない。Location未設立、取得時期不明、技術未解禁、採掘地質・Survey未確認、Allocation未確認、輸送実行未確認等は、依存する数量と時間評価へ条件付き情報として伝播させる。
 
+GUIとCLIは同じGameApplicationのDefinition・実State・判定Queryを情報源とする。CLI専用の横断Definition抽出やDomainのprivate State参照を追加せず、UI投影に調整用の数量が足りない場合はその所有DomainのApplication公開契約を補強する。物理Worldの非公開設計統計はPlayerに表示する知識と区別する。
+
 CLIは**単一の全体系評価操作**に限り、全体サマリー・段階別数量・Definition ID付き根拠を一度に出力する。値の由来は実State、設計仮説、選択方式に依存する条件付き参照量、実成立未確認を区別する。Research費用・Provider性能・Facility/Vehicle取得費と能力・Recipe・World・初期資産・活動規模は全て同時に変更候補とする。局所的な前後比較、適正倍率、Player最適Build、自動調整器、第二のSimulationは作らず、設計者が変更後の全段階の連接を判断する。
 
 ### 22.3 調整の成果と検証

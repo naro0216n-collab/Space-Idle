@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .application_commands import (
-    ApplicationError, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
+    ApplicationError, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog, GetDevelopmentWorldReference, GetCargoFlows,
     GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
@@ -53,6 +53,8 @@ class ApplicationQueryRouterMixin:
             return self._passenger_transfers_view(query)
         if isinstance(query, GetCatalog):
             return self._catalog_view()
+        if isinstance(query, GetDevelopmentWorldReference):
+            return self._development_world_reference()
         if isinstance(query, GetWorld):
             return self._world_view()
         if isinstance(query, GetSurfaceMap):

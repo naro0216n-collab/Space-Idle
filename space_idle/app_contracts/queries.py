@@ -6,6 +6,8 @@ class GetCatalog: pass
 @dataclass(frozen=True)
 class GetWorld: pass
 @dataclass(frozen=True)
+class GetDevelopmentWorldReference: pass
+@dataclass(frozen=True)
 class GetSurfaceMap:
     body_id: str
     # A map query never expands every staging/recipe/vehicle combination.

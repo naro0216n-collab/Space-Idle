@@ -37,7 +37,7 @@ from .app_contracts.economy import (
     CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
 )
 from .app_contracts.queries import (
-    GetCatalog, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
+    GetCatalog, GetDevelopmentWorldReference, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
     GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext,
     GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetMarket,
@@ -64,7 +64,7 @@ Command: TypeAlias = (
 )
 Query: TypeAlias = (
     GetPassengerTransferPreview | GetPassengerTransfers |
-    GetCatalog | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
+    GetCatalog | GetDevelopmentWorldReference | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
     GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockContext |
     GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetMarket

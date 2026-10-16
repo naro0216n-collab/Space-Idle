@@ -90,6 +90,8 @@ class FacilityRow:
     power_active_load_mw: float = 0.0
     power_standby_load_mw: float = 0.0
     operating_resources_per_day: tuple[tuple[str, float], ...] = ()
+    selected_process_id: str | None = None
+    selected_extraction_method_id: str | None = None
 
 
 @dataclass(frozen=True)

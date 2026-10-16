@@ -41,6 +41,7 @@ COMMAND_TYPES = _command_types()
 QUERY_TYPES = {
     cls.__name__: cls for cls in get_args(Query)
     if isinstance(cls, type) and is_dataclass(cls)
+    and cls.__name__ != "GetDevelopmentWorldReference"
 }
 
 

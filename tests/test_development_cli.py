@@ -9,13 +9,14 @@ import pytest
 
 from space_idle.bootstrap import build_game_application, build_game_application_for_load
 from space_idle.balance.pacing import FORMAT, tune
+from space_idle.balance.application_inputs import collect_application_inputs
 from space_idle.dev_cli.__main__ import main
 from space_idle.persistence import save_game, load_game
 
 
 def _base():
     app = build_game_application()
-    return app, app.balance_definitions()
+    return app, collect_application_inputs(app)
 
 
 def _plan(*milestones):
@@ -48,6 +49,11 @@ def test_time_goals_expose_current_cost_and_capacity_without_autotuning():
     assert second["research"]["assumed_research_time_share"] is None
     assert second["research"]["required_average_rp_per_day_if_share_assumed"] is None
     assert first["research"]["single_provider_options"]
+    reference = first["research"]["required_average_rp_per_day_if_share_assumed"]
+    end = first["research"]["nominal_end_target_research_capacity"]
+    if reference > min(end["generation_rp_per_day"], end["execution_rp_per_day"]):
+        assert any(x["code"] == "planned_end_research_rate_below_interval_reference"
+                   for x in first["constraints"])
     assert all(p["nominal_units_if_sole_provider_from_zero"] >= 1
                for p in first["research"]["single_provider_options"])
     # A higher RP cost changes the required rate, not a supposedly correct Content multiplier.
@@ -412,3 +418,61 @@ def test_whole_report_contains_typed_conditions_and_traces_to_canonical_definiti
     assert any(row["milestone"] == "stage1" and row["id"] == facility and
                row["kind"] == "facility_acquisition" for row in report["evidence"])
     assert report["milestones"][1]["state_provenance"]["starting_assets"] == "planned_previous_milestone_not_actual"
+
+
+def test_cargo_targets_charge_origin_and_preserve_conditional_destination_without_stock_credit():
+    _, defs = _base()
+    origin, destination = (row["id"] for row in defs["world"]["nodes"][:2])
+    resource = next(iter(defs["resources"]))
+    route = {"source": origin, "destination": destination,
+             "resource": resource, "tonnes_per_day": 3.5}
+    plan = _plan({"name": "initial", "cumulative_hours": 4,
+                  "transport_targets": [route]},
+                 {"name": "inherited", "cumulative_hours": 12})
+    first, second = tune(defs, plan)["milestones"]
+    zero = tune(defs, _plan({"name": "without_route", "cumulative_hours": 4}))["milestones"][0]
+
+    def budget(stage, node):
+        return next(row for row in stage["resource_time_budget"]
+                    if row["node"] == node and row["resource"] == resource)
+
+    initial = next((row for row in zero["resource_time_budget"]
+                    if row["node"] == origin and row["resource"] == resource), None)
+    summary = {row["milestone"]: row for row in tune(defs, plan)["summary"]}
+    for stage in (first, second):
+        origin_row, destination_row = budget(stage, origin), budget(stage, destination)
+        assert isclose(origin_row["authored_transport_outbound_t_per_day"], 3.5)
+        assert isclose(destination_row["conditional_transport_inbound_t_per_day_not_delivered"], 3.5)
+        assert isclose(origin_row["combined_reference_demand_t_per_day"],
+                       (initial["combined_reference_demand_t_per_day"] if initial else 0) + 3.5)
+        assert origin_row["conditional_transport_inbound_t_per_day_not_delivered"] == 0
+        assert destination_row["authored_transport_outbound_t_per_day"] == 0
+        assert destination_row["conditional_selected_method_output_t_per_day"] == 0
+        assert destination_row["quantity_status"] == "conditional_reference_not_delivery"
+        assert any(row["code"] == "supply_not_established" and row["node"] == origin and
+                   row["resource"] == resource for row in stage["constraints"])
+        assert any(row["kind"] == "authored_transport_target" and row["resource"] == resource
+                   for row in stage["quantity_evidence"])
+        assert any(row["node"] == destination and row["resource"] == resource and
+                   row["conditional_transport_inbound_t_per_day"] == 3.5
+                   for row in summary[stage["name"]]["reference_total_demands_by_resource"])
+    assert not first["capital_resources_t"] and not second["capital_resources_t"]
+    assert first["fleet_end_targets"] == second["fleet_end_targets"]
+
+
+def test_cargo_routes_share_origin_resource_demand_without_inventing_delivery():
+    _, defs = _base()
+    origin, a, b = (row["id"] for row in defs["world"]["nodes"][:3])
+    resource = next(iter(defs["resources"]))
+    result = tune(defs, _plan({"name": "routes", "cumulative_hours": 4,
+        "transport_targets": [
+            {"source": origin, "destination": a, "resource": resource, "tonnes_per_day": 2},
+            {"source": origin, "destination": b, "resource": resource, "tonnes_per_day": 5}]}))["milestones"][0]
+    rows = {(r["node"], r["resource"]): r for r in result["resource_time_budget"]}
+    assert isclose(rows[(origin, resource)]["authored_transport_outbound_t_per_day"], 7)
+    assert isclose(rows[(a, resource)]["conditional_transport_inbound_t_per_day_not_delivered"], 2)
+    assert isclose(rows[(b, resource)]["conditional_transport_inbound_t_per_day_not_delivered"], 5)
+    economy = next(row for row in result["economy_resources_across_nodes"] if row["resource"] == resource)
+    assert isclose(economy["authored_transport_outbound_t_per_day"], 7)
+    assert isclose(economy["conditional_transport_inbound_t_per_day_not_delivered"], 7)
+    assert economy["not_deliverable_global_supply"]

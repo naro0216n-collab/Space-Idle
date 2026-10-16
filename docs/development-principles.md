@@ -153,6 +153,8 @@ Facilityの追加・改称・性能調整は単体比較で確定しない。実
 
 一般的欠陥だけをCore修正へ昇格させ、バランス問題はContent評価として扱う。
 
+GUIと開発CLIが同じ数量・状態を必要とする場合、各利用者がprivate Domainを個別探索する経路を設けず、所有DomainのApplication公開Projectionを共通化する。新しいContent要素やQuantity Requirementで必要な契約が増える場合は、GUI・CLIとその間のQuery投影が同時に追従するかを確認し、参照漏れのない一つの経路に統合する。
+
 ---
 
 ## 6. 検証・テスト・CIの位置づけ
