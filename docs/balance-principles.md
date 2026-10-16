@@ -106,7 +106,7 @@ Contentの工学的構成を決める前に、研究費用とRP生成・Research
 
 ### 7.2 評価開始条件・実行・証拠
 
-1. **対象状態と由来**：標準Scenario、通常Save、または同じ正準Scenario構築経路による開発初期状態を選ぶ。Content/World/Scenario版、開始State、ゲーム日を識別する。開発配置済みの施設・研究・在庫は、その前史の取得費用・日数を証明しない。
+1. **対象状態と由来**：標準Scenario、通常Save、または正準ScenarioDefinition生成関数による開発初期状態を選ぶ。Content/World/Scenario版、開始State、ゲーム日を識別する。開発配置済みの施設・研究・在庫は、その前史の取得費用・日数を証明しない。
 2. **取得条件とCommand**：未取得資産のRecipe、Technology、Site、資材、Service、期間は本体のBuild/Research/Vehicle/Fleet等のQueryから読み、必要なとき通常のCommandで実際に取得する。設計者が選ぶCommandの系列は実験入力であり、Coreへ最適攻略や段階専用の建造Scriptを持たせない。
 3. **正準実行記録**：研究、Construction、Industry、Transport、人口等を同じcanonical dayで進め、実Allocation、Resource決済、Cargo・Fleet等の状態変化を観測する。取得投資、継続運用、所有権移転、一時的な拘束を区別し、在庫差分だけから総消費を推定しない。値には日・Node・活動・Resource・単位・出典を付す。観測されなかった因果関係は未知とする。
 4. **記録と反復**：期間実績はゲームStateを二重に保存せず、正準処理の出力から集計する。詳細ログは必要なscope・期間だけ記録可能にする。実験のCommand履歴、開始状態の識別、途中Save、取得したQueryと期間集計は保存・再開・比較できる。記録の有無で実ゲームのState結果を変えない。

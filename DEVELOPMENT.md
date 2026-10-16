@@ -83,6 +83,8 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 ```bash
 # 正準初期Scenarioから実行。全Query・期間集計をJSON保存、標準出力は概要のみ
 python -m space_idle.dev_cli run --script /temp/eval.json --output /temp/run.json --checkpoint-dir /temp/checkpoints
+# 後期産業など、既存の正準ScenarioDefinition生成関数から開始する場合
+python -m space_idle.dev_cli run --scenario-factory space_idle.content.base_scenario:build_standard_scenario_definition --script /temp/eval.json --output /temp/scenario-run.json
 # 任意の実Saveから再開・別のコマンド列を実行し、Saveと選択的な詳細日次ログを出力
 python -m space_idle.dev_cli run --from-save /temp/checkpoints/after-two-days.json --script /temp/next.json --save-out /temp/after.json --output /temp/next-result.json --trace-file /temp/trace.ndjson
 # 結果比較（開始Content・State fingerprintの同一性も示す）

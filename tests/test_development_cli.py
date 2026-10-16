@@ -101,3 +101,12 @@ def test_cli_end_to_end_save_replay_and_trace(tmp_path, capsys):
     assert main(["run", "--script", str(script), "--from-save", str(restored),
                  "--output", str(next_run), "--checkpoint-dir", str(tmp_path / "other")]) == 0
     assert json.loads(next_run.read_text())["start_day"] == 1
+
+
+def test_scenario_factory_uses_canonical_builder():
+    from space_idle.dev_cli.__main__ import _authored_scenario
+    app = _authored_scenario("space_idle.content.base_scenario:build_standard_scenario_definition")
+    assert app.content_id == build_game_application().content_id
+    assert app.game_day == 0
+    with pytest.raises(ValueError):
+        _authored_scenario("not-a-module")

@@ -64,8 +64,10 @@ def test_layer_dependency_direction_is_enforced():
         "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
     )
 
-    # Each module is classified once; its allowed dependency direction is a
-    # layer contract, independent of how many files exist in that layer.
+    # API and development CLI are both external adapters. Their __main__
+    # composition entries may bootstrap a game, but inner adapter modules may
+    # not directly import static Content or compose the Simulation.
+    # Each module is classified once by its actual architectural layer.
     layer_forbidden = {
         "content": (
             "space_idle.application", "space_idle.app_contracts", "space_idle.composition",
@@ -97,7 +99,7 @@ def test_layer_dependency_direction_is_enforced():
             continue
         if rel.parts[0] in ("content", "composition", "app_contracts"):
             layer = "application" if rel.parts[0] == "app_contracts" else rel.parts[0]
-        elif rel.parts[0] == "api":
+        elif rel.parts[0] in ("api", "dev_cli"):
             if rel.name == "__main__.py":
                 continue
             layer = "api"

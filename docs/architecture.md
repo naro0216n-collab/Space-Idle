@@ -124,7 +124,7 @@ Content固有名は説明に使ってよいが、Generic Core内の分岐条件�
 - QueryをJSON化可能なimmutable DTOへ変換する
 - blocker、limiting factor、候補、必要条件、不足を返す
 
-UIがCoreの可否判定や計算式を再実装しない。
+UIがCoreの可否判定や計算式を再実装しない。HTTPと開発CLIはApplication外側のAdapterであり、CLIの起動入口だけが正準Composition/Bootstrapを使用してよい。CLIの実行・観測処理はApplication・Persistence・共通codecを利用し、静的Contentの独自Compositionや所有Domainの直接変更を行わない。
 
 ### 3.4 Simulation Orchestrator
 
