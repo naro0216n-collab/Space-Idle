@@ -9,6 +9,8 @@ from __future__ import annotations
 from collections import defaultdict
 from math import ceil, isfinite
 
+from .decision import whole_horizon_decision_view
+
 
 FORMAT = "space-idle.pacing-targets.v1"
 
@@ -852,7 +854,12 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             "population_sites": len(stage["population_targets"]),
             "conditional_constraints_by_code": dict(sorted(constraint_kinds.items())),
             "details_ref": name, "evidence_ref": name})
-    return {"kind": "balance_pacing", "identity": defs["identity"],
-            "format": FORMAT, "prospective_locations": prospective,
-            "summary": summary, "milestones": results, "evidence": evidence,
-            "interpretation": "One cumulative design baseline; summary, stage quantities and ID-linked evidence. Reference process runs and target assets are conditional; no feasible construction timing, verified delivery, optimizer or achieved Game State is inferred."}
+    return {"kind": "balance_pacing", "identity": defs["identity"], "format": FORMAT,
+            "decision": whole_horizon_decision_view(results, milestones),
+            "technical_evidence": {
+                "prospective_locations": prospective,
+                "quantities_by_milestone": summary,
+                "milestones": results,
+                "definition_evidence": evidence,
+            },
+            "interpretation": "Only the whole-development decision view defines judgment scope and KPIs; subordinate numerical evidence is for tracing an already identified cross-domain question, never a standalone justification to tune an isolated Content coefficient. No optimized build or achieved Game State is inferred."}

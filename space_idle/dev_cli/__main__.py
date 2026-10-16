@@ -39,11 +39,11 @@ def main(argv=None) -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-    summary = {"kind": report["kind"], "identity": report["identity"],
-               "report": str(args.output) if args.output else None,
-               "milestones": report["summary"],
-               "interpretation": report["interpretation"]}
-    print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
+    decision = {"kind": report["kind"], "identity": report["identity"],
+                "report": str(args.output) if args.output else None,
+                "decision": report["decision"],
+                "interpretation": report["interpretation"]}
+    print(json.dumps(decision, ensure_ascii=False, allow_nan=False))
     return 0
 
 

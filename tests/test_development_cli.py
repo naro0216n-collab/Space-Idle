@@ -37,7 +37,7 @@ def test_time_goals_expose_current_cost_and_capacity_without_autotuning():
                   "research_time_share": .5, "research_ids": [rid]},
                  {"name": "phase_two", "cumulative_hours": 12, "research_ids": [rid]})
     data = tune(defs, plan)
-    first, second = data["milestones"]
+    first, second = data["technical_evidence"]["milestones"]
     assert first["interval_game_days_at_base_speed"] == 14400
     assert second["interval_game_days_at_base_speed"] == 28800
     assert first["research"]["theory_rp_cost_at_current_content"] > 0
@@ -62,7 +62,7 @@ def test_time_goals_expose_current_cost_and_capacity_without_autotuning():
     edited_research["stages"] = [{**s, "rp": s["rp"] * 3} if s["kind"] == "theory" else s
                                  for s in edited_research["stages"]]
     edited["research"][rid] = edited_research
-    after = tune(edited, plan)["milestones"][0]
+    after = tune(edited, plan)["technical_evidence"]["milestones"][0]
     assert after["research"]["required_average_rp_per_day_if_full_interval"] > first["research"]["required_average_rp_per_day_if_full_interval"]
     assert after["research"]["nominal_end_target_research_capacity"] == first["research"]["nominal_end_target_research_capacity"]
     assert "theory_rp_cost_scale_to_fit_budget" not in after["research"]
@@ -76,7 +76,7 @@ def test_production_goal_is_not_a_purchase_or_supply_plan_across_stages():
     one = {"name": "one", "cumulative_hours": 4, "production_targets": [
         {"node": node, "resource": resource, "tonnes_per_day": rate, "facility": fid, "method": pid}]}
     two = {"name": "two", "cumulative_hours": 12}
-    first, second = tune(defs, _plan(one, two))["milestones"]
+    first, second = tune(defs, _plan(one, two))["technical_evidence"]["milestones"]
     assert first["production_targets"][0]["nominal_units_if_selected"] == 4
     assert second["production_targets"] == first["production_targets"]
     assert not first["capital_resources_t"] and not second["capital_resources_t"]
@@ -92,7 +92,7 @@ def test_unselected_providers_are_design_choices_not_fake_installed_assets():
     node = defs["world"]["nodes"][0]["id"]
     plan = _plan({"name": "design", "cumulative_hours": 2,
                   "production_targets": [{"node": node, "resource": resource, "tonnes_per_day": 10}]})
-    data = tune(defs, plan)["milestones"][0]
+    data = tune(defs, plan)["technical_evidence"]["milestones"][0]
     row = data["production_targets"][0]
     assert row["selected"] is None and row["options"]
     assert any(reason["code"] == "production_goal_supply_method_unselected" for reason in data["constraints"])
@@ -114,7 +114,7 @@ def test_all_registered_stages_supported_without_hardcoded_gameplay_gates():
         hours += stage * 2
         plan.append({"name": str(stage), "cumulative_hours": hours,
                      "research_ids": [candidates[stage]]})
-    results = tune(defs, _plan(*plan))["milestones"]
+    results = tune(defs, _plan(*plan))["technical_evidence"]["milestones"]
     assert [r["name"] for r in results] == list(map(str, stages))
     assert results[-1]["research"]["new_prerequisites_and_research"]
     assert all(row["interval_game_days_at_base_speed"] > 0 for row in results)
@@ -133,8 +133,8 @@ def test_prospective_nodes_and_transport_remain_design_estimates():
                     "population_targets": [{"node": node, "people": 150}]}),
             "prospective_locations": [{"id": node, "body_id": body}]}
     data = tune(defs, plan)
-    route = data["milestones"][0]["transport_targets"][0]
-    assert data["prospective_locations"][node] == body
+    route = data["technical_evidence"]["milestones"][0]["transport_targets"][0]
+    assert data["technical_evidence"]["prospective_locations"][node] == body
     assert route["canonical_preview"] is None
     assert route["target_t_per_day"] == 6
 
@@ -168,7 +168,7 @@ def test_cli_uses_one_time_first_workflow_and_preserves_canonical_save(tmp_path)
     assert main(["--targets", str(plan), "--from-save", str(start), "--output", str(out)]) == 0
     report = json.loads(out.read_text())
     assert report["kind"] == "balance_pacing"
-    assert report["milestones"][0]["target_cumulative_hours"] == 4
+    assert report["technical_evidence"]["milestones"][0]["target_cumulative_hours"] == 4
     assert load_game(start, build_game_application_for_load)[0].game_day == 0
     for obsolete in ("overview", "evaluate", "inspect", "run", "compare"):
         with pytest.raises(SystemExit):
@@ -183,7 +183,7 @@ def test_only_explicit_purchases_create_capital_and_inherit_as_planned_assets():
     first, second = tune(defs, _plan({"name": "first", "cumulative_hours": 4,
               "facility_targets": [{"node": node, "facility": fid, "count": owned + 3}],
               "population_targets": [{"node": node, "people": 120}]},
-              {"name": "second", "cumulative_hours": 12}))["milestones"]
+              {"name": "second", "cumulative_hours": 12}))["technical_evidence"]["milestones"]
     recipe = defs["facilities"][fid]["construction_resources_t"]
     if recipe:
         for resource, qty in recipe.items():
@@ -202,7 +202,7 @@ def test_population_support_reference_does_not_fabricate_asset_but_exposes_opera
     node = defs["world"]["nodes"][0]["id"]
     data = tune(defs, _plan({"name": "pop", "cumulative_hours": 20,
                 "population_targets": [{"node": node, "people": 200,
-                    "housing_facility": fid, "life_support_facility": fid}]}))["milestones"][0]
+                    "housing_facility": fid, "life_support_facility": fid}]}))["technical_evidence"]["milestones"][0]
     entry = data["population_targets"][0]
     assert entry["housing_nominal_units"] >= 1 and entry["life_support_nominal_units"] >= 1
     assert not data["capital_resources_t"]
@@ -224,7 +224,7 @@ def test_population_targets_do_not_replace_research_selection_or_time_budget():
                  "population_targets": [{"node": node, "people": 120,
                                          "housing_facility": facility,
                                          "life_support_facility": facility}]}
-    report = tune(defs, _plan(milestone))["milestones"][0]
+    report = tune(defs, _plan(milestone))["technical_evidence"]["milestones"][0]
     assert report["research"]["selected_ids"] == [rid]
     assert rid in report["research"]["new_prerequisites_and_research"] or rid in defs["owned"]["completed_technologies"]
     assert report["research"]["theory_rp_cost_at_current_content"] >= 0
@@ -239,7 +239,7 @@ def test_extraction_reference_is_not_achieved_supply_and_requires_site_condition
     node = defs["world"]["nodes"][0]["id"]
     stage = tune(defs, _plan({"name": "extraction", "cumulative_hours": 12,
                   "production_targets": [{"node": node, "resource": method["output_resource_id"],
-                      "tonnes_per_day": 3, "method": eid, "facility": fid}]}))["milestones"][0]
+                      "tonnes_per_day": 3, "method": eid, "facility": fid}]}))["technical_evidence"]["milestones"][0]
     assert stage["production_targets"][0]["selected"]["kind"] == "extraction"
     assert not stage["conditional_reference_process_outputs_t_per_day"]
     assert stage["production_targets"][0]["quantity_role"] == "authored_goal_not_verified_supply"
@@ -255,7 +255,7 @@ def test_supply_assumptions_are_explicit_and_not_inferred_from_production_target
              "production_targets": [{"node": node, "resource": resource,
                                      "tonnes_per_day": unit_rate,
                                      "facility": fid, "method": pid}]}
-    baseline = tune(defs, _plan(stage))["milestones"][0]
+    baseline = tune(defs, _plan(stage))["technical_evidence"]["milestones"][0]
     row = next(r for r in baseline["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
     assert row["authored_supply_assumption_t_per_day"] is None
     assert row["conditional_reference_output_t_per_day"] == 0
@@ -265,7 +265,7 @@ def test_supply_assumptions_are_explicit_and_not_inferred_from_production_target
             {"node": node, "resource": resource, "average_t_per_day": unit_rate}]}))
     assumed = tune(defs, _plan({**stage, "resource_supply_assumptions": [
         {"node": node, "resource": resource, "average_t_per_day": unit_rate,
-         "basis": "Independent supply estimate, verify later"}]}))["milestones"][0]
+         "basis": "Independent supply estimate, verify later"}]}))["technical_evidence"]["milestones"][0]
     row = next(r for r in assumed["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
     assert row["assumption_matches_conditional_production_target"]
     assert row["supply_assumption_basis"] == "Independent supply estimate, verify later"
@@ -279,7 +279,7 @@ def test_provider_reference_does_not_create_assets_or_adjust_costs():
     node = defs["world"]["nodes"][0]["id"]
     result = tune(defs, _plan({"name": "reference", "cumulative_hours": 4,
                                "research_ids": [rid],
-                               "research_provider": {"node": node, "facility": fid}}))["milestones"][0]
+                               "research_provider": {"node": node, "facility": fid}}))["technical_evidence"]["milestones"][0]
     owned = {(r["node"], r["facility"]): r["count"] for r in defs["owned"]["facilities"]}
     counted = {(r["node"], r["facility"]): r["count"] for r in result["facility_end_targets"]}
     assert counted == owned
@@ -294,7 +294,7 @@ def test_full_economy_totals_include_investment_and_operating_but_not_fabricated
     fid = next(fid for fid, spec in defs["facilities"].items()
                if spec["construction_resources_t"] and spec["operating_per_day_t"])
     result = tune(defs, _plan({"name": "industry", "cumulative_hours": 4,
-                               "facility_targets": [{"node": node, "facility": fid, "count": 12}]}))["milestones"][0]
+                               "facility_targets": [{"node": node, "facility": fid, "count": 12}]}))["technical_evidence"]["milestones"][0]
     by_resource = {r["resource"]: r for r in result["economy_resources_across_nodes"]}
     assert any(r["capital_investment_t"] > 0 for r in by_resource.values())
     assert all(r["not_deliverable_global_supply"] for r in by_resource.values())
@@ -325,7 +325,7 @@ def test_demand_first_coproduct_process_is_counted_once_and_has_upstream_unresol
                   "facility_targets": [{"node": node, "facility": purchased, "count": present + 1}],
                   "supply_choices": choices})
     result = tune(defs, plan)
-    stage = result["milestones"][0]
+    stage = result["technical_evidence"]["milestones"][0]
     process = next(p for p in stage["selected_supply_processes"] if p["method"] == "test.co_output")
     assert isclose(process["conditional_activity_units_per_day"], 20 / 3600)
     assert isclose(process["outputs_t_per_day"][a], 100 / 3600)
@@ -341,13 +341,13 @@ def test_demand_first_coproduct_process_is_counted_once_and_has_upstream_unresol
     # Changing the one canonical Process coefficient affects upstream consumption and all outputs.
     changed = deepcopy(defs)
     changed["processes"]["test.co_output"]["outputs_per_unit_t"] = {a: 10, b: 20}
-    other = tune(changed, plan)["milestones"][0]
+    other = tune(changed, plan)["technical_evidence"]["milestones"][0]
     modified = next(p for p in other["selected_supply_processes"] if p["method"] == "test.co_output")
     assert isclose(modified["conditional_activity_units_per_day"], process["conditional_activity_units_per_day"] / 2)
     assert isclose(modified["inputs_t_per_day"][raw], process["inputs_t_per_day"][raw] / 2)
     assert modified["reference_nominal_facility_units"] <= process["reference_nominal_facility_units"]
-    assert result["summary"][0]["milestone"] == "plan"
-    assert any(x["kind"] == "selected_supply_process" for x in result["evidence"])
+    assert result["technical_evidence"]["quantities_by_milestone"][0]["milestone"] == "plan"
+    assert any(x["kind"] == "selected_supply_process" for x in result["technical_evidence"]["definition_evidence"])
 
 
 def test_selected_supply_cycle_is_unverified_not_created_as_self_supply():
@@ -369,7 +369,7 @@ def test_selected_supply_cycle_is_unverified_not_created_as_self_supply():
     report = tune(defs, _plan({"name": "circular", "cumulative_hours": 1,
         "facility_targets": [{"node": node, "facility": purchased, "count": current + 1}],
         "supply_choices": [{"node": node, "resource": resource, "method": "test.circular",
-                            "facility": supplier}]}))["milestones"][0]
+                            "facility": supplier}]}))["technical_evidence"]["milestones"][0]
     assert any(x["code"] == "supply_cycle" for x in report["constraints"])
     assert report["state_provenance"]["reference_units"] == "conditional_not_acquired"
 
@@ -383,7 +383,7 @@ def test_transport_reference_units_never_become_acquired_fleet():
     result = tune(defs, _plan({"name": "routes", "cumulative_hours": 5,
         "transport_targets": [{"source": src, "destination": dst, "resource": resource,
                                "vehicle": vehicle, "tonnes_per_day": 1}]}),
-        transport_preview=lambda *args: {"required_units": 7})["milestones"][0]
+        transport_preview=lambda *args: {"required_units": 7})["technical_evidence"]["milestones"][0]
     assert result["transport_targets"][0]["reference_required_units_not_acquired"] == 7
     actual = {(r["node"], r["vehicle"]): r["count"] for r in defs["owned"]["fleet"]}
     assert {(r["node"], r["vehicle"]): r["count"] for r in result["fleet_end_targets"]} == actual
@@ -412,12 +412,12 @@ def test_whole_report_contains_typed_conditions_and_traces_to_canonical_definiti
     report = tune(defs, _plan({"name": "stage1", "cumulative_hours": 4,
                                "facility_targets": [{"node": node, "facility": facility, "count": owned + 1}]},
                               {"name": "stage2", "cumulative_hours": 12}))
-    assert report["summary"][0]["milestone"] == "stage1"
+    assert report["technical_evidence"]["quantities_by_milestone"][0]["milestone"] == "stage1"
     assert all(isinstance(issue["limits"], list) and issue["code"]
-               for stage in report["milestones"] for issue in stage["constraints"])
+               for stage in report["technical_evidence"]["milestones"] for issue in stage["constraints"])
     assert any(row["milestone"] == "stage1" and row["id"] == facility and
-               row["kind"] == "facility_acquisition" for row in report["evidence"])
-    assert report["milestones"][1]["state_provenance"]["starting_assets"] == "planned_previous_milestone_not_actual"
+               row["kind"] == "facility_acquisition" for row in report["technical_evidence"]["definition_evidence"])
+    assert report["technical_evidence"]["milestones"][1]["state_provenance"]["starting_assets"] == "planned_previous_milestone_not_actual"
 
 
 def test_cargo_targets_charge_origin_and_preserve_conditional_destination_without_stock_credit():
@@ -429,8 +429,8 @@ def test_cargo_targets_charge_origin_and_preserve_conditional_destination_withou
     plan = _plan({"name": "initial", "cumulative_hours": 4,
                   "transport_targets": [route]},
                  {"name": "inherited", "cumulative_hours": 12})
-    first, second = tune(defs, plan)["milestones"]
-    zero = tune(defs, _plan({"name": "without_route", "cumulative_hours": 4}))["milestones"][0]
+    first, second = tune(defs, plan)["technical_evidence"]["milestones"]
+    zero = tune(defs, _plan({"name": "without_route", "cumulative_hours": 4}))["technical_evidence"]["milestones"][0]
 
     def budget(stage, node):
         return next(row for row in stage["resource_time_budget"]
@@ -438,7 +438,7 @@ def test_cargo_targets_charge_origin_and_preserve_conditional_destination_withou
 
     initial = next((row for row in zero["resource_time_budget"]
                     if row["node"] == origin and row["resource"] == resource), None)
-    summary = {row["milestone"]: row for row in tune(defs, plan)["summary"]}
+    summary = {row["milestone"]: row for row in tune(defs, plan)["technical_evidence"]["quantities_by_milestone"]}
     for stage in (first, second):
         origin_row, destination_row = budget(stage, origin), budget(stage, destination)
         assert isclose(origin_row["authored_transport_outbound_t_per_day"], 3.5)
@@ -467,7 +467,7 @@ def test_cargo_routes_share_origin_resource_demand_without_inventing_delivery():
     result = tune(defs, _plan({"name": "routes", "cumulative_hours": 4,
         "transport_targets": [
             {"source": origin, "destination": a, "resource": resource, "tonnes_per_day": 2},
-            {"source": origin, "destination": b, "resource": resource, "tonnes_per_day": 5}]}))["milestones"][0]
+            {"source": origin, "destination": b, "resource": resource, "tonnes_per_day": 5}]}))["technical_evidence"]["milestones"][0]
     rows = {(r["node"], r["resource"]): r for r in result["resource_time_budget"]}
     assert isclose(rows[(origin, resource)]["authored_transport_outbound_t_per_day"], 7)
     assert isclose(rows[(a, resource)]["conditional_transport_inbound_t_per_day_not_delivered"], 2)
@@ -476,3 +476,58 @@ def test_cargo_routes_share_origin_resource_demand_without_inventing_delivery():
     assert isclose(economy["authored_transport_outbound_t_per_day"], 7)
     assert isclose(economy["conditional_transport_inbound_t_per_day_not_delivered"], 7)
     assert economy["not_deliverable_global_supply"]
+
+
+def test_whole_system_is_the_only_kpi_and_detail_remains_evidence(capsys, tmp_path):
+    app, defs = _base()
+    rid = next(rid for rid, row in defs["research"].items() if row["stages"])
+    node = defs["world"]["nodes"][0]["id"]
+    facility = next(fid for fid, row in defs["facilities"].items()
+                    if row["construction_resources_t"])
+    stages = [
+        {"name": "generation_one", "cumulative_hours": 4, "research_ids": [rid]},
+        {"name": "generation_two", "cumulative_hours": 12,
+         "facility_targets": [{"node": node, "facility": facility, "count": 3}]},
+    ]
+    path, result = tmp_path / "targets.json", tmp_path / "report.json"
+    path.write_text(json.dumps(_plan(*stages)), encoding="utf-8")
+    assert main(["--targets", str(path), "--output", str(result)]) == 0
+    screen = json.loads(capsys.readouterr().out)
+    full = json.loads(result.read_text(encoding="utf-8"))
+    assert screen["decision"] == full["decision"]
+    assert "technical_evidence" not in screen
+    assert "summary" not in screen and "milestones" not in screen
+    assert "single_integrated_kpi" in screen["decision"]
+    assert "integrated_kpis" not in screen["decision"]
+    assert len(screen["decision"]["single_integrated_kpi"]["inseparable_dimensions"]) > 1
+    assert screen["decision"]["horizon"]["scope"] == "partial_horizon_not_whole_game"
+    assert "population" in screen["decision"]["evaluation_conditions"]["unarticulated_domains_not_assumed_zero"]
+    assert full["technical_evidence"]["milestones"][0]["research"]["theory_rp_cost_at_current_content"] >= 0
+    assert full["technical_evidence"]["milestones"][1]["capital_resources_t"]
+
+
+def test_cross_domain_constraints_are_not_fragmented_into_local_kpis():
+    from space_idle.balance.decision import whole_horizon_decision_view
+
+    view = whole_horizon_decision_view([
+        {"name": "a", "target_cumulative_hours": 4, "constraints": [
+            {"code": "different_construction_bottleneck", "limits": ["construction", "research", "time"]},
+            {"code": "detail_only", "limits": ["supply", "new_future_domain"]}]},
+        {"name": "b", "target_cumulative_hours": 12, "constraints": [
+            {"code": "another_construction_bottleneck", "limits": ["time", "research", "construction"]}]},
+    ], [
+        {"name": "a", "research_ids": ["research.alpha"]},
+        {"name": "b", "facility_targets": [{"facility": "facility.beta"}]},
+    ])
+    assert view["decision_unit"] == "entire_development_trajectory"
+    assert set(view["evaluation_conditions"]["authored_domains_somewhere_in_horizon"]) == {"research", "capital"}
+    assert set(view["evaluation_conditions"]["unarticulated_domains_not_assumed_zero"]) == {"industry", "logistics", "population"}
+    assert view["evaluation_conditions"]["cross_domain_relations_with_unverified_conditions"] == [
+        {"domains": ["capital", "research", "time"], "technical_evidence_milestones": ["a", "b"]}]
+    # Neither a raw problem code nor a Content edit recommendation enters the decision view.
+    serialized = json.dumps(view)
+    assert "different_construction_bottleneck" not in serialized
+    assert "another_construction_bottleneck" not in serialized
+    assert "detail_only" not in serialized
+    assert view["evaluation_conditions"]["unclassified_condition_dimensions"] == ["new_future_domain"]
+    assert "optimize" not in serialized

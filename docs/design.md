@@ -1003,6 +1003,8 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 GUIとCLIは同じGameApplicationのDefinition・実State・判定Queryを情報源とする。CLI専用の横断Definition抽出やDomainのprivate State参照を追加せず、UI投影に調整用の数量が足りない場合はその所有DomainのApplication公開契約を補強する。物理Worldの非公開設計統計はPlayerに表示する知識と区別する。
 
+バランス調整の判断単位とKPIは、全期間の研究・産業・投資・物流・人口・時間が一体で発展する構造とする。個別の数量・能力・不足は改善目標ではなく根拠として扱い、全体の発展と世代間連接を評価してContent変更を選ぶ。詳細を参照した後も同じ全体系で採否を判断し、未評価の範囲を成立済みと見なさない。
+
 CLIは**単一の全体系評価操作**に限り、全体サマリー・段階別数量・Definition ID付き根拠を一度に出力する。値の由来は実State、設計仮説、選択方式に依存する条件付き参照量、実成立未確認を区別する。Research費用・Provider性能・Facility/Vehicle取得費と能力・Recipe・World・初期資産・活動規模は全て同時に変更候補とする。局所的な前後比較、適正倍率、Player最適Build、自動調整器、第二のSimulationは作らず、設計者が変更後の全段階の連接を判断する。
 
 ### 22.3 調整の成果と検証
