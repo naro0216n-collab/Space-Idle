@@ -115,6 +115,115 @@ def _production_options(defs, resource, rate):
     return sorted(result, key=lambda item: (item["kind"], item["method"], item["facility"]))
 
 
+
+def _selected_supply(defs, choices, demand, interval_days, nodes, known_nodes,
+                     planned_technologies, starting_technologies):
+    """Expand an authored process selection into a *conditional* demand envelope.
+
+    The algorithm does not select supply methods, create assets or claim actual
+    delivery. A process shared by several outputs is scaled once; its complete
+    outputs and inputs are accounted together. Circular dependencies are flagged,
+    never silently filled with hypothetical supply.
+    """
+    by_resource = {}
+    groups = {}
+    for row in choices:
+        _fields(row, {"node", "resource", "facility", "method"},
+                {"node", "resource", "facility", "method"}, "supply choice")
+        node, resource, fid, method = (row[key] for key in ("node", "resource", "facility", "method"))
+        if node not in nodes:
+            raise ValueError(f"unknown supply node: {node}")
+        _known(defs["resources"], resource, "supply resource")
+        spec = _known(defs["facilities"], fid, "supply facility")
+        if (node, resource) in by_resource:
+            raise ValueError(f"duplicate supply choice: {node}/{resource}")
+        if method in defs["processes"]:
+            process = defs["processes"][method]
+            kind = "process"
+            output = process["outputs_per_unit_t"]
+            inp = process["inputs_per_unit_t"]
+            per_day = spec["process_throughput_per_day"]
+        else:
+            extraction = _known(defs["extraction"], method, "supply method")
+            kind = "extraction"
+            output = {extraction["output_resource_id"]: 1.0}
+            inp = {}
+            per_day = spec["extraction_capacity_t_per_day"]
+            process = extraction
+        if fid not in process["provider_facilities"] or output.get(resource, 0) <= 0 or per_day <= 0:
+            raise ValueError(f"incompatible supply choice: {node}/{resource}/{method}/{fid}")
+        key = (node, kind, method, fid)
+        group = groups.setdefault(key, {"node": node, "kind": kind, "method": method,
+            "facility": fid, "inputs": inp, "outputs": output, "unit_throughput_per_day": per_day,
+            "activity_units_per_day": 0.0,
+            "required_technologies": sorted(set(process["prerequisites"] + spec["prerequisites"]))})
+        by_resource[(node, resource)] = (key, group)
+    required = defaultdict(float, demand)
+    supplied = defaultdict(float)
+    issues = []
+    active = set()
+    # Finish each selected downstream demand before expanding its upstream inputs.
+    def expand(key):
+        outstanding = required[key] - supplied[key]
+        if outstanding <= 1e-8 or key not in by_resource:
+            return
+        if key in active:
+            issues.append({"code": "supply_cycle", "node": key[0], "resource": key[1],
+                           "limits": ["supply", "capital", "time"]})
+            return
+        group_key, group = by_resource[key]
+        if any(k in active for k, g in by_resource.items() if g[0] == group_key):
+            issues.append({"code": "supply_cycle", "node": key[0], "resource": key[1],
+                           "limits": ["supply", "capital", "time"]})
+            return
+        active.add(key)
+        output_per_unit = group["outputs"][key[1]]
+        activity = outstanding / output_per_unit
+        group["activity_units_per_day"] += activity
+        for resource, amount in group["outputs"].items():
+            supplied[(key[0], resource)] += activity * amount
+        for resource, amount in group["inputs"].items():
+            upstream = (key[0], resource)
+            required[upstream] += activity * amount
+            expand(upstream)
+        active.remove(key)
+    for key in sorted(required):
+        expand(key)
+    activity_rows, reference_units = [], defaultdict(int)
+    for key, group in sorted(groups.items()):
+        activity = group["activity_units_per_day"]
+        unit_rate = group["unit_throughput_per_day"]
+        count = ceil((activity / unit_rate) - 1e-10) if activity > 0 else 0
+        if count:
+            reference_units[(group["node"], group["facility"])] += count
+        prereqs = set(group["required_technologies"])
+        row = {"node": group["node"], "kind": group["kind"],
+               "method": group["method"], "facility": group["facility"],
+               "conditional_activity_units_per_day": activity,
+               "reference_nominal_facility_units": count,
+               "inputs_t_per_day": {r: activity * q for r, q in group["inputs"].items()},
+               "outputs_t_per_day": {r: activity * q for r, q in group["outputs"].items()},
+               "missing_technologies_at_start": sorted(prereqs - starting_technologies),
+               "outside_planned_technologies": sorted(prereqs - planned_technologies),
+               "definition_source": group["method"], "condition": "selected_method_nominal_not_achieved"}
+        activity_rows.append(row)
+        if row["outside_planned_technologies"]:
+            issues.append({"code": "unplanned_supply_technology", "node": group["node"],
+                           "method": group["method"], "limits": ["supply", "time"]})
+        if group["kind"] == "extraction":
+            issues.append({"code": "geology_and_allocation_unverified", "node": group["node"],
+                           "method": group["method"], "limits": ["supply", "time"]})
+        if group["node"] not in known_nodes:
+            issues.append({"code": "prospective_site_not_founded", "node": group["node"],
+                           "method": group["method"], "limits": ["supply", "time"]})
+    for key, qty in sorted(required.items()):
+        if qty - supplied[key] > 1e-8:
+            issues.append({"code": "supply_not_established", "node": key[0],
+                           "resource": key[1], "quantity_t_per_day": qty - supplied[key],
+                           "limits": ["supply", "capital", "time"]})
+    return required, supplied, activity_rows, reference_units, issues
+
+
 def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
     """Evaluate authored real-play-time budgets and desired outcomes across milestones.
 
@@ -143,6 +252,7 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
     already_researched = set(completed)
     previous_hours = 0.0
     running_production = {}
+    running_supply = {}
     running_transport = {}
     running_population = {row["node"]: {"node": row["node"], "people": row["people"]}
                           for row in defs["owned"]["population"]}
@@ -151,7 +261,8 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
     for index, step in enumerate(milestones):
         _fields(step, {"name", "cumulative_hours"}, {"name", "cumulative_hours", "research_ids",
                  "research_time_share", "production_targets", "facility_targets", "vehicle_targets",
-                 "transport_targets", "population_targets", "research_provider", "resource_supply_assumptions"}, f"milestone {index}")
+                 "transport_targets", "population_targets", "research_provider", "resource_supply_assumptions",
+                 "supply_choices"}, f"milestone {index}")
         name = step["name"]
         if not isinstance(name, str) or not name or name in used_names:
             raise ValueError("milestone names must be distinct nonempty strings")
@@ -174,17 +285,31 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
         already_researched.update(closure)
         rp_cost = sum(s.get("rp", 0.0) for rid in pending for s in defs["research"][rid]["stages"])
         prototype_materials = defaultdict(float)
+        prototype_details = []
         prototype_work = 0.0
         demonstration_work = 0.0
         experiential = []
+        research_requirements = []
         for rid in pending:
             for stage in defs["research"][rid]["stages"]:
+                if stage.get("execution_requirements"):
+                    research_requirements.append({"research": rid, "stage": stage["id"],
+                                                  "requirements": stage["execution_requirements"]})
                 if stage["kind"] == "prototype":
                     prototype_work += stage["work"]
+                    prototype_details.append({"kind": "research_prototype_work", "id": rid,
+                                              "stage_id": stage["id"], "node": "unallocated_research",
+                                              "work": stage["work"]})
                     for resource, quantity in stage["resources_t"].items():
                         prototype_materials[resource] += quantity
+                        prototype_details.append({"kind": "research_prototype_material", "id": rid,
+                                                  "stage_id": stage["id"], "node": "unallocated_research",
+                                                  "resource": resource, "quantity_t": quantity})
                 elif stage["kind"] == "demonstration":
                     demonstration_work += stage["work"]
+                    prototype_details.append({"kind": "research_demonstration_work", "id": rid,
+                                              "stage_id": stage["id"], "node": "unallocated_research",
+                                              "work": stage["work"]})
                 elif stage["kind"] == "operational_experience":
                     experiential.append(rid)
         required_rp = rp_cost / interval_days
@@ -227,10 +352,7 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             seen_production.add(key)
             running_production[key] = row
         production = []
-        required_facility = defaultdict(int)
-        process_operating = defaultdict(float)
-        process_outputs = defaultdict(float)
-        unresolved = []
+        conditions = []
         for row in running_production.values():
             if row["node"] not in nodes:
                 raise ValueError(f"unknown node: {row['node']}")
@@ -246,29 +368,24 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             if fid is not None or method is not None:
                 if chosen is None:
                     raise ValueError(f"production provider cannot supply {row['resource']}: {fid}/{method}")
-                required_facility[(row["node"], fid)] += chosen["minimum_nominal_units"]
                 if chosen["outside_selected_research"]:
-                    unresolved.append(f"{name}: {fid}/{method} relies on unplanned Technology {chosen['outside_selected_research']}")
-                if chosen["kind"] == "process":
-                    spec = defs["processes"][method]
-                    throughput = amount / spec["outputs_per_unit_t"][row["resource"]]
-                    for resource, rate in spec["inputs_per_unit_t"].items():
-                        process_operating[(row["node"], resource)] += throughput * rate
-                    for resource, rate in spec["outputs_per_unit_t"].items():
-                        process_outputs[(row["node"], resource)] += throughput * rate
-                else:
-                    process_outputs[(row["node"], row["resource"])] += amount
-                    unresolved.append(f"{name}: extraction at {row['node']} needs site geology, knowledge and Allocation")
+                    conditions.append({"code": "production_goal_requires_unplanned_technology",
+                                       "node": row["node"], "resource": row["resource"],
+                                       "method": method, "facility": fid,
+                                       "missing_technology_ids": chosen["outside_selected_research"],
+                                       "limits": ["production_goal", "research", "time"]})
             else:
-                unresolved.append(f"{name}: production provider not selected for {row['node']}/{row['resource']}")
+                conditions.append({"code": "production_goal_supply_method_unselected",
+                                   "node": row["node"], "resource": row["resource"],
+                                   "target_t_per_day": amount, "limits": ["production_goal"]})
             if not options:
-                unresolved.append(f"{name}: no registered production method for {row['resource']}")
+                conditions.append({"code": "registered_production_method_missing",
+                                   "node": row["node"], "resource": row["resource"],
+                                   "target_t_per_day": amount, "limits": ["production_goal", "content"]})
             production.append({"node": row["node"], "resource": row["resource"],
                                "target_t_per_day": amount, "quantity_role": "authored_goal_not_verified_supply",
                                "options": options, "selected": chosen, "nominal_units_if_selected":
                                    None if chosen is None else chosen["minimum_nominal_units"]})
-        for key, count in required_facility.items():
-            facilities[key] = max(facilities.get(key, 0), count)
         provider_goal = step.get("research_provider")
         if provider_goal is not None:
             _fields(provider_goal, {"node", "facility"}, {"node", "facility"}, "research_provider")
@@ -288,8 +405,10 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                 (conditional_rp if conditional_rp is not None else required_rp) / provider["generation_points_per_day"],
                 (conditional_rp if conditional_rp is not None else required_rp) / provider["research_execution_per_day"]))}
             if provider_goal["outside_selected_research"]:
-                unresolved.append(f"{name}: selected research provider requires unplanned Technology {provider_goal['outside_selected_research']}")
-            unresolved.append(f"{name}: selected research provider is informational; specify facility_targets for an investment hypothesis")
+                conditions.append({"code": "research_provider_requires_unplanned_technology",
+                                   "node": provider_goal["node"], "facility": fid,
+                                   "missing_technology_ids": provider_goal["outside_selected_research"],
+                                   "limits": ["research", "time"]})
         seen_transport = set()
         for row in step.get("transport_targets", []):
             _fields(row, {"source", "destination", "resource", "tonnes_per_day"},
@@ -300,7 +419,6 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             seen_transport.add(key)
             running_transport[key] = row
         transport = []
-        route_fleet_requirements = defaultdict(int)
         for row in running_transport.values():
             if row["source"] not in nodes or row["destination"] not in nodes:
                 raise ValueError("unknown transport node")
@@ -317,18 +435,24 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                     try:
                         result["canonical_preview"] = transport_preview(row["vehicle"], row["source"], row["destination"], quantity)
                         required = result["canonical_preview"].get("required_units")
-                        if isinstance(required, int) and required > 0:
-                            route_fleet_requirements[(row["source"], row["vehicle"])] += required
-                        else:
-                            unresolved.append(f"{name}: no feasible fleet quantity from canonical route preview")
+                        result["reference_required_units_not_acquired"] = required
+                        if not isinstance(required, int) or required <= 0:
+                            conditions.append({"code": "transport_preview_no_feasible_units",
+                                               "source": row["source"], "destination": row["destination"],
+                                               "resource": row["resource"], "target_t_per_day": quantity,
+                                               "limits": ["logistics", "time"]})
                     except (ValueError, RuntimeError, KeyError) as exc:
-                        unresolved.append(f"{name}: transport preview unresolved: {exc}")
+                        conditions.append({"code": "transport_preview_unresolved",
+                                           "source": row["source"], "destination": row["destination"],
+                                           "reason": str(exc), "limits": ["logistics", "time"]})
             else:
-                unresolved.append(f"{name}: transport vehicle not selected")
+                conditions.append({"code": "transport_vehicle_unselected",
+                                   "source": row["source"], "destination": row["destination"],
+                                   "resource": row["resource"], "target_t_per_day": quantity,
+                                   "limits": ["logistics"]})
             transport.append(result)
-        for key, count in route_fleet_requirements.items():
-            fleet_target[key] = max(fleet_target.get(key, 0), count)
         population_daily = defaultdict(float)
+        population_evidence = []
         seen_population = set()
         for row in step.get("population_targets", []):
             _fields(row, {"node", "people"}, {"node", "people", "housing_facility", "life_support_facility"}, "population target")
@@ -355,23 +479,29 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                     if selected_provider_option is None:
                         raise ValueError(f"{key} cannot support population: {chosen}")
                     entry[kind + "_nominal_units"] = selected_provider_option["minimum_nominal_units"]
-                    asset_key = row["node"], chosen
-                    facilities[asset_key] = max(facilities.get(asset_key, 0), selected_provider_option["minimum_nominal_units"])
                     if kind == "life_support":
                         for resource, rate in defs["facilities"][chosen]["life_support_resources_per_person_day_t"].items():
                             population_daily[(row["node"], resource)] += people * rate
+                            population_evidence.append({"kind": "population_life_support", "id": chosen,
+                                                        "node": row["node"], "resource": resource,
+                                                        "people": people, "quantity_t_per_day": people * rate})
                 elif people:
-                    unresolved.append(f"{name}: {kind} provider not selected for {row['node']}")
+                    conditions.append({"code": "population_support_provider_unselected",
+                                       "node": row["node"], "service": kind,
+                                       "target_people": people, "limits": ["population", "capital", "time"]})
             if people:
-                unresolved.append(f"{name}: population growth, eligibility, arrival and common capacity allocation are not established")
+                conditions.append({"code": "population_progression_unverified",
+                                   "node": row["node"], "target_people": people,
+                                   "limits": ["population", "time"]})
             population.append(entry)
 
         capital = defaultdict(float)
-        daily_input = defaultdict(float, process_operating)
+        daily_input = defaultdict(float)
         for key, value in population_daily.items():
             daily_input[key] += value
-        nominal_output = defaultdict(float, process_outputs)
+        nominal_output = defaultdict(float)
         work = defaultdict(float)
+        quantity_evidence = prototype_details + population_evidence
         # Quantity of the milestone asset inventory is a target, not a build schedule.
         capacity = defaultdict(float)
         power = defaultdict(lambda: [0.0, 0.0])
@@ -386,29 +516,49 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             power[node][1] += count * facility["power_load_mw"]
             added = max(0, count - installed.get((node, fid), 0))
             if count < installed.get((node, fid), 0):
-                unresolved.append(f"{name}: decommissioning does not refund investments")
+                conditions.append({"code": "decommissioning_not_modeled",
+                                   "node": node, "facility": fid, "limits": ["capital", "time"]})
             if added:
                 recipe = facility["construction_resources_t"]
                 if recipe is None:
-                    unresolved.append(f"{name}: no construction Recipe for {fid}")
+                    conditions.append({"code": "facility_construction_recipe_missing",
+                                       "node": node, "facility": fid,
+                                       "limits": ["capital", "construction", "time"]})
                 else:
                     for resource, quantity in recipe.items():
                         capital[(node, resource)] += added * quantity
+                        quantity_evidence.append({"kind": "facility_acquisition", "id": fid, "node": node,
+                                                  "resource": resource, "units": added, "quantity_t": added * quantity})
                     if not facility["self_deploying"]:
-                        work[(node, "construction_work")] += added * (facility["construction_work"] or 0)
+                        needed_work = added * (facility["construction_work"] or 0)
+                        work[(node, "construction_work")] += needed_work
+                        quantity_evidence.append({"kind": "facility_construction_work", "id": fid,
+                                                  "node": node, "units": added, "work": needed_work})
             for resource, quantity in (facility["maintenance_per_day_t"] or {}).items():
                 daily_input[(node, resource)] += quantity * count
+                quantity_evidence.append({"kind": "facility_maintenance", "id": fid, "node": node,
+                                          "resource": resource, "units": count, "quantity_t_per_day": quantity * count})
             for resource, quantity in facility["operating_per_day_t"].items():
                 daily_input[(node, resource)] += quantity * count
+                quantity_evidence.append({"kind": "facility_operation", "id": fid, "node": node,
+                                          "resource": resource, "units": count, "quantity_t_per_day": quantity * count})
         for (node, vid), count in sorted(fleet_target.items()):
             vehicle = defs["vehicles"][vid]
             added = max(0, count - fleet.get((node, vid), 0))
             for resource, quantity in vehicle["production_resources_t"].items():
                 capital[(node, resource)] += added * quantity
+                if added:
+                    quantity_evidence.append({"kind": "vehicle_acquisition", "id": vid, "node": node,
+                                              "resource": resource, "units": added, "quantity_t": added * quantity})
             if vehicle["production_service_type"] and added:
-                work[(node, vehicle["production_service_type"])] += added * vehicle["production_days"]
+                needed_work = added * vehicle["production_days"]
+                work[(node, vehicle["production_service_type"])] += needed_work
+                quantity_evidence.append({"kind": "vehicle_production_work", "id": vid,
+                                          "node": node, "units": added,
+                                          "service": vehicle["production_service_type"], "work": needed_work})
         for resource, quantity in prototype_materials.items():
             capital[("unallocated_research", resource)] += quantity
+
         work[("unallocated_research", "prototype_work")] += prototype_work
         work[("unallocated_research", "demonstration_work")] += demonstration_work
         def research_capacity(facility_counts, fleet_counts):
@@ -454,43 +604,132 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
             supply_assumptions[key] = {
                 "average_t_per_day": _number(assumption["average_t_per_day"], "average_t_per_day"),
                 "basis": basis.strip()}
+        seen_supply = set()
+        for choice in step.get("supply_choices", []):
+            _fields(choice, {"node", "resource", "method", "facility"},
+                    {"node", "resource", "method", "facility"}, "supply choice")
+            key = (choice["node"], choice["resource"])
+            if key in seen_supply:
+                raise ValueError(f"duplicate supply choice: {key}")
+            seen_supply.add(key)
+            running_supply[key] = choice
+        # Capital is a once-only stock requirement; operations are an end-point
+        # rate. Spreading capital over the interval is a *scale*, not a schedule.
+        reference_demand = defaultdict(float)
+        for key, amount in capital.items():
+            reference_demand[key] += amount / interval_days
+        for key, amount in daily_input.items():
+            reference_demand[key] += amount
+        upstream_demand, selected_output, chosen_processes, reference_units, supply_issues = _selected_supply(
+            defs, list(running_supply.values()), reference_demand, interval_days,
+            nodes, known_nodes, already_researched, already_researched_at_start)
+        nominal_output.update(selected_output)
+        for row in chosen_processes:
+            quantity_evidence.append({"kind": "selected_supply_process", "id": row["method"],
+                                      "node": row["node"], "facility": row["facility"],
+                                      "conditional_activity_units_per_day": row["conditional_activity_units_per_day"],
+                                      "inputs_t_per_day": row["inputs_t_per_day"],
+                                      "outputs_t_per_day": row["outputs_t_per_day"]})
+        initial_stock = ({(r["node"], r["resource"]): r["available_t"]
+                         for r in defs["owned"]["available_inventory"]} if index == 0 else {})
         resource_budget = []
-        for node, resource in sorted(set(capital) | set(daily_input) | set(nominal_output) | set(supply_assumptions)):
-            acquisition = capital.get((node, resource), 0.0)
-            operation = daily_input.get((node, resource), 0.0)
-            output = nominal_output.get((node, resource), 0.0)
-            assumption = supply_assumptions.get((node, resource))
-            matches_target = (assumption is not None and output > 0 and
-                              abs(assumption["average_t_per_day"] - output) < 1e-8)
+        for node, resource in sorted(set(capital) | set(daily_input) | set(upstream_demand) |
+                                     set(selected_output) | set(supply_assumptions) | set(initial_stock)):
+            key = (node, resource)
+            acquisition = capital.get(key, 0.0)
+            operation = daily_input.get(key, 0.0)
+            reference = reference_demand[key]
+            all_demand = upstream_demand[key]
+            output = selected_output[key]
+            assumption = supply_assumptions.get(key)
+            matches_target = (assumption is not None and any(
+                r["node"] == node and r["resource"] == resource and
+                abs(r["target_t_per_day"] - assumption["average_t_per_day"]) < 1e-8
+                for r in production))
             if matches_target:
-                unresolved.append(f"{name}: {node}/{resource} supply assumption equals authored production target; independent capacity not established")
+                conditions.append({"code": "supply_assumption_equals_production_goal",
+                                   "node": node, "resource": resource,
+                                   "assumed_t_per_day": assumption["average_t_per_day"],
+                                   "limits": ["supply"]})
             resource_budget.append({
                 "node": node, "resource": resource,
+                "starting_available_stock_t_not_assumed_spent": initial_stock.get(key, 0.0),
                 "authored_supply_assumption_t_per_day": None if assumption is None else assumption["average_t_per_day"],
                 "supply_assumption_basis": None if assumption is None else assumption["basis"],
                 "assumption_matches_conditional_production_target": matches_target,
                 "capital_investment_t": acquisition,
                 "average_capital_requirement_t_per_day_if_spread_over_interval": acquisition / interval_days,
                 "end_target_operation_input_t_per_day": operation,
-                "end_target_conditional_output_t_per_day": output,
-                "average_capital_plus_end_target_operation_input_t_per_day": acquisition / interval_days + operation,
-                "interpretation": "Investment average and end-state operating rate are different time bases; production is conditional on selected methods and is not independently verified supply. No affordable Recipe scale is inferred."})
+                "conditional_reference_output_t_per_day": output,
+                "direct_reference_requirement_t_per_day": reference,
+                "upstream_intermediate_input_t_per_day": max(0.0, all_demand - reference),
+                "combined_reference_demand_t_per_day": all_demand,
+                "conditional_selected_method_output_t_per_day": output,
+                "remaining_unestablished_supply_t_per_day": max(0.0, all_demand - output),
+                "average_capital_plus_end_target_operation_input_t_per_day": reference,
+                "quantity_status": "conditional_reference_not_delivery",
+                "interpretation": "Capital is spread only to compare scales; conditional processes, start stock and authored supply assumptions do not establish delivered supply or a construction schedule."})
+        for (node, fid), count in sorted(reference_units.items()):
+            chosen = facilities.get((node, fid), 0)
+            if count > chosen:
+                supply_issues.append({"code": "planned_facility_capacity_below_reference",
+                                      "node": node, "facility": fid, "nominal_reference_units": count,
+                                      "explicit_planned_units": chosen,
+                                      "limits": ["supply", "capital", "time"]})
+        for row in population:
+            node, people = row["node"], row["target_people"]
+            for kind, field in (("housing", "housing_capacity"),
+                                ("life_support", "life_support_person_days_per_day")):
+                chosen = row.get(kind + "_facility")
+                if chosen and people > facilities.get((node, chosen), 0) * (defs["facilities"][chosen][field] or 0):
+                    supply_issues.append({"code": "planned_population_support_below_reference",
+                                          "node": node, "facility": chosen, "service": kind,
+                                          "limits": ["population", "capital", "time"]})
+        for (node, service), amount in sorted(work.items()):
+            rate = amount / interval_days
+            if rate == 0:
+                continue
+            cap_key = "construction_work_per_day" if service == "construction_work" else f"service:{service}"
+            available = capacity.get((node, cap_key), 0.0)
+            if rate > available + 1e-9:
+                supply_issues.append({"code": "planned_work_capacity_below_interval_average",
+                                      "node": node, "service": service,
+                                      "required_reference_per_day": rate, "planned_end_capacity_per_day": available,
+                                      "limits": ["construction", "research", "time"]})
+        for (node, fid), planned in sorted(facilities.items()):
+            if planned > installed.get((node, fid), 0):
+                missing = sorted(set(defs["facilities"][fid]["prerequisites"]) - already_researched)
+                if missing:
+                    supply_issues.append({"code": "facility_requires_unplanned_technology",
+                                          "node": node, "facility": fid,
+                                          "missing_technology_ids": missing,
+                                          "limits": ["construction", "research", "time"]})
+        for node, (generation, load) in sorted(power.items()):
+            if load > generation + 1e-9:
+                supply_issues.append({"code": "reference_power_load_exceeds_generation",
+                                      "node": node, "nominal_generation_mw": generation,
+                                      "nominal_load_mw": load, "limits": ["power", "supply", "research"]})
         # Global totals are economic *magnitudes*, not freely transferable supplies.
-        totals = defaultdict(lambda: [0.0, 0.0, 0.0])
+        totals = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
         for row in resource_budget:
             columns = totals[row["resource"]]
             columns[0] += row["capital_investment_t"]
             columns[1] += row["end_target_operation_input_t_per_day"]
-            columns[2] += row["end_target_conditional_output_t_per_day"]
+            columns[2] += row["conditional_reference_output_t_per_day"]
+            columns[3] += row["upstream_intermediate_input_t_per_day"]
+            columns[4] += row["remaining_unestablished_supply_t_per_day"]
         economy_resources = [{"resource": resource, "capital_investment_t": cols[0],
                               "end_target_operation_input_t_per_day": cols[1],
-                              "end_target_conditional_output_t_per_day": cols[2],
+                              "conditional_reference_output_t_per_day": cols[2],
+                              "conditional_upstream_input_t_per_day": cols[3],
+                              "remaining_unestablished_supply_t_per_day": cols[4],
                               "not_deliverable_global_supply": True}
                              for resource, cols in sorted(totals.items())]
         if not selected and not any(step.get(field) for field in (
                 "production_targets", "facility_targets", "vehicle_targets", "population_targets", "transport_targets", "research_provider")):
-            unresolved.append(f"{name}: no new development outcome stated; only inherited targets are assessed" if index else
-                              f"{name}: no development outcome specified; time target alone cannot determine Content values")
+            conditions.append({"code": "milestone_has_no_new_development_outcome",
+                               "milestone": name, "inherited_previous_goals": bool(index),
+                               "limits": ["development_goal", "balance_judgment"]})
         # This is NOT cumulative production during growth: all operating rates are end targets.
         stage = {"name": name, "target_cumulative_hours": hours,
                  "interval_play_hours": interval_days / 3600, "interval_game_days_at_base_speed": interval_days,
@@ -506,16 +745,28 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                               "prototype_resources_t": dict(sorted(prototype_materials.items())),
                               "prototype_work": prototype_work, "demonstration_work": demonstration_work,
                               "operational_experience_projects": sorted(experiential),
-                              "single_provider_options": provider_options},
+                              "single_provider_options": provider_options,
+                              "execution_requirements_by_stage": research_requirements,
+                              "research_selection_is_planned_not_actual": True},
                  "production_targets": production,
                  "facility_end_targets": [{"node": node, "facility": fid, "count": count,
                                            "basis": ("explicit_target" if (node, fid) in seen_facilities else
-                                                     "conditional_minimum_for_selected_production" if (node, fid) in required_facility else
                                                      "inherited_or_initial_asset")}
                                           for (node, fid), count in sorted(facilities.items())],
                  "fleet_end_targets": [{"node": node, "vehicle": vid, "count": count}
                                        for (node, vid), count in sorted(fleet_target.items())],
                  "capital_resources_t": _ledger(capital), "resource_time_budget": resource_budget,
+                 "selected_supply_processes": chosen_processes,
+                 "supply_choices": [running_supply[key] for key in sorted(running_supply)],
+                 "reference_facility_units_not_acquired": [
+                     {"node": n, "facility": f, "count": c} for (n, f), c in sorted(reference_units.items())],
+                 "constraints": supply_issues + conditions,
+                 "quantity_evidence": quantity_evidence,
+                 "state_provenance": {"starting_assets": (
+                     "actual_save_or_scenario" if index == 0 else "planned_previous_milestone_not_actual"),
+                                      "ending_assets": "explicit_authored_targets_not_achieved_game_state",
+                                      "reference_units": "conditional_not_acquired",
+                                      "technologies": "selected_research_is_planned_not_proven_completed"},
                  "economy_resources_across_nodes": economy_resources,
                  "construction_and_production_work": [
                      {"node": node, "service": svc, "quantity": amount}
@@ -526,17 +777,49 @@ def tune(defs: dict, targets: dict, *, transport_preview=None) -> dict:
                                                 "nominal_load_mw": value[1], "site_adjustment_not_applied": True}
                                                for node, value in sorted(power.items())],
                  "end_target_nominal_inputs_t_per_day": _ledger(daily_input),
-                 "end_target_nominal_process_outputs_t_per_day": _ledger(nominal_output),
+                 "conditional_reference_process_outputs_t_per_day": _ledger(nominal_output),
                  "construction_work_time_lower_bounds": construction_bounds,
                  "required_average_work_per_day_by_service": [
                      {"node": node, "service": svc, "work_per_day_to_finish_in_interval": amount / interval_days}
                      for (node, svc), amount in sorted(work.items()) if amount],
-                 "transport_targets": transport, "population_targets": population,
-                 "unresolved_assumptions": sorted(set(unresolved)),
+                 "transport_targets": transport,
+                 "transport_flow_envelope_not_proven_delivered": [
+                     {"source": row["source"], "destination": row["destination"],
+                      "resource": row["resource"], "target_t_per_day": row["target_t_per_day"]}
+                     for row in transport],
+                 "population_targets": population,
+
                  "interpretation": "Time-first design envelope, not growth simulation or achieved State. The target asset capacity is an end-state upper bound; build-up, competing allocation, geographic supply, and actual play decisions are not inferred."}
         results.append(stage)
         installed, fleet = facilities, fleet_target
+    summary = []
+    evidence = []
+    for stage in results:
+        name = stage["name"]
+        constraint_kinds = defaultdict(int)
+        for row in stage["constraints"]:
+            constraint_kinds[row["code"]] += 1
+        for row in stage["quantity_evidence"]:
+            evidence.append({"milestone": name, **row})
+        summary.append({
+            "milestone": name, "target_cumulative_hours": stage["target_cumulative_hours"],
+            "interval_game_days": stage["interval_game_days_at_base_speed"],
+            "theory_rp_cost": stage["research"]["theory_rp_cost_at_current_content"],
+            "average_required_rp_per_day": stage["research"]["required_average_rp_per_day_if_full_interval"],
+            "start_nominal_research": stage["research"]["nominal_start_research_capacity"],
+            "planned_end_nominal_research": stage["research"]["nominal_end_target_research_capacity"],
+            "capital_resources_t": stage["capital_resources_t"],
+            "reference_total_demands_by_resource": [
+                {"node": r["node"], "resource": r["resource"],
+                 "capital_t": r["capital_investment_t"],
+                 "operating_t_per_day": r["end_target_operation_input_t_per_day"],
+                 "conditional_upstream_t_per_day": r["upstream_intermediate_input_t_per_day"]}
+                for r in stage["resource_time_budget"]],
+            "transport_routes": len(stage["transport_targets"]),
+            "population_sites": len(stage["population_targets"]),
+            "conditional_constraints_by_code": dict(sorted(constraint_kinds.items())),
+            "details_ref": name, "evidence_ref": name})
     return {"kind": "balance_pacing", "identity": defs["identity"],
             "format": FORMAT, "prospective_locations": prospective,
-            "milestones": results,
-            "interpretation": "All milestones share one cumulative design baseline. Outputs expose Content magnitudes and optional authored assumptions, not a correct adjustment, optimized Build, feasible construction schedule, or achieved Game State. Game-days assume 1 game day per real second at base speed."}
+            "summary": summary, "milestones": results, "evidence": evidence,
+            "interpretation": "One cumulative design baseline; summary, stage quantities and ID-linked evidence. Reference process runs and target assets are conditional; no feasible construction timing, verified delivery, optimizer or achieved Game State is inferred."}

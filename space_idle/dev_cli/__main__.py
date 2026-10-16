@@ -38,25 +38,10 @@ def main(argv=None) -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-    summary = {"kind": report["kind"], "report": str(args.output) if args.output else None,
-               "milestones": [{"name": stage["name"], "cumulative_hours": stage["target_cumulative_hours"],
-                               "theory_rp_cost": stage["research"]["theory_rp_cost_at_current_content"],
-                               "required_average_rp_per_day_if_full_interval": stage["research"]["required_average_rp_per_day_if_full_interval"],
-                               "required_average_rp_per_day_if_share_assumed": stage["research"]["required_average_rp_per_day_if_share_assumed"],
-                               "nominal_start_research_capacity": stage["research"]["nominal_start_research_capacity"],
-                               "nominal_end_target_research_capacity": stage["research"]["nominal_end_target_research_capacity"],
-                               "capital_resources_t": stage["capital_resources_t"],
-                               "economy_resource_totals": stage["economy_resources_across_nodes"],
-                               "supply_assumptions": [r for r in stage["resource_time_budget"]
-                                    if r["authored_supply_assumption_t_per_day"] is not None],
-                               "work_per_day_needed": stage["required_average_work_per_day_by_service"],
-                               "transport_targets": len(stage["transport_targets"]),
-                               "population_targets": stage["population_targets"],
-                               "production_targets": [{"resource": p["resource"], "target_t_per_day": p["target_t_per_day"],
-                                                       "selected": p["selected"], "alternatives": len(p["options"])}
-                                                      for p in stage["production_targets"]],
-                               "unresolved_assumptions": stage["unresolved_assumptions"]}
-                              for stage in report["milestones"]]}
+    summary = {"kind": report["kind"], "identity": report["identity"],
+               "report": str(args.output) if args.output else None,
+               "milestones": report["summary"],
+               "interpretation": report["interpretation"]}
     print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
     return 0
 

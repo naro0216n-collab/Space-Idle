@@ -62,37 +62,22 @@ def test_time_goals_expose_current_cost_and_capacity_without_autotuning():
     assert "theory_rp_cost_scale_to_fit_budget" not in after["research"]
 
 
-def test_production_target_derives_facilities_capital_and_time_pressure_with_cumulative_asset_growth():
+def test_production_goal_is_not_a_purchase_or_supply_plan_across_stages():
     _, defs = _base()
     pid, fid, resource = _selection(defs)
     node = defs["world"]["nodes"][0]["id"]
-    per_unit = defs["facilities"][fid]["process_throughput_per_day"] * defs["processes"][pid]["outputs_per_unit_t"][resource]
-    rate_a, rate_b = per_unit * 2, per_unit * 5
-    targets = lambda rate: {"node": node, "resource": resource,
-                            "tonnes_per_day": rate, "method": pid, "facility": fid}
-    stage_one = {"name": "first", "cumulative_hours": 4, "production_targets": [targets(rate_a)]}
-    stage_two = {"name": "second", "cumulative_hours": 12, "production_targets": [targets(rate_b)]}
-    data = tune(defs, _plan(stage_one, stage_two))["milestones"]
-    assert data[0]["production_targets"][0]["nominal_units_if_selected"] == 2
-    assert data[0]["production_targets"][0]["quantity_role"] == "authored_goal_not_verified_supply"
-    assert any(r["basis"] == "conditional_minimum_for_selected_production"
-               for r in data[0]["facility_end_targets"] if r["facility"] == fid)
-    assert data[1]["production_targets"][0]["nominal_units_if_selected"] == 5
-    first_count = next(r["count"] for r in data[0]["facility_end_targets"] if r["facility"] == fid and r["node"] == node)
-    second_count = next(r["count"] for r in data[1]["facility_end_targets"] if r["facility"] == fid and r["node"] == node)
-    assert first_count >= 2 and second_count >= 5
-    unit_cost = defs["facilities"][fid]["construction_resources_t"]
-    if unit_cost:
-        rid, price = next(iter(unit_cost.items()))
-        owned = next((r["count"] for r in defs["owned"]["facilities"] if r["node"] == node and r["facility"] == fid), 0)
-        first_capital = next((r["quantity_t"] for r in data[0]["capital_resources_t"] if r["node"] == node and r["resource"] == rid), 0)
-        second_capital = next((r["quantity_t"] for r in data[1]["capital_resources_t"] if r["node"] == node and r["resource"] == rid), 0)
-        assert first_capital >= max(0, first_count - owned) * price
-        assert second_capital >= max(0, second_count - first_count) * price
-        assert any(row["resource"] == rid and row["average_capital_requirement_t_per_day_if_spread_over_interval"] >= 0
-                   for row in data[1]["resource_time_budget"])
-    assert data[1]["end_target_nominal_process_outputs_t_per_day"]
-    assert "build-up" in data[0]["interpretation"]
+    rate = defs["facilities"][fid]["process_throughput_per_day"] * defs["processes"][pid]["outputs_per_unit_t"][resource] * 4
+    one = {"name": "one", "cumulative_hours": 4, "production_targets": [
+        {"node": node, "resource": resource, "tonnes_per_day": rate, "facility": fid, "method": pid}]}
+    two = {"name": "two", "cumulative_hours": 12}
+    first, second = tune(defs, _plan(one, two))["milestones"]
+    assert first["production_targets"][0]["nominal_units_if_selected"] == 4
+    assert second["production_targets"] == first["production_targets"]
+    assert not first["capital_resources_t"] and not second["capital_resources_t"]
+    actual = {(row["node"], row["facility"]): row["count"] for row in defs["owned"]["facilities"]}
+    assert {(r["node"], r["facility"]): r["count"] for r in first["facility_end_targets"]} == actual
+    assert {(r["node"], r["facility"]): r["count"] for r in second["facility_end_targets"]} == actual
+    assert not first["conditional_reference_process_outputs_t_per_day"]
 
 
 def test_unselected_providers_are_design_choices_not_fake_installed_assets():
@@ -104,7 +89,7 @@ def test_unselected_providers_are_design_choices_not_fake_installed_assets():
     data = tune(defs, plan)["milestones"][0]
     row = data["production_targets"][0]
     assert row["selected"] is None and row["options"]
-    assert any("not selected" in reason for reason in data["unresolved_assumptions"])
+    assert any(reason["code"] == "production_goal_supply_method_unselected" for reason in data["constraints"])
     before = {(r["node"], r["facility"]): r["count"] for r in defs["owned"]["facilities"]}
     after = {(r["node"], r["facility"]): r["count"] for r in data["facility_end_targets"]}
     assert after == before
@@ -184,41 +169,40 @@ def test_cli_uses_one_time_first_workflow_and_preserves_canonical_save(tmp_path)
             main([obsolete])
 
 
-def test_ongoing_activity_goals_inherit_across_time_milestones():
+def test_only_explicit_purchases_create_capital_and_inherit_as_planned_assets():
     _, defs = _base()
-    pid, fid, rid = _selection(defs)
+    pid, fid, resource = _selection(defs)
     node = defs["world"]["nodes"][0]["id"]
-    initial = {"name": "entry", "cumulative_hours": 4,
-               "production_targets": [{"node": node, "resource": rid, "tonnes_per_day": 2,
-                                       "method": pid, "facility": fid}],
-               "population_targets": [{"node": node, "people": 120}]}
-    expanded = {"name": "expansion", "cumulative_hours": 12}
-    result = tune(defs, _plan(initial, expanded))["milestones"]
-    assert result[1]["production_targets"] == result[0]["production_targets"]
-    assert result[1]["end_target_nominal_process_outputs_t_per_day"] == result[0]["end_target_nominal_process_outputs_t_per_day"]
-    assert result[1]["population_targets"] == result[0]["population_targets"]
-    # Existing assets are not re-purchased just because a new time interval begins.
-    costs_one = {(r["node"], r["resource"]): r["quantity_t"] for r in result[0]["capital_resources_t"]}
-    costs_two = {(r["node"], r["resource"]): r["quantity_t"] for r in result[1]["capital_resources_t"]}
-    assert costs_one
-    assert not costs_two
+    owned = next((row["count"] for row in defs["owned"]["facilities"] if row["facility"] == fid and row["node"] == node), 0)
+    first, second = tune(defs, _plan({"name": "first", "cumulative_hours": 4,
+              "facility_targets": [{"node": node, "facility": fid, "count": owned + 3}],
+              "population_targets": [{"node": node, "people": 120}]},
+              {"name": "second", "cumulative_hours": 12}))["milestones"]
+    recipe = defs["facilities"][fid]["construction_resources_t"]
+    if recipe:
+        for resource, qty in recipe.items():
+            assert any(r["node"] == node and r["resource"] == resource and
+                       r["quantity_t"] >= qty * 3 for r in first["capital_resources_t"])
+    assert not second["capital_resources_t"]
+    assert second["state_provenance"]["ending_assets"] == "explicit_authored_targets_not_achieved_game_state"
+    assert first["population_targets"] == second["population_targets"]
 
 
-def test_population_outcome_derives_housing_and_life_support_capex_and_consumption():
+def test_population_support_reference_does_not_fabricate_asset_but_exposes_operating_demand():
     _, defs = _base()
     fid = next(k for k, r in defs["facilities"].items()
                if r["housing_capacity"] > 0 and (r["life_support_person_days_per_day"] or 0) > 0
                and r["life_support_resources_per_person_day_t"])
     node = defs["world"]["nodes"][0]["id"]
     data = tune(defs, _plan({"name": "pop", "cumulative_hours": 20,
-                              "population_targets": [{"node": node, "people": 200,
-                                  "housing_facility": fid, "life_support_facility": fid}]}))["milestones"][0]
+                "population_targets": [{"node": node, "people": 200,
+                    "housing_facility": fid, "life_support_facility": fid}]}))["milestones"][0]
     entry = data["population_targets"][0]
-    expected = max(entry["housing_nominal_units"], entry["life_support_nominal_units"])
-    assert next(x for x in data["facility_end_targets"] if x["facility"] == fid and x["node"] == node)["count"] >= expected
+    assert entry["housing_nominal_units"] >= 1 and entry["life_support_nominal_units"] >= 1
+    assert not data["capital_resources_t"]
+    assert any(x["code"] == "planned_population_support_below_reference" for x in data["constraints"])
     for resource, amount in defs["facilities"][fid]["life_support_resources_per_person_day_t"].items():
-        assert next(x for x in data["end_target_nominal_inputs_t_per_day"] if x["resource"] == resource and x["node"] == node)["quantity_t"] >= 200 * amount
-
+        assert next(x for x in data["resource_time_budget"] if x["resource"] == resource and x["node"] == node)["end_target_operation_input_t_per_day"] >= 200 * amount
 
 
 def test_population_targets_do_not_replace_research_selection_or_time_budget():
@@ -241,7 +225,7 @@ def test_population_targets_do_not_replace_research_selection_or_time_budget():
     assert report["population_targets"][0]["target_people"] == 120
 
 
-def test_extraction_uses_output_upper_bound_without_pretending_geology_is_known():
+def test_extraction_reference_is_not_achieved_supply_and_requires_site_conditions():
     _, defs = _base()
     eid, method = next((eid, method) for eid, method in defs["extraction"].items()
                        if method["provider_facilities"])
@@ -249,10 +233,10 @@ def test_extraction_uses_output_upper_bound_without_pretending_geology_is_known(
     node = defs["world"]["nodes"][0]["id"]
     stage = tune(defs, _plan({"name": "extraction", "cumulative_hours": 12,
                   "production_targets": [{"node": node, "resource": method["output_resource_id"],
-                                          "tonnes_per_day": 3, "method": eid, "facility": fid}]}))["milestones"][0]
+                      "tonnes_per_day": 3, "method": eid, "facility": fid}]}))["milestones"][0]
     assert stage["production_targets"][0]["selected"]["kind"] == "extraction"
-    assert next(x for x in stage["end_target_nominal_process_outputs_t_per_day"] if x["resource"] == method["output_resource_id"])["quantity_t"] == 3
-    assert any("geology" in caveat for caveat in stage["unresolved_assumptions"])
+    assert not stage["conditional_reference_process_outputs_t_per_day"]
+    assert stage["production_targets"][0]["quantity_role"] == "authored_goal_not_verified_supply"
 
 
 def test_supply_assumptions_are_explicit_and_not_inferred_from_production_targets():
@@ -268,7 +252,7 @@ def test_supply_assumptions_are_explicit_and_not_inferred_from_production_target
     baseline = tune(defs, _plan(stage))["milestones"][0]
     row = next(r for r in baseline["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
     assert row["authored_supply_assumption_t_per_day"] is None
-    assert row["end_target_conditional_output_t_per_day"] == unit_rate
+    assert row["conditional_reference_output_t_per_day"] == 0
     assert "affordable_capital_recipe_scale_if_budget_stated" not in row
     with pytest.raises(ValueError):
         tune(defs, _plan({**stage, "resource_supply_assumptions": [
@@ -279,7 +263,7 @@ def test_supply_assumptions_are_explicit_and_not_inferred_from_production_target
     row = next(r for r in assumed["resource_time_budget"] if r["node"] == node and r["resource"] == resource)
     assert row["assumption_matches_conditional_production_target"]
     assert row["supply_assumption_basis"] == "Independent supply estimate, verify later"
-    assert any("independent capacity not established" in note for note in assumed["unresolved_assumptions"])
+    assert any(note["code"] == "supply_assumption_equals_production_goal" for note in assumed["constraints"])
 
 
 def test_provider_reference_does_not_create_assets_or_adjust_costs():
@@ -308,4 +292,123 @@ def test_full_economy_totals_include_investment_and_operating_but_not_fabricated
     by_resource = {r["resource"]: r for r in result["economy_resources_across_nodes"]}
     assert any(r["capital_investment_t"] > 0 for r in by_resource.values())
     assert all(r["not_deliverable_global_supply"] for r in by_resource.values())
-    assert all(r["end_target_conditional_output_t_per_day"] == 0 for r in by_resource.values())
+    assert all(r["conditional_reference_output_t_per_day"] == 0 for r in by_resource.values())
+
+
+def test_demand_first_coproduct_process_is_counted_once_and_has_upstream_unresolved():
+    from copy import deepcopy
+    _, original = _base()
+    defs = deepcopy(original)
+    node = defs["world"]["nodes"][0]["id"]
+    resources = list(defs["resources"])
+    assert len(resources) >= 3
+    a, b, raw = resources[:3]
+    supplier = next(fid for fid, spec in defs["facilities"].items()
+                    if spec["process_throughput_per_day"] > 0)
+    purchased = next(fid for fid, spec in defs["facilities"].items()
+                     if spec["construction_resources_t"] is not None)
+    defs["facilities"][purchased]["construction_resources_t"] = {a: 100, b: 200}
+    defs["processes"]["test.co_output"] = {
+        "provider_facilities": [supplier], "prerequisites": [],
+        "inputs_per_unit_t": {raw: 2}, "outputs_per_unit_t": {a: 5, b: 10}}
+    choices = [{"node": node, "resource": r, "method": "test.co_output", "facility": supplier}
+               for r in (a, b)]
+    present = next((row["count"] for row in defs["owned"]["facilities"]
+                    if row["node"] == node and row["facility"] == purchased), 0)
+    plan = _plan({"name": "plan", "cumulative_hours": 1,
+                  "facility_targets": [{"node": node, "facility": purchased, "count": present + 1}],
+                  "supply_choices": choices})
+    result = tune(defs, plan)
+    stage = result["milestones"][0]
+    process = next(p for p in stage["selected_supply_processes"] if p["method"] == "test.co_output")
+    assert isclose(process["conditional_activity_units_per_day"], 20 / 3600)
+    assert isclose(process["outputs_t_per_day"][a], 100 / 3600)
+    assert isclose(process["outputs_t_per_day"][b], 200 / 3600)
+    assert isclose(process["inputs_t_per_day"][raw], 40 / 3600)
+    assert any(row["code"] == "supply_not_established" and row["resource"] == raw
+               for row in stage["constraints"])
+    counts = {(row["node"], row["facility"]): row["count"] for row in stage["facility_end_targets"]}
+    supplier_actual = next((x["count"] for x in defs["owned"]["facilities"]
+                            if x["node"] == node and x["facility"] == supplier), 0)
+    assert counts.get((node, supplier), 0) == supplier_actual + (1 if supplier == purchased else 0)
+    assert stage["reference_facility_units_not_acquired"]
+    # Changing the one canonical Process coefficient affects upstream consumption and all outputs.
+    changed = deepcopy(defs)
+    changed["processes"]["test.co_output"]["outputs_per_unit_t"] = {a: 10, b: 20}
+    other = tune(changed, plan)["milestones"][0]
+    modified = next(p for p in other["selected_supply_processes"] if p["method"] == "test.co_output")
+    assert isclose(modified["conditional_activity_units_per_day"], process["conditional_activity_units_per_day"] / 2)
+    assert isclose(modified["inputs_t_per_day"][raw], process["inputs_t_per_day"][raw] / 2)
+    assert modified["reference_nominal_facility_units"] <= process["reference_nominal_facility_units"]
+    assert result["summary"][0]["milestone"] == "plan"
+    assert any(x["kind"] == "selected_supply_process" for x in result["evidence"])
+
+
+def test_selected_supply_cycle_is_unverified_not_created_as_self_supply():
+    from copy import deepcopy
+    _, original = _base()
+    defs = deepcopy(original)
+    node = defs["world"]["nodes"][0]["id"]
+    resource = next(iter(defs["resources"]))
+    supplier = next(fid for fid, spec in defs["facilities"].items()
+                    if spec["process_throughput_per_day"] > 0)
+    purchased = next(fid for fid, spec in defs["facilities"].items()
+                     if spec["construction_resources_t"] is not None)
+    defs["facilities"][purchased]["construction_resources_t"] = {resource: 10}
+    defs["processes"]["test.circular"] = {
+        "provider_facilities": [supplier], "prerequisites": [],
+        "inputs_per_unit_t": {resource: 1}, "outputs_per_unit_t": {resource: 1}}
+    current = next((row["count"] for row in defs["owned"]["facilities"]
+                    if row["node"] == node and row["facility"] == purchased), 0)
+    report = tune(defs, _plan({"name": "circular", "cumulative_hours": 1,
+        "facility_targets": [{"node": node, "facility": purchased, "count": current + 1}],
+        "supply_choices": [{"node": node, "resource": resource, "method": "test.circular",
+                            "facility": supplier}]}))["milestones"][0]
+    assert any(x["code"] == "supply_cycle" for x in report["constraints"])
+    assert report["state_provenance"]["reference_units"] == "conditional_not_acquired"
+
+
+def test_transport_reference_units_never_become_acquired_fleet():
+    _, defs = _base()
+    src = defs["world"]["nodes"][0]["id"]
+    dst = defs["world"]["nodes"][1]["id"]
+    vehicle = next(iter(defs["vehicles"]))
+    resource = next(iter(defs["resources"]))
+    result = tune(defs, _plan({"name": "routes", "cumulative_hours": 5,
+        "transport_targets": [{"source": src, "destination": dst, "resource": resource,
+                               "vehicle": vehicle, "tonnes_per_day": 1}]}),
+        transport_preview=lambda *args: {"required_units": 7})["milestones"][0]
+    assert result["transport_targets"][0]["reference_required_units_not_acquired"] == 7
+    actual = {(r["node"], r["vehicle"]): r["count"] for r in defs["owned"]["fleet"]}
+    assert {(r["node"], r["vehicle"]): r["count"] for r in result["fleet_end_targets"]} == actual
+    assert not result["capital_resources_t"]
+
+
+def test_supply_choices_must_be_unique_and_never_select_missing_method():
+    _, defs = _base()
+    node = defs["world"]["nodes"][0]["id"]
+    resource = next(iter(defs["resources"]))
+    facility = next(iter(defs["facilities"]))
+    choice = {"node": node, "resource": resource, "method": "unknown_method", "facility": facility}
+    base = {"name": "supply", "cumulative_hours": 1}
+    with pytest.raises(ValueError, match="duplicate supply choice"):
+        tune(defs, _plan({**base, "supply_choices": [choice, choice]}))
+    with pytest.raises(ValueError, match="unknown supply method"):
+        tune(defs, _plan({**base, "supply_choices": [choice]}))
+
+
+def test_whole_report_contains_typed_conditions_and_traces_to_canonical_definitions():
+    _, defs = _base()
+    facility = next(fid for fid, spec in defs["facilities"].items() if spec["construction_resources_t"])
+    node = defs["world"]["nodes"][0]["id"]
+    owned = next((row["count"] for row in defs["owned"]["facilities"]
+                  if row["node"] == node and row["facility"] == facility), 0)
+    report = tune(defs, _plan({"name": "stage1", "cumulative_hours": 4,
+                               "facility_targets": [{"node": node, "facility": facility, "count": owned + 1}]},
+                              {"name": "stage2", "cumulative_hours": 12}))
+    assert report["summary"][0]["milestone"] == "stage1"
+    assert all(isinstance(issue["limits"], list) and issue["code"]
+               for stage in report["milestones"] for issue in stage["constraints"])
+    assert any(row["milestone"] == "stage1" and row["id"] == facility and
+               row["kind"] == "facility_acquisition" for row in report["evidence"])
+    assert report["milestones"][1]["state_provenance"]["starting_assets"] == "planned_previous_milestone_not_actual"
