@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from math import isfinite
 
 from .domain import DomainExtension, StateCodec, decode_float, decode_list, decode_str, require_fields
 from .shared import SpatialNodeId
+from .inventory import DEFAULT_STORAGE_POOL_KEY
 from .validation_support import ValidationContext, require as _require
 
 
@@ -28,6 +30,8 @@ def restore_storage(sim: Any, data: dict[str, Any]) -> None:
             SpatialNodeId(decode_str(row["operational_node_id"], "storage operational_node_id")),
             decode_str(row["storage_pool_key"], "storage storage_pool_key"),
         )
+        if key[1] == DEFAULT_STORAGE_POOL_KEY:
+            raise ValueError("ordinary Inventory cannot have storage infrastructure")
         if key in restored:
             raise ValueError(f"duplicate storage infrastructure capacity key: {key}")
         restored[key] = decode_float(row["amount"], "storage amount")
@@ -44,15 +48,20 @@ def validate_configuration(sim: Any, ctx: ValidationContext) -> None:
     for definition_id, spec in sim.storage.providers.items():
         _require(definition_id == spec.facility_def_id, f"storage provider key mismatch: {definition_id}")
         _require(definition_id in facility_defs, f"storage provider references unknown facility: {definition_id}")
-        _require(all(v >= 0 for v in spec.capacity_t_by_pool.values()), f"negative storage capacity: {definition_id}")
+        _require(all(isfinite(v) and v >= 0 for v in spec.capacity_t_by_pool.values()), f"negative storage capacity: {definition_id}")
         _require(spec.power_sensitive_pools.issubset(spec.capacity_t_by_pool), f"unknown power-sensitive storage pool: {definition_id}")
+        if spec.power_sensitive_pools:
+            power_spec = sim.power.specs.get(definition_id)
+            _require(power_spec is not None and power_spec.load_mw > 0,
+                     f"power-sensitive storage requires an active power demand: {definition_id}")
 
 
 def validate_runtime(sim: Any) -> None:
     for (node_id, pool_key), amount in sim.storage.infrastructure_capacity_t.items():
         _require(sim.graph.has_operational_node(node_id), f"storage infrastructure references unknown operational node: {node_id}/{pool_key}")
         _require(bool(pool_key), f"empty storage pool key at {node_id}")
-        _require(amount >= 0, f"negative storage infrastructure capacity: {node_id}/{pool_key}")
+        _require(pool_key != DEFAULT_STORAGE_POOL_KEY, "ordinary Inventory has no storage capacity")
+        _require(isfinite(amount) and amount >= 0, f"nonfinite or negative storage infrastructure capacity: {node_id}/{pool_key}")
 
 
 DOMAIN_EXTENSION = DomainExtension(

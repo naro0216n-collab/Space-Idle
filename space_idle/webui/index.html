@@ -97,13 +97,14 @@
           <div class="logistics-decision-canvas">
             <section class="workspace logistics-workspace">
               <div class="workspace-heading logistics-heading"><div><div class="eyebrow">輸送ネットワーク</div><h1>輸送</h1></div><div id="logisticsSummary" class="headline-metrics"></div></div>
+              <div class="passenger-network-control"><div id="passengerLogisticsMount" class="passenger-controls"></div></div>
               <div class="logistics-route-context-bar" aria-label="移動経路コンテキスト">
                 <div class="route-filter-row"><select id="movementPlanOriginFilter" aria-label="出発地"></select><select id="movementPlanDestinationFilter" aria-label="到着地"></select></div>
                 <div id="networkDecisionContext" class="network-decision-context" hidden></div>
                 <div id="movementPlanList" class="movement-plan-list"></div>
               </div>
               <section id="logisticsDecisionLane" class="logistics-decision-lane" aria-label="現在の輸送判断"></section>
-              <div class="network-stage" id="networkStage"><svg id="networkSvg" class="network-svg" viewBox="0 0 900 470" aria-label="物流ネットワーク図"></svg><div id="networkNodes" class="network-nodes"></div></div>
+              <div id="systemMapMountLogistics" class="system-map-host"></div>
               <div class="logistics-support-heading"><div><span class="eyebrow">詳細・設定</span><h2>物流状態とPlayer intent</h2></div><span>上の判断から必要な項目へ進み、必要時だけ設定を変更します。</span></div>
               <div class="logistics-bottom-grid">
                 <section class="card logistics-support-card is-primary-support"><div class="card-heading"><h3>補給需要</h3><span id="requirementCountBadge" class="badge"></span></div><div id="requirementTable" class="table-wrap"></div></section>
@@ -152,13 +153,11 @@
       <form method="dialog" id="targetStockForm">
         <div class="dialog-heading"><div><div class="eyebrow">RESERVE STOCK</div><h2>追加備蓄を設定</h2></div><button type="button" class="icon-button" id="targetStockCloseButton">×</button></div>
         <div class="field-pair"><label>需要地<select id="targetStockDestination" required></select></label><label>資源<select id="targetStockResource" required></select></label></div>
-        <div id="targetStockOptionSummary" class="decision-context-summary"><div class="cell-sub">需要地と資源を選択すると現在在庫・通常需要・入荷中を確認できます。</div></div>
+        <div id="targetStockContextSummary" class="decision-context-summary"><div class="cell-sub">需要地と資源を選択すると現在在庫・通常需要・入荷中を確認できます。</div></div>
         <div class="direct-control">
           <div class="direct-control-heading"><span>追加備蓄目標</span><strong id="targetStockQuantityValue">0 t</strong></div>
-          <input id="targetStockQuantityRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="追加備蓄量">
-          <div id="targetStockPresets" class="preset-row"></div>
+          <label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="any" value="0" required></label>
         </div>
-        <details class="precision-input"><summary>数値を直接入力</summary><label>目標在庫 (t)<input id="targetStockQuantity" type="number" min="0" step="0.01" value="0" required></label></details>
         <div class="choice-section"><div class="choice-label">活動優先度</div><input id="targetStockPriority" type="hidden" value="3"><div class="priority-segment" id="targetStockPriorityButtons" role="group" aria-label="追加備蓄優先度">
           <button type="button" data-target-stock-priority="1">1 最低</button><button type="button" data-target-stock-priority="2">2 低</button><button type="button" class="is-selected" data-target-stock-priority="3">3 標準</button><button type="button" data-target-stock-priority="4">4 高</button><button type="button" data-target-stock-priority="5">5 最高</button>
         </div></div>
@@ -173,6 +172,9 @@
         <div class="cell-sub">現在の空き: <span id="relocationFree">0</span> 機。移動中は出発地Fleetとして拘束され、到着時に到着地Fleetへ移ります。</div>
         <label>到着地<select id="relocationDestination" required></select></label>
         <label>移動機数<input id="relocationUnits" type="number" min="1" step="1" value="1" required></label>
+        <label>搬送方法<select id="relocationCarrierVehicle"><option value="">機体自身で移動</option></select></label>
+        <label>Carrier機数<input id="relocationCarrierUnits" type="number" min="1" step="1" value="1" required></label>
+        <div class="cell-sub">Carrierを選ぶと、移動対象は乾燥質量分の搭載量を占有します。Carrier自身も到着地で保有されます。</div>
         <div id="relocationPreview" class="inspector-section"><div class="cell-sub">到着地と機数から正準移動評価で移動計画を確認します。</div></div>
         <div class="dialog-actions"><button type="button" class="secondary" id="relocationCancelButton">取消</button><button type="submit" class="primary" id="relocationSubmitButton">移動開始</button></div>
       </form>
@@ -187,9 +189,8 @@
         <div class="choice-section"><div class="choice-label">配備優先度</div><input id="allocationPriority" type="hidden" value="3"><div class="priority-segment" id="allocationPriorityButtons" role="group" aria-label="輸送配備優先度">
           <button type="button" data-allocation-priority="1">1 最低</button><button type="button" data-allocation-priority="2">2 低</button><button type="button" class="is-selected" data-allocation-priority="3">3 標準</button><button type="button" data-allocation-priority="4">4 高</button><button type="button" data-allocation-priority="5">5 最高</button>
         </div></div>
-        <div class="direct-control"><div class="direct-control-heading"><span>往路能力目標</span><strong id="allocationForwardValue">0 t/日</strong></div><input id="allocationForwardRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="往路輸送能力"><div id="allocationForwardPresets" class="preset-row"></div></div>
-        <div class="direct-control"><div class="direct-control-heading"><span>復路能力目標</span><strong id="allocationReverseValue">0 t/日</strong></div><input id="allocationReverseRange" type="range" min="0" max="1" step="0.01" value="0" aria-label="復路輸送能力"><div id="allocationReversePresets" class="preset-row"></div></div>
-        <details class="precision-input"><summary>輸送能力を数値で直接入力</summary><div class="field-pair"><label>往路 (t/日)<input id="allocationForward" type="number" min="0" step="any" value="0" required></label><label>復路 (t/日)<input id="allocationReverse" type="number" min="0" step="any" value="0" required></label></div></details>
+        <div id="allocationCapacityContext" class="decision-context-summary">輸送手段を選択すると、1機あたり能力とFleet数量を表示します。</div>
+        <div class="field-pair"><label>往路能力目標 (t/日)<input id="allocationForward" type="number" min="0" step="any" value="0" required></label><label>復路能力目標 (t/日)<input id="allocationReverse" type="number" min="0" step="any" value="0" required></label></div>
         <div class="choice-section"><div class="choice-label">経路固定（必要時のみ）</div><div id="allocationMovementChoices" class="choice-grid"></div><div class="cell-sub">通常は経路を自動選択します。特定経路を固定したい場合だけ候補を選択してください。</div></div>
         <div id="allocationPreview" class="inspector-section"><div class="cell-sub">能力目標を調整すると必要Fleetと成立見込みを表示します。</div></div>
         <div id="allocationServiceOptions" class="inspector-section"><div class="cell-sub">出発地と到着地から輸送手段候補を取得します。</div></div>
@@ -200,7 +201,9 @@
   </div>
   <script src="/research_tree.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/passenger_ui.js" defer></script>
   <script src="/operations_ui.js" defer></script>
+  <script src="/system_map.js" defer></script>
   <script src="/logistics_ui.js" defer></script>
 </body>
 </html>

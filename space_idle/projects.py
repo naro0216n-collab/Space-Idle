@@ -8,7 +8,7 @@ from .facility_lifecycle import FacilityLifecycleRegistry
 from .inventory import InventoryBook
 from .power import PowerService
 from .service_capacity import ServiceCapacityRegistry
-from .shared import DefinitionId, ProjectId
+from .shared import DefinitionId, ProjectId, SurfaceCellId
 from .exploration_models import KnowledgeRequirement
 from .spatial_claims import SurfaceCellClaimRegistry
 from .technology import TechnologyState
@@ -28,6 +28,7 @@ from .construction.models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     SurfaceCellDevelopmentTarget,
+    SurfaceCellEngineeringTarget,
     ProcurementTimingPolicy,
 )
 from .construction.rules import ConstructionRulesMixin
@@ -57,6 +58,9 @@ class ProjectService(ConstructionRulesMixin, ConstructionAccountingMixin, Constr
     spatial_recipes: dict[DefinitionId, SpatialDevelopmentRecipe] = field(default_factory=dict)
     surface_cell_development_recipe_id: DefinitionId | None = None
     projects: dict[ProjectId, ConstructionProject] = field(default_factory=dict)
+    # Transient completion events consumed within the canonical-day boundary;
+    # authoritative terrain lives in Spatial and observed terrain in Knowledge.
+    engineered_results: list[SurfaceCellId] = field(default_factory=list)
     _counter: int = 0
 
     def __post_init__(self) -> None:

@@ -31,7 +31,7 @@ def _dijkstra(
         best[node] = (score, keys)
         if node == destination:
             return score, path
-        for edge in sorted(outgoing(node), key=edge_key):
+        for edge in outgoing(node):
             weight = float(edge_weight(edge))
             if weight < 0:
                 raise ValueError("path metric must be non-negative")
@@ -67,20 +67,31 @@ def select_canonical_path(
     the same candidate graph. Stable keys are only used to break equal scores.
     """
 
+    # All five metrics evaluate the same physical graph in one selection.
+    # Materialize adjacency once; recomputing ``outgoing`` can re-evaluate
+    # expensive Vehicle, site, and infrastructure eligibility for every metric.
+    # The cache belongs to this invocation, never to mutable Simulation state.
+    adjacency: dict[NodeT, tuple[EdgeT, ...]] = {}
+
+    def snapshot_outgoing(node: NodeT) -> tuple[EdgeT, ...]:
+        if node not in adjacency:
+            adjacency[node] = tuple(sorted(outgoing(node), key=edge_key))
+        return adjacency[node]
+
     best_time, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=edge_time, edge_key=edge_key,
     )
     best_propellant, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=edge_propellant, edge_key=edge_key,
     )
     best_hops, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=lambda _edge: 1.0, edge_key=edge_key,
     )
     best_capacity_burden, _ = _dijkstra(
-        origin, destination, outgoing=outgoing, edge_destination=edge_destination,
+        origin, destination, outgoing=snapshot_outgoing, edge_destination=edge_destination,
         edge_weight=lambda edge: 1.0 / max(float(edge_capacity(edge)), _EPS),
         edge_key=edge_key,
     )
@@ -91,7 +102,7 @@ def select_canonical_path(
     return _dijkstra(
         origin,
         destination,
-        outgoing=outgoing,
+        outgoing=snapshot_outgoing,
         edge_destination=edge_destination,
         edge_weight=lambda edge: (
             float(edge_time(edge)) / time_scale
@@ -121,10 +132,14 @@ def select_canonical_candidate(
     metric_functions = (
         metric_time, metric_propellant, metric_handoffs, metric_capacity_burden
     )
-    bounds: list[tuple[float, float]] = []
-    for metric in metric_functions:
-        values = tuple(float(metric(row)) for row in rows)
-        bounds.append((min(values), max(values)))
+    values_by_row = tuple(
+        tuple(float(metric(row)) for metric in metric_functions)
+        for row in rows
+    )
+    bounds = tuple(
+        (min(values), max(values))
+        for values in zip(*values_by_row, strict=True)
+    )
 
     def normalized(value: float, bounds: tuple[float, float]) -> float:
         low, high = bounds
@@ -133,12 +148,12 @@ def select_canonical_candidate(
         return (value - low) / (high - low)
 
     return min(
-        rows,
-        key=lambda row: (
+        zip(rows, values_by_row, strict=True),
+        key=lambda item: (
             sum(
-                normalized(float(metric(row)), bound)
-                for metric, bound in zip(metric_functions, bounds, strict=True)
+                normalized(value, bound)
+                for value, bound in zip(item[1], bounds, strict=True)
             ),
-            stable_key(row),
+            stable_key(item[0]),
         ),
-    )
+    )[0]

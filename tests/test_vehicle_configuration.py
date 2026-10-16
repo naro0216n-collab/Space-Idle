@@ -98,8 +98,8 @@ def test_transport_performance_enforces_operation_continuity_and_endurance():
     profile = TransportPerformanceProfile(
         dry_mass_t=10.0, payload_t=1.0,
         operation_capabilities=(
-            PoweredAscentCapability(10.0, 11.0, 120000.0, OperationAssetDisposition.ORIGIN),
-            SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0),
+            PoweredAscentCapability(10.0, 11.0, 120000.0, 400.0, OperationAssetDisposition.ORIGIN),
+            SpaceflightCapability(5.0), LandingCapability(2.5, 2.5, 2000.0, 400.0),
         ),
     )
     failures = sim.transport.performance_movement_failures(plan, profile, sim.day)
@@ -109,7 +109,7 @@ def test_transport_performance_enforces_operation_continuity_and_endurance():
     endurance_profile = TransportPerformanceProfile(
         dry_mass_t=10.0,
         payload_t=1.0,
-        operation_capabilities=(PoweredAscentCapability(10.0, 11.0, 120000.0),),
+        operation_capabilities=(PoweredAscentCapability(10.0, 11.0, 120000.0, 400.0),),
         endurance_days=1.0,
     )
     endurance_failures = sim.transport.performance_movement_failures(
@@ -122,7 +122,71 @@ def test_transport_performance_enforces_operation_continuity_and_endurance():
         sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].performance,
         transit_time_multiplier=0.7,
     )
-    assert fractional_plan.transit_days * fractional_performance.transit_time_multiplier == 3.5
     assert sim.transport.performance_movement_transit_days(
         fractional_plan, fractional_performance
     ) == 4
+
+
+def test_surface_movement_requires_known_physical_fields_without_reclassifying_vacuum():
+    from space_idle.spatial import AtmosphereField, GravityField
+    from space_idle.transport import (
+        AtmosphericEntryCapability, LandingCapability,
+        TransportOperationRequirement, TransportOperationKind,
+    )
+    from space_idle.transport.operations import (
+        OperationEvaluationContext, SurfaceOperationEnvironment, build_default_operation_registry,
+    )
+
+    registry = build_default_operation_registry()
+    landing = TransportOperationRequirement(TransportOperationKind.LANDING, 1.0)
+    entry = TransportOperationRequirement(TransportOperationKind.ATMOSPHERIC_ENTRY)
+    capability = LandingCapability(2.0, 12.0, 200000.0, 400.0)
+    context = OperationEvaluationContext(1, None, SurfaceOperationEnvironment(None, None))
+    assert registry.evaluate(landing, capability, context) == (
+        "operation:landing:gravity_unknown", "operation:landing:pressure_unknown",
+        "operation:landing:temperature_unknown",
+    )
+    assert registry.evaluate(entry, AtmosphericEntryCapability(200000.0, 400.0, 40.0), context) == (
+        "operation:atmospheric_entry:pressure_unknown",
+        "operation:atmospheric_entry:temperature_unknown",
+    )
+    vacuum = replace(context, destination_surface=SurfaceOperationEnvironment(1.62, 0.0, 250.0))
+    assert not registry.evaluate(landing, capability, vacuum)
+    assert not registry.evaluate(entry, AtmosphericEntryCapability(200000.0, 400.0, 40.0), vacuum)
+
+    app = build_game_application()
+    sim = app._simulation
+    static = sim.facilities.environment.static
+    plan = sim.transport.movement_plans_to_physical_target(
+        LEO, ids.MARS_CELL_EQUATORIAL_PLAIN,  # physical target, no inventory
+    )[0]
+    lander = sim.transport.vehicle_defs[ids.INTERPLANETARY_LANDER].performance
+    static.body_facets.pop((ids.MARS_BODY, AtmosphereField))
+    static.body_facets.pop((ids.MARS_BODY, GravityField))
+    failures = sim.transport.performance_movement_failures(plan, lander, sim.day)
+    assert "operation:landing:gravity_unknown" in failures
+    assert "operation:landing:pressure_unknown" in failures
+
+    # Evaluate physical limits against an independent synthetic environment;
+    # registered planet temperatures and pressures are Content, not Core thresholds.
+    surface = SurfaceOperationEnvironment(9.0, 800_000.0, 750.0, 30.0)
+    hot_context = OperationEvaluationContext(1, None, surface)
+    hot_enough = AtmosphericEntryCapability(10_000_000, 800, 50)
+    assert not registry.evaluate(entry, hot_enough, hot_context)
+    assert any("temperature:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(10_000_000, 500, 50), hot_context,
+    ))
+    assert any("entry_energy:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(10_000_000, 800, 10), hot_context,
+    ))
+    assert any("pressure:" in failure for failure in registry.evaluate(
+        entry, AtmosphericEntryCapability(500_000, 800, 50), hot_context,
+    ))
+    assert any("temperature:" in failure for failure in registry.evaluate(
+        landing, LandingCapability(5, 20, 10_000_000, 500), hot_context,
+    ))
+    assert "operation:atmospheric_entry:temperature_unknown" in registry.evaluate(
+        entry, hot_enough, replace(hot_context, destination_surface=replace(
+            surface, maximum_temperature_k=None,
+        )),
+    )

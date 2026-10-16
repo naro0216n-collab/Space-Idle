@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Mapping, TypeAlias
 
 from .priority import ActivityPriority
@@ -324,6 +324,9 @@ class ExecutionAllocationPlan:
     allocations: tuple[ExecutionAllocation, ...]
     capacity_by_constraint: Mapping[AllocationConstraintKey, float]
     used_by_constraint: Mapping[AllocationConstraintKey, float]
+    _bundles_by_id: dict[EntityId, ExecutionRequirementBundle] = field(init=False, repr=False, compare=False)
+    _allocations_by_id: dict[EntityId, ExecutionAllocation] = field(init=False, repr=False, compare=False)
+    _allocations_by_owner: dict[tuple[str, EntityId], tuple[ExecutionAllocation, ...]] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         bundle_ids = [bundle.id for bundle in self.bundles]
@@ -332,6 +335,15 @@ class ExecutionAllocationPlan:
             raise ValueError("duplicate execution bundle id")
         if set(bundle_ids) != set(allocation_ids) or len(bundle_ids) != len(allocation_ids):
             raise ValueError("execution plan must contain exactly one allocation per bundle")
+        by_bundle = {row.id: row for row in self.bundles}
+        by_allocation = {row.bundle_id: row for row in self.allocations}
+        owner_by_id = {row.id: (row.owner_kind, row.owner_id) for row in self.bundles}
+        grouped: dict[tuple[str, EntityId], list[ExecutionAllocation]] = {}
+        for row in self.allocations:
+            grouped.setdefault(owner_by_id[row.bundle_id], []).append(row)
+        object.__setattr__(self, "_bundles_by_id", by_bundle)
+        object.__setattr__(self, "_allocations_by_id", by_allocation)
+        object.__setattr__(self, "_allocations_by_owner", {key: tuple(rows) for key, rows in grouped.items()})
         for key, capacity in self.capacity_by_constraint.items():
             if capacity < -_EPS:
                 raise ValueError(f"negative allocation capacity: {key}")
@@ -344,16 +356,10 @@ class ExecutionAllocationPlan:
         return cls((), (), {}, {})
 
     def bundle(self, bundle_id: EntityId) -> ExecutionRequirementBundle:
-        for bundle in self.bundles:
-            if bundle.id == bundle_id:
-                return bundle
-        raise KeyError(bundle_id)
+        return self._bundles_by_id[bundle_id]
 
     def allocation(self, bundle_id: EntityId) -> ExecutionAllocation:
-        for allocation in self.allocations:
-            if allocation.bundle_id == bundle_id:
-                return allocation
-        raise KeyError(bundle_id)
+        return self._allocations_by_id[bundle_id]
 
     def allocated(self, bundle_id: EntityId) -> float:
         return self.allocation(bundle_id).allocated_execution
@@ -362,12 +368,7 @@ class ExecutionAllocationPlan:
         return self.allocation(bundle_id).fulfillment
 
     def allocations_for_owner(self, owner_kind: str, owner_id: EntityId) -> tuple[ExecutionAllocation, ...]:
-        ids = {
-            bundle.id
-            for bundle in self.bundles
-            if bundle.owner_kind == owner_kind and bundle.owner_id == owner_id
-        }
-        return tuple(row for row in self.allocations if row.bundle_id in ids)
+        return self._allocations_by_owner.get((owner_kind, owner_id), ())
 
 
 def resource_constraint(node_id: SpatialNodeId, resource_id: DefinitionId) -> AllocationConstraintKey:
@@ -410,34 +411,72 @@ def _fairness_key(bundle: ExecutionRequirementBundle) -> tuple[int, tuple[str, s
 
 
 def _fits(
-    bundle: ExecutionRequirementBundle,
+    coefficients: tuple[tuple[AllocationConstraintKey, float], ...],
     execution: float,
     remaining: Mapping[AllocationConstraintKey, float],
 ) -> bool:
-    for key, coefficient in bundle.coefficients():
+    for key, coefficient in coefficients:
         if coefficient * execution > remaining.get(key, 0.0) + _EPS:
             return False
     return True
 
 
 def _consume(
-    bundle: ExecutionRequirementBundle,
+    coefficients: tuple[tuple[AllocationConstraintKey, float], ...],
     execution: float,
     remaining: dict[AllocationConstraintKey, float],
     used: dict[AllocationConstraintKey, float],
 ) -> None:
     if execution <= _EPS:
         return
-    for key, coefficient in bundle.coefficients():
+    for key, coefficient in coefficients:
         amount = coefficient * execution
         remaining[key] = max(0.0, remaining.get(key, 0.0) - amount)
         used[key] = used.get(key, 0.0) + amount
 
 
-def _progressive_allocate_band(
+def _constraint_components(
+    bundles: tuple[ExecutionRequirementBundle, ...],
+    keys_by_id: Mapping[EntityId, frozenset[AllocationConstraintKey]],
+) -> tuple[tuple[ExecutionRequirementBundle, ...], ...]:
+    """Partition a priority band by *actual* shared finite constraints.
+
+    Components cannot affect one another's fulfillment.  Priority, minimum
+    admission, and progressive fairness are all retained inside each component.
+    No Location or Domain knowledge is needed: future requirement kinds use
+    their normal constraint keys and automatically join the correct component.
+    """
+    if len(bundles) < 2:
+        return (bundles,) if bundles else ()
+    parent = list(range(len(bundles)))
+    owner_by_key: dict[AllocationConstraintKey, int] = {}
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for index, bundle in enumerate(bundles):
+        for key in keys_by_id[bundle.id]:
+            first = owner_by_key.setdefault(key, index)
+            root = find(index)
+            other = find(first)
+            if root != other:
+                parent[root] = other
+
+    groups: dict[int, list[ExecutionRequirementBundle]] = {}
+    for index, bundle in enumerate(bundles):
+        groups.setdefault(find(index), []).append(bundle)
+    return tuple(tuple(rows) for rows in groups.values())
+
+
+def _progressive_allocate_connected_band(
     bundles: tuple[ExecutionRequirementBundle, ...],
     remaining: dict[AllocationConstraintKey, float],
     used: dict[AllocationConstraintKey, float],
+    coefficients_by_id: Mapping[EntityId, tuple[tuple[AllocationConstraintKey, float], ...]],
+    keys_by_id: Mapping[EntityId, frozenset[AllocationConstraintKey]],
 ) -> tuple[dict[EntityId, float], dict[EntityId, set[AllocationConstraintKey]]]:
     allocated = {bundle.id: 0.0 for bundle in bundles}
     limiting: dict[EntityId, set[AllocationConstraintKey]] = {bundle.id: set() for bundle in bundles}
@@ -452,12 +491,12 @@ def _progressive_allocate_band(
     rejected: set[EntityId] = set()
     for bundle in threshold:
         amount = bundle.effective_minimum_execution
-        if _fits(bundle, amount, remaining):
+        if _fits(coefficients_by_id[bundle.id], amount, remaining):
             allocated[bundle.id] = amount
-            _consume(bundle, amount, remaining, used)
+            _consume(coefficients_by_id[bundle.id], amount, remaining, used)
         else:
             rejected.add(bundle.id)
-            for key, coefficient in bundle.coefficients():
+            for key, coefficient in coefficients_by_id[bundle.id]:
                 if coefficient * amount > remaining.get(key, 0.0) + _EPS:
                     limiting[bundle.id].add(key)
 
@@ -495,7 +534,7 @@ def _progressive_allocate_band(
 
         usage_rate: dict[AllocationConstraintKey, float] = {}
         for bundle in active:
-            for key, coefficient in bundle.coefficients():
+            for key, coefficient in coefficients_by_id[bundle.id]:
                 usage_rate[key] = usage_rate.get(key, 0.0) + coefficient * bundle.requested_execution
         saturated_now: set[AllocationConstraintKey] = set()
         for key, rate in usage_rate.items():
@@ -513,7 +552,7 @@ def _progressive_allocate_band(
                 frozen.update(bundle.id for bundle in active)
             else:
                 for bundle in active:
-                    bundle_keys = {key for key, _ in bundle.coefficients()}
+                    bundle_keys = keys_by_id[bundle.id]
                     hits = bundle_keys & saturated_now
                     if hits:
                         limiting[bundle.id].update(hits)
@@ -523,7 +562,7 @@ def _progressive_allocate_band(
         for bundle in active:
             increment = bundle.requested_execution * delta
             allocated[bundle.id] += increment
-            _consume(bundle, increment, remaining, used)
+            _consume(coefficients_by_id[bundle.id], increment, remaining, used)
 
         # Any constraint exhausted by this increment freezes only bundles that
         # depend on it. Other bundles continue with residual capacities.
@@ -532,7 +571,7 @@ def _progressive_allocate_band(
                 saturated_now.add(key)
         if saturated_now:
             for bundle in active:
-                hits = {key for key, _ in bundle.coefficients()} & saturated_now
+                hits = keys_by_id[bundle.id] & saturated_now
                 if hits and allocated[bundle.id] < bundle.requested_execution - _EPS:
                     limiting[bundle.id].update(hits)
                     frozen.add(bundle.id)
@@ -540,22 +579,82 @@ def _progressive_allocate_band(
     return allocated, limiting
 
 
+def _progressive_allocate_band(
+    bundles: tuple[ExecutionRequirementBundle, ...],
+    remaining: dict[AllocationConstraintKey, float],
+    used: dict[AllocationConstraintKey, float],
+    coefficients_by_id: Mapping[EntityId, tuple[tuple[AllocationConstraintKey, float], ...]],
+    keys_by_id: Mapping[EntityId, frozenset[AllocationConstraintKey]],
+) -> tuple[dict[EntityId, float], dict[EntityId, set[AllocationConstraintKey]]]:
+    amounts: dict[EntityId, float] = {}
+    limiting: dict[EntityId, set[AllocationConstraintKey]] = {}
+    for component in _constraint_components(bundles, keys_by_id):
+        component_amounts, component_limiting = _progressive_allocate_connected_band(
+            component, remaining, used, coefficients_by_id, keys_by_id
+        )
+        amounts.update(component_amounts)
+        limiting.update(component_limiting)
+    return amounts, limiting
+
+
+@dataclass(frozen=True)
+class ExecutionAllocationGraph:
+    """Read-only, tick-local compiled execution requirements.
+
+    Dynamic Cargo/Fleet/Research requirements extend a common base without
+    re-deriving the unchanged root requirements during fixed-point iterations.
+    No derived graph is authoritative or persisted.
+    """
+    bundles: tuple[ExecutionRequirementBundle, ...]
+    coefficients_by_id: Mapping[EntityId, tuple[tuple[AllocationConstraintKey, float], ...]]
+    keys_by_id: Mapping[EntityId, frozenset[AllocationConstraintKey]]
+
+    @classmethod
+    def compile(cls, intents: Iterable[AllocationIntent]) -> "ExecutionAllocationGraph":
+        return cls((), {}, {}).extend(intents)
+
+    def extend(self, intents: Iterable[AllocationIntent]) -> "ExecutionAllocationGraph":
+        extra = tuple(
+            intent.as_bundle() if isinstance(intent, ReservationAcquisitionRequirement) else intent
+            for intent in intents
+        )
+        ids = [bundle.id for bundle in extra]
+        if len(set(ids)) != len(ids) or any(
+            bundle_id in self.coefficients_by_id for bundle_id in ids
+        ):
+            raise ValueError("duplicate execution bundle id")
+        coefficients = dict(self.coefficients_by_id)
+        keys = dict(self.keys_by_id)
+        for bundle in extra:
+            rows = bundle.coefficients()
+            coefficients[bundle.id] = rows
+            keys[bundle.id] = frozenset(key for key, _ in rows)
+        return ExecutionAllocationGraph(self.bundles + extra, coefficients, keys)
+
+    def allocate(
+        self, capacity_by_constraint: Mapping[AllocationConstraintKey, float]
+    ) -> ExecutionAllocationPlan:
+        return _allocate_compiled_graph(self, capacity_by_constraint)
+
+
 def allocate_execution_requirements(
     intents: Iterable[AllocationIntent],
     capacity_by_constraint: Mapping[AllocationConstraintKey, float],
 ) -> ExecutionAllocationPlan:
-    bundles = tuple(
-        intent.as_bundle() if isinstance(intent, ReservationAcquisitionRequirement) else intent
-        for intent in intents
-    )
-    ids = [bundle.id for bundle in bundles]
-    if len(set(ids)) != len(ids):
-        raise ValueError("duplicate execution bundle id")
+    return ExecutionAllocationGraph.compile(intents).allocate(capacity_by_constraint)
 
+
+def _allocate_compiled_graph(
+    graph: ExecutionAllocationGraph,
+    capacity_by_constraint: Mapping[AllocationConstraintKey, float],
+) -> ExecutionAllocationPlan:
+    bundles = graph.bundles
+    coefficients_by_id = graph.coefficients_by_id
+    keys_by_id = graph.keys_by_id
     capacities = {key: float(value) for key, value in capacity_by_constraint.items()}
     if any(value < -_EPS for value in capacities.values()):
         raise ValueError("allocation capacities must be non-negative")
-    required_keys = {key for bundle in bundles for key, _ in bundle.coefficients()}
+    required_keys = set().union(*keys_by_id.values()) if keys_by_id else set()
     missing = required_keys - capacities.keys()
     if missing:
         raise KeyError(f"missing allocation capacities: {sorted(missing)}")
@@ -570,7 +669,7 @@ def allocate_execution_requirements(
         by_priority.setdefault(int(bundle.priority), []).append(bundle)
     for priority in sorted(by_priority, reverse=True):
         band = tuple(sorted(by_priority[priority], key=_bundle_order_key))
-        band_amounts, band_limiting = _progressive_allocate_band(band, remaining, used)
+        band_amounts, band_limiting = _progressive_allocate_band(band, remaining, used, coefficients_by_id, keys_by_id)
         amounts.update(band_amounts)
         for bundle_id, keys in band_limiting.items():
             limiting[bundle_id].update(keys)

@@ -117,7 +117,6 @@ class TerraformingEnvironmentOverlay(EnvironmentOverlay):
         context_id: SpatialContextId,
         facet_type: type[FacetT],
         current: FacetT | None,
-        day: int,
     ) -> FacetT | None:
         body_id = graph.context_body_id(context_id)
         climate = (

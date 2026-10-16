@@ -11,13 +11,15 @@ from space_idle.transport import (
     TransportPerformanceProfile,
     VehicleDef,
 )
-from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId
+from space_idle.shared import CelestialBodyId, DefinitionId, SpatialNodeId, StarSystemId
 from space_idle.spatial import (
     CelestialBodyDef,
     CharacteristicTransportGeometry,
     OperationalNodeState,
     SpatialNodeDef,
     SpatialNodeKind,
+    StarSystemDef,
+    great_circle_distance_km,
 )
 from space_idle.transport.endpoints import resolve_movement_endpoint
 
@@ -148,14 +150,35 @@ def test_surface_endpoints_use_active_gateway_identity_current_cell_geometry_and
     )
     sim.facilities.resume(gateway)
 
-    sim.graph.develop_surface_cell(location_id, ids.MOON_CELL_EQUATORIAL_HIGHLANDS)
-    sim.facilities.facilities[gateway].site_cell_id = ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    # Development must follow the actual registered spherical topology: the
+    # earlier named regional Cell is not necessarily a physical neighbor.
+    origin_cell = sim.graph.surface_cells[ids.MOON_CELL_FARSIDE_HIGHLANDS]
+    target_cell = sim.graph.surface_cells[ids.MOON_CELL_NEARSIDE_MARE]
+    lunar_radius_km = sim.graph.bodies[ids.MOON].mean_radius_km
+    next_cell_id = min(
+        (
+            cell_id for cell_id in origin_cell.neighbor_ids
+            if sim.graph.owner_of_cell(cell_id) is None
+        ),
+        key=lambda cell_id: great_circle_distance_km(
+            sim.graph.surface_cells[cell_id].centroid,
+            target_cell.centroid,
+            lunar_radius_km,
+        ),
+    )
+    assert great_circle_distance_km(
+        sim.graph.surface_cells[next_cell_id].centroid,
+        target_cell.centroid,
+        lunar_radius_km,
+    ) < before.distance_km
+    sim.graph.develop_surface_cell(location_id, next_cell_id)
+    sim.facilities.facilities[gateway].site_cell_id = next_cell_id
     sim.transport.invalidate_movement_plans()
     after_plan = _plan_between(sim, location_id, other_id)
     after = sim.transport.movement_geometry(after_plan.id)
     assert after_plan.id == before_plan.id
     assert after.origin.node_id == before.origin.node_id == location_id
-    assert after.origin.surface_cell_id == ids.MOON_CELL_EQUATORIAL_HIGHLANDS
+    assert after.origin.surface_cell_id == next_cell_id
     assert after.distance_km is not None and before.distance_km is not None
     assert after.distance_km < before.distance_km
 
@@ -202,30 +225,43 @@ def test_generic_spaceflight_plan_derivation_uses_spatial_geometry_without_pairw
     )
     assert colocated_plan.relation.characteristic_distance_km == 0.0
 
+    # Coordinate-only systems remain supported when no central-orbit physical
+    # model has been supplied. Their geometry is not a second solar baseline.
     new_body_sim = build_game_application()._simulation
+    coordinate_system = StarSystemId("test.system.coordinate_only")
+    new_body_sim.graph.add_star_system(StarSystemDef(
+        coordinate_system, "Coordinate only", CharacteristicTransportGeometry((0.0, 0.0, 0.0)),
+    ))
+    origin_body = CelestialBodyId("test.body.coordinate_origin")
+    origin_orbit = SpatialNodeId("test.node.coordinate_origin")
     body_id = CelestialBodyId("test.body.new")
     new_body_orbit = SpatialNodeId("test.node.new_body_orbit")
+    zero = CharacteristicTransportGeometry((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
     geometry = CharacteristicTransportGeometry(
         (1_000_000.0, 0.0, 0.0),
         (6.0, 0.0, 0.0),
     )
-    new_body_sim.graph.add_body(CelestialBodyDef(
-        body_id, "New Body", 1000.0, ids.SOL_SYSTEM, geometry
+    new_body_sim.graph.add_body(CelestialBodyDef(origin_body, "Origin", 1000.0, coordinate_system, zero))
+    new_body_sim.graph.add_body(CelestialBodyDef(body_id, "New Body", 1000.0, coordinate_system, geometry))
+    new_body_sim.graph.add(SpatialNodeDef(
+        origin_orbit, "Origin Orbit", coordinate_system, zero,
+        body_id=origin_body, kind=SpatialNodeKind.ORBITAL,
     ))
+    new_body_sim.graph.add_operational_node(OperationalNodeState(origin_orbit))
     new_body_sim.graph.add(SpatialNodeDef(
         new_body_orbit,
         "New Body Orbit",
-        ids.SOL_SYSTEM,
+        coordinate_system,
         geometry,
         body_id=body_id,
         kind=SpatialNodeKind.ORBITAL,
     ))
     new_body_sim.graph.add_operational_node(OperationalNodeState(new_body_orbit))
     new_body_plan = _select_plan(
-        new_body_sim.transport.movement_plan_candidates(ids.LEO, new_body_orbit),
+        new_body_sim.transport.movement_plan_candidates(origin_orbit, new_body_orbit),
         operation_types=("spaceflight",),
     )
-    assert new_body_plan.origin.operational_node_id == ids.LEO
+    assert new_body_plan.origin.operational_node_id == origin_orbit
     assert new_body_plan.destination.operational_node_id == new_body_orbit
     assert new_body_plan.relation.characteristic_distance_km == 1_000_000.0
     assert new_body_plan.relation.characteristic_delta_v_km_s == 6.0

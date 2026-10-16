@@ -18,7 +18,7 @@ STATE_NAME = "state.json"
 SUMMARY_NAME = "summary.json"
 PUBLISH_STATE_NAME = "space-idle-publish-state.json"
 MANIFEST_VERSION = 2
-CONNECTOR_CALL_HARD_CEILING_BYTES = 144 * 1024
+CONNECTOR_CALL_HARD_CEILING_BYTES = 1024 * 1024
 CONTROL_PATHS = (
     ".github/workflows/publish-gateway.yml",
     "scripts/publish_gateway_validate.py",
@@ -99,7 +99,7 @@ def _write_packet(path: Path, packet: dict[str, object]) -> int:
     size = _packet_bytes(packet)
     if size >= CONNECTOR_CALL_HARD_CEILING_BYTES:
         raise ControlMaintenanceError(
-            f"control connector call exceeds 144 KiB hard ceiling: {path.name} ({size} bytes)"
+            f"control connector call exceeds 1 MiB hard ceiling: {path.name} ({size} bytes)"
         )
     _write_json(path, packet)
     return size

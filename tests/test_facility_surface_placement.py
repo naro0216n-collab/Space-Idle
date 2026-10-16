@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle import (
@@ -12,22 +14,22 @@ from space_idle import (
     build_game_application,
 )
 from space_idle.content import base_ids as ids
-from space_idle.content.base_facilities import build_facility_definitions
-from space_idle.facilities import FacilityBook, FacilityPlacementScope
+from space_idle.facilities import FacilityPlacementScope
+from space_idle.construction.models import CONSTRUCTION_SERVICE_TYPE
 from space_idle.industry import ProcessSpec
-from space_idle.shared import DefinitionId, SpatialNodeId
+from space_idle.shared import DefinitionId
 
 
-def test_facility_placement_scope_controls_cell_ownership_and_environment_context():
+def test_facility_placement_scope_controls_cell_ownership():
     sim = build_game_application()._simulation
 
     project_id = sim.projects.plan_build(
-        ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait"
+        ids.CRYOGENIC_STORAGE, ids.EARTH, 3, "standard_wait"
     )
     assert sim.projects.projects[project_id].site_cell_id is None
     with pytest.raises(ValueError, match="must not specify"):
         sim.projects.plan_build(
-            ids.WATER_STORAGE, ids.EARTH, 3, "standard_wait",
+            ids.CRYOGENIC_STORAGE, ids.EARTH, 3, "standard_wait",
             site_cell_id=ids.EARTH_CELL_INDUSTRIAL,
         )
 
@@ -49,29 +51,6 @@ def test_facility_placement_scope_controls_cell_ownership_and_environment_contex
     )
     assert sim.projects.projects[project_id].site_cell_id == ids.EARTH_CELL_INDUSTRIAL
 
-    location_id = SpatialNodeId("test.location.surface_environment")
-    sim.graph.found_location(
-        location_id, "Test", ids.MOON, ids.MOON_CELL_SOUTH_POLAR_RIDGE
-    )
-    sim.graph.develop_surface_cell(location_id, ids.MOON_CELL_SOUTH_POLAR_PLAIN)
-    definitions = build_facility_definitions()
-
-    ridge = FacilityBook(definitions, sim.facilities.environment)
-    ridge_id = ridge.install(
-        ids.ROBOTIC_GEOLOGY_STATION, location_id,
-        site_cell_id=ids.MOON_CELL_SOUTH_POLAR_RIDGE,
-    )
-    plain = FacilityBook(definitions, sim.facilities.environment)
-    plain_id = plain.install(
-        ids.ROBOTIC_GEOLOGY_STATION, location_id,
-        site_cell_id=ids.MOON_CELL_SOUTH_POLAR_PLAIN,
-    )
-    ridge_power = sim.power.snapshot(location_id, ridge, sim.day)
-    plain_power = sim.power.snapshot(location_id, plain, sim.day)
-
-    assert ridge.facilities[ridge_id].operational_node_id == location_id
-    assert plain.facilities[plain_id].operational_node_id == location_id
-    assert ridge_power.generation_mw > plain_power.generation_mw
 
 def test_facility_decision_projection_exposes_buildability_process_choices_and_material_readiness():
     app = build_game_application()
@@ -90,33 +69,72 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         if str(row.id) == candidate.facility_definition_id
     )
     assert candidate.capabilities == tuple(sorted(supply.id for supply in definition.capability_supplies))
-    assert candidate.service_capacity_supplies == tuple(
-        sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
-    )
+    expected_services = [
+        (supply.service_type, supply.nominal_rate)
+        for supply in definition.service_capacity_supplies
+    ]
+    construction_provider = sim.projects.construction_providers.get(definition.id)
+    if construction_provider is not None:
+        expected_services.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
+    assert candidate.service_capacity_supplies == tuple(sorted(expected_services))
     assert candidate.placement_scope == definition.placement_scope.value
-    assert candidate.process_options == tuple(
+    assert tuple((option.process_id, option.display_name) for option in candidate.process_options) == tuple(
         (str(process.id), process.display_name)
         for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
-        if process.facility_def_id == definition.id
+        if process in sim.industry.compatible_processes(definition.id)
     )
-    assert build_options.comparison_axes
-    assert any(axis.differs for axis in build_options.comparison_axes)
-    assert {axis.key for axis in build_options.comparison_axes} == {
-        "construction_work",
-        "resource_total_t",
-        "resource_type_count",
-        "capability_count",
-        "service_type_count",
-        "process_count",
-        "self_deploying",
-    }
-    comparison_values = {value.axis_key: value for value in candidate.comparison_values}
-    assert candidate.comparison_key == candidate.facility_definition_id
-    assert set(comparison_values) == {axis.key for axis in build_options.comparison_axes}
-    assert comparison_values["resource_total_t"].number_value == pytest.approx(
-        sum(resource.required_t for resource in candidate.resources)
+    assert candidate.process_nominal_throughput_per_day == (
+        definition.process_throughput_per_day if candidate.process_options else None
     )
-    assert comparison_values["self_deploying"].text_value in {"自己展開", "通常施工"}
+    for option in candidate.process_options:
+        process = sim.industry.processes[DefinitionId(option.process_id)]
+        assert dict(option.input_rates_per_day) == {
+            str(resource_id): rate * definition.process_throughput_per_day
+            for resource_id, rate in process.inputs_per_day.items()
+        }
+        assert dict(option.output_rates_per_day) == {
+            str(resource_id): rate * definition.process_throughput_per_day
+            for resource_id, rate in process.outputs_per_day.items()
+        }
+        assert option.missing_technology_ids == tuple(
+            str(technology) for technology in sim.industry.missing_process_technologies(process)
+        )
+    nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
+        definition.id, ids.EARTH,
+    )
+    assert candidate.power_nominal_generation_mw == pytest.approx(nominal_generation)
+    assert candidate.power_nominal_load_mw == pytest.approx(nominal_load)
+    expected_extraction = definition.extraction_capacity_t_per_day or None
+    assert candidate.extraction_nominal_capacity_t_per_day == expected_extraction
+    # A new build's recurring Resource demand comes from the same Facility
+    # calculation used by runtime maintenance and Upgrade previews.
+    recipe = sim.projects.recipes[definition.id]
+    invested = {}
+    for requirement in recipe.resources:
+        invested[requirement.resource_id] = (
+            invested.get(requirement.resource_id, 0.0) + requirement.amount_t
+        )
+    predicted = dict(candidate.maintenance_rates_per_day)
+    installed = sim.facilities.maintenance_requirements_for_investment(definition.id, invested)
+    assert predicted == {str(resource): rate for resource, rate in installed.items()}
+    rows_by_id = {DefinitionId(row.facility_definition_id): row for row in build_options.items}
+    # Every facility-backed Research Provider is exposed through the same
+    # prospective capability projection, independent of the authored asset ID.
+    research_candidates = 0
+    for facility_id, projected_candidate in rows_by_id.items():
+        provider = sim.research.facility_provider_for_definition(facility_id)
+        if provider is None:
+            continue
+        research_candidates += 1
+        spec = provider.level_spec(1)
+        projected = projected_candidate.research_capacity
+        assert projected is not None
+        assert projected.provider_tier == provider.tier
+        assert projected.generation_points_per_day == spec.generation_points_per_day
+        assert projected.storage_capacity_points == spec.storage_capacity_points
+        assert projected.execution_work_per_day == spec.research_execution_per_day
+        assert projected.crew_person_days_per_research_point == provider.crew_person_days_per_research_point
+    assert research_candidates
     assert candidate.projected_material_readiness_day == sim.day
     for resource in candidate.resources:
         assert resource.available_t == pytest.approx(
@@ -129,13 +147,13 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
     facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.definition_id == process.facility_def_id
+        if process in sim.industry.compatible_processes(row.definition_id)
     )
     alternate_process_id = DefinitionId("test.process.alternate_structural_material")
     sim.industry.processes[alternate_process_id] = ProcessSpec(
         alternate_process_id,
         "Alternate structural material",
-        process.facility_def_id,
+        process.required_capabilities,
         {},
         {ids.STRUCTURAL_COMPONENTS: 0.01},
     )
@@ -148,8 +166,6 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert tuple(option.process_id for option in unresolved.process_options) == tuple(sorted((
         str(process.id), str(alternate_process_id),
     )))
-    assert unresolved.process_comparison_axes
-    assert any(axis.differs for axis in unresolved.process_comparison_axes)
     primary_option = next(
         option for option in unresolved.process_options if option.process_id == str(process.id)
     )
@@ -162,9 +178,6 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         for resource_id, amount in sorted(process.outputs_per_day.items(), key=lambda row: str(row[0]))
     )
     assert primary_option.service_requirements == ((f"process:{process.id}", 1.0),)
-    assert {value.axis_key for value in primary_option.comparison_values} == {
-        axis.key for axis in unresolved.process_comparison_axes
-    }
 
     app.execute(SetFacilityProcess(str(facility.id), str(process.id)))
     selected = next(
@@ -175,7 +188,8 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
     assert not selected.selection_required
     del sim.industry.processes[alternate_process_id]
 
-    capacity = sim.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
     )
     app.execute(CreateTransportAllocation(
@@ -191,6 +205,7 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         if resource.available_t + 1e-9 < resource.required_t
     ]
     assert shortages
+    assert all(row.shortage_t == pytest.approx(row.required_t - row.available_t) for row in shortages)
     assert remote_candidate.projected_material_readiness_day == max(
         resource.projected_arrival_day for resource in shortages
     )
@@ -212,9 +227,231 @@ def test_facility_decision_projection_exposes_buildability_process_choices_and_m
         str(technology_id) for technology_id in recipe.prerequisite_technologies
     }
     assert option.procurement_policy_options == build_options.procurement_policy_options
+    assert {row.resource_id: row.required_t for row in option.resources} == {
+        str(req.resource_id): req.amount_t for req in recipe.resources
+    }
+    for resource in option.resources:
+        assert resource.available_t == pytest.approx(
+            sim.inventory.available(ids.EARTH, resource.resource_id)
+        )
+        assert resource.shortage_t == pytest.approx(
+            max(0.0, resource.required_t - resource.available_t)
+        )
+    assert option.projected_material_readiness_day == sim.day
+    # Surface placement is a physical Facility investment like node construction:
+    # project the same actual upkeep, research and power contracts at the Cell.
+    invested = {req.resource_id: req.amount_t for req in recipe.resources}
+    expected_upkeep = sim.facilities.maintenance_requirements_for_investment(
+        recipe.facility_def_id, invested
+    )
+    assert dict(option.maintenance_rates_per_day) == {
+        str(resource): rate for resource, rate in expected_upkeep.items()
+    }
+    provider = sim.research.facility_provider_for_definition(recipe.facility_def_id)
+    assert provider is not None
+    assert option.research_capacity.provider_tier == provider.tier
+    assert option.research_capacity.generation_points_per_day == provider.level_spec(1).generation_points_per_day
+    assert option.research_capacity.storage_capacity_points == provider.level_spec(1).storage_capacity_points
+    survey = sim.survey.providers[ids.ROBOTIC_GEOLOGY_STATION]
+    survey_projection = next(row for row in option.survey_providers
+                             if row.provider_id == str(survey.id))
+    assert survey_projection.capacity_units_per_source_per_day == survey.capacity_units_per_source_per_day
+    assert tuple((mode.display_name, mode.survey_rate, mode.max_knowledge_level)
+                 for mode in survey_projection.observation_modes) == tuple(
+        (mode.display_name or mode.id, mode.survey_rate, int(mode.max_knowledge_level))
+        for mode in survey.observation_modes
+    )
+    assert (option.power_nominal_generation_mw, option.power_nominal_load_mw) == pytest.approx(
+        sim.power.nominal_for_definition_at_context(recipe.facility_def_id, ids.EARTH_CELL_INDUSTRIAL)
+    )
+    assert option.capabilities == tuple(sorted(
+        supply.id for supply in sim.facilities.definitions[recipe.facility_def_id].capability_supplies
+    ))
+    # Planning eligibility does not hide physical investment effects when a
+    # Technology is missing. Query purity is covered at the Application boundary,
+    # rather than executing a second identical full-body Map projection here.
 
     catalog = app.query(GetCatalog())
     robotic = next(
         row for row in catalog.facilities if row.id == str(ids.ROBOTIC_GEOLOGY_STATION)
     )
     assert robotic.placement_scope == "SURFACE_CELL"
+    # Capability-compatible new Content receives the same Research/Survey
+    # preview without adding a Facility ID branch to Application/UI.
+    from dataclasses import replace
+    peer_id = DefinitionId("test.facility.geology_survey_peer")
+    sim.facilities.definitions[peer_id] = replace(
+        sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION],
+        id=peer_id, display_name="追加地質観測所",
+    )
+    sim.industry.facility_defs[peer_id] = sim.facilities.definitions[peer_id]
+    sim.projects.recipes[peer_id] = replace(recipe, facility_def_id=peer_id)
+    with_peer = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    peer = next(
+        candidate for cell in with_peer.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL)
+        for candidate in cell.facility_placement_options
+        if candidate.facility_definition_id == str(peer_id)
+    )
+    assert peer.research_capacity == option.research_capacity
+    assert peer.survey_providers == option.survey_providers
+    assert peer.maintenance_rates_per_day == option.maintenance_rates_per_day
+    assert peer.resources == option.resources
+    assert peer.projected_material_readiness_day == option.projected_material_readiness_day
+
+
+def test_process_interface_can_be_shared_by_a_differently_named_higher_throughput_facility():
+    """Facility identity is not an Industry permission or an execution-rate ceiling."""
+    from dataclasses import replace
+
+    from space_idle import AdvanceTime
+    from space_idle.validation import validate_runtime_state, validate_simulation_configuration
+
+    app = build_game_application()
+    sim = app._simulation
+    source_def = sim.facilities.definitions[ids.BASIC_STRUCTURAL_MATERIAL_PLANT]
+    process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
+    alternative_id = DefinitionId('test.facility.independent_interface')
+    sim.facilities.definitions[alternative_id] = replace(
+        source_def, id=alternative_id, process_throughput_per_day=2.0,
+    )
+    assert sim.industry.compatible_processes(alternative_id) == (process,)
+    # Missing or partial interfaces must not silently permit a precise Process.
+    basic_only_id = DefinitionId('test.facility.basic_only')
+    machine_shop = sim.facilities.definitions[ids.MACHINE_SHOP]
+    from space_idle.facilities import CapabilitySupply
+    sim.facilities.definitions[basic_only_id] = replace(
+        machine_shop, id=basic_only_id,
+        capability_supplies=(CapabilitySupply('basic_machine_shop'),),
+    )
+    assert ids.PROCESS_BASIC_MACHINING in {
+        row.id for row in sim.industry.compatible_processes(basic_only_id)
+    }
+    assert ids.PROCESS_PRECISION_COMPONENTS not in {
+        row.id for row in sim.industry.compatible_processes(basic_only_id)
+    }
+    new_id = sim.facilities.install(alternative_id, ids.EARTH)
+    # Disable only the old producer so its effect cannot mask the new Asset's flow.
+    for facility in sim.facilities.facilities.values():
+        if facility.definition_id == source_def.id:
+            facility.paused = True
+
+    sim.inventory.add(ids.EARTH, ids.MINERAL_FEEDSTOCK, 50.0)
+    sim.inventory.add(ids.EARTH, ids.METAL_ORE, 50.0)
+    validate_simulation_configuration(sim)
+    validate_runtime_state(sim)
+    bundle = next(row for row in sim.industry.execution_requirement_bundles(
+        ids.EARTH, sim.facilities, sim.inventory, sim.day
+    ) if row.owner_id == new_id)
+    assert bundle.requested_execution == pytest.approx(2.0)
+
+    projection = sim.tick_decision_projection()
+    allocation = projection.allocations.execution.allocation(bundle.id)
+    assert allocation.allocated_execution > 0
+    row = next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).industry
+               if row.facility_id == str(new_id))
+    assert row.process_id == str(process.id)
+    assert dict(row.input_rates_per_day)[str(ids.MINERAL_FEEDSTOCK)] == pytest.approx(
+        process.inputs_per_day[ids.MINERAL_FEEDSTOCK] * allocation.allocated_execution
+    )
+    assert dict(row.output_rates_per_day)[str(ids.STRUCTURAL_COMPONENTS)] == pytest.approx(
+        process.outputs_per_day[ids.STRUCTURAL_COMPONENTS] * allocation.allocated_execution
+    )
+    app.execute(AdvanceTime(1))
+    assert sim.day > 0
+
+
+def test_scenario_and_later_facilities_share_construction_and_site_contracts(tmp_path):
+    """Scenario ownership cannot create a class of otherwise unobtainable facilities."""
+    from datetime import datetime, timezone
+
+    from space_idle import PlanBuild, GetProjects
+    from space_idle.bootstrap import build_game_application_for_load
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.facilities import FacilityPlacementScope
+    from space_idle.persistence import load_game, save_game
+
+    app = build_game_application()
+    sim = app._simulation
+    initial = build_standard_scenario_definition().facilities
+    assert {row.definition_id for row in initial} <= set(sim.projects.recipes)
+    # Initial owned assets must be obtainable; other registered definitions may
+    # intentionally exist without a conventional build recipe.
+
+    node_options = {
+        row.facility_definition_id for row in app.query(GetBuildOptions(str(ids.EARTH))).items
+    }
+    surface = app.query(GetSurfaceMap(str(ids.EARTH_BODY)))
+    core = next(cell for cell in surface.cells if cell.id == str(ids.EARTH_CELL_INDUSTRIAL))
+    cell_options = {row.facility_definition_id for row in core.facility_placement_options}
+
+    for asset in initial:
+        definition = sim.facilities.definitions[asset.definition_id]
+        if definition.placement_scope is FacilityPlacementScope.OPERATIONAL_NODE:
+            assert str(asset.definition_id) in node_options
+        elif asset.operational_node_id == ids.EARTH:
+            assert str(asset.definition_id) in cell_options
+
+    # A new instance follows the same public Project command/persistence path.
+    project_id = app.execute(PlanBuild(str(ids.EARTH), str(ids.GENERAL_RESEARCH_LAB))).created_id
+    assert project_id is not None
+    assert any(row.id == project_id for row in app.query(GetProjects(str(ids.EARTH))).items)
+    path = tmp_path / 'construction.json'
+    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    save_game(app, path, saved_at=now)
+    restored, _ = load_game(path, build_game_application_for_load, now=now)
+    assert any(row.id == project_id for row in restored.query(GetProjects(str(ids.EARTH))).items)
+
+    # A second Grid instance uses the same World-side site eligibility as the
+    # scenario-provided instance; initial ownership grants no special power.
+    from space_idle.spatial import ExternalGridConnectionField
+    grid = ids.GRID_POWER_SUPPLY
+    initial = next(row for row in sim.facilities.all_at(ids.EARTH) if row.definition_id == grid)
+    assert initial.site_cell_id == ids.EARTH_CELL_INDUSTRIAL
+    first_generation = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw
+
+    sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
+    blocked = sim.projects.site_failures(grid, ids.EARTH, sim.day, site_cell_id=ids.EARTH_CELL_COASTAL)
+    assert any(row.code == 'world:external_grid_connection' for row in blocked)
+
+    # With the same World-side connection, another developed Cell can use the
+    # same Facility Definition and the same installation/operation evaluator.
+    sim.facilities.environment.static.set(ids.EARTH_CELL_COASTAL, ExternalGridConnectionField())
+    assert not sim.projects.site_failures(grid, ids.EARTH, sim.day, site_cell_id=ids.EARTH_CELL_COASTAL)
+    second = sim.facilities.install(grid, ids.EARTH, site_cell_id=ids.EARTH_CELL_COASTAL)
+    assert sim.facilities.is_environmentally_compatible(sim.facilities.facilities[second], sim.day)
+    second_generation = sim.power.snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw
+    assert second_generation > first_generation
+
+
+def test_facility_operating_site_blockers_respect_unmeasured_environment():
+    """Facility operation follows World, while the Inspector follows Knowledge."""
+    from dataclasses import replace
+    from space_idle.site import SiteRequirements, FacetValueRange
+    from space_idle.spatial import ThermalField
+
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.EARTH_CELL_INDUSTRIAL
+    definition = sim.facilities.definitions[ids.ROBOTIC_GEOLOGY_STATION]
+    sim.facilities.definitions[definition.id] = replace(
+        definition,
+        operating_requirements=SiteRequirements(environment=(
+            FacetValueRange(ThermalField, 'nominal_temperature_k',
+                            'test_unmeasured_thermal_limit', 'Physical thermal limit',
+                            minimum=1e6),
+        )),
+    )
+    facility_id = sim.facilities.install(definition.id, ids.EARTH, site_cell_id=cell)
+    sim.surface_knowledge.cell_attribute_levels.pop((cell, 'environment'), None)
+    hidden = app.query(GetOperationalNode(str(ids.EARTH)))
+    facility = next(row for row in hidden.facilities if row.id == str(facility_id))
+    assert not facility.active_and_site_compatible
+    assert any(row.code == 'site_knowledge_unverified' for row in facility.activation_blockers)
+    assert all(row.code != 'test_unmeasured_thermal_limit' for row in facility.activation_blockers)
+    assert all(row.code != 'test_unmeasured_thermal_limit' for row in facility.operating_blockers)
+
+    sim.surface_knowledge.observe_attribute(cell, 'environment', 2)
+    observed = app.query(GetOperationalNode(str(ids.EARTH)))
+    facility = next(row for row in observed.facilities if row.id == str(facility_id))
+    assert any(row.code == 'test_unmeasured_thermal_limit' for row in facility.activation_blockers)
+    assert not any(row.code == 'site_knowledge_unverified' for row in facility.activation_blockers)

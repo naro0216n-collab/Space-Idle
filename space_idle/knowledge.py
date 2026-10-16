@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from math import floor
+from hashlib import sha256
+import json
+
+from .exploration_models import KnowledgeLevel, KnowledgeRequirement, SurveyTarget, SurveyObservationModeSpec
+from .shared import CelestialBodyId, DefinitionId, SurfaceCellId
+from .spatial import SpatialGraph
 
 from .shared import EntityId, SpatialNodeId
 
@@ -59,3 +66,338 @@ class KnowledgeState:
                 continue
             for rule in rates.get(activity.activity_kind, ()): 
                 self.add(rule.category_id, activity.amount * rule.points_per_unit)
+
+
+@dataclass
+class SurfaceKnowledgeState:
+    """Player observations; World is the sole owner of physical values.
+
+    This state is shared by Survey and Scientific Exploration, never copied
+    into an activity campaign. Progress and quality are monotonic.
+    """
+    targets: dict[tuple[SurfaceCellId, DefinitionId], SurveyTarget]
+    graph: SpatialGraph
+    knowledge_progress: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    knowledge_precision_fraction: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    estimated_potential: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    observed_presence_probability: dict[tuple[SurfaceCellId, DefinitionId], float] = field(default_factory=dict)
+    # Cell-local attributes are independently observed; known Resource does not
+    # silently reveal weather, slope, geology or Power conditions.
+    cell_attribute_levels: dict[tuple[SurfaceCellId, str], int] = field(default_factory=dict)
+    terrain_overview_resolution: float = 0.5
+    # A measurement belongs to the physical environment at observation time.
+    # Store only evidence identity, never a second copy of World values.
+    environment_observation_fingerprints: dict[SurfaceCellId, str] = field(default_factory=dict)
+    environment: object | None = field(default=None, repr=False, compare=False)
+
+    def _environment_fingerprint(self, cell_id: SurfaceCellId) -> str | None:
+        if self.environment is None:
+            return None
+        fields = []
+        for facet_type in sorted(self.environment.static.facet_types(),
+                                 key=lambda item: getattr(item, 'facet_key', item.__name__)):
+            value = self.environment.get(cell_id, facet_type)
+            fields.append((getattr(facet_type, 'facet_key', facet_type.__name__),
+                           None if value is None else asdict(value) if is_dataclass(value) else repr(value)))
+        encoded = json.dumps(fields, sort_keys=True, default=str, separators=(',', ':'))
+        return sha256(encoded.encode('utf-8')).hexdigest()
+
+    def publishes_environment(self, context_id: object) -> bool:
+        """A physical Surface Location cannot expose unmeasured member Cells
+        through its aggregate node or location environmental breakdown.
+        """
+        if context_id in self.graph.surface_cells:
+            return self.attribute_level(context_id, 'environment') >= 2
+        location = self.graph.locations.get(context_id)
+        if location is not None:
+            return all(self.publishes_environment(cell_id)
+                       for cell_id in location.developed_cell_ids)
+        # Active non-surface operations have locally accessible environment.
+        return True
+
+    def visible_geology(self, cell_id: SurfaceCellId) -> tuple[tuple[str, float], ...]:
+        """Physical geology is published only after that attribute is measured."""
+        if self.attribute_level(cell_id, 'geology') < 2:
+            return ()
+        return tuple(sorted(self.graph.surface_cells[cell_id].static_geology.items()))
+
+    def attribute_level(self, cell_id: SurfaceCellId, attribute: str) -> int:
+        if cell_id not in self.graph.surface_cells or attribute not in ("terrain", "environment", "geology"):
+            raise KeyError((cell_id, attribute))
+        level = self.cell_attribute_levels.get((cell_id, attribute), 0)
+        if attribute == 'environment' and level and self.environment is not None:
+            if self.environment_observation_fingerprints.get(cell_id) != self._environment_fingerprint(cell_id):
+                return 0
+        return level
+
+    def unpublished_site_condition_codes(self, context_id: object, *requirements: object) -> frozenset[str]:
+        """Which authored Environment requirements cannot be explained publicly.
+
+        This only classifies metadata for projection; execution continues to
+        evaluate true World conditions through the owning Site service.
+        """
+        if self.publishes_environment(context_id):
+            return frozenset()
+        return frozenset(
+            condition.code
+            for requirement in requirements
+            for condition in requirement.environment
+        )
+
+    def public_site_blockers(
+        self, context_id: object, failures: tuple[tuple[str, str], ...],
+        *requirements: object, code_prefix: str = "",
+    ) -> tuple[tuple[tuple[str, str], ...], bool]:
+        """Publish typed physical failures only where their observations justify it.
+
+        All Site-facing Application views use this contract; the physical
+        evaluator continues to use true conditions independently. The
+        uncertainty marker is not a verdict of ineligibility.
+        """
+        hidden = {code_prefix + code for code in
+                  self.unpublished_site_condition_codes(context_id, *requirements)}
+        visible = tuple(row for row in failures if row[0] not in hidden)
+        if hidden:
+            visible += (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
+        return visible, bool(hidden)
+
+    def terrain_overview(self, cell_id: SurfaceCellId) -> tuple[tuple[str, float], ...]:
+        """Content-granularity intervals, never a midpoint that reveals true value."""
+        if self.attribute_level(cell_id, "terrain") < 1:
+            return ()
+        # Overview intentionally reports a range, not an unobserved exact
+        # landform. Its numeric scale is the cost of terrain preparation only.
+        value = self.graph.terrain_profile(cell_id).development_work_factor
+        lower = floor(value / self.terrain_overview_resolution) * self.terrain_overview_resolution
+        return (("development_work_min", lower),
+                ("development_work_max", lower + self.terrain_overview_resolution))
+
+    def observe_attribute(self, cell_id: SurfaceCellId, attribute: str, level: int) -> None:
+        self.attribute_level(cell_id, attribute)
+        if isinstance(level, bool) or not isinstance(level, int) or level not in (1, 2):
+            raise ValueError("attribute observation quality must be overview=1 or measured=2")
+        key = (cell_id, attribute)
+        # A weaker new observation cannot preserve a measurement from an old
+        # physical environment. Unchanged subjects still improve monotonically.
+        self.cell_attribute_levels[key] = max(level, self.attribute_level(cell_id, attribute))
+        if attribute == 'environment':
+            fingerprint = self._environment_fingerprint(cell_id)
+            if fingerprint is not None:
+                self.environment_observation_fingerprints[cell_id] = fingerprint
+
+    def observe_body(self, body_id: CelestialBodyId, *, resource_level: KnowledgeLevel,
+                     attribute_level: int = 0,
+                     observation_source_id: DefinitionId | None = None,
+                     estimate_uncertainty_fraction: float | None = None) -> None:
+        """A finite orbital campaign settles one consistent regional observation.
+
+        The truth is still owned by World; settlement only improves what the
+        player knows. This never creates Survey Intent or RP.
+        """
+        if resource_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            if (observation_source_id is None or estimate_uncertainty_fraction is None
+                    or not 0.0 < estimate_uncertainty_fraction <= 1.0):
+                raise ValueError("estimated science observation requires authored uncertainty and source")
+        resources_by_cell = self.resource_ids_by_cell
+        for cell in self.graph.cells_for_body(body_id):
+            if attribute_level:
+                for attribute in ("terrain", "environment", "geology"):
+                    self.observe_attribute(cell.id, attribute, attribute_level)
+            if resource_level is not KnowledgeLevel.UNKNOWN:
+                for resource_id in resources_by_cell.get(cell.id, ()):
+                    estimate = None
+                    precision = 0.0
+                    if resource_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+                        precision = estimate_uncertainty_fraction
+                        estimate = self._estimated_potential_from_observation(
+                            cell.id, resource_id, str(observation_source_id), precision
+                        )
+                    self.observe_resource(cell.id, resource_id, resource_level,
+                                          precision=precision, estimate=estimate)
+
+    @property
+    def resource_ids_by_cell(self) -> dict[SurfaceCellId, tuple[DefinitionId, ...]]:
+        # Only used at settlement, not during each UI Cell iteration.
+        result: dict[SurfaceCellId, list[DefinitionId]] = {}
+        for cell_id, resource_id in self.targets:
+            result.setdefault(cell_id, []).append(resource_id)
+        return {key: tuple(values) for key, values in result.items()}
+
+    def observe_resource(self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+                         level: KnowledgeLevel, *, precision: float = 0.0,
+                         estimate: float | None = None) -> None:
+        """Settle an actual observation without resetting a stronger result."""
+        key = (cell_id, resource_id)
+        target = self.targets[key]
+        level = KnowledgeLevel(level)
+        current_level = self.knowledge_level(*key)
+        if level is KnowledgeLevel.UNKNOWN or current_level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            return
+        if level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            if not 0.0 < precision <= 1.0 or estimate is None or estimate < 0.0:
+                raise ValueError("estimated observation requires positive uncertainty and an estimate")
+        elif level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL and precision < 0.0:
+            raise ValueError("measurement precision must be nonnegative")
+        # At equal quality, select one observation deterministically instead
+        # of letting the Survey/Science execution order choose the estimate.
+        previous_precision = self.knowledge_precision_fraction.get(key)
+        previous_estimate = self.estimated_potential.get(key)
+        replace_estimate = (
+            level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL and
+            (current_level < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL
+             or previous_precision is None
+             or precision < previous_precision
+             or (precision == previous_precision and previous_estimate is not None
+                 and estimate < previous_estimate))
+        )
+        self.knowledge_progress[key] = max(self.progress(*key), target.thresholds[int(level) - 1])
+        if level < KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            # Evidence is settled once; reading it must not re-sample World truth.
+            self.observed_presence_probability.setdefault(key, self._presence_observation(*key))
+        else:
+            self.observed_presence_probability.pop(key, None)
+        if level >= KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            if level is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+                self.knowledge_precision_fraction[key] = min(
+                    precision, self.knowledge_precision_fraction.get(key, precision)
+                )
+            elif replace_estimate:
+                self.knowledge_precision_fraction[key] = precision
+                self.estimated_potential[key] = estimate
+            if self.knowledge_level(*key) is KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+                self.estimated_potential.pop(key, None)
+
+    def settle_survey_work(self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+                           work: float, max_level: KnowledgeLevel, provider_id: DefinitionId,
+                           mode: SurveyObservationModeSpec) -> None:
+        key = (cell_id, resource_id)
+        target = self.targets[key]
+        threshold = target.thresholds[int(max_level) - 1]
+        if work <= 0:
+            return
+        before_level = self.knowledge_level(*key)
+        self.knowledge_progress[key] = max(self.progress(*key), min(threshold, self.progress(*key) + work))
+        after_level = self.knowledge_level(*key)
+        if after_level > before_level:
+            estimate = (self._estimated_potential_for_mode(cell_id, resource_id, provider_id, mode)
+                        if after_level is KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL else None)
+            self.observe_resource(cell_id, resource_id, after_level,
+                                  precision=mode.precision_for_level(after_level) or 0.0, estimate=estimate)
+        # Finite regional observation provides physical context as a separate
+        # quality-graded attribute, without unlocking unrelated Resource truths.
+        if after_level >= KnowledgeLevel.PRESENCE_PROBABILITY:
+            self.observe_attribute(cell_id, "terrain", 1)
+            self.observe_attribute(cell_id, "environment", 1)
+        if after_level >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            self.observe_attribute(cell_id, "terrain", 2)
+            self.observe_attribute(cell_id, "environment", 2)
+            self.observe_attribute(cell_id, "geology", 2)
+
+    def progress(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
+        key = (cell_id, resource_id)
+        if key not in self.targets:
+            raise KeyError(key)
+        return self.knowledge_progress.get(key, 0.0)
+
+    def knowledge_level(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> KnowledgeLevel:
+        key = (cell_id, resource_id)
+        target = self.targets[key]
+        progress = self.knowledge_progress.get(key, 0.0)
+        level = KnowledgeLevel.UNKNOWN
+        for index, threshold in enumerate(target.thresholds, start=1):
+            if progress + 1e-9 >= threshold:
+                level = KnowledgeLevel(index)
+        return level
+
+    def knowledge_requirement_failures(self, requirement: KnowledgeRequirement) -> tuple[str, ...]:
+        key = (requirement.target_cell_id, requirement.subject_resource_id)
+        if key not in self.targets:
+            return ("knowledge_target_unknown",)
+        actual = self.knowledge_level(*key)
+        if actual < requirement.minimum_level:
+            return (
+                f"knowledge:{requirement.target_cell_id}:{requirement.subject_resource_id}:"
+                f"{int(actual)}/{int(requirement.minimum_level)}",
+            )
+        return ()
+
+    def initialize_known(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> None:
+        key = (cell_id, resource_id)
+        if key not in self.targets:
+            raise KeyError(key)
+        self.observe_resource(cell_id, resource_id, KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL)
+
+    def is_complete(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> bool:
+        return self.knowledge_level(cell_id, resource_id) >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL
+
+    def actual_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
+        if (cell_id, resource_id) not in self.targets:
+            raise KeyError((cell_id, resource_id))
+        return float(self.graph.surface_cells[cell_id].resource_potential_by_resource.get(resource_id, 0.0))
+
+    def visible_presence_probability(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId
+    ) -> float | None:
+        level = self.knowledge_level(cell_id, resource_id)
+        if level < KnowledgeLevel.PRESENCE_PROBABILITY:
+            return None
+        if level >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            return 1.0 if self.actual_potential(cell_id, resource_id) > 0.0 else 0.0
+        return self.observed_presence_probability[(cell_id, resource_id)]
+
+    def _presence_observation(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float:
+        # Settled evidence, unlike a Query, is allowed to inspect physical truth.
+        actual_present = self.actual_potential(cell_id, resource_id) > 0.0
+        target = self.targets[(cell_id, resource_id)]
+        prior = target.prior_presence_probability
+        reliability = target.presence_detection_reliability
+        # Real observations can return a false positive or a false negative.
+        # Physical truth does not become public through a probability of 1/0.
+        digest = sha256(f"{cell_id}\0{resource_id}\0detection".encode()).digest()
+        detection_error = int.from_bytes(digest[:8], "big") / ((1 << 64) - 1)
+        observed_positive = (actual_present == (detection_error < reliability))
+        if observed_positive:
+            observed_true = reliability * prior
+            observed_false = (1.0 - reliability) * (1.0 - prior)
+        else:
+            observed_true = (1.0 - reliability) * prior
+            observed_false = reliability * (1.0 - prior)
+        return observed_true / (observed_true + observed_false)
+
+    def _estimated_potential_from_observation(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+        source_key: str, uncertainty_fraction: float,
+    ) -> float:
+        """Settle a source-specific estimate once, independently of registration order.
+
+        A measured observation bypasses this estimator and reports World truth.
+        """
+        actual = self.actual_potential(cell_id, resource_id)
+        digest = sha256(f"{cell_id}\0{resource_id}\0{source_key}".encode("utf-8")).digest()
+        unit = int.from_bytes(digest[:8], "big") / float((1 << 64) - 1)
+        signed_error = (unit * 2.0) - 1.0
+        return max(0.0, actual * (1.0 + signed_error * uncertainty_fraction))
+
+    def _estimated_potential_for_mode(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId,
+        provider_id: DefinitionId, mode: SurveyObservationModeSpec,
+    ) -> float:
+        return self._estimated_potential_from_observation(
+            cell_id, resource_id, f"{provider_id}\0{mode.id}",
+            mode.estimate_uncertainty_fraction,
+        )
+
+    def visible_potential(self, cell_id: SurfaceCellId, resource_id: DefinitionId) -> float | None:
+        level = self.knowledge_level(cell_id, resource_id)
+        if level < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            return None
+        if level >= KnowledgeLevel.MEASURED_RESOURCE_POTENTIAL:
+            return self.actual_potential(cell_id, resource_id)
+        return self.estimated_potential.get((cell_id, resource_id))
+
+    def visible_potential_precision_fraction(
+        self, cell_id: SurfaceCellId, resource_id: DefinitionId
+    ) -> float | None:
+        if self.knowledge_level(cell_id, resource_id) < KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL:
+            return None
+        return self.knowledge_precision_fraction.get((cell_id, resource_id))

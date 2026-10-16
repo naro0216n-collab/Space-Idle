@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import asin, cos, dist, isfinite, radians, sin, sqrt
+from math import asin, cos, dist, isfinite, pi, radians, sin, sqrt
 from enum import Enum
 from typing import Any, ClassVar, Mapping, Protocol, TypeAlias, TypeVar, cast
 
@@ -65,7 +65,7 @@ class IlluminationField(SpatialFacet):
     facet_key: ClassVar[str] = "illumination"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.SURFACE_CELL_LOCAL
     solar_flux_w_m2: float
-    availability: float = 1.0
+    availability: float = 1.0  # Long-run climate/exposure fraction, not a day-specific forecast.
 
     def __post_init__(self) -> None:
         if self.solar_flux_w_m2 < 0 or not 0 <= self.availability <= 1:
@@ -76,7 +76,7 @@ class IlluminationField(SpatialFacet):
 class ThermalField(SpatialFacet):
     facet_key: ClassVar[str] = "thermal"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
-    nominal_temperature_k: float
+    nominal_temperature_k: float  # Representative climate temperature, not a daily reading.
     min_temperature_k: float | None = None
     max_temperature_k: float | None = None
 
@@ -97,21 +97,50 @@ class ThermalField(SpatialFacet):
 
 
 @dataclass(frozen=True)
-class SurfaceTerrain:
-    """Static terrain/geology descriptors owned by SurfaceCellDef."""
-    terrain_factor: float = 1.0
-    bearing_capacity_factor: float = 1.0
-    dust_factor: float = 0.0
-    slope_factor: float = 0.0
+class RadiationField(SpatialFacet):
+    """Ambient unshielded dose-equivalent rate; never a protection/capability state.
+
+    A local Cell or orbital context may override the body's reference field.
+    Undefined remains different from a measured zero dose rate.
+    """
+
+    facet_key: ClassVar[str] = "radiation"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
+    dose_equivalent_msv_per_day: float
 
     def __post_init__(self) -> None:
-        if min(
-            self.terrain_factor,
-            self.bearing_capacity_factor,
-            self.dust_factor,
-            self.slope_factor,
-        ) < 0:
-            raise ValueError("surface factors must be non-negative")
+        if not isfinite(self.dose_equivalent_msv_per_day) or self.dose_equivalent_msv_per_day < 0:
+            raise ValueError("radiation dose equivalent must be finite and non-negative")
+
+
+@dataclass(frozen=True)
+class TerrainProfileDef:
+    """Authored landform and the two physical activities it directly affects.
+
+    This is not a universal productivity, power, maintenance or Resource buff.
+    """
+    id: str
+    display_name: str
+    development_work_factor: float = 1.0
+    excavation_accessibility: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.display_name.strip():
+            raise ValueError("terrain profile needs an ID and name")
+        if any(not isfinite(value) or value <= 0 for value in (
+            self.development_work_factor, self.excavation_accessibility,
+        )):
+            raise ValueError("terrain work/access values must be finite and positive")
+
+
+@dataclass(frozen=True)
+class SurfaceTerrain:
+    """A Cell's naturally occurring landform, resolved through authored profiles."""
+    profile_id: str = "standard"
+
+    def __post_init__(self) -> None:
+        if not self.profile_id:
+            raise ValueError("surface terrain profile must be specified")
 
 
 @dataclass(frozen=True)
@@ -130,11 +159,23 @@ class CommunicationField(SpatialFacet):
     facet_key: ClassVar[str] = "communication"
     environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.BODY_WITH_CELL_OVERLAY
     baseline_latency_s: float
-    availability: float = 1.0
+    availability: float = 1.0  # Long-run climate/exposure fraction, not a day-specific forecast.
 
     def __post_init__(self) -> None:
         if self.baseline_latency_s < 0 or not 0 <= self.availability <= 1:
             raise ValueError("invalid communication values")
+
+
+@dataclass(frozen=True)
+class ExternalGridConnectionField(SpatialFacet):
+    """World-owned external electrical-grid access at a specific surface Cell.
+
+    Absence means no external supply contract; it is not equivalent to a
+    player-owned generator and never provides generation on its own.
+    """
+
+    facet_key: ClassVar[str] = "external_grid_connection"
+    environment_scope: ClassVar[EnvironmentFieldScope] = EnvironmentFieldScope.SURFACE_CELL_LOCAL
 
 
 class SpatialNodeKind(str, Enum):
@@ -143,6 +184,13 @@ class SpatialNodeKind(str, Enum):
     # surface geography itself is represented by SurfaceCellDef, not a node.
     SURFACE = "surface"
     ORBITAL = "orbital"
+
+
+class PhysicalSurface(str, Enum):
+    """Physical substrate of a body, independent of Cell coverage or Founding."""
+
+    SOLID = "solid"
+    NO_SOLID_SURFACE = "no_solid_surface"
 
 
 @dataclass(frozen=True)
@@ -184,6 +232,7 @@ class CharacteristicTransportSeparation:
     scope: str
     distance_km: float
     delta_v_km_s: float
+    representative_transit_days: float | None = None
 
 
 @dataclass(frozen=True)
@@ -191,10 +240,15 @@ class StarSystemDef:
     id: StarSystemId
     display_name: str
     interstellar_transport_geometry: CharacteristicTransportGeometry
+    central_gravitational_parameter_km3_s2: float | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name.strip():
             raise ValueError("star system display name must not be empty")
+        if (self.central_gravitational_parameter_km3_s2 is not None
+                and (not isfinite(self.central_gravitational_parameter_km3_s2)
+                     or self.central_gravitational_parameter_km3_s2 <= 0)):
+            raise ValueError("star system central gravitational parameter must be positive")
 
 
 @dataclass(frozen=True)
@@ -203,13 +257,46 @@ class CelestialBodyDef:
     display_name: str
     mean_radius_km: float
     star_system_id: StarSystemId
-    system_local_transport_geometry: CharacteristicTransportGeometry
+    system_local_transport_geometry: CharacteristicTransportGeometry | None
+    parent_body_id: CelestialBodyId | None = None
+    physical_surface: PhysicalSurface = PhysicalSurface.SOLID
+    heliocentric_semimajor_axis_au: float | None = None
+    parent_orbit_semimajor_axis_km: float | None = None
+    standard_gravitational_parameter_km3_s2: float | None = None
+    reference_gravity_m_s2: float | None = None
 
     def __post_init__(self) -> None:
         if self.mean_radius_km <= 0:
             raise ValueError("celestial body mean radius must be positive")
         if not self.display_name.strip():
             raise ValueError("celestial body display name must not be empty")
+        if not isinstance(self.physical_surface, PhysicalSurface):
+            raise ValueError("unknown physical surface classification")
+        for name in (
+            "heliocentric_semimajor_axis_au", "parent_orbit_semimajor_axis_km",
+            "standard_gravitational_parameter_km3_s2", "reference_gravity_m_s2",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isfinite(value) or value <= 0):
+                raise ValueError(f"invalid celestial body physical parameter: {name}")
+        if self.parent_body_id is not None:
+            if self.heliocentric_semimajor_axis_au is not None:
+                raise ValueError("satellite must use parent orbit, not heliocentric orbit")
+        elif self.parent_orbit_semimajor_axis_km is not None:
+            raise ValueError("primary body cannot specify a parent orbit")
+        if (self.standard_gravitational_parameter_km3_s2 is not None
+                and self.reference_gravity_m_s2 is not None):
+            raise ValueError("gravity must have one physical input")
+        if (self.system_local_transport_geometry is not None
+                and (self.heliocentric_semimajor_axis_au is not None
+                     or self.parent_orbit_semimajor_axis_km is not None)):
+            raise ValueError("orbital scale and Cartesian transport position cannot be independent baselines")
+
+    @property
+    def representative_gravity_m_s2(self) -> float | None:
+        if self.standard_gravitational_parameter_km3_s2 is not None:
+            return self.standard_gravitational_parameter_km3_s2 * 1000 / self.mean_radius_km ** 2
+        return self.reference_gravity_m_s2
 
 
 @dataclass(frozen=True)
@@ -248,6 +335,7 @@ class SurfaceCellDef:
     static_geology: Mapping[str, float] = field(default_factory=dict)
     resource_potential_by_resource: Mapping[DefinitionId, float] = field(default_factory=dict)
     display_name: str = ""
+    spherical_bounds: "SphericalCellBounds | None" = None
 
     def __post_init__(self) -> None:
         if self.area_km2 <= 0:
@@ -286,17 +374,23 @@ class SpatialNodeDef:
     id: SpatialNodeId
     display_name: str
     star_system_id: StarSystemId
-    system_local_transport_geometry: CharacteristicTransportGeometry
+    system_local_transport_geometry: CharacteristicTransportGeometry | None
     parent_id: SpatialNodeId | None = None
     body_id: CelestialBodyId | None = None
     kind: SpatialNodeKind = SpatialNodeKind.GENERIC
     inherits_parent_environment: bool = True
+    body_center_orbit_radius_km: float | None = None
 
     def __post_init__(self) -> None:
         if self.kind is SpatialNodeKind.SURFACE:
             raise ValueError("surface geography must use SurfaceCellDef and SurfaceLocationState")
         if not self.display_name.strip():
             raise ValueError("spatial node display name must not be empty")
+        if self.body_center_orbit_radius_km is not None:
+            if (self.body_id is None or self.kind is not SpatialNodeKind.ORBITAL
+                    or not isfinite(self.body_center_orbit_radius_km)
+                    or self.body_center_orbit_radius_km <= 0):
+                raise ValueError("reference orbital radius requires a body-owned orbit")
 
 
 @dataclass(frozen=True)
@@ -322,6 +416,10 @@ class SpatialGraph:
     # Non-surface nodes only. Surface economic nodes live in locations.
     nodes: dict[SpatialNodeId, SpatialNodeDef] = field(default_factory=dict)
     surface_cells: dict[SurfaceCellId, SurfaceCellDef] = field(default_factory=dict)
+    terrain_profiles: dict[str, TerrainProfileDef] = field(default_factory=lambda: {
+        "standard": TerrainProfileDef("standard", "Standard Terrain"),
+    })
+    engineered_terrain: dict[SurfaceCellId, str] = field(default_factory=dict)
     locations: dict[SpatialNodeId, SurfaceLocationState] = field(default_factory=dict)
     operational_node_states: dict[SpatialNodeId, OperationalNodeState] = field(default_factory=dict)
 
@@ -335,7 +433,39 @@ class SpatialGraph:
             raise ValueError(f"duplicate celestial body: {body.id}")
         if body.star_system_id not in self.star_systems:
             raise ValueError(f"unknown star system {body.star_system_id} for {body.id}")
+        if body.parent_body_id is not None:
+            parent = self.bodies.get(body.parent_body_id)
+            if parent is None:
+                raise ValueError(f"unknown celestial parent {body.parent_body_id} for {body.id}")
+            if parent.star_system_id != body.star_system_id:
+                raise ValueError(f"celestial parent belongs to another star system: {body.id}")
+            if (body.parent_orbit_semimajor_axis_km is not None
+                    and body.parent_orbit_semimajor_axis_km <= parent.mean_radius_km):
+                raise ValueError("satellite orbit must lie outside the reference parent radius")
+            self.body_lineage(body.parent_body_id)
         self.bodies[body.id] = body
+
+    def body_lineage(self, body_id: CelestialBodyId) -> tuple[CelestialBodyId, ...]:
+        """Physical hierarchy only; it is not an Environment inheritance chain."""
+        lineage: list[CelestialBodyId] = []
+        seen: set[CelestialBodyId] = set()
+        current: CelestialBodyId | None = body_id
+        while current is not None:
+            if current in seen:
+                raise ValueError("celestial body hierarchy cycle")
+            seen.add(current)
+            body = self.bodies.get(current)
+            if body is None:
+                raise ValueError(f"unknown celestial body in hierarchy: {current}")
+            lineage.append(current)
+            current = body.parent_body_id
+        return tuple(lineage)
+
+    def representative_solar_flux_w_m2(self, body_id: CelestialBodyId) -> float | None:
+        """Baseline at orbital distance, not local illumination or generation."""
+        primary = self.bodies[self.body_lineage(body_id)[-1]]
+        a = primary.heliocentric_semimajor_axis_au
+        return None if a is None else 1361.0 / (a * a)
 
     def add(self, node: SpatialNodeDef) -> None:
         if node.id in self.nodes or node.id in self.locations:
@@ -350,13 +480,55 @@ class SpatialGraph:
             raise ValueError(f"unknown celestial body {node.body_id} for {node.id}")
         if node.body_id is not None and self.bodies[node.body_id].star_system_id != node.star_system_id:
             raise ValueError(f"spatial node body belongs to another star system: {node.id}")
+        if node.body_id is not None:
+            body = self.bodies[node.body_id]
+            if node.body_center_orbit_radius_km is not None:
+                if node.body_center_orbit_radius_km <= body.mean_radius_km:
+                    raise ValueError("orbital radius must lie outside the reference body radius")
+            if (node.system_local_transport_geometry is not None
+                    and (body.heliocentric_semimajor_axis_au is not None
+                         or body.parent_orbit_semimajor_axis_km is not None)):
+                raise ValueError("body orbit and spatial-node Cartesian geometry cannot be independent baselines")
         self.nodes[node.id] = node
+
+    def terrain_profile(self, cell_id: SurfaceCellId) -> TerrainProfileDef:
+        cell = self.surface_cells[cell_id]
+        profile_id = self.engineered_terrain.get(cell_id, cell.terrain.profile_id)
+        return self.terrain_profiles[profile_id]
+
+    def terrain_engineering_failures(self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+                                     target_profile_id: str) -> tuple[tuple[str, str], ...]:
+        if location_id not in self.locations:
+            return (("unknown_location", "unknown surface location"),)
+        if cell_id not in self.surface_cells:
+            return (("unknown_cell", "unknown surface cell"),)
+        if target_profile_id not in self.terrain_profiles:
+            return (("unknown_terrain", "unknown terrain profile"),)
+        if cell_id not in self.locations[location_id].developed_cell_ids:
+            return (("not_developed", "terrain engineering requires owned developed territory"),)
+        if self.terrain_profile(cell_id).id == target_profile_id:
+            return (("already_engineered", "target landform is already in effect"),)
+        return ()
+
+    def engineer_surface_cell(self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+                              target_profile_id: str) -> None:
+        failures = self.terrain_engineering_failures(location_id, cell_id, target_profile_id)
+        if failures:
+            raise ValueError("; ".join(message for _, message in failures))
+        # Natural geography remains unchanged. Only the actual constructed
+        # improvement is authoritative runtime state.
+        if target_profile_id == self.surface_cells[cell_id].terrain.profile_id:
+            self.engineered_terrain.pop(cell_id, None)
+        else:
+            self.engineered_terrain[cell_id] = target_profile_id
 
     def add_surface_cell(self, cell: SurfaceCellDef) -> None:
         if cell.id in self.surface_cells:
             raise ValueError(f"duplicate surface cell: {cell.id}")
         if cell.body_id not in self.bodies:
             raise ValueError(f"unknown celestial body {cell.body_id} for {cell.id}")
+        if self.bodies[cell.body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            raise ValueError(f"celestial body has no solid surface: {cell.body_id}")
         self.surface_cells[cell.id] = cell
 
     def _add_location_state(self, location: SurfaceLocationState) -> None:
@@ -414,6 +586,8 @@ class SpatialGraph:
         failures: list[tuple[str, str]] = []
         if body_id not in self.bodies:
             return (("unknown_body", f"unknown celestial body: {body_id}"),)
+        if self.bodies[body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            return (("no_solid_surface", f"celestial body has no solid surface: {body_id}"),)
         cell = self.surface_cells.get(core_cell_id)
         if cell is None:
             return (("unknown_cell", f"unknown surface cell: {core_cell_id}"),)
@@ -626,15 +800,121 @@ class SpatialGraph:
     def transport_geometry_for_context(
         self, context_id: SpatialContextId
     ) -> CharacteristicTransportGeometry:
+        geometry: CharacteristicTransportGeometry | None
         if context_id in self.locations:
             body_id = self.locations[cast(SpatialNodeId, context_id)].body_id
-            return self.bodies[body_id].system_local_transport_geometry
-        if context_id in self.surface_cells:
+            geometry = self.bodies[body_id].system_local_transport_geometry
+        elif context_id in self.surface_cells:
             body_id = self.surface_cells[cast(SurfaceCellId, context_id)].body_id
-            return self.bodies[body_id].system_local_transport_geometry
-        if context_id in self.nodes:
-            return self.nodes[cast(SpatialNodeId, context_id)].system_local_transport_geometry
-        raise KeyError(context_id)
+            geometry = self.bodies[body_id].system_local_transport_geometry
+        elif context_id in self.nodes:
+            geometry = self.nodes[cast(SpatialNodeId, context_id)].system_local_transport_geometry
+        else:
+            raise KeyError(context_id)
+        if geometry is None:
+            raise ValueError(f"representative movement not defined for context: {context_id}")
+        return geometry
+
+    @staticmethod
+    def _circular_transfer(
+        origin_radius_km: float, destination_radius_km: float, mu_km3_s2: float,
+    ) -> CharacteristicTransportSeparation:
+        """Characteristic half-ellipse transfer, not a date-specific ephemeris.
+
+        The delta-v is the sum of the two impulsive changes from circular orbits;
+        the distance is the characteristic half-orbit path, not an instantaneous
+        separation. The launch window and orbital inclination are not modeled.
+        """
+        r1, r2 = origin_radius_km, destination_radius_km
+        if r1 == r2:
+            return CharacteristicTransportSeparation("circular_orbit_transfer", 0.0, 0.0, 0.0)
+        a = (r1 + r2) / 2.0
+        v1 = sqrt(mu_km3_s2 / r1)
+        v2 = sqrt(mu_km3_s2 / r2)
+        transfer_v1 = sqrt(mu_km3_s2 * (2.0 / r1 - 1.0 / a))
+        transfer_v2 = sqrt(mu_km3_s2 * (2.0 / r2 - 1.0 / a))
+        return CharacteristicTransportSeparation(
+            "circular_orbit_transfer",
+            pi * a,  # characteristic arc scale, not a straight-line displacement
+            abs(transfer_v1 - v1) + abs(v2 - transfer_v2),
+            pi * sqrt(a ** 3 / mu_km3_s2) / 86400.0,
+        )
+
+    def _body_orbit_transfer(
+        self, origin_body_id: CelestialBodyId, destination_body_id: CelestialBodyId,
+    ) -> CharacteristicTransportSeparation:
+        origin_root = self.body_lineage(origin_body_id)[-1]
+        destination_root = self.body_lineage(destination_body_id)[-1]
+        if origin_root != destination_root:
+            source = self.bodies[origin_root]
+            target = self.bodies[destination_root]
+            system = self.star_systems[source.star_system_id]
+            if (source.heliocentric_semimajor_axis_au is None
+                    or target.heliocentric_semimajor_axis_au is None
+                    or system.central_gravitational_parameter_km3_s2 is None):
+                raise ValueError("heliocentric transfer physical baseline is incomplete")
+            heliocentric = self._circular_transfer(
+                source.heliocentric_semimajor_axis_au * 149_597_870.7,
+                target.heliocentric_semimajor_axis_au * 149_597_870.7,
+                system.central_gravitational_parameter_km3_s2,
+            )
+            legs = [heliocentric]
+            for body_id, root_id in ((origin_body_id, origin_root), (destination_body_id, destination_root)):
+                if body_id == root_id:
+                    continue
+                root = self.bodies[root_id]
+                satellite = self.bodies[body_id]
+                radius = satellite.parent_orbit_semimajor_axis_km
+                gravity = root.representative_gravity_m_s2
+                if radius is None or gravity is None:
+                    raise ValueError("satellite departure/arrival baseline is incomplete")
+                legs.append(self._circular_transfer(
+                    root.mean_radius_km, radius, gravity * root.mean_radius_km ** 2 / 1000.0,
+                ))
+            return CharacteristicTransportSeparation(
+                "interplanetary_transfer",
+                sum(leg.distance_km for leg in legs),
+                sum(leg.delta_v_km_s for leg in legs),
+                sum(leg.representative_transit_days or 0.0 for leg in legs),
+            )
+
+        parent = self.bodies[origin_root]
+        gravity = parent.representative_gravity_m_s2
+        if gravity is None:
+            raise ValueError("parent body gravity baseline is missing for satellite transfer")
+        origin = self.bodies[origin_body_id]
+        destination = self.bodies[destination_body_id]
+        r1 = parent.mean_radius_km if origin_body_id == origin_root else origin.parent_orbit_semimajor_axis_km
+        r2 = parent.mean_radius_km if destination_body_id == destination_root else destination.parent_orbit_semimajor_axis_km
+        if r1 is None or r2 is None:
+            raise ValueError("satellite transfer orbital scale is missing")
+        leg = self._circular_transfer(r1, r2, gravity * parent.mean_radius_km ** 2 / 1000.0)
+        return CharacteristicTransportSeparation(
+            "planetary_system_transfer", leg.distance_km, leg.delta_v_km_s,
+            leg.representative_transit_days,
+        )
+
+    def _local_orbit_transfer(
+        self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId,
+        body_id: CelestialBodyId,
+    ) -> CharacteristicTransportSeparation | None:
+        # Surface access has its own operations; it is not a second orbit leg.
+        if origin_context_id not in self.nodes or destination_context_id not in self.nodes:
+            return None
+        origin = self.nodes[cast(SpatialNodeId, origin_context_id)]
+        destination = self.nodes[cast(SpatialNodeId, destination_context_id)]
+        r1, r2 = origin.body_center_orbit_radius_km, destination.body_center_orbit_radius_km
+        if r1 is None or r2 is None:
+            return None
+        body = self.bodies[body_id]
+        gravity = body.representative_gravity_m_s2
+        if gravity is None:
+            raise ValueError("body gravity baseline is missing for local orbital transfer")
+        leg = self._circular_transfer(r1, r2, gravity * body.mean_radius_km ** 2 / 1000.0)
+        return CharacteristicTransportSeparation(
+            "local_orbit_transfer", leg.distance_km, leg.delta_v_km_s,
+            leg.representative_transit_days,
+        )
 
     def characteristic_transport_separation(
         self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId
@@ -642,12 +922,26 @@ class SpatialGraph:
         origin_system = self.context_star_system_id(origin_context_id)
         destination_system = self.context_star_system_id(destination_context_id)
         if origin_system == destination_system:
+            origin_body = self.context_body_id(origin_context_id)
+            destination_body = self.context_body_id(destination_context_id)
+            if origin_body is not None and destination_body is not None:
+                # One physical relation per OD. A body-owned orbital baseline
+                # is authoritative whenever it exists, rather than substituting
+                # fabricated Cartesian coordinates for new planetary systems.
+                origin_def = self.bodies[origin_body]
+                destination_def = self.bodies[destination_body]
+                if origin_body == destination_body:
+                    local = self._local_orbit_transfer(origin_context_id, destination_context_id, origin_body)
+                    if local is not None:
+                        return local
+                if origin_def.system_local_transport_geometry is None or destination_def.system_local_transport_geometry is None:
+                    if origin_body == destination_body:
+                        return CharacteristicTransportSeparation("body_local", 0.0, 0.0)
+                    return self._body_orbit_transfer(origin_body, destination_body)
             origin_geometry = self.transport_geometry_for_context(origin_context_id)
             destination_geometry = self.transport_geometry_for_context(destination_context_id)
             distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)
-            return CharacteristicTransportSeparation(
-                "system_local", distance_km, delta_v_km_s
-            )
+            return CharacteristicTransportSeparation("system_local", distance_km, delta_v_km_s)
         origin_geometry = self.star_systems[origin_system].interstellar_transport_geometry
         destination_geometry = self.star_systems[destination_system].interstellar_transport_geometry
         distance_km, delta_v_km_s = origin_geometry.separation_to(destination_geometry)
@@ -665,6 +959,8 @@ class SpatialGraph:
     def _validate_location_shape(self, location: SurfaceLocationState, *, allow_unknown_neighbors: bool) -> None:
         if location.body_id not in self.bodies:
             raise ValueError(f"unknown celestial body {location.body_id} for {location.operational_node_id}")
+        if self.bodies[location.body_id].physical_surface is PhysicalSurface.NO_SOLID_SURFACE:
+            raise ValueError(f"celestial body has no solid surface: {location.body_id}")
         if location.core_cell_id not in self.surface_cells:
             raise ValueError(f"unknown core surface cell {location.core_cell_id} for {location.operational_node_id}")
         if location.core_cell_id not in location.developed_cell_ids:
@@ -677,6 +973,10 @@ class SpatialGraph:
                 raise ValueError(f"location developed cell belongs to another body: {location.operational_node_id}/{cell_id}")
         if not self._cells_connected(location.developed_cell_ids, allow_unknown_neighbors=allow_unknown_neighbors):
             raise ValueError(f"location developed territory is not connected: {location.operational_node_id}")
+
+    def cells_connected(self, cell_ids: set[SurfaceCellId] | frozenset[SurfaceCellId]) -> bool:
+        """Pure World topology contract, including unowned prospective territory."""
+        return self._cells_connected(set(cell_ids))
 
     def _cells_connected(
         self,
@@ -705,12 +1005,70 @@ class SpatialGraph:
         return seen == cell_ids
 
 
+class _FacetDefinitionMap(dict):
+    """Revision-tracked static definition keys, including direct map edits.
+
+    Physical values may change without changing the set of facet types;
+    insertions/removals are the only events that invalidate that index.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.key_revision = 0
+
+    def __setitem__(self, key, value):
+        added = key not in self
+        super().__setitem__(key, value)
+        if added:
+            self.key_revision += 1
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self.key_revision += 1
+
+    def pop(self, key, *default):
+        if key in self:
+            self.key_revision += 1
+        return super().pop(key, *default)
+
+    def popitem(self):
+        item = super().popitem()
+        self.key_revision += 1
+        return item
+
+    def clear(self):
+        if self:
+            super().clear()
+            self.key_revision += 1
+
+    def update(self, *args, **kwargs):
+        rows = dict(*args, **kwargs)
+        if any(key not in self for key in rows):
+            self.key_revision += 1
+        super().update(rows)
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self.key_revision += 1
+        return super().setdefault(key, default)
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
 @dataclass
 class StaticFacetStore:
     """Static Physical Environment definitions separated by authoritative scope."""
 
     facets: dict[tuple[SpatialContextId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
     body_facets: dict[tuple[CelestialBodyId, type[SpatialFacet]], SpatialFacet] = field(default_factory=dict)
+    _facet_type_index: frozenset[type[SpatialFacet]] | None = field(default=None, init=False, repr=False, compare=False)
+    _facet_index_revision: tuple[int, int, int, int] | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.facets = _FacetDefinitionMap(self.facets)
+        self.body_facets = _FacetDefinitionMap(self.body_facets)
 
     @staticmethod
     def _field_scope(facet_type: type[FacetT]) -> EnvironmentFieldScope:
@@ -737,9 +1095,21 @@ class StaticFacetStore:
         self.body_facets[(body_id, type(facet))] = facet
 
     def facet_types(self) -> set[type[SpatialFacet]]:
-        return {facet_type for (_context_id, facet_type) in self.facets} | {
-            facet_type for (_body_id, facet_type) in self.body_facets
-        }
+        # Facet registration is static during a read/tick, but callers may
+        # change map membership directly while composing a World. Track keys
+        # rather than scanning every Cell for each environment observation.
+        revision = (
+            id(self.facets), self.facets.key_revision,
+            id(self.body_facets), self.body_facets.key_revision,
+        )
+        if self._facet_index_revision != revision:
+            self._facet_type_index = frozenset(
+                facet_type for (_context_id, facet_type) in self.facets
+            ) | frozenset(
+                facet_type for (_body_id, facet_type) in self.body_facets
+            )
+            self._facet_index_revision = revision
+        return set(self._facet_type_index)
 
     def field_applies_to_context(
         self, graph: SpatialGraph, context_id: SpatialContextId, facet_type: type[FacetT]
@@ -819,7 +1189,7 @@ class StaticFacetStore:
 
 
 class StatefulEnvironmentOverlay(Protocol):
-    """Optional persistence contract for mutable environment overlays."""
+    """Persistence contract for action-driven climate modifications."""
 
     state_key: str
 
@@ -829,7 +1199,7 @@ class StatefulEnvironmentOverlay(Protocol):
 
 
 class EnvironmentOverlay(Protocol):
-    """Explicit dynamic environment source."""
+    """Explicit action-driven environment modification, never a calendar-day model."""
 
     overlay_key: str
     priority: int
@@ -840,7 +1210,6 @@ class EnvironmentOverlay(Protocol):
         context_id: SpatialContextId,
         facet_type: type[FacetT],
         current: FacetT | None,
-        day: int,
     ) -> FacetT | None: ...
 
 
@@ -848,7 +1217,7 @@ class EnvironmentOverlay(Protocol):
 class EnvironmentResolver:
     graph: SpatialGraph
     static: StaticFacetStore
-    overlays: list[EnvironmentOverlay] = field(default_factory=list)
+    overlays: list[EnvironmentOverlay] = field(default_factory=list)  # Explicit environmental changes only.
 
     def ordered_overlays(self) -> tuple[EnvironmentOverlay, ...]:
         keyed: list[tuple[int, str, EnvironmentOverlay]] = []
@@ -873,22 +1242,20 @@ class EnvironmentResolver:
         self,
         context_id: SpatialContextId,
         facet_type: type[FacetT],
-        day: int = 0,
     ) -> FacetT | None:
         if not self.static.field_applies_to_context(self.graph, context_id, facet_type):
             return None
         value = self.static.resolve(self.graph, context_id, facet_type)
         for overlay in self.ordered_overlays():
-            value = overlay.apply(self.graph, context_id, facet_type, value, day)
+            value = overlay.apply(self.graph, context_id, facet_type, value)
         return value
 
     def require(
         self,
         context_id: SpatialContextId,
         facet_type: type[FacetT],
-        day: int = 0,
     ) -> FacetT:
-        value = self.get(context_id, facet_type, day)
+        value = self.get(context_id, facet_type)
         if value is None:
             raise LookupError(f"{context_id} has no {facet_type.__name__}")
         return value

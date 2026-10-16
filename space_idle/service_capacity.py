@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from contextlib import contextmanager
 from enum import Enum
 from typing import Callable, Iterable, Mapping, Protocol, TYPE_CHECKING
 
@@ -77,23 +78,64 @@ class ServiceCapacityRegistry:
 
     def __init__(self) -> None:
         self._provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]] | None = None
+        self._projection_provider_index: dict[str, tuple[ServiceCapacityProvider, ...]] | None = None
+        self._projection_index_ready = False
 
     def bind_provider_source(
         self, provider_source: Callable[[], tuple[ServiceCapacityProvider, ...]]
     ) -> None:
         self._provider_source = provider_source
+        # A composition rebinding must not retain the prior provider wiring.
+        self._projection_provider_index = None
+        self._projection_index_ready = False
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Index definition-owned Service types once per immutable execution/read boundary.
+
+        Mutable registration outside a boundary is reflected by the next lookup;
+        this is never an authoritative or persisted snapshot of provider supply.
+        """
+        if self._projection_provider_index is not None:
+            yield
+            return
+        # Most scoped reads never ask for an individual provider. Keep the
+        # index lazy so World/Research-only requests do not scan Service types.
+        self._projection_provider_index = {}
+        self._projection_index_ready = False
+        try:
+            yield
+        finally:
+            self._projection_provider_index = None
+            self._projection_index_ready = False
 
     def providers(self) -> tuple[ServiceCapacityProvider, ...]:
         if self._provider_source is None:
             return ()
         return self._provider_source()
 
+    def providers_by_type(self) -> dict[str, tuple[ServiceCapacityProvider, ...]]:
+        """One Service registration projection shared by all its Domain consumers.
+
+        Definition registration can change outside a projection boundary.  The
+        next boundary resolves the live provider source again, without keeping
+        a persistent cache or capturing mutable Service supply.
+        """
+        index = self._projection_provider_index
+        if index is None or not self._projection_index_ready:
+            grouped: dict[str, list[ServiceCapacityProvider]] = {}
+            for provider in self.providers():
+                for service_type in provider.service_capacity_types():
+                    grouped.setdefault(service_type, []).append(provider)
+            new_index = {key: tuple(rows) for key, rows in grouped.items()}
+            if index is None:
+                return new_index
+            index.update(new_index)
+            self._projection_index_ready = True
+        return index
+
     def provider_for(self, service_type: str) -> ServiceCapacityProvider | None:
-        providers = tuple(
-            provider
-            for provider in self.providers()
-            if service_type in provider.service_capacity_types()
-        )
+        providers = self.providers_by_type().get(service_type, ())
         if len(providers) > 1:
             raise RuntimeError(f"multiple service capacity providers own {service_type}")
         return providers[0] if providers else None
@@ -202,6 +244,10 @@ class ServiceCapacityAllocationPlan:
     supply_nominal: Mapping[tuple[SpatialNodeId, str], float]
     supply_enabled: Mapping[tuple[SpatialNodeId, str], float]
     supply_limiting_factors: Mapping[tuple[SpatialNodeId, str], tuple[str, ...]]
+    _requests_by_id: dict[EntityId, ServiceCapacityRequest] = field(init=False, repr=False, compare=False)
+    _allocations_by_id: dict[EntityId, ServiceCapacityAllocation] = field(init=False, repr=False, compare=False)
+    _allocations_by_owner: dict[tuple[str, EntityId], tuple[ServiceCapacityAllocation, ...]] = field(init=False, repr=False, compare=False)
+    _totals_by_scope: dict[tuple[SpatialNodeId, str], tuple[float, float]] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         request_ids = [request.id for request in self.requests]
@@ -210,43 +256,45 @@ class ServiceCapacityAllocationPlan:
             raise ValueError("duplicate service capacity request id")
         if set(request_ids) != set(allocation_ids) or len(request_ids) != len(allocation_ids):
             raise ValueError("service capacity allocation plan must contain one allocation per request")
+        request_by_id = {row.id: row for row in self.requests}
+        allocation_by_id = {row.request_id: row for row in self.allocations}
+        by_owner: dict[tuple[str, EntityId], list[ServiceCapacityAllocation]] = {}
+        for row in self.allocations:
+            request = request_by_id[row.request_id]
+            by_owner.setdefault((request.owner_kind, request.owner_id), []).append(row)
+        requested: dict[tuple[SpatialNodeId, str], list[float]] = {}
+        allocated: dict[tuple[SpatialNodeId, str], list[float]] = {}
+        for request in self.requests:
+            requested.setdefault((request.operational_node_id, request.service_type), []).append(request.requested_rate)
+        for row in self.allocations:
+            request = request_by_id[row.request_id]
+            allocated.setdefault((request.operational_node_id, request.service_type), []).append(row.allocated_rate)
+        object.__setattr__(self, "_requests_by_id", request_by_id)
+        object.__setattr__(self, "_allocations_by_id", allocation_by_id)
+        object.__setattr__(self, "_allocations_by_owner", {key: tuple(rows) for key, rows in by_owner.items()})
+        object.__setattr__(self, "_totals_by_scope", {
+            key: (sum(rows), sum(allocated.get(key, ()))) for key, rows in requested.items()
+        })
         for key, enabled in self.supply_enabled.items():
             nominal = self.supply_nominal.get(key, 0.0)
             if enabled < -1e-9 or nominal < -1e-9 or enabled > nominal + 1e-7:
                 raise ValueError(f"invalid service capacity supply for {key}")
 
     def request(self, request_id: EntityId) -> ServiceCapacityRequest:
-        for request in self.requests:
-            if request.id == request_id:
-                return request
-        raise KeyError(request_id)
+        return self._requests_by_id[request_id]
 
     def allocation(self, request_id: EntityId) -> ServiceCapacityAllocation:
-        for row in self.allocations:
-            if row.request_id == request_id:
-                return row
-        raise KeyError(request_id)
+        return self._allocations_by_id[request_id]
 
     def allocated(self, request_id: EntityId) -> float:
         return self.allocation(request_id).allocated_rate
 
     def allocations_for_owner(self, owner_kind: str, owner_id: EntityId) -> tuple[ServiceCapacityAllocation, ...]:
-        ids = {
-            request.id
-            for request in self.requests
-            if request.owner_kind == owner_kind and request.owner_id == owner_id
-        }
-        return tuple(row for row in self.allocations if row.request_id in ids)
+        return self._allocations_by_owner.get((owner_kind, owner_id), ())
 
     def summary(self, operational_node_id: SpatialNodeId, service_type: str) -> ServiceCapacitySummary:
         key = (operational_node_id, service_type)
-        related = tuple(
-            request for request in self.requests
-            if request.operational_node_id == operational_node_id and request.service_type == service_type
-        )
-        ids = {request.id for request in related}
-        requested = sum(request.requested_rate for request in related)
-        allocated = sum(row.allocated_rate for row in self.allocations if row.request_id in ids)
+        requested, allocated = self._totals_by_scope.get(key, (0.0, 0.0))
         nominal = max(0.0, self.supply_nominal.get(key, 0.0))
         enabled = max(0.0, self.supply_enabled.get(key, 0.0))
         return ServiceCapacitySummary(

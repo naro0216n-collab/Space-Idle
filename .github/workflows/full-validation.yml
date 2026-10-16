@@ -129,7 +129,7 @@ jobs:
           python -m pip install -U pip
           python -m pip install '.[e2e]'
           python -m playwright install --with-deps chromium
-      - name: Run full direct browser-to-server acceptance
+      - name: Run full browser interaction acceptance
         env:
           SPACE_IDLE_BROWSER: chromium
           NO_PROXY: 127.0.0.1,localhost
@@ -149,7 +149,7 @@ jobs:
           python -m pip install -U pip
           python -m pip install '.[e2e]'
           python -m playwright install webkit
-      - name: Run full iPad-like WebKit acceptance
+      - name: Run full iPad-like WebKit interaction acceptance
         env:
           SPACE_IDLE_BROWSER: webkit
           NO_PROXY: 127.0.0.1,localhost

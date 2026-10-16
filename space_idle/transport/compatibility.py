@@ -5,7 +5,7 @@ import math
 from ..power import PowerSnapshot
 from ..shared import DefinitionId, MovementPlanId, SpatialNodeId
 from ..site import evaluate_physical_site_requirements, evaluate_site_requirements
-from ..spatial import AtmosphereField, GravityField
+from ..spatial import AtmosphereField, GravityField, ThermalField
 from .endpoints import movement_geometry, resolve_movement_endpoint
 from .models import (
     OperationAssetDisposition,
@@ -15,7 +15,7 @@ from .models import (
     SurfaceTransportCapability,
     SURFACE_TRANSPORT,
 )
-from .operations import OperationEvaluationContext
+from .operations import OperationEvaluationContext, SurfaceOperationEnvironment
 
 class TransportCompatibilityMixin:
     def resource_support_failures(
@@ -73,7 +73,7 @@ class TransportCompatibilityMixin:
                     failures.append(f"{prefix}:interface:{code}:{detail}")
             if endpoint.operational_node_id is None:
                 for failure in evaluate_physical_site_requirements(
-                    requirements, resolved.environment_context_id, day, self.facilities.environment
+                    requirements, resolved.environment_context_id, self.facilities.environment
                 ):
                     failures.append(f"{prefix}:{failure.code}:{failure.detail}")
                 for requirement in requirements.capability_requirements:
@@ -117,15 +117,31 @@ class TransportCompatibilityMixin:
                 return max(1, math.ceil(geometry.distance_km * multiplier / capability.speed_km_per_day))
         return max(1, math.ceil(plan.transit_days * multiplier - 1e-12))
 
-    def _surface_environment(self, context_id, day: int) -> tuple[float, float] | None:
+    def _surface_environment(self, context_id) -> SurfaceOperationEnvironment | None:
         environment = self.facilities.environment
         if not environment.graph.is_surface_context(context_id):
             return None
-        gravity = environment.get(context_id, GravityField, day)
-        atmosphere = environment.get(context_id, AtmosphereField, day)
-        return (
-            0.0 if gravity is None else gravity.local_acceleration_m_s2,
-            0.0 if atmosphere is None else atmosphere.pressure_pa,
+        gravity = environment.get(context_id, GravityField)
+        atmosphere = environment.get(context_id, AtmosphereField)
+        thermal = environment.get(context_id, ThermalField)
+        body_id = environment.graph.context_body_id(context_id)
+        body = environment.graph.bodies.get(body_id) if body_id is not None else None
+        gravity_value = None if gravity is None else gravity.local_acceleration_m_s2
+        # Energy needed to decelerate from a representative circular orbit:
+        # v^2/2 = g*r/2. This is a reference load for vehicle rating, not an
+        # atmospheric heating simulation or a second Movement delta-v charge.
+        entry_energy = (
+            None if gravity_value is None or body is None else
+            gravity_value * body.mean_radius_km / 2000.0
+        )
+        return SurfaceOperationEnvironment(
+            gravity_m_s2=gravity_value,
+            pressure_pa=None if atmosphere is None else atmosphere.pressure_pa,
+            maximum_temperature_k=None if thermal is None else (
+                thermal.max_temperature_k if thermal.max_temperature_k is not None
+                else thermal.nominal_temperature_k
+            ),
+            characteristic_entry_energy_mj_per_kg=entry_energy,
         )
 
     def performance_movement_failures(
@@ -149,8 +165,8 @@ class TransportCompatibilityMixin:
             transit_days=self.performance_movement_transit_days(
                 plan, performance, transit_multiplier=transit_multiplier
             ),
-            origin_surface=self._surface_environment(origin_endpoint.environment_context_id, day),
-            destination_surface=self._surface_environment(destination_endpoint.environment_context_id, day),
+            origin_surface=self._surface_environment(origin_endpoint.environment_context_id),
+            destination_surface=self._surface_environment(destination_endpoint.environment_context_id),
             surface_distance_km=geometry.distance_km if geometry.same_body_surface else None,
         )
         present_operations: set[str] = set()
@@ -167,6 +183,22 @@ class TransportCompatibilityMixin:
                 failures.append(
                     f"operation:{operation.operation_type}:asset_returns_before_movement_complete"
                 )
+
+        # Assisted operations must obey their actual movement relation, not
+        # only the same-body surface geometry used by ground transport.
+        distance_km = (geometry.distance_km if geometry.distance_km is not None
+                       else plan.relation.characteristic_distance_km)
+        for assistance in performance.operation_service_requirements:
+            if assistance.operation_type not in present_operations:
+                continue
+            if assistance.max_distance_km is not None:
+                if distance_km is None:
+                    failures.append(f"operation_service:{assistance.service_type}:range_unknown")
+                elif distance_km > assistance.max_distance_km + 1e-9:
+                    failures.append(
+                        f"operation_service:{assistance.service_type}:range:"
+                        f"{distance_km:g}/{assistance.max_distance_km:g}"
+                    )
 
         failures.extend(performance.endurance_failures(context.transit_days))
 

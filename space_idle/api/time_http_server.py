@@ -12,7 +12,6 @@ from ..application_commands import (
     GetBuildOptions,
     GetCargoFlows,
     GetFleet,
-    GetContracts,
     GetDependencyAnalytics,
     GetFlowReport,
     GetOperationalNode,
@@ -24,6 +23,7 @@ from ..application_commands import (
     GetMovementPlans,
     GetSurveys,
     GetSurfaceMap,
+    GetNonSurfaceFoundingOptions,
     GetTransportAllocations,
     GetWorld,
     GetMarket,
@@ -53,7 +53,20 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             raise ApiPayloadError("surface_body_id must appear once")
         surface_body_id = surface_body_values[0] if surface_body_values else None
 
-        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}"
+        founding_cell_ids = tuple(dict.fromkeys(params.get("founding_cell_id", ())))
+        selected_context = params.get("founding_context_id", [""])
+        if len(selected_context) != 1:
+            raise ApiPayloadError("founding Context must appear at most once")
+        founding_context_id = selected_context[0]
+
+        # Map/Inspector reference one selected node without changing the
+        # execution node. Selection scopes the Movement candidates as well.
+        inspect_values = params.get("inspect_node_id", [])
+        if len(inspect_values) > 1:
+            raise ApiPayloadError("inspect_node_id must appear once")
+        inspect_node_id = inspect_values[0] if inspect_values else None
+
+        scope_key = f"{operational_node_id or ''}\0{surface_body_id or ''}\0{inspect_node_id or ''}\0{','.join(founding_cell_ids)}\0{founding_context_id}"
         scope_hash = sha256(scope_key.encode("utf-8")).hexdigest()[:12]
         known_revision = None
         known_view = self.headers.get("X-Space-Idle-Known-View", "").strip()
@@ -66,15 +79,18 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
             "global_issues": GetAttention(),
             "research": GetResearch(),
             "scientific_explorations": GetScientificExplorations(),
-            "contracts": GetContracts(),
             "logistics_summary": GetLogisticsSummary(),
             "logistics": GetLogistics(),
-            "movement_plans": GetMovementPlans(include_modes=True),
             "fleet": GetFleet(),
             "transport_allocations": GetTransportAllocations(),
             "cargo_flows": GetCargoFlows(),
             "market": GetMarket(),
         }
+        if inspect_node_id:
+            queries["movement_plans"] = GetMovementPlans(touching_node_id=inspect_node_id, include_modes=True)
+            if inspect_node_id != operational_node_id:
+                queries["inspected_node"] = GetOperationalNode(inspect_node_id)
+                queries["inspected_flow"] = GetFlowReport(inspect_node_id)
         if operational_node_id:
             queries.update({
                 "operational_node": GetOperationalNode(operational_node_id),
@@ -84,10 +100,14 @@ class TimeControlledRequestHandler(SpaceIdleRequestHandler):
                 "projects": GetProjects(operational_node_id),
                 "build_options": GetBuildOptions(operational_node_id),
                 "bottlenecks": GetBottlenecks(operational_node_id),
-                "surveys": GetSurveys(operational_node_id),
+                "surveys": GetSurveys(
+                    operational_node_id, surface_body_id,
+                    include_target_rows=surface_body_id is not None,
+                ),
             })
         if surface_body_id:
-            queries["surface_map"] = GetSurfaceMap(surface_body_id)
+            queries["surface_map"] = GetSurfaceMap(surface_body_id, founding_cell_ids)
+            queries["non_surface_founding"] = GetNonSurfaceFoundingOptions(surface_body_id, founding_context_id)
 
         result = self.server.runtime.snapshot_if_changed(
             queries,

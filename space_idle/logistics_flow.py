@@ -100,6 +100,27 @@ class LogisticsFlowMixin:
                 return cached
         rows: list[TransportServiceSupply] = []
         backpressure = self._arrival_backpressure_by_service()
+        for transit in self.transport.passenger_service_transits.values():
+            if transit.arrival_day <= day:
+                leg = transit.legs[-1]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError("Passenger transit references missing Transport Allocation")
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
+            # A missed intermediate handoff keeps the preceding Service's
+            # cabin occupied.  It cannot be counted as available Cargo mass.
+            for index, delay in enumerate(transit.handoff_wait_days):
+                if not delay or transit.last_settled_day >= transit.transfer_boundary_day(index):
+                    continue
+                leg = transit.legs[index]
+                allocation = self.transport.transport_allocation_snapshot(leg.allocation_id)
+                if allocation is None:
+                    raise RuntimeError('Passenger handoff references missing Transport Allocation')
+                direction = 'forward' if allocation.anchor_node_id == leg.origin_id else 'reverse'
+                key = ('allocation', leg.allocation_id, direction)
+                backpressure[key] = backpressure.get(key, 0.0) + leg.payload_mass_t
         for edge in self.transport.transport_service_supplies(day):
             occupied = backpressure.get(self._capacity_owner_key_from_supply(edge), 0.0)
             if occupied <= 1e-12:
@@ -222,6 +243,11 @@ class LogisticsFlowMixin:
                 else:
                     resource_rows = operation.reverse_resource_per_t
                     turnaround = operation.reverse_turnaround_per_t
+                assist_rows = (operation.forward_service_per_t if edge.direction == "forward"
+                               else operation.reverse_service_per_t)
+                for node_id, service_type, amount in assist_rows:
+                    key = (node_id, service_type)
+                    services[key] = services.get(key, 0.0) + amount
                 for node_id, resource_id, amount in resource_rows:
                     resource_key = (node_id, resource_id)
                     resources[resource_key] = resources.get(resource_key, 0.0) + amount
@@ -305,19 +331,17 @@ class LogisticsFlowMixin:
             ratios: list[float] = []
             row_limits: list[str] = []
             for location_id in dependency.surface_service_locations:
-                request_id = EntityId(f"service.surface_distribution:{location_id}")
-                try:
-                    request = service_allocations.request(request_id)
-                    allocated = service_allocations.allocated(request_id)
-                except KeyError:
-                    request = None
-                    allocated = 0.0
-                if request is None:
+                # The owning geographical Service may have many requests at
+                # different Activity priorities. Never reconstruct a private
+                # root request ID or invent a second allocation path here.
+                summary = service_allocations.summary(location_id, 'surface_distribution')
+                if summary.enabled_rate <= 1e-12:
                     ratio = 0.0
-                elif request.requested_rate <= 1e-12:
+                elif summary.requested_rate <= 1e-12:
                     ratio = 1.0
                 else:
-                    ratio = max(0.0, min(1.0, allocated / request.requested_rate))
+                    ratio = max(0.0, min(1.0,
+                        summary.allocated_rate / summary.requested_rate))
                 ratios.append(ratio)
                 if ratio < 1.0 - 1e-12:
                     row_limits.append(f"surface_infrastructure:{location_id}")
@@ -350,6 +374,12 @@ class LogisticsFlowMixin:
                                 resource_id, amount, constraint_node_id=node_id
                             ).constraint_key(node_id)
                         )
+            for rows in (operation.forward_service_per_t, operation.reverse_service_per_t):
+                for node_id, service_type, amount in rows:
+                    if amount > 1e-12:
+                        keys.add(ServiceCapacityRequirement(
+                            service_type, 1.0, constraint_node_id=node_id,
+                        ).constraint_key(node_id))
             if operation.turnaround_service_type is not None:
                 if (
                     operation.forward_turnaround_per_t > 1e-12
@@ -426,6 +456,13 @@ class LogisticsFlowMixin:
 
         for allocation_id in support_limited:
             usage = used_by_allocation.get(allocation_id, DirectionalCapacity())
+            if allocation_id in self.transport.infrastructure_links:
+                # The finite Cargo service is a Facility pair, not a Fleet
+                # allocation. Cargo Bundle service inputs already constrain it.
+                capacity = self.transport.infrastructure_links[allocation_id].target_t_per_day
+                factors[allocation_id] = min(factors.get(allocation_id, 1.0),
+                    min(1.0, max(0.0, usage.forward_t_per_day / capacity)))
+                continue
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=usage
             )
@@ -590,6 +627,21 @@ class LogisticsFlowMixin:
             sum(1.0 / max(float(edge.capacity_t_per_day), 1.0e-12) for edge in path),
         )
 
+    def _service_adjacency(self, edges: tuple[TransportServiceSupply, ...]) -> dict[SpatialNodeId, tuple[TransportServiceSupply, ...]]:
+        """Index outgoing Service edges once per immutable network projection."""
+        cache = self._projection_service_adjacency_cache
+        if cache is not None:
+            entry = cache.get(id(edges))
+            if entry is not None and entry[0] is edges:
+                return entry[1]
+        by_source: dict[SpatialNodeId, list[TransportServiceSupply]] = {}
+        for edge in sorted(edges, key=lambda row: row.key):
+            by_source.setdefault(edge.source_id, []).append(edge)
+        adjacency = {source: tuple(rows) for source, rows in by_source.items()}
+        if cache is not None:
+            cache[id(edges)] = (edges, adjacency)
+        return adjacency
+
     def _automatic_service_path(
         self,
         source_id: SpatialNodeId,
@@ -611,7 +663,7 @@ class LogisticsFlowMixin:
 
         State = tuple[SpatialNodeId, frozenset[SpatialNodeId], frozenset[EntityId]]
         Edge = tuple[TransportServiceSupply, State]
-        ordered_edges = tuple(sorted(edges, key=lambda edge: edge.key))
+        adjacency = self._service_adjacency(edges)
         start_state: State = (
             source_id,
             frozenset(node_id for node_id in required_via if node_id == source_id),
@@ -621,9 +673,7 @@ class LogisticsFlowMixin:
 
         def outgoing(state: State):
             node_id, visited_via, used_allocations = state
-            for edge in ordered_edges:
-                if edge.source_id != node_id:
-                    continue
+            for edge in adjacency.get(node_id, ()):
                 next_via = visited_via
                 if edge.destination_id in required_via:
                     next_via = frozenset((*visited_via, edge.destination_id))
@@ -649,6 +699,22 @@ class LogisticsFlowMixin:
                 raise
             raise ValueError("routing hard constraint has no matching transport path") from exc
         return tuple(row[0] for row in selected)
+
+    def passenger_service_path(
+        self, origin: SpatialNodeId, destination: SpatialNodeId, day: int,
+        allowed_allocation_ids: frozenset[EntityId] | None = None,
+    ) -> tuple[TransportServiceSupply, ...]:
+        """Find a physical Service route through the existing Cargo path rules.
+
+        A hard choice filters eligible allocations rather than creating another
+        passenger router or Transport capacity source.
+        """
+        edges = tuple(edge for edge in self._service_edges(day)
+                      if edge.capacity_t_per_day > 1e-12
+                      and (allowed_allocation_ids is None or edge.allocation_id in allowed_allocation_ids)
+                      and edge.allocation_id not in self.transport.infrastructure_links
+                      and self.transport.service_vehicle(edge.allocation_id).passengers.seats > 0)
+        return self._automatic_service_path(origin, destination, edges, None)
 
     def supply_service_path(
         self,
@@ -818,6 +884,8 @@ class LogisticsFlowMixin:
     ) -> dict[tuple[SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
+            if allocation_id in self.transport.infrastructure_links:
+                continue  # Infrastructure inputs settle in each Cargo Execution Bundle.
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
@@ -845,6 +913,8 @@ class LogisticsFlowMixin:
     ) -> dict[tuple[EntityId, SpatialNodeId, DefinitionId], float]:
         totals: dict[tuple[EntityId, SpatialNodeId, DefinitionId], float] = {}
         for allocation_id, directional in sorted(used.items(), key=lambda row: str(row[0])):
+            if allocation_id in self.transport.infrastructure_links:
+                continue  # Infrastructure inputs settle in each Cargo Execution Bundle.
             snapshot = self.transport.transport_capacity_snapshot(
                 allocation_id, day=day, used=directional
             )
@@ -1140,6 +1210,13 @@ class LogisticsFlowMixin:
             ):
                 segment.dispatch_end_day += 1
                 segment.amount_t += amount_t
+                # Almost-equal dispatch slices share one transport segment,
+                # but their real settled amounts must not be replaced by the
+                # original rate. Preserve the aggregate mass and represent its
+                # mean frozen rate across the merged dispatch interval.
+                segment.dispatch_rate_t_per_day = (
+                    segment.amount_t / segment.dispatch_days
+                )
                 return segment.id
 
         self._cargo_flow_counter += 1
@@ -1195,14 +1272,28 @@ class LogisticsFlowMixin:
             arrived_days = max(0, arrived_end - segment.dispatch_start_day)
             if arrived_days <= 0:
                 continue
-            arrived_amount = min(
-                segment.amount_t, segment.dispatch_rate_t_per_day * arrived_days
+            # The final slice owns *all* remaining physical cargo, including
+            # round-off left by repeated equal-rate dispatch coalescing. Using
+            # rate * days for the last slice can leave a positive amount with
+            # a zero-day interval, which breaks snapshots/Save and conceals a
+            # physical quantity from Inventory admission. Never round it away.
+            fully_arrived = arrived_end >= segment.dispatch_end_day
+            arrived_amount = (
+                segment.amount_t if fully_arrived
+                else min(segment.amount_t, segment.dispatch_rate_t_per_day * arrived_days)
             )
             self._append_arrival_waiting(segment, arrived_amount, day)
             segment.dispatch_start_day += arrived_days
             segment.amount_t = max(0.0, segment.amount_t - arrived_amount)
-            if segment.amount_t <= 1e-9:
+            if fully_arrived or segment.amount_t <= 0.0:
                 del self.cargo_flows[segment_id]
+            else:
+                # The outstanding aggregate is again normalized to its
+                # remaining interval. No loss or phantom Resource is introduced
+                # by accumulated rounding in long-running merged flows.
+                segment.dispatch_rate_t_per_day = (
+                    segment.amount_t / segment.dispatch_days
+                )
 
     @staticmethod
     def _handoff_request_id(owner_id: EntityId, kind: str) -> EntityId:
@@ -1223,7 +1314,8 @@ class LogisticsFlowMixin:
             requirements: list = [ServiceCapacityRequirement("cargo_transfer", 1.0)]
             if not waiting.remaining_legs:
                 pool_key = self.inventory.storage_pool_for_resource(waiting.resource_id)
-                requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
+                if self.inventory.is_finite_storage_pool(pool_key):
+                    requirements.append(StockOrPoolAdmissionRequirement(pool_key, 1.0))
             rows.append(ExecutionRequirementBundle(
                 id=self._handoff_request_id(waiting.id, "arrival"),
                 owner_kind="cargo_handoff", owner_id=waiting.id, purpose="arrival_handling",
@@ -1254,7 +1346,11 @@ class LogisticsFlowMixin:
                     legs=waiting.remaining_legs, dispatch_day=day,
                 )
             else:
-                admission = self.inventory.admit(waiting.node_id, waiting.resource_id, amount)
+                admission = self.inventory.admit(
+                    waiting.node_id, waiting.resource_id, amount,
+                    source_owner=f"logistics_cargo:{waiting.requirement_id}",
+                    activity_id=f"cargo_arrival:{waiting.id}",
+                )
                 if abs(admission.admitted_t - amount) > 1e-7:
                     raise RuntimeError("boundary Cargo allocation exceeded Inventory Admission")
             waiting.amount_t = max(0.0, waiting.amount_t - amount)
@@ -1334,7 +1430,11 @@ class LogisticsFlowMixin:
         activities: list[DomainActivity] = []
         for row, amount in execution.executable_dispatches:
             requirement = row.requirement
-            self.inventory.consume_allocated(row.source_id, requirement.resource_id, amount)
+            self.inventory.consume_allocated(
+                row.source_id, requirement.resource_id, amount,
+                destination_owner=f"logistics_cargo:{requirement.id}",
+                activity_id=f"cargo_dispatch:{requirement.id}",
+            )
 
             activities.append(
                 DomainActivity(
@@ -1356,7 +1456,11 @@ class LogisticsFlowMixin:
         for allocation_id, location_id, resource_id, amount in (
             execution.operational_resource_use_by_allocation
         ):
-            self.inventory.consume_allocated(location_id, resource_id, amount)
+            self.inventory.consume_allocated(
+                location_id, resource_id, amount,
+                destination_owner=f"transport_allocation:{allocation_id}",
+                activity_id=f"transport_operation:{allocation_id}",
+            )
 
         for allocation_id, directional in execution.used_by_allocation:
             if (
@@ -1470,18 +1574,28 @@ class LogisticsFlowMixin:
             if not selected_path
             else min(float(edge.capacity_t_per_day) for edge in selected_path)
         )
-        arrivals = [
-            flow.first_arrival_day
-            for flow in self.cargo_flows.values()
+        committed_flows = (
+            flow for flow in self.cargo_flows.values()
             if flow.requirement_id == requirement.id
-        ]
+        )
+        arrivals = sorted(
+            (flow.first_final_arrival_day, flow.last_final_arrival_day)
+            for flow in committed_flows
+        )
+        # Arrival waiting has no reliable onward/admission date.  In particular,
+        # a trailing dispatched slice does not imply complete material readiness.
+        waiting_for_requirement = any(
+            waiting.requirement_id == requirement.id
+            for waiting in self.arrival_waiting.values()
+        )
         return SupplyPlanningOptions(
             tuple(candidates),
             tuple(operational),
             tuple(stocked),
             tuple(path_candidates),
             tuple(dict.fromkeys(blockers)),
-            min(arrivals) if arrivals else None,
+            min(first for first, _last in arrivals) if arrivals else None,
+            max(last for _first, last in arrivals) if arrivals and not waiting_for_requirement else None,
             selected_source_id=selected_source_id,
             selected_service_ids=tuple(edge.key for edge in selected_path),
             selected_movement_plan_ids=tuple(

@@ -6,7 +6,18 @@ class GetCatalog: pass
 @dataclass(frozen=True)
 class GetWorld: pass
 @dataclass(frozen=True)
-class GetSurfaceMap: body_id: str
+class GetDevelopmentWorldReference: pass
+@dataclass(frozen=True)
+class GetSurfaceMap:
+    body_id: str
+    # A map query never expands every staging/recipe/vehicle combination.
+    # Request the specific Cell(s) whose Founding candidates are needed.
+    founding_cell_ids: tuple[str, ...] = ()
+@dataclass(frozen=True)
+class GetNonSurfaceFoundingOptions:
+    body_id: str
+    # Without a selected Context, return its physical identity only.
+    founding_context_id: str = ""
 @dataclass(frozen=True)
 class GetOperationalNode: operational_node_id: str
 @dataclass(frozen=True)
@@ -43,6 +54,7 @@ class GetMovementPlans:
     movement_plan_id: str | None = None
     include_modes: bool = True
     vehicle_definition_id: str | None = None
+    touching_node_id: str | None = None
 @dataclass(frozen=True)
 class GetFleet:
     operational_node_id: str | None = None
@@ -54,6 +66,8 @@ class GetFleetRelocationPreview:
     source_id: str
     destination_id: str
     movement_hard_constraint: tuple[str, ...] | None = None
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 1
 @dataclass(frozen=True)
 class GetTransportAllocations: pass
 @dataclass(frozen=True)
@@ -72,7 +86,7 @@ class GetTransportAllocationPreview:
     movement_hard_constraint: tuple[str, ...] | None = None
     allocation_id: str | None = None
 @dataclass(frozen=True)
-class GetTargetStockOptions:
+class GetTargetStockContext:
     destination_id: str
     resource_id: str
 @dataclass(frozen=True)
@@ -80,14 +94,15 @@ class GetResearch: pass
 @dataclass(frozen=True)
 class GetScientificExplorations: pass
 @dataclass(frozen=True)
-class GetSurveys: provider_operational_node_id: str | None = None
+class GetSurveys:
+    provider_operational_node_id: str | None = None
+    body_id: str | None = None
+    include_target_rows: bool = True
 @dataclass(frozen=True)
 class GetSurveyCampaignIntentPreview:
     target_cell_ids: tuple[str, ...]
     resource_ids: tuple[str, ...]
     goal_knowledge_level: int
     campaign_id: str | None = None
-@dataclass(frozen=True)
-class GetContracts: pass
 @dataclass(frozen=True)
 class GetMarket: pass

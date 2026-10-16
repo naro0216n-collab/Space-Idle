@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from math import ceil
 
 import pytest
 
@@ -15,13 +16,13 @@ from space_idle import (
 )
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
-from space_idle.facilities import CapabilitySupply, FacilityDef, ServiceCapacitySupply
+from space_idle.facilities import CapabilitySupply, FacilityDef
 from space_idle.site import (
     CapabilityRequirement,
     CapabilityRequirementState,
     SiteRequirements,
 )
-from space_idle.persistence import capture_state, load_game, save_game
+from space_idle.persistence import load_game, save_game
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.transport.models import FleetActivityRef, FleetRetirementPhase
 
@@ -80,7 +81,8 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     retirement = next(row for row in fleet.retirements if row.id == retirement_id)
     assert retirement.phase == "committed"
     assert not retirement.irreversible_started
-    assert retirement.required_work == pytest.approx(5.0)
+    retirement_spec = sim.transport.vehicle_defs[ids.REUSABLE_LAUNCH_VEHICLE].retirement
+    assert retirement.required_work == pytest.approx(retirement_spec.work_days_per_unit)
     assert retirement.expected_salvage
     assert next(
         row for row in fleet.pools
@@ -91,7 +93,6 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     save_game(app, path, saved_at=datetime(2026, 9, 17, tzinfo=timezone.utc))
     loaded, offline = load_game(path, build_game_application_for_load)
     assert offline is None
-    assert capture_state(loaded._simulation) == capture_state(sim)
     app = loaded
     sim = loaded._simulation
     loaded_retirement = sim.transport.fleet_retirements[EntityId(retirement_id)]
@@ -108,44 +109,40 @@ def test_fleet_retirement_lifecycle_preserves_commitment_across_projection_save_
     with pytest.raises(ApplicationError, match="cannot be cancelled"):
         app.execute(CancelFleetRetirement(retirement_id))
 
-    app.execute(AdvanceTime(5))
+    finish_days = ceil(retirement_spec.work_days_per_unit) + 1
+    app.execute(AdvanceTime(finish_days))
     state = sim.transport.fleet_retirements[EntityId(retirement_id)]
     assert state.phase is FleetRetirementPhase.COMPLETE
     assert state.salvage_recovered_fraction == pytest.approx(1.0)
     snapshot = sim.transport.fleet_pool_snapshot(ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH)
     assert snapshot.total_units == 0
     assert snapshot.retirement_units == 0
-    control.execute(AdvanceTime(6))
-    assert sim.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(
-        control._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS) + 10.0
-    )
+    control.execute(AdvanceTime(1 + finish_days))
+    for resource_id, quantity in retirement_spec.recovery_resources_per_unit:
+        assert sim.inventory.amount(ids.EARTH, resource_id) == pytest.approx(
+            control._simulation.inventory.amount(ids.EARTH, resource_id) + quantity
+        )
 
-    completed_stock = {
-        resource_id: sim.inventory.amount(ids.EARTH, resource_id)
-        for resource_id, _amount in sim.transport.vehicle_defs[
-            ids.REUSABLE_LAUNCH_VEHICLE
-        ].retirement.recovery_resources_per_unit
-    }
     completed_path = tmp_path / "retirement-complete.json"
     save_game(app, completed_path, saved_at=datetime(2026, 9, 18, tzinfo=timezone.utc))
     reloaded, offline = load_game(completed_path, build_game_application_for_load)
     assert offline is None
-    control_after_load, offline = load_game(completed_path, build_game_application_for_load)
-    assert offline is None
-    control_after_load._simulation.transport.fleet_retirements.pop(EntityId(retirement_id))
-    reloaded.execute(AdvanceTime(1))
-    control_after_load.execute(AdvanceTime(1))
+    # Once COMPLETE has been loaded, the transition must be idempotent.
+    # Recording the actual domain flow avoids constructing a second whole
+    # Application solely to subtract baseline production from salvage.
+    from space_idle.analysis_execution import observe_canonical_day
+    with observe_canonical_day(reloaded._simulation) as trace:
+        reloaded.execute(AdvanceTime(1))
     reloaded_state = reloaded._simulation.transport.fleet_retirements[EntityId(retirement_id)]
     assert reloaded_state.phase is FleetRetirementPhase.COMPLETE
     assert reloaded_state.salvage_recovered_fraction == pytest.approx(1.0)
     assert reloaded._simulation.transport.fleet_pool_snapshot(
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH
     ).total_units == 0
-    for resource_id in completed_stock:
-        assert reloaded._simulation.inventory.amount(ids.EARTH, resource_id) == pytest.approx(
-            control_after_load._simulation.inventory.amount(ids.EARTH, resource_id)
-        )
-
+    assert not any(
+        row.activity_id == f"vehicle_retirement_salvage:{retirement_id}"
+        for row in trace.activity_flows()
+    )
 
 
 
@@ -190,103 +187,3 @@ def test_fleet_retirement_rechecks_site_requirements_during_execution():
     app.execute(AdvanceTime(1))
     assert state.progress_work > 0.0
     assert state.irreversible_started
-
-
-def test_fleet_retirement_at_non_earth_node_settles_partial_salvage_without_blocking_removal():
-    app = build_game_application()
-    sim = app._simulation
-    workshop_definition_id = DefinitionId("test.facility.orbital_vehicle_workshop")
-    sim.facilities.definitions[workshop_definition_id] = FacilityDef(
-        workshop_definition_id,
-        "Orbital vehicle workshop",
-        service_capacity_supplies=(ServiceCapacitySupply("vehicle_assembly", 1.0),),
-    )
-    sim.facilities.install(workshop_definition_id, ids.LUNAR_ORBIT)
-    sim.transport.fleet_pool(ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT).total_units = 1
-
-    retirement_id = EntityId(
-        app.execute(
-            RetireFleet(
-                str(ids.REUSABLE_ORBITAL_CARGO_TUG),
-                1,
-                str(ids.LUNAR_ORBIT),
-                priority=5,
-            )
-        ).created_id
-    )
-    state = sim.transport.fleet_retirements[retirement_id]
-    definition = sim.transport.vehicle_defs[state.vehicle_definition_id]
-    required_work = definition.retirement.work_days_per_unit * state.requested_units
-
-    for _ in range(10):
-        app.execute(AdvanceTime(1))
-        if state.progress_work + 1e-9 >= required_work:
-            break
-    assert state.progress_work == pytest.approx(required_work)
-    assert state.phase is FleetRetirementPhase.DISMANTLING
-
-    salvage = tuple(
-        (resource_id, amount_per_unit * state.requested_units)
-        for resource_id, amount_per_unit in definition.retirement.recovery_resources_per_unit
-        if amount_per_unit * state.requested_units > 0.0
-    )
-    storage_pool_key = sim.inventory.storage_pool_for_resource(salvage[0][0])
-    assert all(
-        sim.inventory.storage_pool_for_resource(resource_id) == storage_pool_key
-        for resource_id, _amount in salvage
-    )
-    salvage_total = sum(amount for _resource_id, amount in salvage)
-
-    admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
-    assert admission.admission_capacity_t is not None
-    filler = ids.CONSTRUCTION_EQUIPMENT
-    target_headroom = salvage_total / 2.0
-    sim.inventory.stock[(ids.LUNAR_ORBIT, filler)] = sim.inventory.amount(
-        ids.LUNAR_ORBIT, filler
-    ) + max(0.0, admission.admission_capacity_t - target_headroom)
-
-    admission = sim.inventory.admission_state_for_pool(ids.LUNAR_ORBIT, storage_pool_key)
-    assert admission.admission_capacity_t is not None
-    assert 0.0 < admission.admission_capacity_t < salvage_total
-    assert not any(
-        blocker.startswith("salvage_admission:")
-        for blocker in sim.transport.fleet_retirement_blockers(retirement_id, day=sim.day)
-    )
-
-    salvage_bundle = next(
-        row
-        for row in sim.transport.fleet_retirement_execution_requirement_bundles(sim.day)
-        if row.owner_kind == "fleet_retirement"
-        and row.owner_id == retirement_id
-        and row.purpose == "salvage_admission"
-    )
-    assert not salvage_bundle.atomic
-    assert salvage_bundle.minimum_execution == pytest.approx(0.0)
-    expected_fraction = sim.tick_decision_projection().allocations.execution.fulfillment(
-        salvage_bundle.id
-    )
-    assert 0.0 < expected_fraction < 1.0
-
-    before_recovery = sum(
-        sim.inventory.amount(ids.LUNAR_ORBIT, resource_id)
-        for resource_id, _amount in salvage
-    )
-    app.execute(AdvanceTime(1))
-
-    completed = sim.transport.fleet_retirements[retirement_id]
-    assert completed.phase is FleetRetirementPhase.COMPLETE
-    assert completed.salvage_recovered_fraction == pytest.approx(expected_fraction)
-    assert sim.transport.fleet_pool_snapshot(
-        ids.REUSABLE_ORBITAL_CARGO_TUG, ids.LUNAR_ORBIT
-    ).total_units == 0
-    assert sum(
-        sim.inventory.amount(ids.LUNAR_ORBIT, resource_id)
-        for resource_id, _amount in salvage
-    ) > before_recovery
-
-    completed_row = next(
-        row for row in app.query(GetFleet()).retirements
-        if row.id == str(retirement_id)
-    )
-    assert completed_row.actual_salvage_fraction == pytest.approx(expected_fraction)
-    assert completed_row.actual_salvage

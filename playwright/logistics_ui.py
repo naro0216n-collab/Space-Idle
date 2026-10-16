@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from e2e_support import isolated_browser_context, monitored_page, wait_for_server
+from e2e_support import choose_priority, isolated_browser_context, monitored_page, wait_for_server
 
-import os
 from pathlib import Path
 from threading import Thread
 import tempfile
 
-from space_idle import AdvanceTime, PlanBuild, build_game_application
+from space_idle import AdvanceTime, CreateTransportAllocation, GetBuildOptions, GetCargoFlows, GetFleet, GetLogistics, GetOperationalNode, GetWorld, PlanBuild, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import ApiServerConfig, GameRuntime, create_server
 from space_idle.content import base_ids as ids
@@ -20,39 +19,56 @@ PROPELLANT = str(ids.PROPELLANT)
 OWNED_LAUNCH_VEHICLE = str(ids.REUSABLE_LAUNCH_VEHICLE)
 
 
-def _choose_priority(root, holder_selector: str, level: int | str) -> None:
-    value = str(level)
-    holder = root.locator(holder_selector)
-    group = holder.locator("xpath=ancestor::*[contains(@class,'priority-segment')][1]")
-    group.locator(f'[data-priority-choice="{value}"]').click()
-    assert holder.input_value() == value
+def _wait_for_allocation_preview(page, *, forward: float, reverse: float, editing: bool) -> None:
+    """Wait for a complete result for the entered capacity targets, not a stale row.
 
-
-def _build_logistics_test_application():
-    app = build_game_application()
-    app._simulation.technology.completed.update(  # noqa: SLF001 - deterministic E2E fixture setup
-        {ids.TECH_ORBITAL_OPERATIONS, ids.TECH_CISLUNAR_LOGISTICS}
+    A new input starts a debounced HTTP request. The inspector clears its rows
+    while that request is in flight, so waiting for *any* ``dt`` is racy.
+    """
+    page.wait_for_function(
+        r"""([forward, reverse, editing]) => {
+          const root = document.querySelector('#allocationPreview');
+          const rows = [...(root?.querySelectorAll('.kv-grid dt') || [])];
+          const field = label => rows.find(row => row.textContent.trim() === label)
+            ?.nextElementSibling?.textContent?.trim();
+          const target = field('輸送能力目標');
+          const values = target?.match(/^\s*([\d,.]+)\s*\/\s*([\d,.]+)\s*t\/日\s*$/);
+          if (!values || Number(values[1].replaceAll(',', '')) !== forward
+              || Number(values[2].replaceAll(',', '')) !== reverse) return false;
+          const labels = ['必要Fleet', '利用可能Fleet', '不足', '成立可能輸送能力',
+            '選択経路', '運行周期 / 所要時間'];
+          if (editing) labels.push('現在のCapacity target', '現在の利用可能Capacity',
+            '現在の使用Capacity', '現在の余力');
+          return labels.every(label => Boolean(field(label)));
+        }""",
+        arg=[forward, reverse, editing],
+        timeout=10000,
     )
-    return app
 
 
-def run(*, browser=None) -> None:
-    browser_name = os.environ.get("SPACE_IDLE_BROWSER", "chromium").strip().lower()
-    if browser_name not in {"chromium", "webkit"}:
-        raise ValueError(f"unsupported browser: {browser_name}")
-
+def run(browser) -> None:
     temp_dir = tempfile.TemporaryDirectory(prefix="space-idle-logistics-ui-")
     runtime = GameRuntime(
-        new_game_factory=_build_logistics_test_application,
+        new_game_factory=build_game_application,
         load_factory=build_game_application_for_load,
         save_dir=Path(temp_dir.name) / "saves",
         offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0),
     )
     runtime.set_time_control(paused=True)
+    # Start only a construction project the shipped new game can actually plan.
+    # Granting technology in private Simulation State used to make an otherwise
+    # blocked project look like a working logistics scenario.
+    candidate = next(
+        (row for row in runtime.query(GetBuildOptions(LEO)).data.items
+         if row.can_plan and not row.blockers
+         and any(resource.shortage_t > 0 for resource in row.resources)),
+        None,
+    )
+    assert candidate is not None, "new game must expose an actionable remote construction supply demand"
     project_id = runtime.execute(
         PlanBuild(
             LEO,
-            str(ids.ORBITAL_LOGISTICS_NODE),
+            candidate.facility_definition_id,
             priority=5,
             procurement_policy="immediate",
         )
@@ -61,16 +77,19 @@ def run(*, browser=None) -> None:
     # Establish a real project-owned Supply Requirement so browser controls can
     # exercise sparse routing intent against an Application-projected decision row.
     runtime.execute(AdvanceTime(1))
+    requirements = runtime.query(GetLogistics()).data.requirements
+    assert any(row.owner_id == project_id and row.remaining_t > 0 for row in requirements), (
+        "a real construction project must generate Supply Requirements before the browser checks routing"
+    )
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
     origin = f"http://127.0.0.1:{int(server.server_address[1])}"
-    thread = Thread(target=server.serve_forever, daemon=True)
+    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
 
     try:
         wait_for_server(origin)
         with isolated_browser_context(
-            browser_name,
-            browser=browser,
+            browser,
             viewport={"width": 1194, "height": 834},
             has_touch=True,
             locale="ja-JP",
@@ -82,9 +101,7 @@ def run(*, browser=None) -> None:
 
             fleet_pool = page.locator('#vehicleTable [data-fleet-pool-row]').first
             fleet_pool.wait_for(timeout=10000)
-            fleet_text = fleet_pool.inner_text()
-            for usage_label in ("輸送", "研究", "地表調査", "科学探査", "拠点設立", "移動中", "回収中", "退役中"):
-                assert usage_label in fleet_text, f"Fleet pool must expose {usage_label} commitment state"
+            assert fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").count() > 0
 
             constraint_button = page.locator(
                 f'#requirementTable [data-requirement-constraint][data-owner-id="{project_id}"]'
@@ -111,7 +128,56 @@ def run(*, browser=None) -> None:
             decision_item.click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "補給需要" in page.locator("#networkDecisionContext").inner_text()
-            assert page.locator("#networkSvg .network-line.is-context-related").count() > 0
+            requirement_resource = constraint_button.get_attribute('data-resource-id')
+            assert requirement_resource
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            # A resource chosen at a location must resolve the same scoped
+            # Demand/Allocation context in Transport, without a second search.
+            page.locator('.primary-nav-button[data-section="location"]').click()
+            page.locator(f'[data-location-id="{LEO}"]').click()
+            page.locator('[data-section-tab="location"][data-tab="inventory"]').click()
+            resource_card = page.locator(
+                f'#operationsTabContent [data-inspect="resource"][data-id="{requirement_resource}"]'
+            ).first
+            resource_card.wait_for(timeout=10000)
+            resource_card.click()
+            resource_link = page.locator('#inspectorContent [data-issue-area="logistics"][data-issue-subject-kind="dependency_resource"]')
+            resource_link.wait_for(timeout=10000)
+            resource_link.click()
+            assert page.locator('#logisticsView').is_visible()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            assert "関連する補給需要" in page.locator('#networkDecisionContext').inner_text()
+            assert page.locator(f'#requirementTable [data-requirement-id="{requirement_id}"]').get_attribute('class').find('is-context-target') >= 0
+            scoped_inspector = page.locator('#movementPlanInspectorContent')
+            assert '現地Resource' in scoped_inspector.inner_text()
+            assert '補給と輸送中貨物' in scoped_inspector.inner_text()
+            scoped_inspector.locator(f'[data-open-location="{LEO}"]').click()
+            assert page.locator('#operationsView').is_visible()
+            expected_resource_name = next(
+                row.display_name for row in runtime.query(GetOperationalNode(LEO)).data.inventory
+                if row.resource_id == requirement_resource
+            )
+            assert page.locator('#inspectorTitle').inner_text() == expected_resource_name
+            # Project-owned supply uses the same decision identity even when
+            # reached from the construction Inspector rather than Transport.
+            page.locator('[data-section-tab="location"][data-tab="construction"]').click()
+            page.locator(f'#operationsTabContent [data-inspect="project"][data-id="{project_id}"]').click()
+            project_requirement = page.locator(
+                f'#inspectorContent [data-issue-area="logistics"][data-issue-subject-id="{requirement_id}"]'
+            )
+            project_requirement.wait_for(timeout=10000)
+            project_requirement.click()
+            assert page.locator(f'#requirementTable [data-requirement-id="{requirement_id}"]').get_attribute('class').find('is-context-target') >= 0
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            requirement_details = page.locator('#movementPlanInspectorContent').inner_text()
+            assert all(label in requirement_details for label in ('未充足', '現地供給', '輸送系内'))
+            # A supply shortfall is not evidence of an operating transport
+            # connection. The spatial canvas must remain available even when
+            # there is no allocated service for this requirement.
+            assert page.locator("#systemMapStage [data-system-node-id]").count() > 0
+            assert page.locator("#systemMapRelations [data-system-allocation-id]").count() == len(
+                runtime.query(GetLogistics()).data.allocations
+            )
             # Create and later clear a project-scoped Routing Constraint through the UI.
             requirement_row.locator("[data-requirement-constraint]").click()
             page.locator("#routingConstraintDialog").wait_for(state="visible", timeout=10000)
@@ -148,14 +214,13 @@ def run(*, browser=None) -> None:
                 assert label in movement_text, f"Movement candidate must expose {label} before hard-constraint selection"
             movement_control = movement_card.locator("[data-allocation-movement]")
             assert movement_control.get_attribute("aria-pressed") == "false"
-            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).wait_for(timeout=10000)
-            page.locator('#allocationForwardPresets [data-allocation-capacity-preset="forward"]').nth(1).click()
-            assert float(page.locator("#allocationForward").input_value()) > 0
-            assert page.locator("#allocationForward").evaluate("input => input.checkValidity()"), (
-                "Application-derived capacity presets must remain valid precision inputs"
+            page.locator('#allocationCapacityContext').get_by_text('1機あたりの公称能力', exact=False).wait_for(timeout=10000)
+            page.locator('#allocationForward').fill('1')
+            assert float(page.locator('#allocationForward').input_value()) > 0
+            assert page.locator('#allocationForward').evaluate('input => input.checkValidity()'), (
+                'Direction-specific capacity target must accept a physical numeric value'
             )
-            page.locator("#allocationPreview").get_by_text("必要Fleet", exact=True).wait_for(timeout=10000)
-            assert "機" in page.locator("#allocationPreview").inner_text()
+            _wait_for_allocation_preview(page, forward=1, reverse=0, editing=False)
             page.locator('[data-allocation-priority="5"]').click()
             page.get_by_role("button", name="輸送設定を作成").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -164,6 +229,43 @@ def run(*, browser=None) -> None:
             allocation_row.wait_for(timeout=10000)
             allocation_id = allocation_row.get_attribute("data-allocation-row")
             assert allocation_id
+
+            # Verify real Application-owned Fleet quantities in the browser.
+            # Text labels alone could remain present while showing wrong numbers.
+            pools = runtime.query(GetFleet()).data.pools
+            pool = next(pool for pool in pools if pool.transport_units > 0)
+            fleet_pool = page.locator(
+                f'#vehicleTable [data-fleet-pool-row][data-fleet-node-id="{pool.operational_node_id}"]'
+                f'[data-fleet-vehicle-id="{pool.vehicle_definition_id}"]'
+            )
+            fleet_pool.wait_for(timeout=10000)
+            assert fleet_pool.locator(".decision-card-title strong").inner_text() == pool.display_name
+            expected_usage = {
+                key.removesuffix("_units"): value
+                for key, value in vars(pool).items()
+                if key.endswith("_units") and key not in {"total_units", "free_units"}
+                and (key != "other_committed_units" or value > 0)
+            }
+            rendered_usage = {
+                metric.get_attribute("data-fleet-usage"): int(metric.locator("strong").inner_text())
+                for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
+            }
+            assert rendered_usage == expected_usage
+            fleet_pool.locator('[data-fleet-map-node]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == ''
+            assert page.locator(f'#systemMapStage [data-system-node-id="{pool.operational_node_id}"]').get_attribute('aria-pressed') == 'true'
+            expected_node_name = runtime.query(
+                GetOperationalNode(pool.operational_node_id)
+            ).data.display_name
+            assert page.locator('#movementPlanInspectorTitle').inner_text() == expected_node_name
+            # An explicit Resource choice is carried between entrances; the
+            # earlier Fleet decision intentionally cleared the stale filter.
+            page.locator('#systemMapResourceFilter').select_option(requirement_resource)
+            assert all(
+                metric.locator("small").inner_text().strip()
+                for metric in fleet_pool.locator(".fleet-commitment-grid [data-fleet-usage]").all()
+            )
+
             allocation_text = allocation_row.inner_text()
             for label in ("目標", "必要機体", "利用可能", "使用中", "余力", "周期"):
                 assert label in allocation_text, f"Transport Allocation card must expose {label}"
@@ -171,13 +273,41 @@ def run(*, browser=None) -> None:
             allocation_row.locator("[data-allocation-network]").click()
             page.locator("#networkDecisionContext").wait_for(state="visible", timeout=10000)
             assert "輸送能力設定" in page.locator("#networkDecisionContext").inner_text()
-            context_line = page.locator("#networkSvg .network-line.is-context-related").first
-            context_line.wait_for(state="attached", timeout=10000)
-            assert context_line.evaluate("el => parseFloat(getComputedStyle(el).strokeWidth) >= 5 && Number(getComputedStyle(el).opacity) === 1")
-            assert page.locator("#networkNodes .network-node.is-context-related").count() >= 2
+            allocation_map_entry = page.locator(
+                f'#systemMapRelations [data-system-allocation-id="{allocation_id}"]'
+            )
+            allocation_map_entry.wait_for(state="visible", timeout=10000)
+            assert allocation_map_entry.get_attribute("aria-pressed") == "true"
+            # Comparing several allocations must not lose the keyboard target
+            # merely because a new authoritative projection has been rendered.
+            allocation_map_entry.focus()
+            with page.expect_response(
+                lambda response: response.request.method == 'GET' and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as allocation_keyboard_refresh:
+                allocation_map_entry.press("Enter")
+            assert allocation_keyboard_refresh.value.ok
+            page.wait_for_function("() => !window.SpaceIdleApp.state.syncInFlight", timeout=10000)
+            assert allocation_map_entry.evaluate("node => document.activeElement === node"), (
+                "shared Map relation controls must retain focus across redraw"
+            )
+            assert page.locator("#systemMapStage .system-map-edge.is-context-related").count() > 0
+            allocation_details = page.locator("#movementPlanInspectorContent").inner_text()
+            assert all(label in allocation_details for label in (
+                '目標', 'Nominal', '利用可能', '使用中', '余力', '必要Fleet', '運用Resource',
+            ))
+            # Shared Resource selection is UI context; it must survive a round trip
+            # through the overview entrance without creating another spatial map.
+            page.locator('.primary-nav-button[data-section="global"]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
+            assert page.locator('#systemMapResourceFilter').input_value() == requirement_resource
+            assert page.locator('#systemMapRelations [data-system-allocation-id]').count() > 0
 
+            allocation_row = page.locator(f'[data-allocation-row="{allocation_id}"]')
             allocation_row.locator('[data-allocation-edit]').click()
             page.locator("#allocationDialog").wait_for(state="visible", timeout=10000)
+            _wait_for_allocation_preview(page, forward=1, reverse=0, editing=True)
             page.locator('[data-allocation-priority="4"]').click()
             page.get_by_role("button", name="設定を更新").click()
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
@@ -190,7 +320,7 @@ def run(*, browser=None) -> None:
             page.locator("#allocationDialog").wait_for(state="hidden", timeout=10000)
 
             allocation_toggle = allocation_row.locator('[data-allocation-toggle]')
-            assert allocation_toggle.inner_text() == "停止"
+            assert allocation_toggle.is_enabled()
             allocation_toggle.click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '1'",
@@ -198,13 +328,43 @@ def run(*, browser=None) -> None:
                 timeout=10000,
             )
             allocation_toggle = page.locator(f'[data-allocation-row="{allocation_id}"] [data-allocation-toggle]')
-            assert allocation_toggle.inner_text() == "再開"
+            assert allocation_toggle.is_enabled()
             allocation_toggle.click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-allocation-row=\"${id}\"] [data-allocation-toggle]`)?.dataset.paused === '0'",
                 arg=allocation_id,
                 timeout=10000,
             )
+
+            # Make the previously configured player-owned Transport Allocation
+            # execute one canonical day through the public Application Command.
+            # A conditional cargo assertion was vacuous here: the clock is paused
+            # and no cargo exists until a day actually advances.
+            runtime.execute(AdvanceTime(1))
+            cargo = runtime.query(GetCargoFlows()).data.items
+            assert any(flow.owner_id == project_id and flow.status == 'in_transit' for flow in cargo), (
+                'the real project and UI-created Transport Allocation must dispatch cargo'
+            )
+            # The Logistics canvas receives authoritative changes through its
+            # normal periodic synchronization; its contextual refresh button is
+            # not visible here, so a forced click would bypass real navigation.
+            with page.expect_response(
+                lambda response: response.request.method == 'GET'
+                and '/api/v1/ui-state' in response.url,
+                timeout=10000,
+            ) as cargo_refresh:
+                pass
+            assert cargo_refresh.value.ok
+            page.wait_for_function('() => !window.SpaceIdleApp.state.syncInFlight', timeout=10000)
+            cargo_card = page.locator('#cargoTable .cargo-flow-card').first
+            cargo_card.wait_for(state='visible', timeout=10000)
+            assert '最終目的地' in cargo_card.inner_text()
+            assert '次のhandoff' in cargo_card.inner_text()
+            cargo_card.locator('[data-cargo-inspect]').click()
+            cargo_inspector = page.locator('#movementPlanInspectorContent').inner_text()
+            assert all(label in cargo_inspector for label in (
+                '輸送中のResource', '最終目的地', '次の引継先', '輸送量',
+            ))
 
             # Target Stock is a persistent Supply Planning intent with Activity Priority.
             page.get_by_role("button", name="追加備蓄を設定").click()
@@ -213,15 +373,15 @@ def run(*, browser=None) -> None:
             page.locator("#targetStockResource").select_option(PROPELLANT)
             page.wait_for_function(
                 """() => ['current','inbound','demand'].every(
-                  key => document.querySelector(`#targetStockOptionSummary [data-stock-summary="${key}"]`)
+                  key => document.querySelector(`#targetStockContextSummary [data-stock-summary="${key}"]`)
                 )""",
                 timeout=10000,
             )
-            summary = page.locator("#targetStockOptionSummary")
+            summary = page.locator("#targetStockContextSummary")
             assert summary.locator('[data-stock-summary="current"]').count() == 1
             assert summary.locator('[data-stock-summary="inbound"]').count() == 1
             assert summary.locator('[data-stock-summary="demand"]').count() == 1
-            page.locator("#targetStockQuantityRange").fill("1")
+            page.locator("#targetStockQuantity").fill("1")
             page.locator('[data-target-stock-priority="4"]').click()
             page.get_by_role("button", name="追加備蓄を保存").click()
             page.locator("#targetStockDialog").wait_for(state="hidden", timeout=10000)
@@ -263,7 +423,7 @@ def run(*, browser=None) -> None:
             market_order_id = market_order.get_attribute('data-market-order-row')
             assert market_order_id
             market_order.locator('[data-market-target]').fill('2')
-            _choose_priority(market_order, '[data-market-priority]', 4)
+            choose_priority(market_order, '[data-market-priority]', 4)
             market_order.locator('[data-market-save]').click()
             page.wait_for_function(
                 "id => document.querySelector(`[data-market-order-row=\"${id}\"] [data-market-target]`)?.value === '2'",
@@ -279,12 +439,64 @@ def run(*, browser=None) -> None:
                 timeout=10000,
             )
 
+            # The Map relation is a visual grouping, not a unique allocation.
+            # Two independent settings on the same OD must remain individually
+            # inspectable, even when their capacity targets differ sharply.
+            first_parallel_id = runtime.execute(CreateTransportAllocation(
+                OWNED_LAUNCH_VEHICLE, EARTH, LEO,
+                target_forward_t_per_day=0.25, target_reverse_t_per_day=0.0,
+            )).data.created_id
+            second_parallel_id = runtime.execute(CreateTransportAllocation(
+                OWNED_LAUNCH_VEHICLE, EARTH, LEO,
+                target_forward_t_per_day=0.0, target_reverse_t_per_day=0.0,
+            )).data.created_id
+            assert first_parallel_id and second_parallel_id and first_parallel_id != second_parallel_id
+            # Allocation target semantics are covered by Application/Domain tests.
+            # E2E checks that both independently owned rows can be selected in the Map.
+            page.reload(wait_until='load')
+            page.locator('#connectionState.is-ok').wait_for(timeout=10000)
+            page.locator('.primary-nav-button[data-section="logistics"]').click()
+            relation = page.locator('#systemMapRelations .system-map-relation').filter(
+                has=page.locator(f'[data-system-allocation-id="{first_parallel_id}"]')
+            )
+            relation.wait_for(state='visible', timeout=10000)
+            assert relation.locator('[data-system-allocation-id]').count() == 2
+            assert relation.locator('[data-system-pair]').is_visible()
+            first_button = relation.locator(f'[data-system-allocation-id="{first_parallel_id}"]')
+            second_button = relation.locator(f'[data-system-allocation-id="{second_parallel_id}"]')
+            first_button.click()
+            assert first_button.get_attribute('aria-pressed') == 'true'
+            second_button.click()
+            assert first_button.get_attribute('aria-pressed') == 'false'
+            assert second_button.get_attribute('aria-pressed') == 'true'
+            relation.locator('[data-system-pair]').click()
+            assert first_button.get_attribute('aria-pressed') == 'true'
+            assert second_button.get_attribute('aria-pressed') == 'true'
+
+            # A remote node selected on the shared Map is an inspection scope,
+            # not a command to change the location running the simulation.
+            execution_id = page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId')
+            remote = next(
+                (node for node in runtime.query(GetWorld()).data.operational_nodes
+                 if node.id != execution_id
+                 and runtime.query(GetOperationalNode(node.id)).data.inventory),
+                None,
+            )
+            assert remote is not None, 'an independently queryable remote Node is required'
+            remote_id = remote.id
+            page.locator(f'#systemMapNodeIndex [data-system-node-jump="{remote_id}"]').click()
+            page.wait_for_function(
+                'id => window.SpaceIdleApp.state.inspectedNode?.id === id', arg=remote_id
+            )
+            assert page.evaluate('() => window.SpaceIdleApp.state.operationalNodeId') == execution_id
+            remote_resource = runtime.query(GetOperationalNode(remote_id)).data.inventory[0].resource_id
+            assert remote_resource, 'Application must expose a remote Resource for map inspection'
+            page.locator('#systemMapResourceFilter').select_option(remote_resource)
+            assert '現在在庫' in page.locator('#movementPlanInspectorContent').inner_text()
+            assert '現地生産' in page.locator('#movementPlanInspectorContent').inner_text()
+
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
         temp_dir.cleanup()
-
-
-if __name__ == "__main__":
-    run()

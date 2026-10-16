@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from math import ceil
 
-from .application_comparison import project_comparison_axes
 from .application_constraints import constraints_from_pairs, limiting_factors_from_codes
-from .app_contracts.ui_reports import ComparisonValueRow
 from .application_views import (
     BuildResourceOption,
-    BuildOptionRow,
+    BuildOptionRow, BuildProcessOptionRow, BuildResearchCapacityRow,
+    BuildSurveyModeRow, BuildSurveyProviderRow,
     BuildOptionsView,
     FacilityUpgradeOption, FacilityUpgradeDifferenceRow,
     ProjectResourceRow,
@@ -15,10 +14,12 @@ from .application_views import (
     ProjectRow,
 )
 from .construction.models import (
+    CONSTRUCTION_SERVICE_TYPE,
     FacilityUpgradeTarget, FacilityDecommissionTarget, NewFacilityTarget,
-    ProjectStatus, SurfaceCellDevelopmentTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 from .facilities import FacilityPlacementScope
+from .survey import SurveyProviderSourceKind
 from .disposal import project_salvage_recovery
 from .shared import EntityId, SpatialNodeId
 from .supply import SupplyRequirement
@@ -48,9 +49,9 @@ class ProjectProjectorMixin:
                 continue
             if requirement.remaining_t > 1e-9:
                 return None
-            if requirement.earliest_confirmed_arrival_day is None:
+            if requirement.latest_in_transit_arrival_day is None:
                 return None
-            readiness_days.append(requirement.earliest_confirmed_arrival_day)
+            readiness_days.append(requirement.latest_in_transit_arrival_day)
         return max(readiness_days, default=day)
     def _construction_resource_options(
         self, recipe, location_id: SpatialNodeId, execution_allocation
@@ -150,6 +151,7 @@ class ProjectProjectorMixin:
             BuildResourceOption(
                 row["resource_id"],
                 float(row["required_t"]),
+                shortage_t=float(row["shortage_t"]),
                 available_t=float(row["available_t"]),
                 projected_source_id=row["source_id"],
                 projected_arrival_day=row["arrival_day"],
@@ -173,10 +175,9 @@ class ProjectProjectorMixin:
         definition = sim.facilities.definitions[facility.definition_id]
 
         if sim.extraction is not None:
-            extraction_spec = sim.extraction.specs.get(facility.definition_id)
-            if extraction_spec is not None:
-                current = extraction_spec.nominal_capacity_t_per_day * facility.level
-                target = extraction_spec.nominal_capacity_t_per_day * target_level
+            if sim.extraction.compatible_methods(facility.definition_id):
+                current = sim.extraction.nominal_capacity(facility)
+                target = definition.extraction_capacity_t_per_day * target_level
                 if abs(target - current) > 1e-9:
                     rows.append(FacilityUpgradeDifferenceRow(
                         "capacity", "抽出公称Capacity", current, target, "t/日"
@@ -194,15 +195,85 @@ class ProjectProjectorMixin:
                 if abs(target - current) > 1e-9:
                     rows.append(FacilityUpgradeDifferenceRow(kind, label, current, target, unit))
 
+        if provider is not None and provider.crew_person_days_per_research_point > 0:
+            crew_rate = provider.crew_person_days_per_research_point
+            rows.append(FacilityUpgradeDifferenceRow(
+                "demand", "研究RP生成時Crew最大需要",
+                provider.level_spec(facility.level).generation_points_per_day * crew_rate,
+                provider.level_spec(target_level).generation_points_per_day * crew_rate,
+                "人日/日",
+            ))
+
+        # Installed unit additions alter both nominal output and physical demand.
+        per_unit = definition.process_throughput_per_day
+        if sim.industry.compatible_processes(facility.definition_id) and per_unit > 0:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "capacity", "Industry Process実行量", per_unit * facility.level,
+                per_unit * target_level, "実行/日"))
+        if definition.housing_capacity:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "capacity", "居住Capacity", definition.housing_at_level(facility.level),
+                definition.housing_at_level(target_level), "人"))
+        if definition.life_support is not None:
+            life = definition.life_support
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", "Life Support供給", life.capacity_at_level(facility.level),
+                life.capacity_at_level(target_level), "人日/日"))
+        power_spec = sim.power.specs.get(facility.definition_id)
+        if power_spec is not None:
+            context = sim.facilities.facility_environment_context(facility)
+            environment_known = sim.surface_knowledge.publishes_environment(context)
+            generation, load = sim.power.nominal_for_definition_at_context(facility.definition_id, context)
+            for label, amount, unit, site_dependent in (
+                ("発電Capacity", generation, "MW", True),
+                ("Power需要", load, "MW", True),
+                ("停止中Power需要", power_spec.standby_load_mw, "MW", False),
+            ):
+                if amount or (site_dependent and not environment_known):
+                    rows.append(FacilityUpgradeDifferenceRow(
+                        "capacity" if "Capacity" in label else "demand", label,
+                        (amount * facility.level if environment_known or not site_dependent else "未測定"),
+                        (amount * target_level if environment_known or not site_dependent else "未測定"), unit))
+        for supply in definition.service_capacity_supplies:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", f"Service供給 · {supply.service_type}",
+                supply.nominal_rate * facility.level, supply.nominal_rate * target_level,
+                "単位/日"))
+        construction_provider = sim.projects.construction_providers.get(facility.definition_id)
+        if construction_provider is not None:
+            rows.append(FacilityUpgradeDifferenceRow(
+                "service", "Construction Service供給",
+                construction_provider.work_per_day * facility.level,
+                construction_provider.work_per_day * target_level, "work/日"))
+        storage_provider = sim.storage.providers.get(facility.definition_id)
+        if storage_provider is not None:
+            for pool, capacity in sorted(storage_provider.capacity_t_by_pool.items()):
+                rows.append(FacilityUpgradeDifferenceRow(
+                    "capacity", f"保管Capacity · {pool}", capacity * facility.level,
+                    capacity * target_level, "t"))
+        if sim.survey is not None:
+            for survey_provider in sim.survey.providers.values():
+                if survey_provider.source_kind.value != "facility":
+                    continue
+                if not sim.survey.source_is_compatible(survey_provider, facility.definition_id):
+                    continue
+                rate = survey_provider.capacity_units_per_source_per_day
+                rows.append(FacilityUpgradeDifferenceRow(
+                    "service", f"Survey Service · {survey_provider.id}",
+                    rate * facility.level, rate * target_level, "観測単位/日"))
+
         maintenance_fraction = definition.maintenance_fraction_per_year
         if maintenance_fraction > 1e-12:
             current_maintenance = sim.facilities.maintenance_requirements_per_day(facility.id)
             target_investment = dict(facility.invested_resources)
             for requirement in recipe.resources:
                 target_investment[requirement.resource_id] = target_investment.get(requirement.resource_id, 0.0) + requirement.amount_t
-            for resource_id in sorted(set(current_maintenance) | set(target_investment), key=str):
+            target_maintenance = sim.facilities.maintenance_requirements_for_investment(
+                facility.definition_id, target_investment
+            )
+            for resource_id in sorted(set(current_maintenance) | set(target_maintenance), key=str):
                 current = current_maintenance.get(resource_id, 0.0)
-                target = target_investment.get(resource_id, 0.0) * maintenance_fraction / 365.0
+                target = target_maintenance.get(resource_id, 0.0)
                 if abs(target - current) > 1e-12:
                     rows.append(FacilityUpgradeDifferenceRow(
                         "maintenance", f"維持需要 · {self._resource_name(resource_id)}", current, target, "t/日"
@@ -213,8 +284,6 @@ class ProjectProjectorMixin:
             unchanged.append("Capability構成")
         if sim.industry.compatible_processes(facility.definition_id):
             unchanged.append("Process選択肢")
-        if definition.service_capacity_supplies:
-            unchanged.append("固定Service供給")
         return tuple(rows), tuple(unchanged)
 
     def _facility_upgrade_option(self, facility, power=None) -> FacilityUpgradeOption | None:
@@ -236,13 +305,20 @@ class ProjectProjectorMixin:
         site_failures = sim.projects.upgrade_site_failures(
             facility.id, recipe.target_level, sim.day, snapshot
         )
+        context_id = facility.site_cell_id or facility.operational_node_id
+        definition = sim.facilities.definitions[facility.definition_id]
+        public_site_failures, _ = sim.surface_knowledge.public_site_blockers(
+            context_id,
+            tuple((failure.code, failure.detail) for failure in site_failures),
+            definition.installation_requirements, recipe.site_requirements,
+        )
         blockers = tuple(
             ("technology", str(technology))
             for technology in sorted(
                 recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
                 key=str,
             )
-        ) + tuple((failure.code, failure.detail) for failure in site_failures)
+        ) + public_site_failures
         for failure in plan_failures:
             row = (failure.code, failure.detail)
             if row not in blockers:
@@ -371,6 +447,28 @@ class ProjectProjectorMixin:
                 external_requirements,
                 decision.allocations.transport,
             )
+            # A queued or executing Site Project may be physically unsuitable.
+            # Its real blockers govern simulation; the player's read model must
+            # not reveal an unobserved Cell through an in-progress Project.
+            if isinstance(project.target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
+                blockers, _ = sim.surface_knowledge.public_site_blockers(
+                    project.target.cell_id, blockers, recipe.site_requirements,
+                )
+            elif isinstance(project.target, NewFacilityTarget):
+                definition = sim.facilities.definitions[project.target.facility_def_id]
+                blockers, _ = sim.surface_knowledge.public_site_blockers(
+                    project.site_cell_id or project.operational_node_id, blockers,
+                    definition.installation_requirements, recipe.site_requirements,
+                )
+            elif isinstance(project.target, FacilityUpgradeTarget):
+                existing = sim.facilities.facilities.get(project.target.facility_id)
+                if existing is not None:
+                    definition = sim.facilities.definitions[existing.definition_id]
+                    blockers, _ = sim.surface_knowledge.public_site_blockers(
+                        existing.site_cell_id or existing.operational_node_id,
+                        blockers, definition.installation_requirements,
+                        recipe.site_requirements,
+                    )
             resources = []
             for requirement in recipe.resources:
                 state = project.resources[requirement.resource_id]
@@ -410,7 +508,8 @@ class ProjectProjectorMixin:
                 definition = sim.facilities.definitions[target.facility_definition_id]
                 display_name = definition.display_name
             else:
-                target_kind = "surface_cell_development"
+                target_kind = ("surface_cell_engineering" if isinstance(target, SurfaceCellEngineeringTarget)
+                               else "surface_cell_development")
                 target_cell_id = str(target.cell_id)
                 target_location_id = str(project.operational_node_id)
                 display_name = recipe.display_name
@@ -519,7 +618,7 @@ class ProjectProjectorMixin:
                 knowledge_rows = []
                 if sim.survey is not None:
                     for requirement in sim.founding.knowledge_requirements_for_target(target_spec, recipe):
-                        current = sim.survey.knowledge_level(
+                        current = sim.surface_knowledge.knowledge_level(
                             requirement.target_cell_id, requirement.subject_resource_id
                         )
                         knowledge_rows.append(ProjectKnowledgeRequirementRow(
@@ -529,6 +628,20 @@ class ProjectProjectorMixin:
                             current_level=int(current),
                             met=current >= requirement.minimum_level,
                         ))
+                if target_cell is not None:
+                    unpublished = sim.surface_knowledge.unpublished_site_condition_codes(
+                        target_cell, recipe.target_requirements,
+                    )
+                    unknown_facility = (
+                        not sim.surface_knowledge.publishes_environment(target_cell)
+                        and any(sim.facilities.definitions[deployment.facility_def_id].installation_requirements.environment
+                                for deployment in recipe.deployed_facilities)
+                    )
+                    blockers = tuple(row for row in blockers
+                        if row[0] not in {f"target:{code}" for code in unpublished}
+                        and not (unknown_facility and row[0] == "facility_environment"))
+                    if unpublished or unknown_facility:
+                        blockers += (("site_knowledge_unverified", "現地環境条件は未測定・再測定待ち"),)
                 site_blockers = tuple(
                     row for row in blockers
                     if row[0].startswith("staging:") or row[0].startswith("target:")
@@ -589,6 +702,119 @@ class ProjectProjectorMixin:
                 ))
         return tuple(rows)
 
+    def _prospective_facility_effects(self, recipe, context_id) -> dict[str, object]:
+        """Nominal Level 1 effects of a new Facility at its actual physical site.
+
+        Construction and Surface Cell placement share the same Domain sources.
+        These are *not* executable flow forecasts; resource/service allocation
+        still determines actual production and upkeep after construction.
+        """
+        sim = self._simulation
+        definition = sim.facilities.definitions[recipe.facility_def_id]
+        compatible = sim.industry.compatible_processes(recipe.facility_def_id)
+        process_options = tuple(
+            BuildProcessOptionRow(
+                process_id=str(process.id),
+                display_name=process.display_name,
+                input_rates_per_day=tuple(
+                    (str(resource), rate * definition.process_throughput_per_day)
+                    for resource, rate in sorted(process.inputs_per_day.items(), key=lambda pair: str(pair[0]))
+                ),
+                output_rates_per_day=tuple(
+                    (str(resource), rate * definition.process_throughput_per_day)
+                    for resource, rate in sorted(process.outputs_per_day.items(), key=lambda pair: str(pair[0]))
+                ),
+                missing_technology_ids=tuple(
+                    str(technology) for technology in sim.industry.missing_process_technologies(process)
+                ),
+            )
+            for process in compatible
+        )
+        invested = {}
+        for resource in recipe.resources:
+            invested[resource.resource_id] = invested.get(resource.resource_id, 0.0) + resource.amount_t
+        upkeep = sim.facilities.maintenance_requirements_for_investment(
+            recipe.facility_def_id, invested
+        )
+        provider = (
+            None if sim.research is None else
+            sim.research.facility_provider_for_definition(recipe.facility_def_id)
+        )
+        research_capacity = None
+        if provider is not None:
+            level = provider.level_spec(1)
+            research_capacity = BuildResearchCapacityRow(
+                provider_tier=provider.tier,
+                generation_points_per_day=level.generation_points_per_day,
+                storage_capacity_points=level.storage_capacity_points,
+                execution_work_per_day=level.research_execution_per_day,
+                crew_person_days_per_research_point=provider.crew_person_days_per_research_point,
+            )
+        survey_providers = ()
+        if sim.survey is not None:
+            survey_providers = tuple(
+                BuildSurveyProviderRow(
+                    provider_id=str(provider.id),
+                    capacity_units_per_source_per_day=provider.capacity_units_per_source_per_day,
+                    observation_modes=tuple(
+                        BuildSurveyModeRow(
+                            display_name=mode.display_name or mode.id,
+                            survey_rate=mode.survey_rate,
+                            max_knowledge_level=int(mode.max_knowledge_level),
+                        )
+                        for mode in provider.observation_modes
+                        if sim.survey.source_supports_mode(provider, mode, recipe.facility_def_id)
+                    ),
+                )
+                for provider in sorted(sim.survey.providers.values(), key=lambda row: str(row.id))
+                if provider.source_kind is SurveyProviderSourceKind.FACILITY
+                and sim.survey.source_is_compatible(provider, recipe.facility_def_id)
+            )
+        nominal_generation, nominal_load = sim.power.nominal_for_definition_at_context(
+            recipe.facility_def_id, context_id,
+        )
+        services = [
+            (supply.service_type, supply.nominal_rate)
+            for supply in definition.service_capacity_supplies
+        ]
+        construction_provider = sim.projects.construction_providers.get(recipe.facility_def_id)
+        if construction_provider is not None:
+            services.append((CONSTRUCTION_SERVICE_TYPE, construction_provider.work_per_day))
+        return dict(
+            capabilities=tuple(sorted(supply.id for supply in definition.capability_supplies)),
+            service_capacity_supplies=tuple(sorted(services)),
+            process_options=process_options,
+            power_nominal_generation_mw=nominal_generation,
+            power_nominal_load_mw=nominal_load,
+            power_nominal_standby_load_mw=(
+                sim.power.specs[recipe.facility_def_id].standby_load_mw
+                if recipe.facility_def_id in sim.power.specs else 0.0
+            ),
+            process_nominal_throughput_per_day=(
+                definition.process_throughput_per_day if compatible else None
+            ),
+            extraction_nominal_capacity_t_per_day=(
+                definition.extraction_capacity_t_per_day
+                if definition.extraction_capacity_t_per_day > 0 else None
+            ),
+            maintenance_rates_per_day=tuple(
+                (str(resource_id), rate)
+                for resource_id, rate in sorted(upkeep.items(), key=lambda item: str(item[0]))
+            ),
+            housing_capacity=definition.housing_capacity,
+            life_support_person_days_per_day=(
+                definition.life_support.person_days_per_day
+                if definition.life_support is not None else 0.0
+            ),
+            life_support_net_resources_per_person_day=(
+                tuple((str(resource), rate)
+                      for resource, rate in definition.life_support.net_resources)
+                if definition.life_support is not None else ()
+            ),
+            research_capacity=research_capacity,
+            survey_providers=survey_providers,
+        )
+
     def _build_options_view(self, location_id: SpatialNodeId) -> BuildOptionsView:
         sim = self._simulation
         decision = self._tick_decision_projection()
@@ -604,48 +830,19 @@ class ProjectProjectorMixin:
             site_failures = sim.projects.site_failures(
                 recipe.facility_def_id, location_id, sim.day, powers[location_id]
             )
+            public_site_failures, site_unknown = sim.surface_knowledge.public_site_blockers(
+                location_id, tuple((failure.code, failure.detail) for failure in site_failures),
+                definition.installation_requirements, recipe.site_requirements,
+            )
             blockers = tuple(
                 ("technology", str(technology))
                 for technology in sorted(
                     recipe.prerequisite_technologies - sim.projects.unlocked_technologies,
                     key=str,
                 )
-            ) + tuple((failure.code, failure.detail) for failure in site_failures)
-            process_options = tuple(
-                (str(process.id), process.display_name)
-                for process in sorted(sim.industry.processes.values(), key=lambda row: str(row.id))
-                if process.facility_def_id == recipe.facility_def_id
-            )
+            ) + public_site_failures
             build_resources, material_readiness_day = self._construction_resource_options(
                 recipe, location_id, decision.allocations.transport
-            )
-            capabilities = tuple(sorted(supply.id for supply in definition.capability_supplies))
-            service_capacity_supplies = tuple(
-                sorted((supply.service_type, supply.nominal_rate) for supply in definition.service_capacity_supplies)
-            )
-            comparison_values = (
-                ComparisonValueRow(axis_key="construction_work", number_value=recipe.construction_work),
-                ComparisonValueRow(
-                    axis_key="resource_total_t",
-                    number_value=sum(resource.required_t for resource in build_resources),
-                ),
-                ComparisonValueRow(
-                    axis_key="resource_type_count", number_value=float(len(build_resources))
-                ),
-                ComparisonValueRow(
-                    axis_key="capability_count", number_value=float(len(capabilities))
-                ),
-                ComparisonValueRow(
-                    axis_key="service_type_count",
-                    number_value=float(len(service_capacity_supplies)),
-                ),
-                ComparisonValueRow(
-                    axis_key="process_count", number_value=float(len(process_options))
-                ),
-                ComparisonValueRow(
-                    axis_key="self_deploying",
-                    text_value="自己展開" if recipe.self_deploying else "通常施工",
-                ),
             )
             rows.append(BuildOptionRow(
                 facility_definition_id=str(recipe.facility_def_id),
@@ -660,29 +857,15 @@ class ProjectProjectorMixin:
                     related_entity_id=str(recipe.facility_def_id),
                 ),
                 can_plan=not plan_failures,
-                capabilities=capabilities,
-                service_capacity_supplies=service_capacity_supplies,
-                process_options=process_options,
                 placement_scope=definition.placement_scope.value,
                 projected_material_readiness_day=material_readiness_day,
-                comparison_key=str(recipe.facility_def_id),
-                comparison_values=comparison_values,
+                site_knowledge_unverified=site_unknown,
+                **self._surface_facility_public_effects(
+                    recipe, location_id, sim.surface_knowledge.publishes_environment(location_id)
+                ),
             ))
-        comparison_axes = project_comparison_axes(
-            (
-                ("construction_work", "必要工数", "number", None),
-                ("resource_total_t", "必要資源量", "number", "t"),
-                ("resource_type_count", "必要資源種", "integer", "種"),
-                ("capability_count", "追加能力", "integer", "種"),
-                ("service_type_count", "追加サービス", "integer", "種"),
-                ("process_count", "利用可能工程", "integer", "種"),
-                ("self_deploying", "施工方式", "text", None),
-            ),
-            (row.comparison_values for row in rows),
-        )
         return BuildOptionsView(
             str(location_id),
             tuple(sim.projects.procurement_policy_options()),
             tuple(rows),
-            comparison_axes,
         )

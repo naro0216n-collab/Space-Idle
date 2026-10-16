@@ -8,6 +8,7 @@ from .application_commands import (
     ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity,
     SetResearchPrototypeSite, SetSurveyPriority, StartResearch, StartSurvey, UpdateSurvey, StartScientificExploration, SetScientificExplorationPriority, PauseScientificExploration, ResumeScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, AssignExplorationFleet, UnassignExplorationFleet,
 )
+from .app_contracts.common import ApplicationError
 from .exploration_models import KnowledgeLevel, SurveyProviderConstraint
 from .shared import DefinitionId, EntityId, SurfaceCellId
 
@@ -23,10 +24,19 @@ class ProgressionCommandHandlerMixin:
                 raise RuntimeError("research is not configured")
             rid = DefinitionId(command.research_id)
             if isinstance(command, StartResearch):
+                blockers = sim.research.start_blockers(rid, day=sim.day)
+                if blockers:
+                    raise ApplicationError(*blockers[0])
                 sim.research.start(rid, day=sim.day, priority=command.priority)
             elif isinstance(command, PauseResearch):
+                blockers = sim.research.pause_blockers(rid)
+                if blockers:
+                    raise ApplicationError(*blockers[0])
                 sim.research.pause(rid)
             elif isinstance(command, ResumeResearch):
+                blockers = sim.research.resume_blockers(rid)
+                if blockers:
+                    raise ApplicationError(*blockers[0])
                 sim.research.resume(rid)
             elif isinstance(command, SetResearchPrototypeSite):
                 sim.research.set_prototype_site(
@@ -130,6 +140,7 @@ class ProgressionCommandHandlerMixin:
                     provider_constraint = SurveyProviderConstraint(
                         DefinitionId(command.provider_constraint.provider_definition_id),
                         self._require_operational_node(command.provider_constraint.operational_node_id),
+                        None if command.provider_constraint.source_definition_id is None else DefinitionId(command.provider_constraint.source_definition_id),
                     )
                 if isinstance(command, StartSurvey):
                     campaign_id = sim.survey.start(

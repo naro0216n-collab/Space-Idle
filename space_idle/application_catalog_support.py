@@ -63,3 +63,28 @@ def operation_capability_definition(capability: object) -> OperationCapabilityDe
                 continue
             parameters.append((field.name, definition_value(getattr(capability, field.name))))
     return OperationCapabilityDefinitionRow(str(getattr(capability, "operation_type")), tuple(parameters))
+
+
+def execution_requirement_definition(requirement):
+    """Project every public field of an owner-defined execution requirement.
+
+    New requirement fields must not silently vanish from GUI or tuning evidence.
+    """
+    if not is_dataclass(requirement):
+        raise TypeError(f"unprojected execution requirement: {type(requirement).__name__}")
+    return (("kind", type(requirement).__name__),) + tuple(
+        (field.name, definition_value(value))
+        for field in fields(requirement)
+        if (value := getattr(requirement, field.name)) is not None
+    )
+
+
+def research_provider_definition(provider):
+    from .app_contracts.catalog_views import ResearchProviderDefinitionRow
+    return ResearchProviderDefinitionRow(
+        str(provider.id), provider.tier,
+        provider.levels[0].generation_points_per_day,
+        provider.levels[0].research_execution_per_day,
+        provider.levels[0].storage_capacity_points,
+        provider.crew_person_days_per_research_point,
+    )

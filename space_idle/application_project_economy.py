@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_constraints import constraints_from_codes, limiting_factors_from_codes
 from .application_views import (
-    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketView, TradeOrderRow,
+    BuyCommitmentRow, MarketInterfaceRow, MarketOfferRow, MarketOrderCandidateRow, MarketView, TradeOrderRow,
 )
 from .market import TradeDirection
 
@@ -28,6 +28,30 @@ class MarketProjectorMixin:
                     market.available_provider_demand_t(provider.id, resource_id),
                 ) for resource_id in resources),
             ))
+
+        # Every selectable (interface, direction, resource) combination retains its
+        # Domain-derived acceptance result, including unsupported offers.
+        selectable_resources = sorted({rid for provider in market.provider_defs.values()
+                                      for rid, _ in (*provider.buy_offers_musd_per_t,
+                                                     *provider.sell_offers_musd_per_t)}, key=str)
+        order_candidates = []
+        for interface in sorted(market.interfaces.values(), key=lambda row: str(row.id)):
+            provider = market.provider_defs[interface.provider_id]
+            for resource_id in selectable_resources:
+                for direction in (TradeDirection.BUY, TradeDirection.SELL):
+                    blockers = market.order_offer_blockers(
+                        direction=direction, resource_id=resource_id, market_interface_id=interface.id,
+                    )
+                    price = (provider.buy_price(resource_id) if direction is TradeDirection.BUY
+                             else provider.sell_price(resource_id))
+                    order_candidates.append(MarketOrderCandidateRow(
+                        str(interface.id), direction.value, str(resource_id), price,
+                        not blockers,
+                        constraints_from_codes(
+                            blockers, affected_action="create_market_order",
+                            related_entity_kind="market_interface", related_entity_id=str(interface.id),
+                        ),
+                    ))
 
         buy_plan = market.plan_buy_allocations()
         buy_limiting = {row.order_id: row.limiting_factors for row in buy_plan.rows}
@@ -93,5 +117,6 @@ class MarketProjectorMixin:
             for row in sorted(market.buy_commitments.values(), key=lambda value: str(value.id))
         )
         return MarketView(
-            market.funds.balance, market.available_funds_musd, tuple(interfaces), tuple(orders), commitments
+            market.funds.balance, market.available_funds_musd, tuple(interfaces), tuple(orders),
+            commitments, tuple(order_candidates),
         )

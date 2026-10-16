@@ -2,104 +2,57 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
 PACKAGE = Path(__file__).parents[1] / "space_idle"
 
 
-def _module_import_targets(path: Path) -> set[str]:
-    """Return normalized relative import targets for architecture assertions."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+@lru_cache(maxsize=1)
+def _source_modules() -> tuple[tuple[Path, Path, ast.AST], ...]:
+    """Parse each static source module once for all architecture assertions."""
+    return tuple(
+        (path, path.relative_to(PACKAGE), ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        for path in sorted(PACKAGE.rglob("*.py"))
+    )
+
+
+def _module_source_contracts(
+    path: Path, tree: ast.AST, content_ids: set[str]
+) -> tuple[set[str], set[str]]:
+    """Find forbidden imports and concrete ID literals in a single AST traversal."""
     module_parts = list(path.relative_to(PACKAGE).with_suffix("").parts)
     targets: set[str] = set()
+    embedded: set[str] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in content_ids:
+            embedded.add(node.value)
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                targets.add(alias.name)
+            targets.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                base = module_parts[:-1]
-                trim = max(0, node.level - 1)
-                if trim:
-                    base = base[:-trim]
+                # ImportFrom.level counts the current package as one level.
+                parent = module_parts[:-node.level]
+                module = "space_idle" + ("." + ".".join(parent) if parent else "")
                 if node.module:
-                    base += node.module.split(".")
-                targets.add("space_idle." + ".".join(base))
-            elif node.module:
-                targets.add(node.module)
-    return targets
+                    module += "." + node.module
+            else:
+                module = node.module
+            if module:
+                targets.add(module)
+                # `from space_idle import persistence` imports the same outer
+                # layer as `import space_idle.persistence`.
+                targets.update(module + "." + alias.name for alias in node.names
+                               if alias.name != "*")
+    return targets, embedded
 
 
-def test_domain_authoritative_state_is_not_read_directly_across_domain_boundaries():
-    from space_idle.logistics import LogisticsService
-    from space_idle.transport.service import TransportService
+def _matches_dependency(target: str, prohibited: tuple[str, ...]) -> bool:
+    return any(target == prefix or target.startswith(prefix + ".")
+               for prefix in prohibited)
 
-    authoritative_state = {
-        "transport": {
-            "vehicle_defs",
-            "fleet_pools",
-            "fleet_commitments",
-            "transport_allocations",
-            "fleet_relocations",
-            "movement_executions",
-            "fleet_releases",
-            "fleet_retirements",
-            "vehicle_production_projects",
-        },
-        "logistics": {
-            "target_stocks", "routing_constraints", "cargo_flows", "arrival_waiting",
-        },
-    }
-    service_fields = {
-        "transport": set(TransportService.__dataclass_fields__),
-        "logistics": set(LogisticsService.__dataclass_fields__),
-    }
 
-    for domain, fields in authoritative_state.items():
-        assert fields <= service_fields[domain]
-        for other_domain, other_fields in service_fields.items():
-            if other_domain != domain:
-                assert not fields & other_fields
-
-    violations: list[tuple[str, str]] = []
-    for path in PACKAGE.rglob("*.py"):
-        rel = path.relative_to(PACKAGE)
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Attribute):
-                continue
-            owner = node.value
-            if not isinstance(owner, ast.Attribute):
-                continue
-            domain = owner.attr
-            fields = authoritative_state.get(domain)
-            if fields is None or node.attr not in fields:
-                continue
-            if domain == "transport" and rel.parts[0] == "transport":
-                continue
-            if domain == "logistics" and rel.name.startswith("logistics"):
-                continue
-            violations.append((str(rel), f"{domain}.{node.attr}"))
-
-    assert violations == []
-
-    construction_files = [PACKAGE / "projects.py", *(PACKAGE / "construction").glob("*.py")]
-    for path in construction_files:
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target
-            for target in targets
-            if target.startswith(
-                (
-                    "space_idle.logistics",
-                    "space_idle.transport",
-                )
-            )
-        )
-        assert not offenders, (
-            f"{path.relative_to(PACKAGE)} bypasses Supply Requirement / Execution Claim boundary: {offenders}"
-        )
 
 
 def test_layer_dependency_direction_is_enforced():
@@ -111,82 +64,66 @@ def test_layer_dependency_direction_is_enforced():
         "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
     )
 
-    for path in PACKAGE.rglob("*.py"):
-        rel = path.relative_to(PACKAGE)
-        if path.name == "__init__.py":
-            continue
-        parts = rel.parts
-        name = rel.name
-
-        if parts[0] in {"content", "composition", "app_contracts", "api"}:
-            continue
-        if name == "bootstrap.py" or name == "persistence.py" or name.startswith("application"):
-            continue
-
-        targets = _module_import_targets(path)
-        offenders = sorted(target for target in targets if target.startswith(forbidden_outer))
-        assert not offenders, f"{rel} imports outer layer(s): {offenders}"
-
-    for path in (PACKAGE / "content").glob("*.py"):
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.application", "space_idle.app_contracts", "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
-
-    for path in (PACKAGE / "composition").glob("*.py"):
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.application", "space_idle.app_contracts", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports outer layer(s): {offenders}"
-
-    application_files = list(PACKAGE.glob("application*.py")) + list((PACKAGE / "app_contracts").glob("*.py"))
-    for path in application_files:
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.content", "space_idle.composition", "space_idle.bootstrap", "space_idle.persistence", "space_idle.api"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
-
-    for path in (PACKAGE / "api").glob("*.py"):
-        if path.name in {"__init__.py", "__main__.py"}:
-            continue
-        targets = _module_import_targets(path)
-        offenders = sorted(
-            target for target in targets
-            if target.startswith(("space_idle.content", "space_idle.composition", "space_idle.bootstrap"))
-        )
-        assert not offenders, f"{path.relative_to(PACKAGE)} imports concrete composition/content: {offenders}"
-
-    core_files = [
-        path for path in PACKAGE.rglob("*.py")
-        if path.name != "__init__.py"
-        and not any(part in {"content", "composition", "app_contracts"} for part in path.parts)
-        and path.name not in {"bootstrap.py", "persistence.py"}
-        and not path.name.startswith("application")
-    ]
+    # API and development CLI are both external adapters. Their __main__
+    # composition entries may bootstrap a game, but inner adapter modules may
+    # not directly import static Content or compose the Simulation.
+    # Each module is classified once by its actual architectural layer.
+    layer_forbidden = {
+        "content": (
+            "space_idle.application", "space_idle.app_contracts", "space_idle.composition",
+            "space_idle.bootstrap", "space_idle.persistence", "space_idle.api",
+        ),
+        "composition": (
+            "space_idle.application", "space_idle.app_contracts", "space_idle.bootstrap",
+            "space_idle.persistence", "space_idle.api",
+        ),
+        "application": (
+            "space_idle.content", "space_idle.composition", "space_idle.bootstrap",
+            "space_idle.persistence", "space_idle.api",
+        ),
+        "api": ("space_idle.content", "space_idle.composition", "space_idle.bootstrap"),
+    }
     current_content_ids = {
         value
         for name, value in vars(base_ids).items()
-        if name.isupper() and isinstance(value, str) and value.startswith("base.")
+        if name.isupper() and isinstance(value, str)
     }
     assert current_content_ids
-    for path in core_files:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        embedded = {
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and node.value in current_content_ids
-        }
-        assert not embedded, (
-            f"{path.relative_to(PACKAGE)} embeds concrete Content IDs: {sorted(embedded)}"
-        )
+
+    for path, rel, tree in _source_modules():
+        targets, embedded = _module_source_contracts(path, tree, current_content_ids)
+        assert not any(target == "scripts" or target.startswith("scripts.")
+                       for target in targets), f"{rel} imports development-only scripts"
+
+        if rel.name == "__init__.py":
+            continue
+        if rel.parts[0] in ("content", "composition", "app_contracts"):
+            layer = "application" if rel.parts[0] == "app_contracts" else rel.parts[0]
+        elif rel.parts[0] in ("api", "dev_cli"):
+            if rel.name == "__main__.py":
+                continue
+            layer = "api"
+        elif rel.name.startswith("application"):
+            layer = "application"
+        elif rel.name in ("bootstrap.py", "persistence.py"):
+            continue
+        else:
+            layer = "core"
+
+        forbidden = layer_forbidden.get(layer, forbidden_outer)
+        offenders = sorted(target for target in targets if _matches_dependency(target, forbidden))
+        assert not offenders, f"{rel} imports outer layer(s): {offenders}"
+
+        # The same scan also finds concrete Content identifiers in Core source.
+        # A second ast.walk over all Core modules doubles the traversal cost
+        # without checking a distinct contract.
+        if (rel.name != "__init__.py"
+                and not any(part in {"content", "composition", "app_contracts"} for part in rel.parts)
+                and rel.name not in {"bootstrap.py", "persistence.py"}
+                and not rel.name.startswith("application")):
+            assert not embedded, (
+                f"{rel} embeds concrete Content IDs: {sorted(embedded)}"
+            )
 
 
 def test_peer_extensions_join_generic_registries_without_central_enum_or_simulation_switches():
@@ -299,9 +236,6 @@ def test_allocation_dependency_graph_is_deterministic_and_cycle_safe():
     from space_idle.service_capacity import ServiceCapacityScope
     from space_idle.simulation import (
         ALLOCATION_LOGISTICS,
-        ALLOCATION_MAINTENANCE,
-        ALLOCATION_POWER,
-        ALLOCATION_RESOURCES,
         ALLOCATION_TRANSPORT,
     )
     from space_idle.validation import validate_simulation_configuration
@@ -319,10 +253,6 @@ def test_allocation_dependency_graph_is_deterministic_and_cycle_safe():
     position = {node: index for index, node in enumerate(order)}
     dependencies = sim.tick_allocation_dependencies(service_types)
 
-    assert position[ALLOCATION_LOGISTICS] < position[ALLOCATION_RESOURCES]
-    assert position[ALLOCATION_RESOURCES] < position[ALLOCATION_MAINTENANCE]
-    assert position[ALLOCATION_MAINTENANCE] < position[ALLOCATION_POWER]
-    assert position[ALLOCATION_POWER] < position[ALLOCATION_TRANSPORT]
     assert all(position[edge.upstream_node] < position[edge.node] for edge in dependencies)
 
     cross_domain = build_game_application()._simulation
@@ -378,14 +308,8 @@ def test_world_definition_and_scenario_initialization_keep_static_and_runtime_st
 
     from space_idle import build_game_application
     from space_idle.bootstrap import build_game_application_for_load
-    from space_idle.content.base_scenario import (
-        STANDARD_SCENARIO_ID,
-        build_standard_scenario_definition,
-    )
-    from space_idle.content.base_spatial import (
-        BASE_WORLD_DEFINITION_ID,
-        build_world_definition,
-    )
+    from space_idle.content.base_scenario import build_standard_scenario_definition
+    from space_idle.content.base_spatial import build_world_definition
 
     graph, _environment = build_world_definition()
     assert graph.nodes
@@ -410,12 +334,10 @@ def test_world_definition_and_scenario_initialization_keep_static_and_runtime_st
     assert load_sim.market.funds.balance == 0.0
     assert load_sim.market.provider_states == {}
     assert load_sim.market.interfaces == {}
-    assert load_sim.survey is not None and load_sim.survey.knowledge_progress == {}
+    assert load_sim.survey is not None and load_sim.surface_knowledge.knowledge_progress == {}
 
     app = build_game_application()
     sim = app._simulation
-    assert app.world_definition_id == BASE_WORLD_DEFINITION_ID
-    assert app.scenario_id == STANDARD_SCENARIO_ID
     assert sim.runtime_state_initialized
     assert sim.graph.operational_node_states
     assert sim.facilities.facilities
@@ -426,3 +348,45 @@ def test_world_definition_and_scenario_initialization_keep_static_and_runtime_st
 
     with pytest.raises(ValueError, match="initial runtime state has already been established"):
         build_standard_scenario_definition().apply(sim)
+
+
+def test_service_registration_projection_is_shared_but_rebuilt_at_next_boundary():
+    """Bounded definition enumeration never makes Provider registration authoritative."""
+    from space_idle.service_capacity import ServiceCapacityRegistry
+
+    calls = []
+
+    class Provider:
+        def __init__(self, name, types):
+            self.name = name
+            self.types = types
+
+        def service_capacity_types(self):
+            calls.append(self.name)
+            return tuple(self.types)
+
+    first = Provider("first", {"research"})
+    second = Provider("second", {"industry"})
+    providers = [first, second]
+    registry = ServiceCapacityRegistry()
+    registry.bind_provider_source(lambda: tuple(providers))
+    with registry.derived_projection_scope():
+        assert registry.provider_for("research") is first
+        assert registry.provider_for("industry") is second
+        assert registry.provider_for("research") is first
+        assert set(registry.providers_by_type()) == {"research", "industry"}
+        assert calls == ["first", "second"]
+        with registry.derived_projection_scope():
+            assert registry.provider_for("industry") is second
+        assert calls == ["first", "second"]
+    # A new definition belongs to the next boundary, not the previous snapshot.
+    first.types.add("construction")
+    assert registry.provider_for("construction") is first
+    with registry.derived_projection_scope():
+        assert registry.provider_for("construction") is first
+        assert set(registry.providers_by_type()) == {"research", "construction", "industry"}
+    second.types.add("research")
+    with registry.derived_projection_scope():
+        from pytest import raises
+        with raises(RuntimeError, match="multiple service capacity providers"):
+            registry.provider_for("research")

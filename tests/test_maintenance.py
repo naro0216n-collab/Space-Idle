@@ -154,3 +154,32 @@ def test_current_tick_maintenance_fulfillment_controls_power_and_service_capacit
     assert row.maintenance_satisfaction == pytest.approx(0.0)
     assert service.nominal_rate > 0.0
     assert service.enabled_rate == pytest.approx(0.0)
+
+
+def test_maintenance_constrained_service_never_exceeds_actual_resource_settlement():
+    """Provider service is bounded by settled maintenance under competition."""
+    from space_idle import CreateTransportAllocation, GetTransportAllocationOptions, SetTargetStock
+
+    app = build_game_application()
+    sim = app._simulation
+    option = next(
+        row for row in app.query(GetTransportAllocationOptions(str(ids.EARTH), str(ids.LEO))).options
+        if row.vehicle_definition_id == str(ids.REUSABLE_LAUNCH_VEHICLE)
+    )
+    app.execute(CreateTransportAllocation(
+        str(ids.REUSABLE_LAUNCH_VEHICLE), str(ids.EARTH), str(ids.LEO),
+        target_forward_t_per_day=option.nominal_capacity.forward_t_per_day,
+        target_reverse_t_per_day=0.0,
+    ))
+    app.execute(SetTargetStock(str(ids.LEO), str(ids.PROPELLANT), 0.9))
+    decision = sim.tick_decision_projection()
+    settled = sim.maintenance.satisfaction_projection(decision.allocations.execution)
+    for power in decision.allocations.power_by_location.values():
+        for facility_id, supplied_factor in power.maintenance_factor_by_facility.items():
+            assert 0.0 <= supplied_factor <= settled[facility_id] + 1e-8
+    for facility in app.query(GetOperationalNode(str(ids.LEO))).facilities:
+        facility_id = EntityId(facility.id)
+        assert facility.maintenance_satisfaction == pytest.approx(settled[facility_id])
+        supplied_factor = decision.allocations.power_by_location[ids.LEO].maintenance_factor_by_facility[facility_id]
+        if supplied_factor < settled[facility_id] - 1e-7:
+            assert any(blocker.code == "provider_feedback" for blocker in facility.operating_blockers)

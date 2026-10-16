@@ -9,19 +9,23 @@ from space_idle import (
     GetOperationalNode,
     GetProjects,
     PlanFacilityUpgrade,
+    PlanBuild,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
+from space_idle.catalog import ResourceDef
 from space_idle.app_contracts.construction import CancelBuild, PlanFacilityDecommission
 from space_idle.application_commands import ApplicationError
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle.content import base_ids as ids
 from space_idle.construction import (
     BuildResourceRequirement,
+    ConstructionRecipe,
     ConstructionProviderSpec,
     FacilityDecommissionRecipe,
     FacilityUpgradeRecipe,
 )
-from space_idle.facilities import FacilityDef, FacilityLifecycle
+from space_idle.facilities import CapabilitySupply, FacilityDef, FacilityLifecycle
 from space_idle.facility_lifecycle import FacilityLifecycleBlocker
 from space_idle.persistence import load_game, save_game
 from space_idle.research import (
@@ -33,6 +37,7 @@ from space_idle.research import (
 )
 from space_idle.shared import DefinitionId, EntityId
 from space_idle.storage import StorageProviderSpec
+from space_idle.power import PowerSpec, FixedGeneration
 
 DECOMMISSION_TARGET = DefinitionId("test.facility.decommission_target")
 STORAGE_DECOMMISSION_TARGET = DefinitionId("test.facility.storage_decommission_target")
@@ -42,11 +47,26 @@ SALVAGE_RESOURCE = DefinitionId("test.resource.decommission_salvage")
 def _build_decommission_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    # The fixture tests decommission ownership and settlement, not the
+    # Scenario's current construction throughput. Provision enough genuine
+    # reusable Construction Equipment for deterministic short work phases.
+    if not for_load:
+        equipment = ids.CONSTRUCTION_EQUIPMENT
+        sim.inventory.add(ids.EARTH, equipment, max(
+            0.0, 120.0 - sim.inventory.amount(ids.EARTH, equipment)
+        ))
+    app._catalog.resources[SALVAGE_RESOURCE] = ResourceDef(SALVAGE_RESOURCE, "Recoverable components")
     sim.facilities.definitions[DECOMMISSION_TARGET] = FacilityDef(
         DECOMMISSION_TARGET, "Decommission target", decommission_recovery_fraction=0.5
     )
+    sim.power.specs[DECOMMISSION_TARGET] = PowerSpec(
+        FixedGeneration(0.4), load_mw=0.05, standby_load_mw=0.01
+    )
     sim.projects.decommission_recipes[DECOMMISSION_TARGET] = FacilityDecommissionRecipe(
         DECOMMISSION_TARGET, construction_work=12.0
+    )
+    sim.projects.recipes[DECOMMISSION_TARGET] = ConstructionRecipe(
+        DECOMMISSION_TARGET, (), construction_work=1.0
     )
     sim.facilities.definitions[STORAGE_DECOMMISSION_TARGET] = FacilityDef(
         STORAGE_DECOMMISSION_TARGET,
@@ -57,7 +77,7 @@ def _build_decommission_fixture_application(*, for_load: bool = False):
         STORAGE_DECOMMISSION_TARGET, construction_work=2.0
     )
     sim.storage.providers[STORAGE_DECOMMISSION_TARGET] = StorageProviderSpec(
-        STORAGE_DECOMMISSION_TARGET, {"default": 10.0}
+        STORAGE_DECOMMISSION_TARGET, {"cryogenic": 10.0}
     )
     return app
 
@@ -76,6 +96,7 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
         row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
         if row.id == str(facility_id)
     )
+    assert sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day).generation_mw_by_facility[facility_id] > 0
     expected_salvage = dict(facility_row.expected_salvage)
     assert facility_row.lifecycle == FacilityLifecycle.NORMAL.value
     assert expected_salvage == {str(SALVAGE_RESOURCE): 5.0}
@@ -103,6 +124,9 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert active.target_kind == "facility_decommission"
     assert active.irreversible_started
     assert sim.facilities.facilities[facility_id].lifecycle is FacilityLifecycle.DECOMMISSIONING
+    decommissioning_power = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
+    assert facility_id not in decommissioning_power.generation_mw_by_facility
+    assert all(row.owner_id != facility_id for row in decommissioning_power.requests)
     assert not sim.facilities.is_active_and_compatible(sim.facilities.facilities[facility_id], sim.day)
     with pytest.raises(ApplicationError):
         app.execute(CancelBuild(project_id))
@@ -121,7 +145,47 @@ def test_decommission_lifecycle_salvage_and_roundtrip_preserve_asset_conservatio
     assert completed.actual_salvage_fraction == pytest.approx(1.0)
     assert dict(completed.actual_salvage) == {str(SALVAGE_RESOURCE): pytest.approx(5.0)}
     assert facility_id not in loaded._simulation.facilities.facilities
+    assert all(row.id != str(facility_id) for row in loaded.query(GetOperationalNode(str(ids.EARTH))).facilities)
     assert loaded._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(before_stock + 5.0)
+
+    # Cancelled plans are historical, not live assets. After actual removal,
+    # persistence must retain their records without recreating the facility.
+    removed_path = tmp_path / "removed-facility.json"
+    save_game(loaded, removed_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    restored, offline = load_game(
+        removed_path, lambda: _build_decommission_fixture_application(for_load=True)
+    )
+    assert offline is None
+    assert facility_id not in restored._simulation.facilities.facilities
+    assert _project_row(restored, project_id).status == "complete"
+    assert restored._simulation.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(
+        before_stock + 5.0
+    )
+
+    # The same definition can be acquired by normal construction rather than
+    # scenario initialization, then retired without orphaning the build record.
+    built_project_id = restored.execute(PlanBuild(str(ids.EARTH), str(DECOMMISSION_TARGET))).created_id
+    assert built_project_id is not None
+    for _ in range(10):
+        if _project_row(restored, built_project_id).status == "complete":
+            break
+        restored.execute(AdvanceTime(1))
+    built_facility_id = _project_row(restored, built_project_id).completed_facility_id
+    assert built_facility_id is not None
+    removed_built = restored.execute(PlanFacilityDecommission(built_facility_id)).created_id
+    assert removed_built is not None
+    for _ in range(30):
+        if _project_row(restored, removed_built).status == "complete":
+            break
+        restored.execute(AdvanceTime(1))
+    assert _project_row(restored, removed_built).status == "complete"
+    assert EntityId(built_facility_id) not in restored._simulation.facilities.facilities
+    # Save/Load has already preserved both the active dismantling Project and
+    # its terminal record. Repeating a third Save/Load for the second instance
+    # only duplicates that persistence contract; its distinct acquisition and
+    # removal lifecycle is checked against the actual Project and Facility.
+    assert _project_row(restored, built_project_id).completed_facility_id == built_facility_id
+    assert _project_row(restored, removed_built).status == "complete"
 
 
 def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settles_partial_salvage():
@@ -130,14 +194,14 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
     facility_id = sim.facilities.install(
         STORAGE_DECOMMISSION_TARGET,
         ids.EARTH,
-        invested_resources={SALVAGE_RESOURCE: 8.0},
+        invested_resources={ids.OXYGEN: 8.0},
     )
     sim.refresh_storage()
 
-    pool = sim.inventory.storage_pool_for_resource(SALVAGE_RESOURCE)
+    pool = sim.inventory.storage_pool_for_resource(ids.OXYGEN)
     physical_with_target = sim.inventory.physical_storage_capacity_t[(ids.EARTH, pool)]
     remaining_physical = physical_with_target - 10.0
-    filler = ids.CONSTRUCTION_EQUIPMENT
+    filler = ids.PROPELLANT
     original_filler = sim.inventory.amount(ids.EARTH, filler)
     occupied = sim.inventory.stored_in_pool(ids.EARTH, pool)
 
@@ -170,11 +234,11 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
         if row.id == str(facility_id)
     )
     assert dict(facility_row.expected_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(4.0)
+        str(ids.OXYGEN): pytest.approx(4.0)
     }
     assert facility_row.projected_salvage_fraction == pytest.approx(0.5)
     assert dict(facility_row.projected_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(2.0)
+        str(ids.OXYGEN): pytest.approx(2.0)
     }
     sim.inventory.stock[(ids.EARTH, filler)] = original_filler
 
@@ -215,23 +279,30 @@ def test_decommission_storage_provider_blocks_only_for_existing_stock_and_settle
         salvage_bundle.id
     )
     assert 0.0 < expected_fraction < 1.0
-    stock_before = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
+    stock_before = sim.inventory.amount(ids.EARTH, ids.OXYGEN)
 
-    app.execute(AdvanceTime(1))
+    with observe_canonical_day(sim) as trace:
+        app.execute(AdvanceTime(1))
+    recovered = tuple(flow for flow in trace.activity_flows()
+                      if flow.activity_id == f"facility_decommission:{project_id}")
+    assert len(recovered) == 1
+    assert recovered[0].source_owner == f"decommissioned_facility:{facility_id}"
+    assert recovered[0].destination_owner == f"inventory:{ids.EARTH}"
+    assert recovered[0].quantity_t == pytest.approx(4.0 * expected_fraction)
     completed = _project_row(app, project_id)
     assert completed.status == "complete"
     assert completed.actual_salvage_fraction == pytest.approx(expected_fraction)
     assert dict(completed.actual_salvage) == {
-        str(SALVAGE_RESOURCE): pytest.approx(4.0 * expected_fraction)
+        str(ids.OXYGEN): pytest.approx(4.0 * expected_fraction)
     }
     assert facility_id not in sim.facilities.facilities
-    assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(
+    assert sim.inventory.amount(ids.EARTH, ids.OXYGEN) == pytest.approx(
         stock_before + 4.0 * expected_fraction
     )
 
-    stock_after = sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE)
+    stock_after = sim.inventory.amount(ids.EARTH, ids.OXYGEN)
     app.execute(AdvanceTime(1))
-    assert sim.inventory.amount(ids.EARTH, SALVAGE_RESOURCE) == pytest.approx(stock_after)
+    assert sim.inventory.amount(ids.EARTH, ids.OXYGEN) == pytest.approx(stock_after)
     assert facility_id not in sim.facilities.facilities
 
 
@@ -296,10 +367,13 @@ UPGRADE_RESOURCE_B = DefinitionId("test.resource.upgrade_b")
 def _build_upgrade_fixture_application(*, for_load: bool = False):
     app = build_game_application_for_load() if for_load else build_game_application()
     sim = app._simulation
+    for resource_id in (UPGRADE_RESOURCE_A, UPGRADE_RESOURCE_B):
+        app._catalog.resources[resource_id] = ResourceDef(resource_id, str(resource_id))
 
     sim.facilities.definitions[UPGRADE_FACILITY] = FacilityDef(
         UPGRADE_FACILITY,
         "Upgrade target fixture",
+        capability_supplies=(CapabilitySupply("test_upgrade_research_instrument"),),
     )
     sim.facilities.definitions[UPGRADE_CONTRACTOR] = FacilityDef(
         UPGRADE_CONTRACTOR,
@@ -309,12 +383,12 @@ def _build_upgrade_fixture_application(*, for_load: bool = False):
     sim.research.providers[UPGRADE_FACILITY] = ResearchProviderSpec(
         UPGRADE_FACILITY,
         ResearchProviderSourceKind.FACILITY,
-        UPGRADE_FACILITY,
+        frozenset({"test_upgrade_research_instrument"}),
         tier=1,
-        levels=(
-            ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),
-            ResearchProviderLevelSpec(2, 5.0, 25.0, 1.0),
-        ),
+        levels=(ResearchProviderLevelSpec(1, 2.0, 10.0, 0.5),),
+    )
+    sim.projects.decommission_recipes[UPGRADE_FACILITY] = FacilityDecommissionRecipe(
+        UPGRADE_FACILITY, construction_work=1.0,
     )
     sim.projects.upgrade_recipes[(UPGRADE_FACILITY, 2)] = FacilityUpgradeRecipe(
         UPGRADE_FACILITY,
@@ -373,16 +447,48 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
         for row in option.differences
     }
     assert ("level", 1.0, 2.0) in difference_values
-    assert ("capacity", 2.0, 5.0) in difference_values
-    assert ("capacity", 10.0, 25.0) in difference_values
+    assert ("capacity", 2.0, 4.0) in difference_values
+    assert ("capacity", 10.0, 20.0) in difference_values
     assert ("service", 0.5, 1.0) in difference_values
     _seed_upgrade_materials(app, facility, recipe)
+
+    # Both intents refer to one physical Facility: a pending, reversible
+    # decommission cannot be overlapped by an upgrade, or vice versa.
+    pending_removal = app.execute(PlanFacilityDecommission(before_row.id)).created_id
+    blocked_upgrade = _upgrade_target(app)[0].next_upgrade
+    assert blocked_upgrade is not None and not blocked_upgrade.can_plan
+    assert any(b.code == "active_facility_project" and b.subject_id == pending_removal
+               for b in blocked_upgrade.blockers)
+    with pytest.raises(ApplicationError, match="active_facility_project"):
+        app.execute(PlanFacilityUpgrade(before_row.id))
+    app.execute(CancelBuild(pending_removal))
+    assert _upgrade_target(app)[0].next_upgrade.can_plan
 
     provider = app._simulation.research.providers[facility.definition_id]
     before_provider_spec = provider.level_spec(facility.level)
     next_provider_spec = provider.level_spec(facility.level + 1)
     assert before_provider_spec != next_provider_spec
     investment_before = dict(facility.invested_resources)
+    # An invalid investment must not partially modify the Facility's physical
+    # investment history or level before the real Project settlement runs.
+    with pytest.raises(ValueError, match="finite"):
+        app._simulation.facilities.upgrade_to(
+            facility.id, 2, invested_resources={
+                ids.STRUCTURAL_COMPONENTS: 1.0,
+                ids.MACHINERY: float("nan"),
+            },
+        )
+    assert facility.level == 1
+    assert facility.invested_resources == investment_before
+    with pytest.raises(ValueError, match="sequential"):
+        app._simulation.facilities.upgrade_to(facility.id, True)
+    assert facility.invested_resources == investment_before
+    from space_idle.facilities_domain import validate_runtime as validate_facility_runtime
+    from space_idle.validation_support import ConfigurationError
+    facility.invested_resources[ids.MACHINERY] = float("nan")
+    with pytest.raises(ConfigurationError, match="nonfinite"):
+        validate_facility_runtime(app._simulation)
+    facility.invested_resources = dict(investment_before)
 
     result = app.execute(
         PlanFacilityUpgrade(before_row.id, priority=5, procurement_policy="extended_wait")
@@ -401,6 +507,10 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
     )
     with pytest.raises(ApplicationError):
         app.execute(PlanFacilityUpgrade(before_row.id, procurement_policy="extended_wait"))
+    assert not next(row for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                    if row.id == before_row.id).can_decommission
+    with pytest.raises(ApplicationError, match="active_facility_project"):
+        app.execute(PlanFacilityDecommission(before_row.id))
 
     # The first canonical boundary acquires the inputs; level application belongs
     # to the following construction boundary. Persist between those boundaries so
@@ -460,3 +570,179 @@ def test_upgrade_planning_roundtrip_and_completion_apply_resources_and_level_onc
         before_row.research_generation_points_per_day,
         before_row.research_storage_capacity_points,
     )
+
+
+    # Completed upgrades remain construction history, not a second live owner.
+    # Decommissioning the upgraded facility must not invalidate the past upgrade
+    # record or cause Save/Load to resurrect the removed asset.
+    decommission_id = loaded.execute(PlanFacilityDecommission(after_row.id)).created_id
+    assert decommission_id is not None
+    for _ in range(10):
+        if _project_row(loaded, decommission_id).status == "complete":
+            break
+        loaded.execute(AdvanceTime(1))
+    assert _project_row(loaded, decommission_id).status == "complete"
+    assert EntityId(after_row.id) not in loaded._simulation.facilities.facilities
+    assert _project_row(loaded, project_id).status == "complete"
+    final_path = tmp_path / "upgraded-then-retired.json"
+    save_game(loaded, final_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    restored, offline = load_game(
+        final_path, lambda: _build_upgrade_fixture_application(for_load=True)
+    )
+    assert offline is None
+    assert EntityId(after_row.id) not in restored._simulation.facilities.facilities
+    assert _project_row(restored, project_id).status == "complete"
+    assert _project_row(restored, decommission_id).status == "complete"
+
+
+def test_installed_unit_count_scaling_matches_separate_identical_facilities_across_domains():
+    """Facility aggregation is physical quantity, not a free technology upgrade."""
+    from space_idle.facilities import LifeSupportSpec, ServiceCapacitySupply
+    from space_idle.construction.models import ConstructionProviderSpec
+    from space_idle.production import ProcessSpec
+    from space_idle.exploration_models import (
+        SurveyProviderSpec, SurveyObservationModeSpec, SurveyProviderSourceKind,
+        SurveyReachSpec, SurveyReachScope, KnowledgeLevel,
+    )
+
+    facility_def_id = DefinitionId('test.facility.aggregated_capacity')
+    process_id = DefinitionId('test.process.aggregated_capacity')
+    survey_id = DefinitionId('test.survey.aggregated_capacity')
+    research_id = DefinitionId('test.research.aggregated_capacity')
+
+    def configure(levels):
+        app = build_game_application()
+        sim = app._simulation
+        sim.facilities.definitions[facility_def_id] = FacilityDef(
+            facility_def_id, 'Aggregate capacity',
+            capability_supplies=(CapabilitySupply('test_aggregate_capacity'),),
+            service_capacity_supplies=(ServiceCapacitySupply('test_aggregate_service', 1.75),),
+            process_throughput_per_day=1.25,
+            housing_capacity=3,
+            life_support=LifeSupportSpec(4.0),
+        )
+        sim.power.specs[facility_def_id] = PowerSpec(FixedGeneration(3.0), load_mw=0.5, standby_load_mw=0.2)
+        sim.storage.providers[facility_def_id] = StorageProviderSpec(facility_def_id, {'cryogenic': 7.0})
+        sim.projects.construction_providers[facility_def_id] = ConstructionProviderSpec(facility_def_id, 2.5)
+        sim.industry.processes[process_id] = ProcessSpec(
+            process_id, 'Aggregate operation', frozenset({'test_aggregate_capacity'}),
+            {ids.CONSTRUCTION_EQUIPMENT: 0.25}, {ids.MINERAL_FEEDSTOCK: 0.1},
+        )
+        sim.research.providers[research_id] = ResearchProviderSpec(
+            research_id, ResearchProviderSourceKind.FACILITY,
+            frozenset({'test_aggregate_capacity'}), tier=1,
+            levels=(ResearchProviderLevelSpec(1, 1.5, 6.0, 0.25),),
+        )
+        mode = SurveyObservationModeSpec(
+            'aggregate_observation', 1.0, SurveyReachSpec(SurveyReachScope.SAME_BODY),
+            KnowledgeLevel.PRESENCE_PROBABILITY, 0.2, 0.1,
+        )
+        sim.survey.providers[survey_id] = SurveyProviderSpec(
+            survey_id, SurveyProviderSourceKind.FACILITY,
+            frozenset({'test_aggregate_capacity'}), (mode,),
+            capacity_units_per_source_per_day=0.8,
+        )
+        facility_ids = [sim.facilities.install(facility_def_id, ids.EARTH, level=level) for level in levels]
+        generation = sim.power.physical_snapshot(ids.EARTH, sim.facilities, sim.day)
+        service = sim.facilities.nominal_service_capacity_at(ids.EARTH, 'test_aggregate_service', sim.day)
+        construction = sim.projects.construction_nominal_capacity_at(ids.EARTH, sim.day)
+        survey = sim.survey.provider_capacity_at(survey_id, ids.EARTH, day=sim.day)
+        industry = sim.industry.execution_requirement_bundles(ids.EARTH, sim.facilities, sim.inventory, sim.day)
+        industry_volume = sum(row.requested_execution for row in industry if row.owner_id in facility_ids)
+        research = sum(sim.research.provider_generation(fid, {}, sim.day) for fid in facility_ids)
+        storage = sim.storage._capacity_for_node(ids.EARTH, sim.day, None)[0]
+        return (
+            sum(generation.generation_mw_by_facility[fid] for fid in facility_ids),
+            sum(request.requested_rate for request in generation.requests if request.owner_id in facility_ids),
+            service, construction, survey, industry_volume, research, storage['cryogenic'],
+            sim.population.housing_capacity(ids.EARTH, sim.day),
+            sum(sim.facilities.definitions[facility_def_id].life_support.capacity_at_level(level) for level in levels),
+        )
+
+    assert configure([2]) == pytest.approx(configure([1, 1]))
+
+
+def test_common_facility_unit_investment_and_maintenance_apply_to_unbounded_level():
+    """A single Level transition acquires one more ordinary facility unit."""
+    app = build_game_application()
+    sim = app._simulation
+    from space_idle.content.base_assets import build_base_assets
+    from space_idle.construction.models import BuildResourceRequirement
+
+    assets, _ = build_base_assets()
+    # Test the full registered Content family, not only the research-lab upgrade.
+    for asset in assets:
+        base = sim.projects.recipes[asset.definition.id]
+        unit = {entry.resource_id: entry.amount_t for entry in base.resources}
+        for level in (2, 3, 9):
+            upgrade = sim.projects.upgrade_recipe_for_definition(asset.definition.id, level)
+            assert upgrade is not None
+            assert upgrade.target_level == level
+            assert upgrade.facility_def_id == asset.definition.id
+            assert {entry.resource_id: entry.amount_t for entry in upgrade.resources} == unit
+            assert upgrade.construction_work == pytest.approx(base.construction_work)
+            assert upgrade.self_deploying is False
+
+    # The authoritative accumulated investment yields the same maintenance
+    # demand as independently acquired identical units, without relying on
+    # the temporary numeric maintenance rate of any single Content facility.
+    lab = ids.GENERAL_RESEARCH_LAB
+    construction = sim.projects.recipes[lab]
+    unit = {item.resource_id: item.amount_t for item in construction.resources}
+    grouped = sim.facilities.install(lab, ids.EARTH, invested_resources=unit)
+    singles = [sim.facilities.install(lab, ids.EARTH, invested_resources=unit)
+               for _ in range(3)]
+    for target in (2, 3):
+        upgrade = sim.projects.next_upgrade_recipe(grouped)
+        assert upgrade.target_level == target
+        sim.facilities.upgrade_to(grouped, target, invested_resources={
+            item.resource_id: item.amount_t for item in upgrade.resources
+        })
+    expected = {
+        resource: sum(sim.facilities.maintenance_requirements_per_day(fid).get(resource, 0.0)
+                      for fid in singles)
+        for resource in unit
+    }
+    assert sim.facilities.facilities[grouped].invested_resources == pytest.approx({
+        resource: amount * 3 for resource, amount in unit.items()
+    })
+    assert sim.facilities.maintenance_requirements_per_day(grouped) == pytest.approx(expected)
+
+
+def test_initial_scenario_facility_unit_investments_match_ordinary_acquisition():
+    """No initial Scenario facility is an alternate, discounted physical asset."""
+    sim = build_game_application()._simulation
+    for facility in sim.facilities.facilities.values():
+        recipe = sim.projects.recipes[facility.definition_id]
+        unit_investment = {
+            requirement.resource_id: requirement.amount_t
+            for requirement in recipe.resources
+        }
+        assert facility.level == 1
+        assert facility.invested_resources == pytest.approx(unit_investment), facility.definition_id
+        assert sim.facilities.maintenance_requirements_per_day(facility.id) == pytest.approx(
+            sim.facilities.maintenance_requirements_for_investment(
+                facility.definition_id, unit_investment,
+            )
+        )
+
+
+def test_unmeasured_environment_does_not_leak_through_upgrade_power_differences():
+    app = build_game_application()
+    sim = app._simulation
+    facility = next(row for row in sim.facilities.all_at(ids.EARTH)
+                    if row.definition_id == ids.GRID_POWER_SUPPLY)
+    cell = facility.site_cell_id
+    assert cell is not None
+    sim.surface_knowledge.cell_attribute_levels[(cell, 'environment')] = 0
+    option = next(row.next_upgrade for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                  if row.id == str(facility.id))
+    assert option is not None
+    hidden = [row for row in option.differences if row.label in {'発電Capacity', 'Power需要'}]
+    assert hidden
+    assert all(row.current_value == '未測定' and row.target_value == '未測定' for row in hidden)
+    sim.surface_knowledge.observe_attribute(cell, 'environment', 2)
+    revealed = next(row.next_upgrade for row in app.query(GetOperationalNode(str(ids.EARTH))).facilities
+                    if row.id == str(facility.id))
+    assert any(row.label == '発電Capacity' and isinstance(row.target_value, (int, float))
+               for row in revealed.differences)

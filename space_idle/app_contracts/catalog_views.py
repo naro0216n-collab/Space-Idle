@@ -35,7 +35,49 @@ class ResourceDefinitionRow:
     display_name: str
     unit: str
     category: str
-    storage_pool_key: str
+    storage_pool_key: str | None
+
+
+@dataclass(frozen=True)
+class ResearchProviderDefinitionRow:
+    id: str
+    tier: int
+    generation_points_per_day: float
+    research_execution_per_day: float
+    storage_capacity_points: float
+    crew_person_days_per_research_point: float = 0.0
+
+
+@dataclass(frozen=True)
+class FacilityDesignCoefficientsRow:
+    # Domain-owned technical values; GUI Catalog and development evaluation share
+    # this exact definition projection, rather than independently traversing Core.
+    construction_resources_t: tuple[tuple[str, float], ...] | None
+    construction_work: float | None
+    self_deploying: bool | None
+    prerequisites: tuple[str, ...]
+    maintenance_per_day_t: tuple[tuple[str, float], ...] | None
+    operating_per_day_t: tuple[tuple[str, float], ...]
+    process_throughput_per_day: float
+    construction_work_per_day: float
+    power_load_mw: float
+    power_generation_kind: str
+    power_reference_generation_mw: float
+    extraction_capacity_t_per_day: float
+    housing_capacity: int
+    life_support_person_days_per_day: float | None
+    life_support_resources_per_person_day_t: tuple[tuple[str, float], ...]
+    research_provider: ResearchProviderDefinitionRow | None
+
+
+@dataclass(frozen=True)
+class ExtractionMethodDefinitionRow:
+    id: str
+    display_name: str
+    resource_id: str
+    output_resource_id: str
+    prerequisites: tuple[str, ...]
+    provider_facilities: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -48,15 +90,18 @@ class FacilityDefinitionRow:
     operating_requirements: SiteRequirementsDefinitionRow = SiteRequirementsDefinitionRow()
     maintenance_fraction_per_year: float = 0.0
     placement_scope: str = "OPERATIONAL_NODE"
+    design: FacilityDesignCoefficientsRow | None = None
 
 
 @dataclass(frozen=True)
 class ProcessDefinitionRow:
     id: str
     display_name: str
-    facility_definition_id: str
+    required_capabilities: tuple[str, ...]
     inputs_per_day: tuple[tuple[str, float], ...]
     outputs_per_day: tuple[tuple[str, float], ...]
+    prerequisites: tuple[str, ...] = ()
+    provider_facilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +112,7 @@ class ResearchStageDefinitionRow:
     resources: tuple[tuple[str, float], ...] = ()
     site_requirements: SiteRequirementsDefinitionRow = SiteRequirementsDefinitionRow()
     operational_experience: tuple[tuple[str, float], ...] = ()
+    execution_requirements: tuple[tuple[tuple[str, object], ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,6 +121,9 @@ class ResearchDefinitionRow:
     display_name: str
     prerequisites: tuple[str, ...]
     stages: tuple[ResearchStageDefinitionRow, ...]
+    progression_stage: int | None = None
+    category: str | None = None
+    series: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +145,7 @@ class VehicleDefinitionRow:
     turnaround_days: float
     turnaround_resources: tuple[tuple[str, float], ...]
     operation_capability_details: tuple[OperationCapabilityDefinitionRow, ...] = ()
+    research_providers: tuple[ResearchProviderDefinitionRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,6 +165,15 @@ class MovementPlanDefinitionRow:
 class CelestialBodyDefinitionRow:
     id: str
     display_name: str
+    star_system_id: str | None = None
+    parent_body_id: str | None = None
+    physical_surface: str = "solid"
+    surface_cell_count: int = 0
+    mean_radius_km: float | None = None
+    reference_gravity_m_s2: float | None = None
+    heliocentric_semimajor_axis_au: float | None = None
+    parent_orbit_semimajor_axis_km: float | None = None
+    representative_solar_flux_w_m2: float | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +186,12 @@ class OperationalNodeDefinitionRow:
 
 
 @dataclass(frozen=True)
+class ServiceCapacityDefinitionRow:
+    id: str
+    display_name: str
+
+
+@dataclass(frozen=True)
 class CatalogView:
     resources: tuple[ResourceDefinitionRow, ...]
     facilities: tuple[FacilityDefinitionRow, ...]
@@ -136,6 +201,8 @@ class CatalogView:
     processes: tuple[ProcessDefinitionRow, ...] = ()
     research: tuple[ResearchDefinitionRow, ...] = ()
     movement_plans: tuple[MovementPlanDefinitionRow, ...] = ()
+    service_capacities: tuple[ServiceCapacityDefinitionRow, ...] = ()
+    extraction_methods: tuple[ExtractionMethodDefinitionRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -156,3 +223,9 @@ class WorldView:
     day: int
     funds_musd: float
     operational_nodes: tuple[OperationalNodeSummary, ...]
+
+
+@dataclass(frozen=True)
+class DevelopmentWorldReferenceView:
+    # Physical Content-only world statistics, never a Player knowledge disclosure.
+    surface_resource_distribution: dict[str, dict]

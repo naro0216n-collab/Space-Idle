@@ -2,12 +2,12 @@ from __future__ import annotations
 from typing import TypeAlias
 from .app_contracts.common import ApplicationError, CommandResult
 from .app_contracts.construction import (
-    PlanBuild, PlanFacilityUpgrade, PlanFacilityDecommission, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
+    PlanBuild, PlanFacilityUpgrade, PlanFacilityDecommission, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, EngineerSurfaceCell, CancelBuild, PauseBuild, ResumeBuild, SetProjectPriority,
     SetProjectProcurementPolicy,
 )
 from .app_contracts.operations import (
-    PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityActivityPriority,
-    SetMaintenancePriority, SetTimeControl, AdvanceTime,
+    PauseFacility, ResumeFacility, SetFacilityProcess, SetFacilityExtractionMethod, SetFacilityActivityPriority,
+    SetMaintenancePriority, SetTimeControl, AdvanceTime, SetPowerLink, DeletePowerLink,
 )
 from .app_contracts.progression import (
     StartResearch, PauseResearch, ResumeResearch, SetResearchPrototypeSite,
@@ -24,27 +24,31 @@ from .app_contracts.transport import (
     SetVehicleProductionSettings, CreateTransportAllocation, UpdateTransportAllocation,
     SetTransportMovementConstraint, ClearTransportMovementConstraint,
     PauseTransportAllocation, ResumeTransportAllocation,
-    DeleteTransportAllocation, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
+    DeleteTransportAllocation, SetInfrastructureFreightLink, DeleteInfrastructureFreightLink, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
 )
 from .app_contracts.logistics import (
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
 )
-from .app_contracts.contracts import AcceptContract, DeclineContract
+from .app_contracts.population import (
+    SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
+)
 from .app_contracts.economy import (
     CancelTradeOrder, CreateTradeOrder, UpdateTradeOrder,
 )
 from .app_contracts.queries import (
-    GetCatalog, GetWorld, GetSurfaceMap, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
+    GetCatalog, GetDevelopmentWorldReference, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, GetOperationalNode, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetBottlenecks, GetAttention, GetProjects,
     GetBuildOptions, GetLogistics, GetLogisticsSummary, GetMovementPlans, GetFleet,
-    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions,
-    GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetContracts, GetMarket,
+    GetFleetRelocationPreview, GetTransportAllocations, GetCargoFlows, GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext,
+    GetResearch, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetMarket,
 )
 
 Command: TypeAlias = (
-    PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
+    SetPopulationTarget | ClearPopulationTarget | SetNaturalPopulationGrowth | RequestPassengerTransfer | CancelPassengerTransfer |
+    PlanBuild | PlanFacilityUpgrade | PlanFacilityDecommission | PlanOperationalNodeFounding | CancelFounding | PauseFounding | ResumeFounding | SetFoundingPriority | DevelopSurfaceCell | EngineerSurfaceCell | CancelBuild | PauseBuild | ResumeBuild | SetProjectPriority |
     SetProjectProcurementPolicy |
-    PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityActivityPriority | SetMaintenancePriority |
-    SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
+    PauseFacility | ResumeFacility | SetFacilityProcess | SetFacilityExtractionMethod | SetFacilityActivityPriority | SetMaintenancePriority |
+    SetPowerLink | DeletePowerLink | SetTimeControl | StartResearch | PauseResearch | ResumeResearch | SetResearchPrototypeSite |
     SetResearchPriority | SetResearchDemonstrationSite | StartSurvey | UpdateSurvey | PauseSurvey |
     ResumeSurvey | SetSurveyPriority | StartScientificExploration | SetScientificExplorationPriority | PauseScientificExploration |
     ResumeScientificExploration | AbortScientificExploration | ReturnScientificExploration | SetScientificExplorationCompletionDisposition | AssignExplorationFleet | UnassignExplorationFleet |
@@ -54,16 +58,16 @@ Command: TypeAlias = (
     ProduceVehicle | PauseVehicleProduction | ResumeVehicleProduction | SetVehicleProductionSettings |
     CreateTransportAllocation | UpdateTransportAllocation | SetTransportMovementConstraint |
     ClearTransportMovementConstraint |
-    PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | RelocateFleet |
+    PauseTransportAllocation | ResumeTransportAllocation | DeleteTransportAllocation | SetInfrastructureFreightLink | DeleteInfrastructureFreightLink | RelocateFleet |
     RetireFleet | CancelFleetRetirement | SetFleetRetirementPriority |
-    SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | AcceptContract |
-    DeclineContract | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
+    SetTargetStock | DeleteTargetStock | SetSupplyRoutingConstraint | ClearSupplyRoutingConstraint | CreateTradeOrder | UpdateTradeOrder | CancelTradeOrder | AdvanceTime
 )
 Query: TypeAlias = (
-    GetCatalog | GetWorld | GetSurfaceMap | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
+    GetPassengerTransferPreview | GetPassengerTransfers |
+    GetCatalog | GetDevelopmentWorldReference | GetWorld | GetSurfaceMap | GetNonSurfaceFoundingOptions | GetOperationalNode | GetFlowReport | GetDependencyAnalytics | GetDetailedForecast | GetBottlenecks | GetAttention | GetProjects |
     GetBuildOptions | GetLogistics | GetLogisticsSummary | GetMovementPlans | GetFleet |
-    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockOptions |
-    GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetContracts | GetMarket
+    GetFleetRelocationPreview | GetTransportAllocations | GetCargoFlows | GetTransportAllocationOptions | GetTransportAllocationPreview | GetTargetStockContext |
+    GetResearch | GetScientificExplorations | GetSurveys | GetSurveyCampaignIntentPreview | GetMarket
 )
 
 __all__ = [name for name in globals() if not name.startswith('_') and name not in {'TypeAlias'}]

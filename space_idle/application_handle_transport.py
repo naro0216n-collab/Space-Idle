@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .application_commands import (
     ClearTransportMovementConstraint, Command, CommandResult,
-    CreateTransportAllocation, DeleteTransportAllocation,
+    CreateTransportAllocation, DeleteTransportAllocation, SetInfrastructureFreightLink, DeleteInfrastructureFreightLink,
     PauseTransportAllocation, ProduceVehicle, PauseVehicleProduction, RelocateFleet,
     RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority, ResumeVehicleProduction, ResumeTransportAllocation, SetVehicleProductionSettings,
     SetTransportMovementConstraint, UpdateTransportAllocation,
@@ -22,6 +22,20 @@ class TransportCommandHandlerMixin:
 
     def _handle_transport_command(self, command: Command):
         sim = self._simulation
+        if isinstance(command, SetInfrastructureFreightLink):
+            link_id = sim.transport.set_infrastructure_freight_link(
+                DefinitionId(command.method_id),
+                EntityId(command.source_facility_id),
+                EntityId(command.destination_facility_id),
+                command.target_t_per_day, sim.day,
+            )
+            return CommandResult(str(link_id))
+        if isinstance(command, DeleteInfrastructureFreightLink):
+            link_id = EntityId(command.link_id)
+            if sim.logistics.transport_link_references(link_id):
+                raise ValueError("clear Supply Routing constraints before deleting a referenced transport link")
+            sim.transport.delete_infrastructure_freight_link(link_id)
+            return CommandResult()
         if isinstance(command, ProduceVehicle):
             production_id = sim.transport.plan_vehicle_production(
                 DefinitionId(command.vehicle_definition_id),
@@ -85,7 +99,11 @@ class TransportCommandHandlerMixin:
         if isinstance(command, ResumeTransportAllocation):
             sim.transport.update_transport_allocation(EntityId(command.allocation_id), paused=False, day=sim.day); return CommandResult()
         if isinstance(command, DeleteTransportAllocation):
-            sim.transport.delete_transport_allocation(EntityId(command.allocation_id), day=sim.day); return CommandResult()
+            allocation_id = EntityId(command.allocation_id)
+            if sim.logistics.transport_link_references(allocation_id):
+                raise ValueError("clear Supply Routing constraints before deleting a referenced transport link")
+            sim.transport.delete_transport_allocation(allocation_id, day=sim.day)
+            return CommandResult()
         if isinstance(command, RetireFleet):
             retirement_id = sim.transport.plan_fleet_retirement(
                 DefinitionId(command.vehicle_definition_id), command.units,
@@ -108,6 +126,9 @@ class TransportCommandHandlerMixin:
                     if command.movement_hard_constraint is None
                     else tuple(MovementPlanId(value) for value in command.movement_hard_constraint)
                 ),
+                carrier_vehicle_definition_id=(None if command.carrier_vehicle_definition_id is None
+                    else DefinitionId(command.carrier_vehicle_definition_id)),
+                carrier_units=command.carrier_units,
                 day=sim.day,
             )
             return CommandResult(str(relocation_id))

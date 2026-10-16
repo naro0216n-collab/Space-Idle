@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from space_idle import AdvanceTime, GetWorld, SetTimeControl, build_game_application
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.api import GameRuntime
@@ -133,3 +135,30 @@ def test_runtime_clock_supports_speed_pause_resume_and_nonconflicting_passive_ti
 
     assert first.data["world"].day == day_before_projection
     assert second.data["world"].day == day_before_projection + 2
+
+
+def test_offline_progress_validates_time_and_preserves_state_on_rejection():
+    for seconds_per_day in (0, -1, float("nan"), float("inf"), -float("inf")):
+        with pytest.raises(ValueError, match="real_seconds_per_game_day"):
+            OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
+
+    app = build_game_application()
+    before = capture_state(app._simulation)
+    for elapsed, seconds_per_day, reason in (
+        (-1, 1.0, "elapsed_real_seconds"),
+        (float("nan"), 1.0, "elapsed_real_seconds"),
+        (float("inf"), 1.0, "elapsed_real_seconds"),
+        (-float("inf"), 1.0, "elapsed_real_seconds"),
+        (1e308, 1e-308, "representable game time"),
+    ):
+        with pytest.raises(ValueError, match=reason):
+            app._simulation.advance_offline(
+                elapsed, OfflineProgressPolicy(real_seconds_per_game_day=seconds_per_day)
+            )
+        assert capture_state(app._simulation) == before
+
+    # A configured resume cap bounds even extreme but finite elapsed time.
+    policy = OfflineProgressPolicy(real_seconds_per_game_day=1e-308, max_game_days_per_resume=2)
+    result = app._simulation.advance_offline(1e308, policy)
+    assert result.capped
+    assert result.advanced_days == 2

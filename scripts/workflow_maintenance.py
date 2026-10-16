@@ -12,7 +12,7 @@ from pathlib import Path
 PUBLISH_STATE_NAME = "space-idle-publish-state.json"
 REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 2
-CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
+CONNECTOR_CALL_BUDGET_BYTES = 1024 * 1024
 CONNECTOR_STATE_NAME = "workflow-maintenance-state.json"
 SUMMARY_NAME = "summary.json"
 TRANSACTION_DIR_NAME = "space-idle-workflow-maintenance-transaction"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .application_transport_support import infrastructure_requirement_rows, vehicle_concept
 from .application_comparison import project_comparison_axes
 from .app_contracts.ui_reports import ComparisonValueRow
@@ -13,7 +15,6 @@ from .application_views import (
     TransportAllocationOptionRow,
     TransportAllocationOptionsView,
     TransportAllocationPreviewView,
-    TransportCapacityPresetRow,
 )
 from .shared import DefinitionId, EntityId, MovementPlanId
 from .transport.models import DirectionalCapacity
@@ -26,39 +27,13 @@ class LogisticsMovementPlanProjectorMixin:
             value.forward_t_per_day, value.reverse_t_per_day
         )
 
-    def _transport_capacity_assistance(
-        self, vehicle_definition_id, source_id, plan
-    ):
-        sim = self._simulation
-        fleet = sim.transport.fleet_pool_snapshot(vehicle_definition_id, source_id)
-        preset_units = tuple(dict.fromkeys((1, fleet.free_units, fleet.total_units)))
-        presets = tuple(
-            TransportCapacityPresetRow(
-                key=(
-                    "one_unit" if units == 1
-                    else "free_fleet" if units == fleet.free_units
-                    else "total_fleet"
-                ),
-                display_name=(
-                    "1 unit分" if units == 1
-                    else "空きFleet分" if units == fleet.free_units
-                    else "全Fleet分"
-                ),
-                capacity=self._directional_capacity_row(
-                    sim.transport.capacity_for_service_units(plan.nominal_per_unit, units)
-                ),
-                units=units,
-            )
-            for units in preset_units
-            if units > 0
-        )
-        suggested_units = max(1, fleet.total_units)
-        suggested_max = sim.transport.capacity_for_service_units(
-            plan.nominal_per_unit, suggested_units
-        )
-        return fleet, presets, suggested_max
-
     def _movement_service_mode_rows(self, movement_plan) -> tuple[MovementServiceModeRow, ...]:
+        # Multiple read models (summary, logistics detail, comparison) refer to
+        # the same physical Movement Plan within a single query snapshot.
+        cache = getattr(self, "_query_projection_cache", None)
+        key = ("movement_service_modes", movement_plan.id)
+        if cache is not None and key in cache:
+            return cache[key]
         sim = self._simulation
         rows: list[MovementServiceModeRow] = []
 
@@ -109,7 +84,10 @@ class LogisticsMovementPlanProjectorMixin:
                 )
             )
 
-        return tuple(rows)
+        result = tuple(rows)
+        if cache is not None:
+            cache[key] = result
+        return result
 
     def _movement_plan_rows(
         self,
@@ -117,13 +95,31 @@ class LogisticsMovementPlanProjectorMixin:
         origin_id: str | None = None,
         destination_id: str | None = None,
         movement_plan_id: str | None = None,
+        touching_node_id: str | None = None,
         include_modes: bool = True,
         comparison_vehicle_definition_id: str | None = None,
     ) -> tuple[MovementPlanRow, ...]:
+        cache = getattr(self, "_query_projection_cache", None)
+        key = (
+            "movement_plan_rows", origin_id, destination_id, touching_node_id,
+            movement_plan_id, comparison_vehicle_definition_id,
+        )
+        # The summary only suppresses mode details in presentation; it still
+        # needs the same service feasibility derivation as the detailed view.
+        if cache is not None and key in cache:
+            complete_rows = cache[key]
+            return complete_rows if include_modes else tuple(
+                replace(row, modes=()) for row in complete_rows
+            )
         sim = self._simulation
         if movement_plan_id is not None:
             movement_plan = sim.transport.movement_plan(movement_plan_id)
             candidates = () if movement_plan is None else (movement_plan,)
+        elif touching_node_id is not None:
+            outbound = sim.transport.outbound_movement_plans(touching_node_id)
+            inbound = sim.transport.inbound_movement_plans(touching_node_id)
+            by_id = {str(plan.id): plan for plan in (*outbound, *inbound)}
+            candidates = tuple(by_id[plan_id] for plan_id in sorted(by_id))
         elif origin_id is not None and destination_id is not None:
             candidates = sim.transport.movement_plan_candidates(origin_id, destination_id)
         elif origin_id is not None:
@@ -174,7 +170,6 @@ class LogisticsMovementPlanProjectorMixin:
                 comparison_values.extend((
                     ComparisonValueRow(axis_key="transit_days", number_value=float(movement_plan.transit_days)),
                     ComparisonValueRow(axis_key="delta_v_km_s", number_value=float(movement_plan.delta_v_km_s)),
-                    ComparisonValueRow(axis_key="operation_count", number_value=float(len(movement_plan.operations))),
                 ))
             if comparison_requested and comparison_mode is not None:
                 comparison_values.extend((
@@ -182,7 +177,6 @@ class LogisticsMovementPlanProjectorMixin:
                     ComparisonValueRow(axis_key="cycle_days", number_value=comparison_mode.cycle_days),
                     ComparisonValueRow(axis_key="nominal_forward_t_per_day", number_value=comparison_mode.nominal_capacity.forward_t_per_day),
                     ComparisonValueRow(axis_key="full_load_propellant_t", number_value=(comparison_mode.full_load_propellant_t or 0.0)),
-                    ComparisonValueRow(axis_key="infrastructure_count", number_value=float(len(comparison_mode.infrastructure_requirements))),
                 ))
             rows.append(
                 MovementPlanRow(
@@ -210,18 +204,24 @@ class LogisticsMovementPlanProjectorMixin:
                         related_entity_kind="movement_plan",
                         related_entity_id=str(movement_plan.id),
                     ),
-                    modes=mode_rows if include_modes else (),
+                    modes=mode_rows,
                     comparison_key=str(movement_plan.id),
                     comparison_values=tuple(comparison_values),
                 )
             )
-        return tuple(rows)
+        complete_rows = tuple(rows)
+        if cache is not None:
+            cache[key] = complete_rows
+        return complete_rows if include_modes else tuple(
+            replace(row, modes=()) for row in complete_rows
+        )
 
     def _movement_plans_view(self, query) -> MovementPlansView:
         rows = self._movement_plan_rows(
             origin_id=query.origin_id,
             destination_id=query.destination_id,
             movement_plan_id=query.movement_plan_id,
+            touching_node_id=query.touching_node_id,
             include_modes=query.include_modes,
             comparison_vehicle_definition_id=query.vehicle_definition_id,
         )
@@ -232,7 +232,6 @@ class LogisticsMovementPlanProjectorMixin:
             axis_definitions = [
                 ("transit_days", "移動所要時間", "integer", "日"),
                 ("delta_v_km_s", "必要Δv", "number", "km/s"),
-                ("operation_count", "運用工程数", "integer", None),
             ]
             if query.vehicle_definition_id is not None:
                 propellant_name = "推進剤"
@@ -246,7 +245,6 @@ class LogisticsMovementPlanProjectorMixin:
                     ("cycle_days", "往復運行周期", "number", "日"),
                     ("nominal_forward_t_per_day", "1機あたり往路能力", "number", "t/日"),
                     ("full_load_propellant_t", f"満載時{propellant_name}", "number", "t/便"),
-                    ("infrastructure_count", "必要インフラ数", "integer", None),
                 ))
             comparison_axes = project_comparison_axes(
                 tuple(axis_definitions),
@@ -266,9 +264,7 @@ class LogisticsMovementPlanProjectorMixin:
                 destination_id,
                 day=sim.day,
             )
-            fleet, preset_rows, suggested_capacity_max = self._transport_capacity_assistance(
-                definition.id, source_id, plan
-            )
+            fleet = sim.transport.fleet_pool_snapshot(definition.id, source_id)
             options.append(
                 TransportAllocationOptionRow(
                     vehicle_definition_id=str(definition.id),
@@ -283,10 +279,6 @@ class LogisticsMovementPlanProjectorMixin:
                     nominal_capacity=self._directional_capacity_row(
                         plan.nominal_per_unit
                     ),
-                    suggested_capacity_max=self._directional_capacity_row(
-                        suggested_capacity_max
-                    ),
-                    capacity_presets=preset_rows,
                     fleet_total_units=fleet.total_units,
                     fleet_free_units=fleet.free_units,
                     operational_supply_at_full_unit=tuple(
@@ -328,9 +320,7 @@ class LogisticsMovementPlanProjectorMixin:
             day=sim.day,
             movement_hard_constraint=constraint,
         )
-        fleet, capacity_presets, suggested_capacity_max = self._transport_capacity_assistance(
-            vehicle_definition_id, source_id, plan
-        )
+        fleet = sim.transport.fleet_pool_snapshot(vehicle_definition_id, source_id)
         current_units = 0
         if query.allocation_id is not None:
             allocation_id = EntityId(query.allocation_id)
@@ -373,8 +363,6 @@ class LogisticsMovementPlanProjectorMixin:
             destination_id=str(destination_id),
             target_capacity=self._directional_capacity_row(target),
             nominal_capacity_per_unit=self._directional_capacity_row(plan.nominal_per_unit),
-            suggested_capacity_max=self._directional_capacity_row(suggested_capacity_max),
-            capacity_presets=capacity_presets,
             achievable_capacity=self._directional_capacity_row(achievable),
             required_units=required_units,
             available_units=available_units,

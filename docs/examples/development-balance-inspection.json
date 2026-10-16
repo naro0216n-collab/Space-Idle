@@ -1,0 +1,28 @@
+{
+  "format": "space-idle.development-experiment.v1",
+  "steps": [
+    {
+      "action": "queries",
+      "queries": {
+        "research": {"type": "GetResearch"},
+        "projects": {"type": "GetProjects"},
+        "build_options": {"type": "GetBuildOptions", "payload": {"operational_node_id": "base.location.earth_industrial"}},
+        "earth_flow": {"type": "GetFlowReport", "payload": {"operational_node_id": "base.location.earth_industrial"}},
+        "dependency": {"type": "GetDependencyAnalytics", "payload": {"scope_kind": "operational_nodes", "node_ids": ["base.location.earth_industrial"]}},
+        "fleet": {"type": "GetFleet"},
+        "logistics": {"type": "GetLogisticsSummary"}
+      }
+    },
+    {"action": "advance", "days": 2},
+    {
+      "action": "queries",
+      "queries": {
+        "research": {"type": "GetResearch"},
+        "earth_flow": {"type": "GetFlowReport", "payload": {"operational_node_id": "base.location.earth_industrial"}},
+        "dependency": {"type": "GetDependencyAnalytics", "payload": {"scope_kind": "operational_nodes", "node_ids": ["base.location.earth_industrial"]}},
+        "projects": {"type": "GetProjects"},
+        "cargo": {"type": "GetCargoFlows"}
+      }
+    }
+  ]
+}

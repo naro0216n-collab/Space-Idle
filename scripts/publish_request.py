@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,8 +17,8 @@ from urllib.parse import unquote, urlparse
 STATE_NAME = "space-idle-publish-state.json"
 WORKFLOW_REHYDRATE_MARKER_NAME = "space-idle-workflow-maintenance-rehydrate-required"
 MANIFEST_VERSION = 8
-CONNECTOR_CALL_BUDGET_BYTES = 144 * 1024
-TRANSPORT_CHUNK_BYTES = 16 * 1024
+CONNECTOR_CALL_BUDGET_BYTES = 1024 * 1024
+MAX_TREE_CALLS_PER_EXECUTION = 10
 MAX_PAYLOAD_PARTS = 256
 CONNECTOR_STATE_NAME = "connector-state.json"
 CONNECTOR_STATE_VERSION = 11
@@ -32,7 +33,6 @@ PUBLISH_IDENTITY_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 GITHUB_REPOSITORY = "naro0216n-collab/Space-Idle"
 PUBLISH_BRANCH = "publish"
 TARGET_BRANCH = "develop"
-ALLOWED_TRANSPORT_TARGETS = ("develop", "temp")
 TRUSTED_CONTROL_WORKFLOW = ".github/workflows/publish-gateway.yml"
 
 
@@ -512,8 +512,8 @@ def _tree_content_element(path: str, content: str) -> dict[str, object]:
     return {"path": path, "mode": "100644", "type": "blob", "content": content}
 
 
-def _tree_delete_element(path: str, *, mode: str = "100644", object_type: str = "blob") -> dict[str, object]:
-    return {"path": path, "mode": mode, "type": object_type, "sha": None}
+def _tree_delete_element(path: str) -> dict[str, object]:
+    return {"path": path, "mode": "100644", "type": "blob", "sha": None}
 
 
 def _tree_packet(base_tree: str, elements: list[dict[str, object]], batch_index: int, expected_tree: str | None = None) -> dict[str, object]:
@@ -538,62 +538,6 @@ def _list_publish_paths(repo: Path, tree: str) -> list[str]:
     return [line for line in output.splitlines() if line]
 
 
-def _direct_tree_entries(repo: Path, tree: str, directory: str) -> list[dict[str, str]]:
-    spec = f"{tree}:{directory}"
-    probe = subprocess.run(
-        ["git", "cat-file", "-e", spec], cwd=repo,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    if probe.returncode != 0:
-        return []
-    if _git("cat-file", "-t", spec, cwd=repo) != "tree":
-        raise PublishStateError(f"publish transport path must be a tree: {directory}")
-    output = _git("ls-tree", spec, cwd=repo)
-    entries: list[dict[str, str]] = []
-    for line in output.splitlines():
-        if not line:
-            continue
-        metadata, name = line.split("\t", 1)
-        mode, object_type, oid = metadata.split()
-        entries.append({"name": name, "mode": mode, "type": object_type, "oid": oid})
-    return entries
-
-
-def _compact_stale_delete_elements(
-    repo: Path, *, base_tree: str, target: str, stale: list[str],
-) -> list[dict[str, object]]:
-    deletes: list[dict[str, object]] = []
-    stale_set = set(stale)
-    for entry in _direct_tree_entries(repo, base_tree, ".publish"):
-        name = entry["name"]
-        path = f".publish/{name}"
-        if name != "transport":
-            deletes.append(
-                _tree_delete_element(path, mode=entry["mode"], object_type=entry["type"])
-            )
-            continue
-        if entry["type"] != "tree":
-            raise PublishStateError(".publish/transport must be a tree")
-        for transport_entry in _direct_tree_entries(repo, base_tree, ".publish/transport"):
-            branch = transport_entry["name"]
-            branch_path = f".publish/transport/{branch}"
-            if branch in ALLOWED_TRANSPORT_TARGETS:
-                if transport_entry["type"] != "tree":
-                    raise PublishStateError(f"publish transport slot must be a tree: {branch_path}")
-                if branch != target:
-                    continue
-                prefix = branch_path + "/"
-                for stale_path in sorted(path for path in stale_set if path.startswith(prefix)):
-                    deletes.append(_tree_delete_element(stale_path))
-                continue
-            deletes.append(
-                _tree_delete_element(
-                    branch_path, mode=transport_entry["mode"], object_type=transport_entry["type"]
-                )
-            )
-    return deletes
-
-
 def _write_blob(repo: Path, content: str) -> str:
     result = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"], cwd=repo, input=content.encode("utf-8"),
@@ -602,20 +546,32 @@ def _write_blob(repo: Path, content: str) -> str:
     return _require_hex_sha(result.stdout.decode("ascii").strip(), name="local transport blob OID")
 
 
+def _transport_part_capacity(*, target_branch: str) -> int:
+    """Use each tree call's verified byte budget, not an arbitrary fixed slice."""
+    path = f".publish/transport/{target_branch}/0000.b64"
+    empty = _tree_content_element(path, "")
+    # The base/tree SHA and numeric batch index have fixed widths. The Base64
+    # alphabet needs no JSON escaping, so each additional character adds one byte.
+    overhead = _connector_call_bytes(_tree_packet("0" * 40, [empty], 0))
+    capacity = CONNECTOR_CALL_BUDGET_BYTES - overhead
+    if capacity <= 0:
+        raise PublishStateError("Connector budget cannot hold one transport file")
+    return capacity
+
+
 def _payload_chunks(payload: str, *, target_branch: str) -> list[dict[str, object]]:
+    if not payload:
+        raise PublishStateError("publish payload is empty")
     slot = f".publish/transport/{target_branch}"
+    capacity = _transport_part_capacity(target_branch=target_branch)
     chunks: list[dict[str, object]] = []
-    for start in range(0, len(payload), TRANSPORT_CHUNK_BYTES):
+    for start in range(0, len(payload), capacity):
         index = len(chunks)
-        content = payload[start:start + TRANSPORT_CHUNK_BYTES]
-        path = f"{slot}/{index:04d}.b64"
         chunks.append({
             "chunk_index": index,
-            "path": path,
-            "content": content,
+            "path": f"{slot}/{index:04d}.b64",
+            "content": payload[start:start + capacity],
         })
-    if not chunks:
-        raise PublishStateError("publish payload is empty")
     if len(chunks) > MAX_PAYLOAD_PARTS:
         raise PublishStateError(
             f"publish payload needs {len(chunks)} transport files, exceeding limit {MAX_PAYLOAD_PARTS}"
@@ -629,23 +585,16 @@ def _desired_transport_elements(
     target = str(prepared["target_branch"])
     chunks = _payload_chunks(str(prepared["payload_b64"]), target_branch=target)
     desired_paths = {str(chunk["path"]) for chunk in chunks}
-    current_slot_prefix = f".publish/transport/{target}/"
-    allowed_other_prefixes = tuple(
-        f".publish/transport/{branch}/" for branch in ALLOWED_TRANSPORT_TARGETS if branch != target
-    )
+    slot_prefix = f".publish/transport/{target}/"
     stale: list[str] = []
     for path in _list_publish_paths(repo, base_tree):
-        if path in desired_paths:
-            continue
-        if path.startswith(current_slot_prefix):
+        # The transport tree contains only active fixed slots. An unexpected path
+        # is a control-plane inconsistency, not data for the next publish to erase.
+        if re.fullmatch(r"\.publish/transport/(develop|temp)/[0-9]{4}\.b64", path) is None:
+            raise PublishStateError(f"unsupported publish transport path: {path}")
+        if path.startswith(slot_prefix) and path not in desired_paths:
             stale.append(path)
-            continue
-        if any(path.startswith(prefix) for prefix in allowed_other_prefixes):
-            continue
-        stale.append(path)
-    deletes = _compact_stale_delete_elements(
-        repo, base_tree=base_tree, target=target, stale=stale
-    )
+    deletes = [_tree_delete_element(path) for path in sorted(stale)]
     elements = [
         *[_tree_content_element(str(chunk["path"]), str(chunk["content"])) for chunk in chunks],
         *deletes,
@@ -691,25 +640,14 @@ def _expected_tree_batches(
                         "update-index", "--add", "--cacheinfo", str(element["mode"]), oid, path,
                         cwd=repo, env=env,
                     )
-                elif element.get("sha") is None:
-                    if element.get("type") == "tree":
-                        indexed = _git("ls-files", "--cached", "--", path, cwd=repo, env=env).splitlines()
-                        for indexed_path in indexed:
-                            subprocess.run(
-                                ["git", "update-index", "--force-remove", "--", indexed_path],
-                                cwd=repo, env=env, check=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            )
-                    else:
-                        subprocess.run(
-                            ["git", "update-index", "--force-remove", "--", path], cwd=repo, env=env,
-                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        )
-                else:
-                    _git(
-                        "update-index", "--add", "--cacheinfo", str(element["mode"]), str(element["sha"]), path,
-                        cwd=repo, env=env,
+                elif element.get("sha") is None and element.get("type") == "blob":
+                    subprocess.run(
+                        ["git", "update-index", "--force-remove", "--", path],
+                        cwd=repo, env=env, check=True,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     )
+                else:
+                    raise PublishStateError(f"invalid fixed-slot transport element: {path}")
             expected_tree = _git("write-tree", cwd=repo, env=env)
             result.append({
                 "batch_index": batch_index,
@@ -731,7 +669,7 @@ def _build_transport_plan(
         "publish_head": publish_head,
         "publish_tree": publish_tree,
         "target_branch": prepared["target_branch"],
-        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
+        "transport_chunk_bytes": _transport_part_capacity(target_branch=str(prepared["target_branch"])),
         "payload_part_count": len(chunks),
         "chunks": chunks,
         "stale_transport_path_count": len(stale),
@@ -777,6 +715,8 @@ def _write_execution_packets(
     assert isinstance(plan, dict)
     batches = plan["batches"]
     assert isinstance(batches, list)
+    packet_dir = _connector_dir(repo) / f"inputs-{len(batches) + 1:03d}"
+    packet_dir.mkdir(exist_ok=False)
     tree_packets: list[str] = []
     tree_call_bytes: list[int] = []
     for index, batch in enumerate(batches):
@@ -787,7 +727,7 @@ def _write_execution_packets(
         call_bytes = _connector_call_bytes(packet)
         if call_bytes > CONNECTOR_CALL_BUDGET_BYTES:
             raise PublishStateError("generated create_tree call exceeds Connector hard ceiling")
-        path = _connector_dir(repo) / f"tree-batch-{index:03d}.json"
+        path = packet_dir / f"tree-batch-{index:03d}.json"
         path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         tree_packets.append(str(path))
         tree_call_bytes.append(call_bytes)
@@ -802,7 +742,7 @@ def _write_execution_packets(
             "parent_sha": state["publish_base_head"],
         },
     }
-    commit_path = _connector_dir(repo) / "create-transport-commit.json"
+    commit_path = packet_dir / "create-transport-commit.json"
     commit_path.write_text(json.dumps(commit_packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return tree_packets, tree_call_bytes, str(commit_path)
 
@@ -851,18 +791,24 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
     state["tree_packets"] = tree_packets
     state["commit_packet"] = commit_packet
     _write_connector_state(repo, state)
+    execution_index = _write_execution_index(repo, state)
+    execution_segments = _write_execution_segments(repo, state, execution_index)
+    execution_index = execution_segments[0]
     summary = {
         "stage": state["stage"],
         "request_id": prepared["request_id"],
-        "strategy": "fixed-slot-16kib-tree-content-batches",
+        "strategy": "fixed-slot-tree-content-batches",
         "connector_call_budget_bytes": CONNECTOR_CALL_BUDGET_BYTES,
-        "transport_chunk_bytes": TRANSPORT_CHUNK_BYTES,
+        "transport_chunk_bytes": plan["transport_chunk_bytes"],
         "payload_part_count": plan["payload_part_count"],
         "tree_call_count": plan["tree_call_count"],
         "tree_packets": tree_packets,
         "tree_call_bytes": tree_call_bytes,
         "tree_expected_shas": [batch["expected_tree"] for batch in plan["batches"]],
         "commit_packet": commit_packet,
+        "execution_index": execution_index,
+        "execution_segment_count": len(execution_segments),
+        "max_tree_calls_per_execution": MAX_TREE_CALLS_PER_EXECUTION,
         "stale_transport_path_count": plan["stale_transport_path_count"],
         "normal_pre_ref_helper_round_trips": 0,
         "normal_pre_ref_verification_reads": 0,
@@ -874,16 +820,191 @@ def cmd_connector_plan(args: argparse.Namespace) -> int:
             "force": False,
         },
         "next": (
-            "execute the generated GitHub.create_tree packets in order; each packet carries its expected_tree and "
-            "the next packet is based on that precomputed object identity. If a returned tree SHA differs, retry that "
-            "same packet and do not advance. Then execute GitHub.create_commit and immediately use its returned SHA "
-            "in one non-force GitHub.update_ref of publish. No helper call is required between these writes. After the "
-            "Publish Gateway run completes successfully, call record with that run evidence."
+            "Run the fixed scripts/publish_connector_launch.js in functions.exec using execution_index. "
+            "It verifies and clears each segment’s temporary Library inputs before GitHub writes, "
+            "runs at most 10 create_tree calls, and returns the next execution_index when needed. "
+            "Repeat the same fixed Launcher with that index until the final commit and ref update. "
+            "After Gateway success call record with the run evidence."
         ),
         "verified": True,
     }
     _write_summary(repo, summary)
     print(json.dumps(summary, indent=2))
+    return 0
+
+
+
+def _tool_call_fingerprint(text: str) -> int:
+    """Compact copy-integrity check; the Git tree SHA remains authoritative."""
+    value = 2166136261
+    for byte in text.encode("utf-8"):
+        value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
+    return value
+
+
+def _verified_execution_packets(repo: Path, state: dict[str, object]) -> list[dict[str, object]]:
+    """Read every original packet and validate it against the immutable execution plan."""
+    plan = state["plan"]
+    assert isinstance(plan, dict)
+    batches = plan["batches"]
+    files = state["tree_packets"]
+    if not isinstance(batches, list) or not isinstance(files, list) or len(batches) != len(files) or not files:
+        raise PublishStateError("invalid Connector execution plan")
+    packets: list[dict[str, object]] = []
+    for index, (file, batch) in enumerate(zip(files, batches)):
+        if not isinstance(batch, dict):
+            raise PublishStateError("invalid Connector tree batch")
+        packet = json.loads(Path(str(file)).read_text(encoding="utf-8"))
+        expected = _tree_packet(
+            str(batch["base_tree"]), list(batch["elements"]), index,
+            str(batch["expected_tree"]),
+        )
+        if packet != expected:
+            raise PublishStateError(f"tree packet no longer matches the active plan: index {index}")
+        packets.append(packet)
+
+    commit_packet = json.loads(Path(str(state["commit_packet"])).read_text(encoding="utf-8"))
+    expected_commit = {
+        "stage": "create-publish-transport-commit",
+        "action": "GitHub.create_commit",
+        "action_args": {
+            "repository_full_name": GITHUB_REPOSITORY,
+            "message": f"Publish transport {state['request_id']}",
+            "tree_sha": plan["final_tree"],
+            "parent_sha": state["publish_base_head"],
+        },
+    }
+    if commit_packet != expected_commit:
+        raise PublishStateError("commit packet no longer matches the active plan")
+    packets.append(commit_packet)
+    return packets
+
+
+def _write_execution_index(repo: Path, state: dict[str, object]) -> str:
+    """Index the original verified Connector packet files, without copying their contents."""
+    _verified_execution_packets(repo, state)
+    paths = [*state["tree_packets"], state["commit_packet"]]
+    directory = Path(str(paths[0])).parent
+    if directory.resolve() != (_connector_dir(repo) / f"inputs-{len(paths):03d}").resolve():
+        raise PublishStateError("Connector packet directory does not encode the input count")
+    entries: list[dict[str, object]] = []
+    for path in paths:
+        file = Path(str(path))
+        if file.parent.resolve() != directory.resolve():
+            raise PublishStateError("Connector packet path escapes active transaction")
+        raw = file.read_bytes()
+        raw.decode("ascii")
+        entries.append({
+            "name": file.name,
+            "size": len(raw),
+            "fnv32": _tool_call_fingerprint(raw.decode("ascii")),
+        })
+    index = {
+        "version": 1,
+        "request_id": state["request_id"],
+        "repository": GITHUB_REPOSITORY,
+        "develop_head": state["develop_head"],
+        "publish_base_head": state["publish_base_head"],
+        "publish_base_tree": state["publish_base_tree"],
+        "packets": entries,
+    }
+    path = directory / f"execution-index-{state['request_id']}.json"
+    encoded = json.dumps(index, indent=2, sort_keys=True) + "\n"
+    if path.exists() and path.read_text(encoding="ascii") != encoded:
+        raise PublishStateError("active Connector execution index differs from verified plan")
+    if not path.exists():
+        path.write_text(encoded, encoding="ascii")
+    return str(path)
+
+
+
+def _write_execution_segments(
+    repo: Path, state: dict[str, object], original_index: str,
+) -> list[str]:
+    """Prepare self-contained <=10-tree-call executions from one verified plan.
+
+    Short plans keep the original immutable index. The next index path is embedded
+    in each longer segment, so an operator only repeats the same fixed launcher.
+    No source commit, gateway packet or tree action is rewritten.
+    """
+    packets = _verified_execution_packets(repo, state)
+    trees = packets[:-1]
+    if len(trees) <= MAX_TREE_CALLS_PER_EXECUTION:
+        return [original_index]
+
+    base = _connector_dir(repo) / "segments"
+    count = (len(trees) + MAX_TREE_CALLS_PER_EXECUTION - 1) // MAX_TREE_CALLS_PER_EXECUTION
+    targets: list[tuple[Path, list[dict[str, object]], int, int]] = []
+    for segment in range(count):
+        first = segment * MAX_TREE_CALLS_PER_EXECUTION
+        end = min(first + MAX_TREE_CALLS_PER_EXECUTION, len(trees))
+        segment_dir = base / f"segment-{segment:03d}" / f"inputs-{end - first + 1:03d}"
+        segment_dir.mkdir(parents=True, exist_ok=True)
+        rows: list[dict[str, object]] = []
+        for local_index, tree in enumerate(trees[first:end]):
+            source = Path(str(state["tree_packets"][first + local_index]))
+            filename = f"tree-batch-{local_index:03d}.json"
+            destination = segment_dir / filename
+            raw = source.read_bytes()
+            raw.decode("ascii")
+            if destination.exists() and destination.read_bytes() != raw:
+                raise PublishStateError("segmented Connector packet differs from verified plan")
+            if not destination.exists():
+                destination.write_bytes(raw)
+            rows.append({"name": filename, "size": len(raw),
+                         "fnv32": _tool_call_fingerprint(raw.decode("ascii"))})
+        destination = segment_dir / "create-transport-commit.json"
+        raw = Path(str(state["commit_packet"])).read_bytes()
+        raw.decode("ascii")
+        if destination.exists() and destination.read_bytes() != raw:
+            raise PublishStateError("segmented Connector commit packet differs from verified plan")
+        if not destination.exists():
+            destination.write_bytes(raw)
+        rows.append({"name": "create-transport-commit.json", "size": len(raw),
+                     "fnv32": _tool_call_fingerprint(raw.decode("ascii"))})
+        targets.append((segment_dir, rows, first, end))
+
+    indices: list[str] = []
+    for segment, (directory, rows, first, end) in enumerate(targets):
+        next_path = (targets[segment + 1][0] / f"execution-index-{state['request_id']}.json") if segment + 1 < count else None
+        data = {
+            "version": 2,
+            "request_id": state["request_id"],
+            "repository": GITHUB_REPOSITORY,
+            "develop_head": state["develop_head"],
+            "publish_base_head": state["publish_base_head"],
+            "publish_base_tree": state["publish_base_tree"],
+            "first_tree_index": first,
+            "total_tree_count": len(trees),
+            "start_tree": trees[first]["action_args"]["base_tree_sha"],
+            "end_tree": trees[end-1]["expected_tree"],
+            "final_tree": state["plan"]["final_tree"],
+            "next_execution_index": str(next_path) if next_path else None,
+            "packets": rows,
+        }
+        path = directory / f"execution-index-{state['request_id']}.json"
+        encoded = json.dumps(data, indent=2, sort_keys=True) + "\n"
+        if path.exists() and path.read_text(encoding="ascii") != encoded:
+            raise PublishStateError("segmented Connector index differs from verified plan")
+        if not path.exists():
+            path.write_text(encoded, encoding="ascii")
+        indices.append(str(path))
+    return indices
+
+
+
+def cmd_connector_segments(_: argparse.Namespace) -> int:
+    """Recover a previously planned large transaction without reauthoring it."""
+    repo = _repo_from_cwd()
+    state = _read_connector_state(repo)
+    _verify_prepared_request(repo, _manifest_path(repo))
+    if state["manifest_sha256"] != _manifest_sha256(_manifest_path(repo)):
+        raise PublishStateError("prepared publish request changed after connector-plan")
+    original_index = _write_execution_index(repo, state)
+    indices = _write_execution_segments(repo, state, original_index)
+    print(json.dumps({"execution_index": indices[0],
+                      "execution_segment_count": len(indices),
+                      "max_tree_calls_per_execution": MAX_TREE_CALLS_PER_EXECUTION}, indent=2))
     return 0
 
 
@@ -991,6 +1112,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--develop-head", required=True)
     plan.add_argument("--publish-head", required=True)
     plan.set_defaults(func=cmd_connector_plan)
+    sub.add_parser(
+        "connector-segments", help="recover a previously planned large transaction as <=10-tree-call executions",
+    ).set_defaults(func=cmd_connector_segments)
 
     cancel = sub.add_parser("cancel", help="cancel a pre-ref active transaction after one combined ref observation")
     cancel.add_argument("--develop-head", required=True)

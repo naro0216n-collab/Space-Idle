@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from math import isfinite
 from typing import Literal, TypeAlias
 
 from ..priority import ActivityPriority
@@ -99,12 +100,17 @@ class SpatialDevelopmentRecipe:
     prerequisite_technologies: frozenset[DefinitionId] = frozenset()
     self_deploying: bool = False
     knowledge_requirements: tuple[KnowledgeRequirementSpec, ...] = ()
+    # A terrain engineering recipe declares the resulting landform. The
+    # baseline Resource and work commitment is not a free instantaneous buff.
+    target_terrain_profile_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name:
             raise ValueError("spatial development recipe display name must not be empty")
         if self.self_deploying:
             raise ValueError("location development must consume construction capacity")
+        if self.target_terrain_profile_id is not None and not self.target_terrain_profile_id:
+            raise ValueError("terrain engineering requires a target landform")
 
 
 ProjectRecipe: TypeAlias = (
@@ -139,8 +145,14 @@ class SurfaceCellDevelopmentTarget:
     cell_id: SurfaceCellId
 
 
+@dataclass(frozen=True)
+class SurfaceCellEngineeringTarget:
+    recipe_id: DefinitionId
+    cell_id: SurfaceCellId
+
+
 ConstructionTarget: TypeAlias = (
-    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget
+    NewFacilityTarget | FacilityUpgradeTarget | FacilityDecommissionTarget | SurfaceCellDevelopmentTarget | SurfaceCellEngineeringTarget
 )
 
 
@@ -187,9 +199,14 @@ class ConstructionProject:
     # Facility placement state only. Geographic project target cells live on
     # their target type so one cell never has two authoritative fields.
     site_cell_id: SurfaceCellId | None = None
+    # Frozen at project creation: subsequent engineering cannot alter already
+    # committed work, even after Save / Load or another terrain modification.
+    planned_spatial_work: float | None = None
 
     def __post_init__(self) -> None:
         self.priority = ActivityPriority(self.priority)
+        if self.planned_spatial_work is not None and (not isfinite(self.planned_spatial_work) or self.planned_spatial_work <= 0):
+            raise ValueError("planned spatial work must be finite and positive")
         if self.salvage_recovered_fraction is not None and not 0.0 <= self.salvage_recovered_fraction <= 1.0:
             raise ValueError("salvage recovered fraction must be within 0..1")
         if any(amount < 0.0 for amount in self.salvage_recovered.values()):

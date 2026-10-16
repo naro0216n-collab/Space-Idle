@@ -75,6 +75,11 @@ def validate_simulation_configuration(sim: Simulation) -> None:
 def validate_runtime_state(sim: Simulation) -> None:
     """Validate configuration, then each domain's mutable-state invariants."""
     validate_simulation_configuration(sim)
+    validate_domain_runtime_state(sim)
+
+
+def validate_domain_runtime_state(sim: Simulation) -> None:
+    """Validate only State after this composition's definitions were validated."""
     for extension in sim.domain_extensions:
         validator = extension.runtime_validator
         if validator is not None:
