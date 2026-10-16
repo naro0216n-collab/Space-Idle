@@ -94,6 +94,8 @@ _PHYSICAL_ROLES: dict[str, FacilityRole] = {
     'autonomous_multi_tool_excavator': FacilityRole(('metal_ore_extraction','mineral_extraction','surface_survey'), .8, extraction_tpd=2.2,cell=True),
     'earth_biomass_feedstock_collector': FacilityRole(('biomass_collection','carbon_nutrient_separation'), .12, throughput=.35, extraction_tpd=.55),
     'earth_basic_electronics_shop': FacilityRole(('earth_basic_electronics',), .7, throughput=.8),
+    'basic_billet_furnace': FacilityRole(('primary_metal_casting',), 1.1, throughput=.55),
+    'basic_ceramics_kiln': FacilityRole(('basic_ceramic_firing',), .75, throughput=.65),
     # High-energy magnetic confinement experiments draw power from the local
     # grid; research stages consume finite plasma feedstock and test work.
     # No fusion generator is advertised until a fuel/cooling output Domain exists.
@@ -165,6 +167,8 @@ _EXTENDED_FACILITY_ROWS = (
     ('autonomous_multi_tool_excavator', '自律資源採取・試料計測複合機', 3, ('RP-RESOURCE-CHAIN-05',), ('base.resource.structural_components', 'base.resource.machinery', 'base.resource.precision_electronics')),
     ('earth_biomass_feedstock_collector', '初期炭素・栄養資源回収設備', 1, (), ('base.resource.structural_components', 'base.resource.machinery')),
     ('earth_basic_electronics_shop', '低歩留まり地球基礎電子部品工場', 1, ('PL-EARTH-PRECISION-PARTS',), ('base.resource.structural_components', 'base.resource.machinery')),
+    ('basic_billet_furnace', '基礎鉱石鋳造炉', 1, ('PL-EARTH-MINERAL-REFINING',), ('base.resource.structural_components', 'base.resource.machinery')),
+    ('basic_ceramics_kiln', '小規模鉱物焼成窯', 1, ('MS-MATERIALS-01',), ('base.resource.structural_components', 'base.resource.machinery')),
     ('fusion_confinement_testbed', '磁化核融合実験設備', 6, ('SF-FUSION-01',), ('base.resource.refractory_alloy', 'base.resource.thermal_control_assemblies', 'base.resource.hardened_electronics')),
     ('pulsed_fusion_testbed', 'パルス核融合試験設備', 7, ('SF-FUSION-02',), ('base.resource.refractory_alloy', 'base.resource.radiation_shielding_panels', 'base.resource.thermal_control_assemblies')),
     ('fusion_blanket_testbed', '核融合ブランケット試験装置', 7, ('SF-FUSION-05', 'SF-MAT-01'), ('base.resource.refractory_alloy', 'base.resource.thermal_control_assemblies', 'base.resource.radiation_shielding_panels')),
