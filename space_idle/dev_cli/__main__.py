@@ -1,4 +1,4 @@
-"""Top-down real-play-time Content tuning; no local diagnostic subcommands."""
+"""One public whole-horizon development-constraint evaluation command."""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ from pathlib import Path
 from ..bootstrap import build_game_application, build_game_application_for_load
 from ..persistence import load_game
 from ..app_contracts.queries import GetTransportAllocationPreview
-from ..balance.pacing import tune
+from ..balance.pacing import evaluate
 from ..balance.application_inputs import collect_application_inputs
 
 
@@ -22,8 +22,8 @@ def _load(path: Path) -> dict:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Time-first, whole-game Content tuning")
-    parser.add_argument("--targets", type=Path, required=True, help="cumulative play-hour milestones and desired outcomes")
+    parser = argparse.ArgumentParser(description="Whole-development coupled-constraint evaluation")
+    parser.add_argument("--targets", type=Path, required=True, help="authored development objectives, activities and time periods")
     parser.add_argument("--from-save", type=Path, help="optional canonical Save as the initial assets and completed research")
     parser.add_argument("--output", type=Path, help="write complete integrated JSON evaluation")
     args = parser.parse_args(argv)
@@ -35,7 +35,7 @@ def main(argv=None) -> int:
             vehicle_definition_id=vehicle, source_id=origin, destination_id=destination,
             target_forward_t_per_day=rate, target_reverse_t_per_day=0.0)))
 
-    report = tune(collect_application_inputs(app), _load(args.targets), transport_preview=transport_preview)
+    report = evaluate(collect_application_inputs(app), _load(args.targets), transport_preview=transport_preview)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")

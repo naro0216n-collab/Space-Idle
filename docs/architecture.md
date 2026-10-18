@@ -1224,21 +1224,17 @@ LLMはCore Stateを自由に書き換えず、検証可能なCommand / Eventへ�
 13. **Application・Persistence・Validationまで同じ契約を貫く。** UIはDomain判定を再計算せず、Saveはdomain-owned authoritative Stateのみを保持し、Validationは不変条件とState ownershipを検査する。
 14. **抽象化は共有される意味へ限定する。** 複数Domainや同種Contentが同じState ownership・保存則・Requirementを共有するときに共通契約を置く。新しいゲーム上の意味が必要になった場合は、その責務を正準設計へ追加してからCoreを拡張する。
 
-### 17.1 時間起点のContentバランス調整とApplication境界
+### 17.1 全期間の結合制約とApplication境界
 
-開発CLIは累計プレイ時間と活動規模から全8段階の研究・資本・継続運用・供給・物流・人口を評価する**一つの公開操作**だけを提供する。入力は累計順の`space-idle.pacing-targets.v1`で、基準速度の1 game day = 実時間1秒を換算尺度とする。これはGame State遷移、実完了日、実行可能Buildの予測ではない。
+開発CLIは全期間の発展目的と期間別活動仮説を一度に評価する単一の公開操作を持つ。主入力は発展目的・工学的役割・目的間関係・活動と規模・地点・時間・選択方法であり、段階別数値目標の事後集約ではない。Research ID、Facility数、Process、輸送量は目的へ結合する根拠として扱い、単独KPIとしない。
 
-正準GameApplicationは研究StageとPrerequisite、Facility/Vehicle Recipeと能力、Process/Extraction、World/Node、Inventory/Facility/Fleet/Technology/Populationの開始実State、必要に応じてTransport Previewを副作用のないProjectionとして提供する。GUIとCLIは**同一のApplication Query投影**からこれらを取得する。Definitionは`GetCatalog`、実資産・在庫・人口・選択済み工程は`GetOperationalNode`、Fleetは`GetFleet`、研究実状態は`GetResearch`を使用する。Worldの全セル物理分布は非Player用の`GetDevelopmentWorldReference`で区別し、HTTP/UIへ公開しない。完了TechnologyはResearch表示行から推測せず、同じResearch Queryのauthoritativeな完了Technology一覧を使う。Projectorは所有DomainのDefinition/Stateから投影する唯一の経路とし、GUI表示と開発CLIが二重に係数やStateを再構成しない。CLIはDomain Stateを所有せず、その係数と設計者入力を用いて数量だけを導出する。開発側の`balance/application_inputs.py`はApplication Query DTOからバランス数量入力への整形のみを担当し、Simulation/private Domainを参照しない。取得対象の登録追加に手動のCLI側配線を要しないこと、投影未定義の係数は暗黙のゼロにしないことを契約とする。生産・建設・研究・物流・人口のEligibility、Allocation、Inventory会計、Save/Load、Offline進行を独立実装しない。
+GameApplicationの副作用のない公開Queryを唯一のSourceとする。登録Definitionは `GetCatalog`、実施設・Inventory・人口は `GetOperationalNode`、Fleetは `GetFleet`、Research実Stateと完了Technologyは `GetResearch`、必要な物理設計条件は非Player向け `GetDevelopmentWorldReference`、Movement・輸送の実行条件は正準Previewを使う。GUI・CLIは同じProjectionを読む。係数の抽出はApplication Query DTOからの整形に限り、private Domain Stateを直接参照しない。未投影の係数をゼロへ変換しない。
 
-数量計算の基礎は次の関係とする。
+一次モデルは期間・地点・Resource・Capability・Technology・取得資産をキーとする数量・依存関係とする。設計上の取得と継続運用、同時需要、複数産出工程と副産物、在庫と期末能力、各期間の継承、条件付き供給、輸送方向と遅延の未確認条件を同じ台帳に載せる。開始実State、設計者が選択した将来取得・活動、方式依存の名目参照量、実Applicationで成立確認した事柄の出典を混同しない。無条件の供給元、実完成・実到着・Research完了をCLIが創作しない。必要な計算は数量制約であり、プレイヤーの行動・Simulation時系列・Resource Allocationを独立実装しない。
 
-1. 研究群・施設/Fleet取得・人口/輸送・稼働条件から、地点別の最終用途Resource需要、一時的取得負担、Workと期末継続需要を取得する。研究Prototypeの投入地点が未選択なら未割当として保持する。
-2. 設計者が選択した供給方式についてのみ、Resource需要に対するProcess/Extractionの条件付き稼働量を算出する。同一Processの複数産出物・副産物は一回の稼働量から計上し、その投入を上流需要へ接続する。供給方式未選択、地質・技術・投入資材が未成立、循環依存の開始条件不明は供給成立として扱わず未確定情報を保持する。
-3. 供給方式から計算される参考必要設備数、Transport Previewの参考Fleet数、人口支援設備参考台数、研究Provider参考台数は**資本取得に加算しない**。取得投資に算入するのは開始実資産との差として設計者が明示したFacility/Vehicle目標のみ。段階間に引き継ぐその資産と選択研究は、明示された**計画状態**であって実完了Stateではない。
-4. 資材の初期Stock・一時的資本需要・期末継続投入・条件付き中間投入/産出・Resource別地点別の輸送を区別する。明示された輸送目標は出発NodeのResource需要に含め、到着Nodeへの搬入は未成立の条件付き参考量として別計上する。これを実Inventoryや供給成立とみなさず、往復Fleet・移動所要時間等は正準Transport Preview/実Applicationに委ねる。期末設備を区間全体で運転したと仮定せず、取得総量を期間で除した値は供給規模の比較尺度に限定する。Power、Work、Service、Fleet、研究RP生成・execution・Pool容量、技術解禁・建設先行条件を同時性の制約として表示するが、最適な成長過程を求めない。
-5. CLIは各区間の実際の数量変化から全期間の結合した規模推移を導出し、技術的数量・根拠とは別階層に保持する。入力の存在、段階数、継承された資産・初期負荷を、新たな発展が評価された証拠としない。標準出力は全体系の判断に必要な結合関係と未記述・未検証条件に限り、個別係数・不足量を独立KPIや編集勧告へ昇格させない。数量推移が存在しても意味的妥当性や実ゲームでの成立を自動認定せず、詳細を参照した後も全期間で変更の採否を判断する。独立した最適化・比較・Simulation経路は設けない。
+採否判断の単位は全期間の結合した発展構造に固定する。CLIの判断層には目的と根拠の対応、共通制約を介した期間・Domain横断関係、競合・矛盾、未確認の条件とその全期間への意味を提示し、Definition係数や地点別数量は同じモデルの参照根拠層に保持する。論点・詳細表示範囲は絞れるが、全体系から切り離された局所評価、差分スコア、自動修正勧告は設けない。実成立の確認にはGameApplicationの通常Commandと実状態遷移を用い、評価結果と照合する。
 
-正準GameApplicationの通常Commandによって研究・建設・生産・輸送・人口の具体的進行を検証し、そこで発見したContent上の問題を全体系評価へ戻す。CLIは自動適正値算出、攻略計画生成、Game Stateの創作、第二のSimulationを行わない。Calculation契約とContent調整判断の妥当性は別々に検証する。特定の段階日数、Facility数量、選択研究群の値を恒久Coreテストへ固定しない。
+CLIの入力形式は `space-idle.development-structure.v2`。単一操作 `python -m space_idle.dev_cli --targets <path> [--from-save <path>] [--output <path>]` で設計入力と実開始Stateに基づく結合レポートを作る。これはSaveまたはGame Stateそのものではない。Core・Persistenceに調整専用State ownershipを追加しない。
 
 ## 18. アーキテクチャ定義の要約
 

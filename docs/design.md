@@ -981,86 +981,17 @@ Facility・VehicleのContent候補（以下の配置先は想定用途・初期S
 
 ## 22. ゲーム性評価段階と全体系Content調整
 
-8表示段階に沿う発展仮説・累積投資・需給・時間の具体的な調整観点は `balance-principles.md` にまとめる。本節のゲーム上の意味と、`architecture.md` §17.1 の評価境界を正本とする。
+全体系Content調整は、初期から後期へ研究・産業・建設・物流・立地・人口・時間が連続して発展する構造を設計する作業である。研究表示段階と累計時間は観測のための変更可能な参照枠であって、全研究取得、特定地点や特定施設数、唯一の取得順をCoreのGateやゲームの必達条件にはしない。工学的に合理的な複数の実現方法とPlayerの選択余地を残す。
 
-### 22.1 目的と責務
+調整の主入力は全期間の発展目的と活動の技術的役割・規模・時間・地点間分担・世代間継承・選択可能な実現方法とする。現行施設の能力や研究価格から到達像を逆算しない。目的は実DefinitionとApplication契約へ結び付け、未選択の方法、未知の条件、実Stateと設計仮説を区別する。個別Researchや設備台数、工程、輸送量は発展目的の実現に関する仮説と根拠であり、独立した改善対象ではない。
 
-開発時の全体系バランス調整は、Playerの最適な攻略順・建設比率・運送計画を発見する作業ではない。研究の各成熟段階から地球圏産業、他天体進出、複数拠点での物流・大規模産業へ発展できるだけの**Contentの種類、技術的役割、数量、時間、取得・維持負担、Worldの差異**を用意し、相互に調整する作業である。研究RP・実行能力だけでなくFacility、Vehicle、Process、Extraction、Recipe、Resource、Power、Movement、Location、初期Scenarioの配置・在庫、World物理パラメータまで可変の設計候補とする。現行登録Content、表示研究世代、初期設備数、既存Scenario、過去の評価指標を正解として固定しない。
+全期間の研究取得、設備・Fleetへの一時的投資、継続維持、加工・採掘、Power・Work・Service、人口維持、物流、Technology条件を、期間・地点・Resource・共有能力・既存資産・世代継承で結合する。共通Resourceの需要競合、並行活動、複数出力の工程、前後期間への負担、輸送遅延、設備更新を一つの依存・数量関係に保つ。初期Stock、名目能力、選択方式に依存する産出を、実成立済みの供給とみなさない。Game Stateの進行・Player操作・配分は評価器で再現せず、実成立性はGameApplicationで検証する。
 
-バランス評価の出発点は、想定する発展段階で宇宙開発にどのような技術・設備・Fleet・産業・物流・活動・量的成長が存在すべきかという設計仮説である。例えば研究第一段階を終えた頃の地球・軌道の設備と活動規模を**仮定して吟味**し、初期Scenarioから必要な研究・建設・製造・操業・輸送の負担と、その後の成長を確認する。別天体への進出や中期ネットワークも、先行する技術・取得・供給・物流の条件から説明できなければ、初期状態に資産や供給能力を無償配置して正当化しない。想定が不自然なら評価条件だけでなくContent、発展区分、初期条件も再設計する。特定の一本道・正しい施設台数・到達日数は規定しない。
+**採否の最小単位は全期間の発展構造**とする。論点や詳細根拠を絞る際も、正準関係から影響範囲と前後期間・上流下流・共有能力・代替方式を辿り、局所的な数値増減や独立した不足量を改善KPIにしない。発展目的・期間・規模の変更も許容し、負担の移転や到達像の変化を同じ全体系の相互整合性で判断する。未確認の関係を影響なしに変換しない。
 
-必要な数量は**全体系の需要と供給**を調べるために用いる。研究中の生産、施設とFleetの取得、維持、居住、探査、建設、輸送のResource・Service・Power負荷と、設備から得る処理量・能力を、共通の単位と期間、発生源で把握する。単体設備の採算、孤立した研究期間、選んだODの不足などをゲーム全体の妥当性の代理指標にしない。施設の工学的役割、前後の世代、規模、複数地点の資源配置と発展状況からContent追加・統廃合も検討する。特定Facilityの選択価値だけでなく、増設による物量の成長や世代交代にも意味がある。
+判断出力は、全期間の発展目的を支える結合関係、競合・矛盾する関係、未選択・未確認の成立条件と、前後期間への含意を扱う。係数・地点別数量・Definition IDは追跡可能な根拠層に分けるが、単一スコア、部門別合否、局所比較・修正勧告、自動Content適正値探索は置かない。判断層と根拠層は同一の数量・依存モデルから導出し、局所改善だけでは全体系の変更を採用できない。
 
-### 22.2 実プレイ時間起点のトップダウン数量調整
-
-全8表示段階の累計実プレイ時間と、それぞれで到達してほしい宇宙活動・研究・産業・物流・人口・拠点規模を**現行Facilityの名目生産量から逆算せず**先に仮定する。活動像と期間、研究群、施設・Vehicle取得、Resource生産拡張目標、World条件は調整可能であり、段階Gate、必修研究、正しい建設順、唯一の産業構成ではない。
-
-活動から研究RPとtyped Stage、試作、施設建設、Vehicle製造、既存設備維持、生命維持、稼働および物流の需要を数量化し、選択した供給方式のProcess/Extraction入出力・副産物・必要設備能力・技術条件・取得投資へ接続する。**最終需要と中間投入を区別し、同じ工程を産出Resourceの数だけ重複稼働させない。** 供給方式が未選択の需要は未確定のままとする。循環する取得・製造条件は既存資産や初期在庫で開始可能と仮定せず、成立条件が未確認であることを示す。必要数量の展開は設計者の方式指定に従うのであって、CLIが適正方式や最適な工程規模を選ぶことではない。
-
-区間内に一度取得する資材・Work、区間開始の既存能力、区間目標時点の名目能力、期末の継続投入・出力、区間平均に平準化した取得負担を異なる数量として扱う。後者は時間尺度を合わせるための参照量であり、実際の建設時期、Research Allocation、輸送到着やResource供給を予測しない。区間内の同時Resource/Power/Service/Fleet負荷や、研究・技術解禁・建設・物流の前提関係を見て実成立が判断不能な箇所を識別する。必要な場合に限って正準GameApplicationの通常状態遷移で実成立性を確認する。
-
-実Scenario/Saveに存在する資産とTechnology、設計者が明示した取得目標と研究群、CLIが必要量から導いた参考設備・Fleet台数を区別する。段階をまたぐ設計目標は**計画上の開始条件**として引き継ぐが、実ゲームでの取得実績には変換しない。研究Provider、産業Process、Transport Preview、人口維持の参考台数を明示的な取得目標へ昇格させない。Location未設立、取得時期不明、技術未解禁、採掘地質・Survey未確認、Allocation未確認、輸送実行未確認等は、依存する数量と時間評価へ条件付き情報として伝播させる。
-
-GUIとCLIは同じGameApplicationのDefinition・実State・判定Queryを情報源とする。CLI専用の横断Definition抽出やDomainのprivate State参照を追加せず、UI投影に調整用の数量が足りない場合はその所有DomainのApplication公開契約を補強する。物理Worldの非公開設計統計はPlayerに表示する知識と区別する。
-
-バランス調整の判断単位とKPIは、全期間の研究・産業・投資・物流・人口・時間が一体で発展する構造とする。段階名や形式的な入力の存在ではなく、区間間の実際の発展変化と各負担の結合した規模推移を判断材料にする。個別の数量・能力・不足は改善目標ではなく根拠として扱い、全体の発展と世代間連接を評価してContent変更を選ぶ。詳細を参照した後も同じ全体系で採否を判断し、発展像の未記述・未評価と数量上の条件付き成立を区別する。
-
-CLIは**単一の全体系評価操作**に限り、全体サマリー・段階別数量・Definition ID付き根拠を一度に出力する。値の由来は実State、設計仮説、選択方式に依存する条件付き参照量、実成立未確認を区別する。Research費用・Provider性能・Facility/Vehicle取得費と能力・Recipe・World・初期資産・活動規模は全て同時に変更候補とする。局所的な前後比較、適正倍率、Player最適Build、自動調整器、第二のSimulationは作らず、設計者が変更後の全段階の連接を判断する。
-
-### 22.3 調整の成果と検証
-
-発展段階・研究体系・設備群・立地・Worldの相互依存を調べ、どのContent要素が不足し、過大・過小・重複・断絶しているかを根拠付きで示して、関係するContentを**まとまりとして**変更する。成果は比較ケース数や計算された項目数ではなく、Contentの構成・量的成長・期間・物量について説明可能な設計判断と、その変更後の再評価で判定する。現段階で個別のバランス値や理想的な進行手順を固定しない。
-
-機能上の不具合は実Applicationと所有Domainの状態遷移を用いて検証し、Resource保存・有限能力・Save/Load・Offline等を確認する。数量調査のために第二のResearch/Logistics/Population Simulationを追加せず、恒久テストを特定の最適配置、研究日数、固定した発展像に紐付けない。分析機能自体は、本当に調整判断を可能にした最小契約だけを検証し、必要性を失ったら削除する。
-
-優先評価対象：
-
-- 自動時間進行、速度変更、一時停止、日次canonical Simulation、Offline同値性
-- Research Point生成・貯蔵・消費とPool admission競合
-- Scientific ExplorationによるFleet unit拘束、有限RP budget、Pool admission、Movement disposition
-- Research Tier / Level
-- 複数Research Project、Activity Priority、Theory / Prototype / Demonstration / Operational Experienceのtyped ordered Stage
-- Technology Unlock / Operational Experienceの単一状態所有
-- 明示Resourceを使うConstruction Recipe（一般Contentでは2〜3主要Resourceを目安とするがCore上限にはしない）
-- 建築物の維持Execution Requirement / Supply Requirement
-- Execution Requirement BundleによるDomain横断の複合Resource / Service競合
-- 5段階Activity Priorityと同順位fair allocation
-- Stock / Pool admissionを含む出力側capacity競合
-- Capability / Service Capacity分離と共有capacity競合
-- Process入出力とUI可視化
-- 地球初期採掘・基礎産業
-- Vehicle建造とFleet数量管理
-- Transport Allocationの方向別Capacity targetとProvisioning Priority、Required Fleet Unitsの派生
-- 成立済みNetwork内の通常auto-routingと必要時だけのhard routing constraint
-- 通常需要の自動補給と、追加備蓄としてのTarget Stock
-- Survey scope / goal指定とProvider / Observation Modeの条件付き自動解決
-- Decommission / Retirementの比例salvage回収と既存在庫保全
-- Transport AllocationからのTransport Capacity自動生成
-- Nominal / Available / Used / Spare Capacityとlimiting factor
-- 発電・配電・部分稼働
-- 在庫・特殊保管のPhysical / Usable Storage Capacity・必要な有限荷役Service
-- Celestial Bodyごとに可変数のSurface Cellを持つ天体マップ
-- Surface拠点なしの軌道SurveyからKnowledge Requirementを満たし、typed Founding targetとDeployment Recipe manifestで任意地点へ最初のLocationを設立し、隣接Cellを開発する一連の進行
-- Resource Potential / soft saturation採掘
-- Surface Infrastructureによる大規模Locationの集約内部物流負荷
-- Operational NodeとSurface Location / non-surface Spatial contextの分離
-- 任意Operational Node間のSpatial Relation / Movement Plan導出
-- 通常物流のaggregate Transport CapacityとCargo Flow
-- direct handoff / Storage経由handoff / arrival waiting
-- Supply Requirement、Target Stock、future-aware sourcing / dispatch、auto-routing結果とrouting hard constraint
-- 長距離latency下でのProjected Material ReadinessとTransport shortfall表示
-- External Resource Marketの有限buy / sell availability、Funds決済、通常Cargo lifecycle / Storage契約
-- Facility Decommission / Fleet Retirementと比例salvage settlement
-- 推進剤の実資源化
-- 複数Surface Cell / Resourceを束ねるResource Survey、Knowledge Level / uncertainty表示、Fleet-backed Survey commitment
-- 初期月面ContentでのISRU・現地加工
-- Location / Operational Node集合のロケーション産業自立・外部依存分析
-- Process選択、routing hard constraint、Fleet commitment、Research stage、Survey Knowledgeを含むSave/Load / Offline Progress
-- Bottleneck表示
-
-FundsはResource売買決済だけに用い、一般的な活動コストや報酬ループを進行軸にしない。
-
-複数戦略を比較し、低Tier研究資産を長く育てる戦略と新Tierへ早期更新する戦略、輸送力増強と現地生産、Vehicleを物流へ使うか探査へ使うか、地球産業を拡張するか宇宙資源利用へ早期移行するか等に合理的なトレードオフが生まれることを確認する。
+実際の調整では、全期間の発展目的を構成し、取得・運用・供給・能力・物流・時間の関係へ接続し、相互整合性とトレードオフを判断した後に関係Content群を変更する。変更後に同じ全体系で採否を判断し、必要な実成立性を正準Applicationの通常操作と状態遷移で検証する。Game CoreやPersistenceに調整専用Stateを設けない。具体的な期間、数量根拠と調整手順は `balance-principles.md`、Application境界は `architecture.md` §17.1 に定める。
 
 ---
 

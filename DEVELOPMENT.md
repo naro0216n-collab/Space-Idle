@@ -62,37 +62,18 @@ python scripts/local_test_run.py status <startで返されたrun_id>
 
 ### バランス調整専用CLI
 
-時間と発展規模を先に設定してContent費用・能力を逆算する**単一の**CLIとする。個別Resource調査や施設前後比較を独立したコマンドにしない。
+CLIは全期間の発展目的と、その目的に紐づく各期の具体的な取得・操業・物流・人口計画を、同一の依存・数量モデルとして出力する。詳細根拠の確認は全体系の採否判断から切り離さない。
 
 ```bash
-python -m space_idle.dev_cli --targets /temp/pacing-targets.json --output /temp/pacing-report.json
-python -m space_idle.dev_cli --targets /temp/pacing-targets.json --from-save /temp/base-save.json --output /temp/pacing-report.json
+python -m space_idle.dev_cli --targets /temp/development-structure.json --output /temp/development-report.json
+python -m space_idle.dev_cli --targets /temp/development-structure.json --from-save /temp/base-save.json --output /temp/development-report.json
 ```
 
-`--targets`は`space-idle.pacing-targets.v1`。各milestoneの`cumulative_hours`は基準速度における実プレイ時間の累計（1 game day = 実時間1秒）。選択研究群とPrerequisiteの現行Theory RP費用、区間全体を使う場合の必要平均RP/day、明示的に`research_time_share`を指定した場合の別の必要RP/day、開始時と期末の名目研究能力を区別して表示する。研究時間割合は省略でき、省略時に任意の割合を暗黙設定しない。RP費用・Provider性能・Facility/Vehicleの性能・Recipe・時間目標は全て調整変数であり、CLIが正しい数値を自動決定することはない。
-```json
-{
-  "format": "space-idle.pacing-targets.v1",
-  "milestones": [
-    {"name": "early", "cumulative_hours": 4,
-     "research_ids": ["AR-AUTONOMY-ROBOTICS-01"],
-     "production_targets": [{"node": "base.location.earth_industrial",
-       "resource": "base.resource.machinery", "tonnes_per_day": 6,
-       "method": "base.process.basic_machinery", "facility": "base.facility.basic_machinery_works"}]},
-    {"name": "later", "cumulative_hours": 12,
-     "research_ids": ["AR-AUTONOMY-ROBOTICS-02"],
-     "production_targets": [{"node": "base.location.earth_industrial",
-       "resource": "base.resource.machinery", "tonnes_per_day": 20,
-       "method": "base.process.basic_machinery", "facility": "base.facility.basic_machinery_works"}]}
-  ]
-}
-```
+`--targets`は`space-idle.development-structure.v2`。全体の`development.intent`、`development.objectives[]`（`id`、工学的目的`purpose`、`role`、他の目的IDとの`relationships`）と、`periods[]`（一意な`id`、`purpose`、増加する`cumulative_hours`、`activities[]`）を含む。各activityは全期間で一意の`id`、`objective`、`kind`と、その種類に対応するDefinition・地点・数量を持つ。期間ごとに同じ目的を独立評価・採否するものではない。
 
-研究Provider候補は全登録Contentから取得条件・単位性能を表示する。`research_provider: {"node": ..., "facility": ...}`は名目台数の参考選択にすぎず、自動的に資産目標を増やさない。研究設備への投資は明示的な`facility_targets`で指定する。`facility_targets`/`vehicle_targets`は`[{"node": ..., "facility"または"vehicle": ..., "count": ...}]`の累計目標。`production_targets`で方式を選ばない場合は生産候補と名目必要台数だけ表示し、投資資材へは算入しない。生産・輸送・人口目標は次のmilestoneで変更されない限り継承する。`transport_targets`は`source`/`destination`/`resource`/`tonnes_per_day`と任意`vehicle`、`population_targets`は`node`/`people`と任意の`housing_facility`/`life_support_facility`を指定する。Provider選択時は人数から名目必要台数とLife Support Resource需要を逆算する。将来の拠点は`prospective_locations`に`id`とWorldの`body_id`を指定する。
+activityの`kind`は、`research`（`definition`、任意の`node`）、`facility`と`vehicle`（`node`、`definition`、`target_count`）、`process`と`extraction`（`node`、方法`definition`、`facility`、名目稼働単位/日の`rate_per_day`）、`transport`（`source`、`destination`、`resource`、`rate_per_day`、任意`vehicle`）、`population`（`node`、`people`、任意`housing_facility`/`life_support_facility`）。施設・Vehicleの`target_count`は計画上の期末総数であり、研究・投資は新規分のみ計上する。Processは選んだ方法1回の稼働からすべての投入・副産物を計上する。工程・輸送・人口の稼働計画は次の期間へ継承され、同一対象の新規指定で更新される。成立していない供給方法やPreviewを自動補完しない。
 
-全研究8段階を同じ契約で入力できるが、ゲーム内研究Stageの自動完了や段階ごとの全研究取得を要求しない。任意の`resource_supply_assumptions`は`node`、`resource`、`average_t_per_day`、空でない`basis`（供給仮説の根拠）を持つ。生産目標から供給仮定を転載しても独立した供給証拠にはならず、同値の場合は警告する。供給を設定しなくても資本投資・期末継続投入・条件付き生産量を表示し、取得Recipe費用の許容倍率や自動推奨倍率を算出しない。資本投資÷区間日数は**目標を満たすための平均必要資材量の目安**であり、完成日や実際の期間総生産を予測しない。輸送が正準Previewで確定できない場合、容量は不明として扱う。レポートは全段階のRP費用予算、産業目標、施設/Vehicle取得、資材・継続投入と輸送・人口を共通の時間尺度で返す。
-
-CLIはGame Stateを変更せず、Domain経路成立のテスト器でもない。実GameApplicationの通常プレイ結果を使って時間・成長の妥当性を確認する。`overview`、`evaluate`、`inspect`、`run`、`compare`、`--observe-days`は存在しない。
+存在しない拠点の検討には、`prospective_locations`に`id`と`body_id`を指定する。これは拠点設立や航路成立を意味しない。初期実StateはGameApplicationから取得するが、後続期の設計目標を実取得Stateへ昇格しない。主な出力は全期間の`decision`（共有Resource・能力と期間横断の関係、解決していない条件、定量的接続がない発展目的）と`technical_evidence`（同じモデルのDefinition ID・地点・期間・数量・出典）である。局所点数や自動バランス係数の提案、第二のSimulationはない。全体系の意味的妥当性はLLMが評価し、実成立性は正準GameApplicationの通常Commandで検証する。
 
 Publish Gateway、helper、CI/E2E harnessの変更は`development_tests/`で検証する。ブラウザ受入Scenarioは`playwright/`に置く。実ブラウザ、clean install、OS差等の検証はGitHub CIで実施する。
 
