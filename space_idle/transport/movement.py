@@ -8,7 +8,7 @@ from typing import Iterable
 from ..facilities import FacilityBook
 from ..shared import CelestialBodyId, DefinitionId, EntityId, MovementPlanId, SpatialNodeId, SurfaceCellId
 from ..site import SiteRequirements
-from ..spatial import SpatialGraph
+from ..spatial import SpatialGraph, SpatialContextId
 from ..spatial import great_circle_distance_km
 from .endpoints import resolve_movement_endpoint
 from .models import (
@@ -129,6 +129,61 @@ class MovementResolver:
         self.surface_access_rules = surface_access_rules
         self.spaceflight_rules = spaceflight_rules
 
+    def physical_context_plans(
+        self, origin_context_id: SpatialContextId, destination_context_id: SpatialContextId,
+    ) -> tuple[MovementPlan, ...]:
+        """Physical movement candidates between World contexts, without founding nodes.
+
+        These are *not* operational Transport Allocations. Surface interfaces,
+        Fleet ownership, installed infrastructure, and Cargo settlement cannot
+        be inferred from geography. This is the same Movement-rule derivation
+        used for established endpoints, with explicitly physical locators.
+        """
+        graph = self.graph
+        if origin_context_id == destination_context_id:
+            return ()
+
+        def endpoint(context_id: SpatialContextId) -> MovementEndpoint:
+            if context_id in graph.surface_cells:
+                return MovementEndpoint(physical_target_cell_id=context_id)
+            if context_id in graph.nodes:
+                return MovementEndpoint(physical_target_node_id=context_id)
+            raise KeyError(f"unknown physical movement context: {context_id}")
+
+        origin = endpoint(origin_context_id)
+        destination = endpoint(destination_context_id)
+        origin_cell = graph.surface_cells.get(origin_context_id)
+        destination_cell = graph.surface_cells.get(destination_context_id)
+        # Two surface Locations on the same body require actual surface
+        # interfaces for normal Transport; a static Cell pair is not a route.
+        if (origin_cell is not None and destination_cell is not None
+                and origin_cell.body_id == destination_cell.body_id):
+            return ()
+
+        origin_rules = (
+            self._access_rules_for_body(origin_cell.body_id)
+            if origin_cell is not None else (None,)
+        )
+        destination_rules = (
+            self._access_rules_for_body(destination_cell.body_id)
+            if destination_cell is not None else (None,)
+        )
+        require_spaceflight = self._requires_spaceflight(origin, destination)
+        rows = (
+            self._build_space_connected_plan(
+                origin, destination,
+                origin_rule=origin_rule,
+                destination_rule=destination_rule,
+                space_rule=space_rule,
+            )
+            for origin_rule in origin_rules
+            for destination_rule in destination_rules
+            for space_rule in self._spaceflight_rules_for(
+                origin, destination, require_spaceflight=require_spaceflight
+            )
+        )
+        return tuple(sorted(rows, key=lambda row: str(row.id)))
+
     def direct_plans(
         self, origin_id: SpatialNodeId, destination_id: SpatialNodeId
     ) -> tuple[MovementPlan, ...]:
@@ -187,7 +242,7 @@ class MovementResolver:
         """Derive one-shot Movement to a non-surface Spatial context before it is operational."""
         if not self.graph.has_operational_node(origin_id):
             return ()
-        if target_node_id not in self.graph.nodes or self.graph.has_operational_node(target_node_id):
+        if target_node_id not in self.graph.nodes:
             return ()
         destination = MovementEndpoint(physical_target_node_id=target_node_id)
         rows: list[MovementPlan] = []
@@ -199,6 +254,29 @@ class MovementResolver:
                     origin_endpoint, destination, origin_rule=origin_rule, destination_rule=None, space_rule=space_rule
                 ))
         return tuple(sorted(rows, key=lambda row: str(row.id)))
+
+    def plans_from_physical_target(
+        self, target: MovementEndpoint, destination_id: SpatialNodeId,
+    ) -> tuple[MovementPlan, ...]:
+        """Derive the return leg for a one-shot visitor, without founding a Node."""
+        if target.operational_node_id is not None or not self.graph.has_operational_node(destination_id):
+            return ()
+        resolved = resolve_movement_endpoint(target, self.facilities)
+        origin_rules = (
+            self._access_rules_for_body(self.graph.context_body_id(resolved.environment_context_id))
+            if target.physical_target_cell_id is not None else (None,)
+        )
+        plans: list[MovementPlan] = []
+        for destination, destination_rule in self._space_destination_endpoints(destination_id):
+            for origin_rule in origin_rules:
+                for space_rule in self._spaceflight_rules_for(
+                    target, destination, require_spaceflight=self._requires_spaceflight(target, destination),
+                ):
+                    plans.append(self._build_space_connected_plan(
+                        target, destination, origin_rule=origin_rule,
+                        destination_rule=destination_rule, space_rule=space_rule,
+                    ))
+        return tuple(sorted(plans, key=lambda plan: str(plan.id)))
 
     def outbound_plans(self, origin_id: SpatialNodeId) -> tuple[MovementPlan, ...]:
         if not self.graph.has_operational_node(origin_id):
@@ -431,7 +509,9 @@ class MovementResolver:
             rule_ids.append(space_rule.id)
             transit_days += max(
                 space_rule.minimum_transit_days,
-                ceil(separation.distance_km / space_rule.characteristic_speed_km_per_day - 1e-12),
+                ceil((separation.representative_transit_days
+                      if separation.representative_transit_days is not None
+                      else separation.distance_km / space_rule.characteristic_speed_km_per_day) - 1e-12),
             )
 
         if destination_rule is not None:

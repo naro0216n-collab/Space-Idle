@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from ..contracts_domain import DOMAIN_EXTENSION as CONTRACTS_EXTENSION
 from ..construction.domain import DOMAIN_EXTENSION as CONSTRUCTION_EXTENSION
 from ..core_domain import DOMAIN_EXTENSION as CORE_EXTENSION
+from ..population_domain import DOMAIN_EXTENSION as POPULATION_EXTENSION
 from ..domain import DomainExtension
 from ..facilities_domain import DOMAIN_EXTENSION as FACILITIES_EXTENSION
 from ..market_domain import DOMAIN_EXTENSION as MARKET_EXTENSION
@@ -11,9 +11,11 @@ from ..inventory_domain import DOMAIN_EXTENSION as INVENTORY_EXTENSION
 from ..production.domain import DOMAIN_EXTENSION as PRODUCTION_EXTENSION
 from ..research_domain import DOMAIN_EXTENSION as RESEARCH_EXTENSION
 from ..spatial_domain import DOMAIN_EXTENSION as SPATIAL_EXTENSION
+from ..power_domain import DOMAIN_EXTENSION as POWER_EXTENSION
 from ..storage_domain import DOMAIN_EXTENSION as STORAGE_EXTENSION
 from ..surface_infrastructure_domain import DOMAIN_EXTENSION as SURFACE_INFRASTRUCTURE_EXTENSION
 from ..survey_domain import EXTRACTION_EXTENSION, SURVEY_EXTENSION
+from ..surface_knowledge_domain import DOMAIN_EXTENSION as SURFACE_KNOWLEDGE_EXTENSION
 from ..technology_domain import DOMAIN_EXTENSION as TECHNOLOGY_EXTENSION
 from ..transport.domain import DOMAIN_EXTENSION as TRANSPORT_EXTENSION
 from ..logistics_domain import DOMAIN_EXTENSION as LOGISTICS_EXTENSION
@@ -27,15 +29,17 @@ BASE_DOMAIN_EXTENSIONS: tuple[DomainExtension, ...] = (
     FACILITIES_EXTENSION,
     INVENTORY_EXTENSION,
     STORAGE_EXTENSION,
+    POWER_EXTENSION,
     SURFACE_INFRASTRUCTURE_EXTENSION,
     PRODUCTION_EXTENSION,
     TRANSPORT_EXTENSION,
     LOGISTICS_EXTENSION,
     CONSTRUCTION_EXTENSION,
     FOUNDING_EXTENSION,
-    CONTRACTS_EXTENSION,
     RESEARCH_EXTENSION,
     SCIENTIFIC_EXPLORATION_EXTENSION,
+    SURFACE_KNOWLEDGE_EXTENSION,
     SURVEY_EXTENSION,
     EXTRACTION_EXTENSION,
+    POPULATION_EXTENSION,
 )

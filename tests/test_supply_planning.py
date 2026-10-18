@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 from dataclasses import dataclass
 
 import pytest
 
 from space_idle import (
-    GetCargoFlows, GetLogistics, GetProjects, PauseTransportAllocation,
+    AdvanceTime, CreateTransportAllocation, GetCargoFlows, GetFlowReport, GetLogistics, GetProjects, GetWorld, PauseTransportAllocation,
     PlanBuild, ResumeTransportAllocation, SetSupplyRoutingConstraint, build_game_application,
 )
+from space_idle.content import base_ids as ids
 from space_idle.content.base_game import (
     CONSTRUCTION_EQUIPMENT,
     EARTH,
@@ -16,9 +19,9 @@ from space_idle.content.base_game import (
     MACHINERY,
     ORBITAL_LOGISTICS_NODE,
     PROPELLANT,
+    OXYGEN,
     REUSABLE_LAUNCH_VEHICLE,
     REUSABLE_ORBITAL_CARGO_TUG,
-    WATER,
 )
 from space_idle.execution_requirements import (
     ExecutionRequirementBundle,
@@ -33,7 +36,7 @@ from space_idle.supply import (
     SupplyRequirement, SupplyRoutingConstraintScope, external_supply_requirements,
     resolve_local_supply,
 )
-from space_idle.shared import DefinitionId, EntityId
+from space_idle.shared import EntityId
 
 
 def _requirement(
@@ -58,7 +61,8 @@ def _requirement(
 
 
 def _capacity_for_units(sim, vehicle_definition_id, source_id, destination_id, units):
-    return sim.transport.transport_capacity_for_units(
+    return service_target_for_test_units(
+        sim.transport,
         vehicle_definition_id, source_id, destination_id, units, day=sim.day
     )
 
@@ -84,6 +88,10 @@ def _owned_multistage_capacity(sim):
         for facility in sim.facilities.facilities.values()
     ):
         sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
+    # This pre-provisioned network fixture needs actual cryogenic hardware
+    # for its 10 t opening propellant, rather than an implicit free pool.
+    sim.facilities.install(ids.ORBITAL_PROPELLANT_DEPOT, LEO)
+    sim.facilities.install(ids.ORBITAL_PROPELLANT_DEPOT, LUNAR_ORBIT)
     sim.refresh_storage()
     sim.inventory.add(LEO, PROPELLANT, 10.0)
     sim.inventory.add(LUNAR_ORBIT, PROPELLANT, 10.0)
@@ -141,6 +149,25 @@ def test_canonical_path_combines_operational_metrics_and_is_registration_order_i
     assert _selected_path_ids(edges) == ("balanced",)
     assert _selected_path_ids(tuple(reversed(edges))) == ("balanced",)
 
+    # Five normalized metrics use a single immutable candidate graph per
+    # selection; obtaining adjacency must not repeat physical eligibility work.
+    expansions: dict[str, int] = {}
+
+    def outgoing(node):
+        expansions[node] = expansions.get(node, 0) + 1
+        return tuple(edge for edge in edges if edge.source == node)
+
+    chosen = select_canonical_path(
+        "origin", "destination", outgoing=outgoing,
+        edge_destination=lambda edge: edge.destination,
+        edge_time=lambda edge: edge.time,
+        edge_propellant=lambda edge: edge.propellant,
+        edge_capacity=lambda edge: edge.capacity,
+        edge_key=lambda edge: edge.id,
+    )
+    assert tuple(row.id for row in chosen) == ("balanced",)
+    assert expansions == {"origin": 1}
+
 def test_recurring_supply_uses_latency_coverage_without_turning_pipeline_into_a_rate_cap():
     sim = build_game_application()._simulation
     allocation_id = _owned_earth_leo_capacity(sim)
@@ -195,6 +222,7 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         source_node_id=str(EARTH),
     ))
 
+    starting_funds = app.query(GetWorld()).funds_musd
     requirements = tuple(
         row for row in sim.projects.supplys(sim.day)
         if str(row.owner_id) == project_id
@@ -266,6 +294,9 @@ def test_construction_supply_constraint_exposes_transport_blocker_and_recovers_w
         if row.id == str(allocation_id)
     )
     assert not allocation.paused and allocation.used.forward_t_per_day > 0.0
+    # Logistics dispatch is a physical Inventory/Fleet transfer.  The player
+    # did not place a market trade order, so it must not debit market Funds.
+    assert app.query(GetWorld()).funds_musd == starting_funds
 
 
 def test_future_high_priority_requirement_does_not_preempt_current_requirement_before_lead_time():
@@ -373,7 +404,8 @@ def test_auto_source_selection_is_deterministic_and_routing_constraints_are_hard
 
 
 def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_ownership_until_final_arrival():
-    sim = build_game_application()._simulation
+    app = build_game_application()
+    sim = app._simulation
     sim.transport.transport_allocations.clear()
     _owned_multistage_capacity(sim)
     sim.facilities.install(ORBITAL_LOGISTICS_NODE, LUNAR_ORBIT)
@@ -415,6 +447,24 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
     assert sum(leg.latency_days for leg in frozen_legs) == expected_latency
     dispatched = first.amount_t
     assert sim.logistics.cargo_flow_pipeline_t(dispatch.requirement.id) == pytest.approx(dispatched)
+    assert first.first_final_arrival_day == first.first_arrival_day + sum(
+        leg.latency_days for leg in first.remaining_legs
+    )
+    assert first.last_final_arrival_day >= first.first_final_arrival_day
+    assert first.first_final_arrival_day > first.first_arrival_day
+
+    requirement_row = next(
+        row for row in app.query(GetLogistics()).requirements
+        if row.owner_kind == "target_stock" and row.owner_id == str(target_id)
+    )
+    assert requirement_row.pipeline_t == pytest.approx(dispatched)
+    assert requirement_row.earliest_in_transit_arrival_day == first.first_final_arrival_day
+    assert requirement_row.latest_in_transit_arrival_day == first.last_final_arrival_day
+
+    lunar_flows = {row.resource_id: row for row in app.query(GetFlowReport(LUNAR_ORBIT)).resources}
+    leo_flows = {row.resource_id: row for row in app.query(GetFlowReport(LEO)).resources}
+    assert lunar_flows[str(resource)].inbound_in_transit_t == pytest.approx(dispatched)
+    assert str(resource) not in leo_flows or leo_flows[str(resource)].inbound_in_transit_t == pytest.approx(0.0)
     next_day = sim.tick_decision_projection()
     assert not [
         row for row in next_day.plan.logistics.dispatches
@@ -452,7 +502,6 @@ def test_multistage_cargo_lifecycle_freezes_service_conditions_and_preserves_own
 
 def test_supply_resource_competition_respects_priority_reservations_and_order_independence():
     inventory = InventoryBook()
-    inventory.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     inventory.add(EARTH, MACHINERY, 5.0)
     high = _requirement(
         4.0, requirement_id="supply.local.high", destination=EARTH, priority=5
@@ -469,7 +518,6 @@ def test_supply_resource_competition_respects_priority_reservations_and_order_in
     assert inventory.reserved == {}
 
     constrained = InventoryBook()
-    constrained.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     constrained.add(EARTH, MACHINERY, 2.0)
     first = _requirement(
         3.0, requirement_id="supply.equal.a", destination=EARTH, priority=3
@@ -487,7 +535,6 @@ def test_supply_resource_competition_respects_priority_reservations_and_order_in
     assert constrained.reserved == {}
 
     reserved = InventoryBook()
-    reserved.set_capacity_snapshot({(EARTH, "default"): 10.0}, {(EARTH, "default"): 10.0})
     reserved.add(EARTH, MACHINERY, 5.0)
     reserved.reserve(EntityId("project.supply"), EARTH, MACHINERY, 4.0)
     other = _requirement(
@@ -583,8 +630,8 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
     allocation_id = _owned_earth_leo_capacity(sim)
     baseline = sim.logistics.current_transport_capacity_snapshot(allocation_id, day=0)
 
-    cargo = WATER
-    filler = CONSTRUCTION_EQUIPMENT
+    cargo = PROPELLANT
+    filler = OXYGEN
     free = sim.inventory.admission_state(LEO, cargo).admission_capacity_t
     assert free is not None and free > 1.0
     sim.inventory.add(LEO, filler, free)
@@ -633,30 +680,3 @@ def test_arrival_waiting_exposes_admission_blocker_and_backpressures_transport_u
         baseline.available.forward_t_per_day
     )
     assert "arrival_backpressure" not in restored.limiting_factors
-
-
-def test_supply_dispatch_requires_player_owned_transport_capacity_without_spending_market_funds():
-    from space_idle import GetWorld
-
-    app = build_game_application()
-    sim = app._simulation
-    sim.inventory.stock[(LEO, CONSTRUCTION_EQUIPMENT)] = 0.0
-    sim.inventory.add(EARTH, CONSTRUCTION_EQUIPMENT, 2.0)
-    target_id = sim.logistics.set_target_stock(LEO, CONSTRUCTION_EQUIPMENT, 1.0, 5)
-    sim.transport.transport_allocations.clear()
-    before_funds = app.query(GetWorld()).funds_musd
-
-    sim.advance_days(1)
-    assert app.query(GetWorld()).funds_musd == before_funds
-    assert not [
-        row for row in sim.logistics.cargo_flows.values()
-        if row.owner_id == target_id
-    ]
-
-    _owned_earth_leo_capacity(sim)
-    sim.advance_days(1)
-    assert app.query(GetWorld()).funds_musd == before_funds
-    assert any(
-        row.owner_id == target_id
-        for row in sim.logistics.cargo_flows.values()
-    )

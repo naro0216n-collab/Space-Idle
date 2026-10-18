@@ -10,7 +10,7 @@ from .models import (
     FacilityUpgradeTarget,
     FacilityDecommissionTarget,
     NewFacilityTarget,
-    SurfaceCellDevelopmentTarget,
+    SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
     ProjectBlocker,
     ProjectResourceState,
     ProjectStatus,
@@ -46,18 +46,22 @@ class ConstructionPlanningMixin:
         facility = self.facilities.facilities.get(facility_id)
         if facility is None:
             return (ProjectBlocker("unknown_facility", f"unknown facility: {facility_id}"),)
+        if facility.lifecycle is not FacilityLifecycle.NORMAL:
+            return (ProjectBlocker("facility_lifecycle", "facility is not in normal operation"),)
         target_level = facility.level + 1
-        if (facility.definition_id, target_level) not in self.upgrade_recipes:
+        if self.upgrade_recipe_for_definition(facility.definition_id, target_level) is None:
             return (ProjectBlocker("upgrade_recipe", "facility has no next upgrade recipe"),)
         active = next((
             project
             for project in self.projects.values()
-            if isinstance(project.target, FacilityUpgradeTarget)
+            if isinstance(project.target, (FacilityUpgradeTarget, FacilityDecommissionTarget))
             and project.target.facility_id == facility_id
             and project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
         ), None)
         if active is not None:
-            return (ProjectBlocker("active_upgrade_project", str(active.id)),)
+            code = ("active_upgrade_project" if isinstance(active.target, FacilityUpgradeTarget)
+                    else "active_facility_project")
+            return (ProjectBlocker(code, str(active.id)),)
         return ()
 
     def decommission_plan_failures(self, facility_id: EntityId) -> tuple[ProjectBlocker, ...]:
@@ -125,7 +129,9 @@ class ConstructionPlanningMixin:
             if site_cell_id is not None:
                 raise ValueError("upgrade project must not duplicate facility site cell")
             facility = self.facilities.facilities[target.facility_id]
-            recipe = self.upgrade_recipes[(facility.definition_id, target.target_level)]
+            recipe = self.upgrade_recipe_for_definition(facility.definition_id, target.target_level)
+            if recipe is None:
+                raise ValueError("no facility upgrade recipe")
         elif isinstance(target, FacilityDecommissionTarget):
             if site_cell_id is not None:
                 raise ValueError("decommission project uses the installed facility site")
@@ -152,6 +158,10 @@ class ConstructionPlanningMixin:
             procurement_policy,
             resources=resources,
             site_cell_id=site_cell_id,
+            planned_spatial_work=(
+                self.development_work_required(target.recipe_id, target.cell_id)
+                if isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)) else None
+            ),
         )
         self._activate_procurement_if_eligible(self.projects[project_id], day)
         return project_id
@@ -189,7 +199,7 @@ class ConstructionPlanningMixin:
                 raise KeyError(facility_id)
             if failures[0].code == "upgrade_recipe":
                 raise ValueError("facility has no next upgrade recipe")
-            raise ValueError("facility already has an active upgrade project")
+            raise ValueError("; ".join(f"{failure.code}: {failure.detail}" for failure in failures))
         facility = self.facilities.facilities[facility_id]
         target_level = facility.level + 1
         return self._create_project(
@@ -234,7 +244,7 @@ class ConstructionPlanningMixin:
             raise ValueError("surface cell development recipe is not configured")
         failures = [
             (failure.code, failure.detail)
-            for failure in self.surface_cell_development_failures(location_id, cell_id, day)
+            for failure in self.surface_cell_development_plan_failures(location_id, cell_id, day)
         ]
         if failures:
             raise ValueError("; ".join(f"{code}: {detail}" for code, detail in failures))
@@ -244,6 +254,19 @@ class ConstructionPlanningMixin:
             priority,
             procurement_policy,
             day=day,
+        )
+
+    def plan_surface_cell_engineering(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        recipe_id: DefinitionId, priority: ActivityPriority,
+        procurement_policy: ProcurementTimingPolicy, day: int = 0,
+    ) -> ProjectId:
+        failures = self.surface_cell_engineering_plan_failures(location_id, cell_id, recipe_id, day)
+        if failures:
+            raise ValueError("; ".join(f.detail for f in failures))
+        return self._create_project(
+            SurfaceCellEngineeringTarget(recipe_id, cell_id), location_id,
+            priority, procurement_policy, day=day,
         )
 
     def settings_mutable(self, project_id: ProjectId) -> bool:

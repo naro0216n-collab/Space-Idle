@@ -10,45 +10,17 @@ from ..research import (
     ResearchProviderSourceKind,
     ResearchProviderSpec,
 )
-from ..execution_requirements import ServiceCapacityRequirement
 from ..knowledge import ExperienceContributionRule
-from ..site import SiteRequirements
+from ..execution_requirements import ServiceCapacityRequirement
+from ..service_capacity import ServiceCapacityScope
+from ..site import CapabilityRequirement, CapabilityRequirementState, SiteRequirements
+from ..shared import DefinitionId
 from . import base_ids as ids
 from . import base_requirements as req
-
-
-def _research_lab_site() -> SiteRequirements:
-    return SiteRequirements(capability_requirements=req._available_requirements("research_lab"))
-
-
-def _orbital_research_site() -> SiteRequirements:
-    return req.with_capabilities(req.ORBIT_SITE, "research_lab")
-
-
-def _surface_research_site() -> SiteRequirements:
-    return req.with_capabilities(req.SURFACE_SITE, "research_lab")
-
-
-def _theory(stage_id: str, cost: float) -> ResearchTheoryStageSpec:
-    return ResearchTheoryStageSpec(stage_id, cost)
-
-
-def _prototype(stage_id: str, site: SiteRequirements, resources: dict) -> ResearchPrototypeStageSpec:
-    return ResearchPrototypeStageSpec(
-        stage_id, resources, site,
-        (ServiceCapacityRequirement("research_execution", 1.0),),
-    )
-
-
-def _demonstration(stage_id: str, work: float, site: SiteRequirements) -> ResearchDemonstrationStageSpec:
-    return ResearchDemonstrationStageSpec(
-        stage_id, work, site,
-        (ServiceCapacityRequirement("research_execution", 1.0),),
-    )
-
-
-def _experience(stage_id: str, category: str, amount: float) -> ResearchOperationalExperienceStageSpec:
-    return ResearchOperationalExperienceStageSpec(stage_id, {category: amount})
+from .base_research_dag import RESEARCH_DAG_ROWS
+from .base_research_details import RESEARCH_DETAILS
+from .base_research_stages import build_new_stage_specs
+from .base_extended_assets import build_extended_research_providers
 
 
 def build_experience_contribution_rules() -> tuple[ExperienceContributionRule, ...]:
@@ -59,276 +31,380 @@ def build_experience_contribution_rules() -> tuple[ExperienceContributionRule, .
     )
 
 
-def build_research_definitions() -> dict:
-    lab = _research_lab_site()
-    orbital_lab = _orbital_research_site()
-    surface_lab = _surface_research_site()
-    surface_survey = req.with_capabilities(req.SURFACE_SITE, "surface_survey")
-    regolith_demo = req.with_capabilities(req.SURFACE_SITE, "regolith_excavation")
-    return {
-        ids.TECH_ORBITAL_OPERATIONS: ResearchDefinition(
-            ids.TECH_ORBITAL_OPERATIONS,
-            "自律ランデブー・標準ドッキング運用",
-            (
-                _theory("theory", 120.0),
-                _prototype("prototype", lab, {ids.PRECISION_ELECTRONICS: 0.5}),
+def research_id(code: str) -> DefinitionId:
+    return DefinitionId(code)
+
+
+def build_research_definitions() -> dict[DefinitionId, ResearchDefinition]:
+    # Authored experiments are attached only to technical questions whose
+    # resolution actually needs hardware trials or operational evidence.
+    # All other DAG entries remain Theory-only; display stages/series never
+    # imply an automatic Research Stage kind.
+    additional_stages = {
+        # Restart-capable propulsion is not established solely by a design
+        # calculation: a genuine propulsion test stand, propellant and finite
+        # trial time are needed before production of restart-capable vehicles.
+        ids.research_id("CH-COMBUSTION-06"): (
+            ResearchPrototypeStageSpec(
+                "restart-propellant-test",
+                {ids.MACHINERY: 0.3, ids.PROPELLANT: 0.5},
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "propulsion_test_equipment", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=4.0,
             ),
-            prerequisites=frozenset(),
         ),
-        ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS: ResearchDefinition(
-            ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS,
-            "微小重力実験ラック・遠隔試料ハンドリング",
-            (
-                _theory("theory", 220.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 0.8, ids.PRECISION_ELECTRONICS: 0.8}),
+        # High-precision planetary navigation requires observations against a
+        # tracking system, not an implicit upgrade of existing spacecraft.
+        ids.research_id("GN-NAVIGATION-06"): (
+            ResearchDemonstrationStageSpec(
+                "deep-space-tracking-demonstration", 4.0,
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "deep_space_tracking_equipment", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
             ),
-            prerequisites=frozenset({ids.TECH_ORBITAL_OPERATIONS}),
         ),
-        ids.TECH_CISLUNAR_LOGISTICS: ResearchDefinition(
-            ids.TECH_CISLUNAR_LOGISTICS,
-            "微小重力推進剤捕捉・軌道上移送",
-            (
-                _theory("theory", 420.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 1.0, ids.PRECISION_ELECTRONICS: 0.5}),
+        # Load-following control needs an existing instrumented reactor, not
+        # merely any solar / grid power source. Both surface and orbital
+        # reactors may provide the physical test interface, independent of ID.
+        ids.research_id("FP-REACTOR-POWER-04"): (
+            ResearchDemonstrationStageSpec(
+                "reactor-load-following-demonstration", 3.0,
+                SiteRequirements(capability_requirements=(CapabilityRequirement(
+                    "fission_reactor_control_instrumentation", CapabilityRequirementState.ACTIVE,
+                ),)),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
             ),
-            prerequisites=frozenset({ids.TECH_ORBITAL_OPERATIONS}),
         ),
-        ids.TECH_CREWED_ORBITAL_RESEARCH: ResearchDefinition(
-            ids.TECH_CREWED_ORBITAL_RESEARCH,
-            "閉鎖式生命維持・有人軌道実験運用",
-            (
-                _theory("theory", 700.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 1.0}),
-                _demonstration("demonstration", 8, orbital_lab),
+        # The plasma discharge and ion-optics designs must be validated on a
+        # powered vacuum bench. A Theory-only research completion cannot
+        # furnish a spacecraft with an untested high-voltage thruster.
+        # The hydrogen-cooled reactor propulsion line has a distinct thermal
+        # flow test and nozzle/heat-exchanger integration demonstration. Both
+        # need real reactor instrumentation; Research cannot supply a free core.
+        # Low-gravity root-zone water transport is an actual plant-growth
+        # experiment on installed microgravity equipment, not an instant
+        # theoretical upgrade of terrestrial farming or new free food output.
+        ids.research_id("PL-PLANT-FOOD-04"): (
+            ResearchPrototypeStageSpec(
+                "microgravity-root-zone-growth-test",
+                {ids.WATER: 0.5, ids.PRECISION_ELECTRONICS: 0.08},
+                req.with_capabilities(req.ORBIT_SITE,
+                                      "microgravity_experiment_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
             ),
-            prerequisites=frozenset({ids.TECH_MICROGRAVITY_EXPERIMENT_SYSTEMS, ids.TECH_CISLUNAR_LOGISTICS}),
         ),
-        ids.TECH_LUNAR_PROSPECTING: ResearchDefinition(
-            ids.TECH_LUNAR_PROSPECTING,
-            "中性子分光・多波長鉱物マッピング",
-            (
-                _theory("theory", 900.0),
-                _prototype("prototype", lab, {ids.PRECISION_ELECTRONICS: 1.0}),
-                _demonstration("demonstration", 6, orbital_lab),
+        ids.research_id("NT-NUCLEAR-THERMAL-02"): (
+            ResearchPrototypeStageSpec(
+                "reactor-hydrogen-flow-test",
+                {ids.HYDROGEN: 0.8, ids.CERAMICS_GLASS: 0.35},
+                req.with_capabilities(req.SiteRequirements(),
+                                      "nuclear_thermal_flow_test_equipment",
+                                      "fission_reactor_control_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=7.0,
             ),
-            prerequisites=frozenset({ids.TECH_CISLUNAR_LOGISTICS}),
         ),
-        ids.TECH_ROBOTIC_FIELD_GEOLOGY: ResearchDefinition(
-            ids.TECH_ROBOTIC_FIELD_GEOLOGY,
-            "自律地質観測・試料採取制御",
-            (
-                _theory("theory", 1200.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 1.2}),
-                _demonstration("demonstration", 8, surface_survey),
+        ids.research_id("NT-NUCLEAR-THERMAL-04"): (
+            ResearchDemonstrationStageSpec(
+                "nuclear-thermal-nozzle-integration", 7.0,
+                req.with_capabilities(req.SiteRequirements(),
+                                      "nuclear_thermal_flow_test_equipment",
+                                      "fission_reactor_control_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
             ),
-            prerequisites=frozenset({ids.TECH_LUNAR_PROSPECTING}),
         ),
-        ids.TECH_VOLATILE_ISRU: ResearchDefinition(
-            ids.TECH_VOLATILE_ISRU,
-            "低温揮発性物質加熱抽出",
-            (
-                _theory("theory", 1250.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
-                _demonstration("demonstration",
-                20,
-                req.with_capabilities(req.COLD_VOLATILE_SURFACE_SITE, "surface_survey"),
+        ids.research_id("EP-PLASMA-THRUSTERS-02"): (
+            ResearchPrototypeStageSpec(
+                "hall-discharge-test",
+                {ids.PRECISION_ELECTRONICS: 0.18, ids.HYDROGEN: 0.35},
+                req.with_capabilities(req.ORBIT_SITE, "plasma_propulsion_test_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=5.0,
             ),
-            ),
-            prerequisites=frozenset({ids.TECH_LUNAR_PROSPECTING}),
         ),
-        ids.TECH_REGOLITH_EXCAVATION: ResearchDefinition(
-            ids.TECH_REGOLITH_EXCAVATION,
-            "レゴリス掘削・粒度制御",
-            (
-                _theory("theory", 1350.0),
-                _prototype("prototype", lab, {ids.MACHINERY: 1.5, ids.PRECISION_ELECTRONICS: 0.5}),
-                _demonstration("demonstration", 10, surface_survey),
+        ids.research_id("EP-PLASMA-THRUSTERS-03"): (
+            ResearchPrototypeStageSpec(
+                "ion-optics-beam-test",
+                {ids.PRECISION_ELECTRONICS: 0.25, ids.HYDROGEN: 0.25},
+                req.with_capabilities(req.ORBIT_SITE, "plasma_propulsion_test_instrumentation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
             ),
-            prerequisites=frozenset({ids.TECH_ROBOTIC_FIELD_GEOLOGY}),
         ),
-        ids.TECH_SAMPLE_ANALYSIS_SYSTEMS: ResearchDefinition(
-            ids.TECH_SAMPLE_ANALYSIS_SYSTEMS,
-            "真空試料前処理・鉱物相分析",
-            (
-                _theory("theory", 2400.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 2.0}),
+        # Higher-order science consumes finite experimental materials and
+        # demands actual powered instrumentation. Its Research output comes
+        # from installed assets; completing these stages is no global buff.
+        ids.research_id("TH-THERMAL-TRANSPORT-06"): (
+            ResearchPrototypeStageSpec(
+                "deployable-radiator-flow-loop-trial",
+                {ids.THERMAL_CONTROL_ASSEMBLIES: 0.6, ids.PRECISION_COMPONENTS: 0.15},
+                req.with_capabilities(req.ORBIT_SITE, "microgravity_experiment_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
             ),
-            prerequisites=frozenset({ids.TECH_ROBOTIC_FIELD_GEOLOGY, ids.TECH_REGOLITH_EXCAVATION}),
         ),
-        ids.TECH_LUNAR_MATERIALS: ResearchDefinition(
-            ids.TECH_LUNAR_MATERIALS,
-            "真空レゴリス焼結・気孔制御",
-            (
-                _theory("theory", 2800.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.6}),
-                _demonstration("demonstration", 10, regolith_demo),
+        ids.research_id("HB-HABITATION-PROTECTION-06"): (
+            ResearchPrototypeStageSpec(
+                "localized-radiation-attenuation-trial",
+                {ids.RADIATION_SHIELDING_PANELS: 0.9, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SiteRequirements(), "research_lab"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
             ),
-            prerequisites=frozenset({ids.TECH_SAMPLE_ANALYSIS_SYSTEMS, ids.TECH_REGOLITH_EXCAVATION}),
         ),
-        ids.TECH_ORE_BENEFICIATION: ResearchDefinition(
-            ids.TECH_ORE_BENEFICIATION,
-            "真空粒度選別・鉱物濃縮",
-            (
-                _theory("theory", 3000.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
-                _demonstration("demonstration", 10, regolith_demo),
-                _experience("operational_experience", ids.EXPERIENCE_EXTRACTION_OPERATIONS, 20.0),
+        ids.research_id("CO-OPTICAL-COMMUNICATIONS-02"): (
+            ResearchPrototypeStageSpec(
+                "optical-link-modulation-hardware-trial",
+                {ids.OPTICAL_INSTRUMENT_PACKAGES: 0.5, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SURFACE_SITE, "deep_space_tracking_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),), required_work=8.0,
             ),
-            prerequisites=frozenset({ids.TECH_SAMPLE_ANALYSIS_SYSTEMS, ids.TECH_REGOLITH_EXCAVATION}),
         ),
-        ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH: ResearchDefinition(
-            ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH,
-            "真空レゴリス熱処理・反応制御",
-            (
-                _theory("theory", 5200.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 3.0, ids.PRECISION_ELECTRONICS: 2.0}),
-                _demonstration("demonstration",
-                12,
-                req.with_capabilities(req.VACUUM_SURFACE_SITE, "regolith_excavation"),
+        ids.research_id("MS-MATERIALS-10"): (
+            ResearchPrototypeStageSpec(
+                "irradiated-material-fatigue-trial",
+                {ids.CERAMICS_GLASS: 1.25, ids.PRECISION_COMPONENTS: 0.32},
+                req.with_capabilities(req.SURFACE_SITE, "material_fatigue_beamline"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=10.0,
             ),
-            ),
-            prerequisites=frozenset({ids.TECH_LUNAR_MATERIALS, ids.TECH_ORE_BENEFICIATION}),
         ),
-        ids.TECH_HIGH_TEMPERATURE_METALLURGY: ResearchDefinition(
-            ids.TECH_HIGH_TEMPERATURE_METALLURGY,
-            "高温酸化物還元・金属分離",
-            (
-                _theory("theory", 5800.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 0.9}),
-                _demonstration("demonstration",
-                12,
-                req.with_capabilities(req.SURFACE_SITE, "ore_processing"),
+        ids.research_id("TH-THERMAL-TRANSPORT-07"): (
+            ResearchDemonstrationStageSpec(
+                "orbital-multiloop-thermal-isolation-test", 12.0,
+                req.with_capabilities(req.ORBIT_SITE,
+                                      "orbital_thermal_vacuum_calorimetry"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
             ),
-            ),
-            prerequisites=frozenset({ids.TECH_ORE_BENEFICIATION, ids.TECH_VACUUM_REGOLITH_PROCESS_RESEARCH}),
         ),
-        ids.TECH_STRUCTURAL_FABRICATION: ResearchDefinition(
-            ids.TECH_STRUCTURAL_FABRICATION,
-            "真空成形・構造材接合",
-            (
-                _theory("theory", 6200.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.7}),
-                _demonstration("demonstration",
-                8,
-                req.with_capabilities(req.SURFACE_SITE, "metallurgy"),
+        ids.research_id("BIO-HUMAN-BIOLOGY-MEDICINE-12"): (
+            ResearchPrototypeStageSpec(
+                "controlled-closed-habitat-microbiome-trial",
+                {ids.FOOD: 0.35, ids.WATER: 0.65,
+                 ids.PRECISION_COMPONENTS: 0.22},
+                req.with_capabilities(req.SiteRequirements(),
+                                      "bioregenerative_biomedical_research"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=12.0,
             ),
-                _experience("operational_experience", ids.EXPERIENCE_MANUFACTURING_OPERATIONS, 20.0),
-            ),
-            prerequisites=frozenset({ids.TECH_HIGH_TEMPERATURE_METALLURGY}),
         ),
-        ids.TECH_PRECISION_MACHINING: ResearchDefinition(
-            ids.TECH_PRECISION_MACHINING,
-            "低重力精密機械加工",
-            (
-                _theory("theory", 6500.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.5, ids.PRECISION_ELECTRONICS: 1.0}),
-                _demonstration("demonstration",
-                8,
-                req.with_capabilities(req.SURFACE_SITE, "metallurgy"),
+        # Experimental recovery of volatile fractions uses an actual heated
+        # processor and finite process water/parts before a multistage separator
+        # can be acquired; it is not a free yield change to existing equipment.
+        ids.research_id("RP-RESOURCE-CHAIN-11"): (
+            ResearchPrototypeStageSpec(
+                "volatile-condensation-process-trial",
+                {ids.VOLATILE_BEARING_MATERIAL: 0.65,
+                 ids.MACHINERY: 0.14},
+                req.with_capabilities(req.SiteRequirements(), "volatile_processing"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=5.0,
             ),
-            ),
-            prerequisites=frozenset({ids.TECH_HIGH_TEMPERATURE_METALLURGY}),
         ),
-        ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY: ResearchDefinition(
-            ids.TECH_HEAVY_EQUIPMENT_ASSEMBLY,
-            "モジュール重機組立・整備",
-            (
-                _theory("theory", 9500.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 3.0, ids.PRECISION_ELECTRONICS: 1.2}),
-                _demonstration("demonstration",
-                12,
-                req.with_capabilities(
-                    req.SURFACE_SITE, "structural_fabrication", "basic_machine_shop"
+        # Plant water recapture needs an operating cultivation module and a
+        # finite feed-water/measurement trial. Post-research physical modules
+        # must still be constructed: an old farm gains no new process interface.
+        ids.research_id("PL-PLANT-FOOD-07"): (
+            ResearchPrototypeStageSpec(
+                "recirculating-nutrient-loop-trial",
+                {ids.WATER: 0.70, ids.PRECISION_ELECTRONICS: 0.12},
+                req.with_capabilities(req.SiteRequirements(), "food_hydroponics"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=6.0,
+            ),
+        ),
+        # Occupied pressure compartments and real life-support systems are
+        # needed to validate long-duration low-net-water habitation.
+        ids.research_id("LS-ATMOSPHERE-WATER-WASTE-13"): (
+            ResearchDemonstrationStageSpec(
+                "pressurized-life-support-recovery-trial", 8.0,
+                req.with_capabilities(req.SiteRequirements(), "pressurized_habitation"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0,
+                    scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+            ),
+        ),
+        ids.RP_RESOURCE_CHAIN_13: (
+            ResearchPrototypeStageSpec(
+                "oxide-reduction-prototype",
+                {ids.MINERAL_FEEDSTOCK: 0.5, ids.MACHINERY: 0.25},
+                SiteRequirements(
+                    capability_requirements=(CapabilityRequirement(
+                        "vacuum_regolith_research_equipment", CapabilityRequirementState.ACTIVE,
+                    ),),
                 ),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=3.0,
             ),
+            ResearchOperationalExperienceStageSpec(
+                "manufacturing-experience", {ids.EXPERIENCE_MANUFACTURING_OPERATIONS: 4.0},
             ),
-            prerequisites=frozenset({ids.TECH_STRUCTURAL_FABRICATION, ids.TECH_PRECISION_MACHINING}),
         ),
-        ids.TECH_INDUSTRIAL_ELECTROLYSIS: ResearchDefinition(
-            ids.TECH_INDUSTRIAL_ELECTROLYSIS,
-            "高圧水電解・酸素水素分離",
-            (
-                _theory("theory", 2200.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 0.8}),
-                _demonstration("demonstration",
-                12,
-                req.with_capabilities(req.SURFACE_SITE, "water_extraction"),
+        ids.RP_RESOURCE_CHAIN_16: (
+            ResearchPrototypeStageSpec(
+                "molten-oxide-electrode-trial",
+                {ids.CERAMICS_GLASS: 0.45, ids.METAL_FEEDSTOCK: 0.25},
+                req.with_capabilities(req.VACUUM_SURFACE_SITE, "vacuum_regolith_research_equipment"),
+                (ServiceCapacityRequirement(
+                    "research_execution", 1.0, scope=ServiceCapacityScope.ORGANIZATION,
+                ),),
+                required_work=8.0,
             ),
-            ),
-            prerequisites=frozenset({ids.TECH_VOLATILE_ISRU}),
-        ),
-        ids.TECH_PROPELLANT_HANDLING: ResearchDefinition(
-            ids.TECH_PROPELLANT_HANDLING,
-            "酸素・水素液化・極低温推進剤調製",
-            (
-                _theory("theory", 3600.0),
-                _prototype("prototype", surface_lab, {ids.MACHINERY: 2.0, ids.PRECISION_ELECTRONICS: 1.0}),
-                _demonstration("demonstration",
-                15,
-                req.with_capabilities(
-                    req.SURFACE_SITE, "industrial_electrolysis", "cryogenic_storage"
-                ),
-            ),
-                _experience("operational_experience", ids.EXPERIENCE_TRANSPORT_OPERATIONS, 20.0),
-            ),
-            prerequisites=frozenset({ids.TECH_INDUSTRIAL_ELECTROLYSIS}),
         ),
     }
-
+    authored = build_new_stage_specs()
+    if set(additional_stages) & set(authored):
+        raise ValueError("duplicated authored research Stage specifications")
+    additional_stages.update(authored)
+    definitions: dict[DefinitionId, ResearchDefinition] = {}
+    for code, progression_stage, category, series, display_name, prerequisites, theory_cost in RESEARCH_DAG_ROWS:
+        definition_id = research_id(code)
+        if definition_id in definitions:
+            raise ValueError(f"duplicate research definition id: {definition_id}")
+        definitions[definition_id] = ResearchDefinition(
+            definition_id,
+            display_name,
+            (ResearchTheoryStageSpec("theory", theory_cost),) + additional_stages.get(definition_id, ()),
+            prerequisites=frozenset(research_id(prerequisite) for prerequisite in prerequisites),
+            progression_stage=progression_stage,
+            category=category,
+            series=series,
+            engineering_problem=RESEARCH_DETAILS[code][0],
+            technical_outcome=RESEARCH_DETAILS[code][1],
+            application_domain=RESEARCH_DETAILS[code][2],
+        )
+    return definitions
 
 def build_research_providers() -> dict:
     return {
-        ids.EARTH_RESEARCH_LAB: ResearchProviderSpec(
-            ids.EARTH_RESEARCH_LAB,
-            ResearchProviderSourceKind.FACILITY,
-            ids.EARTH_RESEARCH_LAB,
-            tier=1,
-            levels=(
-                ResearchProviderLevelSpec(1, 4.0, 180.0, 1.0),
-                ResearchProviderLevelSpec(2, 6.5, 320.0, 1.0),
-                ResearchProviderLevelSpec(3, 9.5, 560.0, 1.0),
-            ),
+        **build_extended_research_providers(),
+        ids.PROPULSION_TEST_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.PROPULSION_TEST_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
+            frozenset({"propulsion_test_equipment"}), tier=2,
+            levels=(ResearchProviderLevelSpec(1, 8.0, 500.0, 2.5),),
         ),
-        ids.EARTH_OBSERVATION_SATELLITE: ResearchProviderSpec(
-            ids.EARTH_OBSERVATION_SATELLITE,
+        ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.DEEP_SPACE_TRACKING_RESEARCH_PROVIDER, ResearchProviderSourceKind.FACILITY,
+            frozenset({"deep_space_tracking_equipment"}), tier=2,
+            levels=(ResearchProviderLevelSpec(1, 6.0, 440.0, 2.2),),
+        ),
+        ids.MATERIALS_FATIGUE_BEAMLINE: ResearchProviderSpec(
+            ids.MATERIALS_FATIGUE_BEAMLINE,
             ResearchProviderSourceKind.FACILITY,
-            ids.EARTH_OBSERVATION_SATELLITE,
+            frozenset({"material_fatigue_beamline"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 125.0, 12500.0, 24.0),),
+        ),
+        ids.ORBITAL_THERMAL_VACUUM_LAB: ResearchProviderSpec(
+            ids.ORBITAL_THERMAL_VACUUM_LAB,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"orbital_thermal_vacuum_calorimetry"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 185.0, 18000.0, 32.0),),
+        ),
+        ids.BIOREGENERATIVE_BIOMEDICAL_LAB: ResearchProviderSpec(
+            ids.BIOREGENERATIVE_BIOMEDICAL_LAB,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"bioregenerative_biomedical_research"}), tier=4,
+            levels=(ResearchProviderLevelSpec(1, 250.0, 22000.0, 40.0),),
+            crew_person_days_per_research_point=0.18,
+            site_requirements=req.SiteRequirements(capability_requirements=(CapabilityRequirement(
+                "closed_cycle_life_support", CapabilityRequirementState.ACTIVE,
+            ),)),
+        ),
+        ids.RESEARCH_DATA_ARCHIVE: ResearchProviderSpec(
+            ids.RESEARCH_DATA_ARCHIVE,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"research_data_retention"}),
+            tier=3,
+            levels=(ResearchProviderLevelSpec(1, 0.0, 9000.0, 0.0),),
+        ),
+        ids.GENERAL_RESEARCH_LAB: ResearchProviderSpec(
+            ids.GENERAL_RESEARCH_LAB,
+            ResearchProviderSourceKind.FACILITY,
+            frozenset({"general_research_equipment"}),
             tier=1,
-            levels=(ResearchProviderLevelSpec(1, 2.0, 120.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 3.4, 240.0, 2.2),),
+        ),
+        ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER: ResearchProviderSpec(
+            ids.ORBITAL_OBSERVATION_RESEARCH_PROVIDER,
+            ResearchProviderSourceKind.FLEET,
+            frozenset({"optical_observation_instrument"}),
+            tier=1,
+            levels=(ResearchProviderLevelSpec(1, 2.0, 160.0, 1.4),),
+            site_requirements=req.ORBIT_SITE,
         ),
         ids.MICROGRAVITY_EXPERIMENT_PLATFORM: ResearchProviderSpec(
             ids.MICROGRAVITY_EXPERIMENT_PLATFORM,
             ResearchProviderSourceKind.FACILITY,
-            ids.MICROGRAVITY_EXPERIMENT_PLATFORM,
+            frozenset({"microgravity_experiment_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 9.0, 650.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 6.5, 800.0, 4.4),),
         ),
         ids.CREWED_ORBITAL_LABORATORY: ResearchProviderSpec(
             ids.CREWED_ORBITAL_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
-            ids.CREWED_ORBITAL_LABORATORY,
+            frozenset({"crewed_orbital_research_equipment"}),
             tier=3,
-            levels=(ResearchProviderLevelSpec(1, 22.0, 1600.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 22.0, 1600.0, 5.0),),
+            crew_person_days_per_research_point=0.18,
         ),
         ids.ROBOTIC_GEOLOGY_STATION: ResearchProviderSpec(
             ids.ROBOTIC_GEOLOGY_STATION,
             ResearchProviderSourceKind.FACILITY,
-            ids.ROBOTIC_GEOLOGY_STATION,
+            frozenset({"robotic_geology_equipment"}),
             tier=2,
-            levels=(ResearchProviderLevelSpec(1, 14.0, 1400.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 7.0, 1400.0, 4.8),),
         ),
         ids.SAMPLE_ANALYSIS_LABORATORY: ResearchProviderSpec(
             ids.SAMPLE_ANALYSIS_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
-            ids.SAMPLE_ANALYSIS_LABORATORY,
+            frozenset({"sample_analysis_equipment"}),
             tier=3,
-            levels=(ResearchProviderLevelSpec(1, 36.0, 3500.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 36.0, 3500.0, 6.0),),
         ),
         ids.VACUUM_REGOLITH_PROCESS_LABORATORY: ResearchProviderSpec(
             ids.VACUUM_REGOLITH_PROCESS_LABORATORY,
             ResearchProviderSourceKind.FACILITY,
-            ids.VACUUM_REGOLITH_PROCESS_LABORATORY,
+            frozenset({"vacuum_regolith_research_equipment"}),
             tier=4,
-            levels=(ResearchProviderLevelSpec(1, 90.0, 9000.0, 1.0),),
+            levels=(ResearchProviderLevelSpec(1, 90.0, 9000.0, 12.0),),
         ),
     }

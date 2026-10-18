@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from stock_support import add_preexisting_stock
+
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pytest
 
@@ -9,6 +11,7 @@ from space_idle import (
     AdvanceTime,
     ApplicationError,
     CancelBuild,
+    PlanBuild,
     CancelFounding,
     DevelopSurfaceCell,
     PlanOperationalNodeFounding,
@@ -17,31 +20,39 @@ from space_idle import (
     GetProjects,
     GetSurfaceMap,
     GetWorld,
+    GetOperationalNode,
+    StartSurvey,
+    SurveyProviderConstraintInput,
     build_game_application,
 )
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content import base_requirements as req
-from space_idle.persistence import load_game, save_game
+from space_idle.persistence import capture_state, load_game, save_game
 from space_idle.founding import (
     DeploymentRecipe, FoundingFacilityDeployment, FoundingResourceRequirement,
     NonSurfaceOperationalNodeTargetSpec,
 )
 from space_idle.facilities import FacilityDef
+from space_idle.exploration_models import KnowledgeLevel
 from space_idle.power import FixedGeneration, PowerSpec
 from space_idle.storage import StorageProviderSpec
 from space_idle.shared import DefinitionId, EntityId, SpatialNodeId
-from space_idle.spatial import CharacteristicTransportGeometry, SpatialNodeDef, SpatialNodeKind
+from space_idle.simulation import OfflineProgressPolicy
+from space_idle.spatial import SpatialNodeDef, SpatialNodeKind, ThermalField
+from space_idle.site import FacetValueRange, SiteRequirements
 from space_idle.spatial_claims import SurfaceCellClaim
 
 
 def _survey_cell_to_l2(sim, cell_id):
-    target = sim.survey.targets[(cell_id, ids.REGOLITH)]
-    key = (target.cell_id, target.resource_id)
-    sim.survey.knowledge_progress[key] = target.thresholds[1]
-    sim.survey.estimated_potential[key] = sim.survey.actual_potential(*key) * 0.9
-    sim.survey.knowledge_precision_fraction[key] = 0.35
-    assert sim.survey.knowledge_level(cell_id, ids.REGOLITH) >= 2
+    # This test is about Founding settlement, not Survey capacity. Seed the
+    # required prior observation through Knowledge's canonical settlement API.
+    sim.surface_knowledge.observe_resource(
+        cell_id, ids.MINERAL_FEEDSTOCK, KnowledgeLevel.ESTIMATED_RESOURCE_POTENTIAL,
+        precision=0.35,
+        estimate=sim.surface_knowledge.actual_potential(cell_id, ids.MINERAL_FEEDSTOCK) * 0.9,
+    )
+    assert sim.surface_knowledge.knowledge_level(cell_id, ids.MINERAL_FEEDSTOCK) >= 2
 
 
 def _surface_target(sim, body_id, cell_id):
@@ -77,10 +88,10 @@ def _advance_founding_to_completion(app, project):
 
 
 def _stage_founding_resources(sim):
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     for req in recipe.payload_resources:
-        sim.inventory.add(ids.LUNAR_ORBIT, req.resource_id, req.amount_t + 1.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+        add_preexisting_stock(sim, ids.LUNAR_ORBIT, req.resource_id, req.amount_t + 1.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
     return recipe
 
 
@@ -91,33 +102,33 @@ def _found_command(name: str, cell_id):
         target_spec=SurfaceLocationFoundingTarget(
             "surface_location", str(ids.MOON), str(cell_id)
         ),
-        deployment_recipe_id=str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE),
+        deployment_recipe_id=str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE),
         vehicle_definition_id=str(ids.REUSABLE_SURFACE_CARGO_LANDER),
     )
 
 
-def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_early_materialization():
+
+
+
+
+def test_generic_surface_development_and_founding_do_not_hardcode_resource_knowledge():
     app = build_game_application()
     sim = app._simulation
 
     earth_cell = ids.EARTH_CELL_COASTAL
-    water_key = (earth_cell, ids.WATER)
-    unrelated_key = (earth_cell, ids.METAL_ORE)
-    sim.survey.knowledge_progress[water_key] = 0.0
-    sim.survey.knowledge_progress[unrelated_key] = sim.survey.targets[unrelated_key].thresholds[-1]
+    for resource_id in (ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.WATER):
+        sim.surface_knowledge.knowledge_progress[(earth_cell, resource_id)] = 0.0
     development_failures = sim.projects.surface_cell_development_failures(
         ids.EARTH, earth_cell, sim.day
     )
-    assert any(
-        failure.code == "knowledge" and str(ids.WATER) in failure.detail
-        for failure in development_failures
-    )
+    assert not any(failure.code == "knowledge" for failure in development_failures)
 
     lunar_cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
-    water_target = sim.survey.targets[(lunar_cell, ids.WATER)]
-    sim.survey.knowledge_progress[(lunar_cell, ids.WATER)] = water_target.thresholds[-1]
-    sim.survey.knowledge_progress[(lunar_cell, ids.REGOLITH)] = 0.0
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    for resource_id in (
+        ids.MINERAL_FEEDSTOCK, ids.METAL_ORE, ids.VOLATILE_BEARING_MATERIAL
+    ):
+        sim.surface_knowledge.knowledge_progress[(lunar_cell, resource_id)] = 0.0
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT,
         _surface_target(sim, ids.MOON, lunar_cell),
@@ -125,27 +136,17 @@ def test_knowledge_requirements_are_subject_specific_and_gate_founding_without_e
         ids.REUSABLE_SURFACE_CARGO_LANDER,
         sim.day,
     )
-    assert any(
-        failure.code == "knowledge_requirement" and str(ids.REGOLITH) in failure.detail
-        for failure in founding_failures
-    )
-    with pytest.raises(ApplicationError, match="knowledge_requirement"):
-        app.execute(_found_command("Farside", lunar_cell))
+    assert not any(failure.code == "knowledge_requirement" for failure in founding_failures)
 
-    _survey_cell_to_l2(sim, lunar_cell)
     _stage_founding_resources(sim)
     result = app.execute(_found_command("Farside", lunar_cell))
     assert result.created_id is not None
-    project = next(
-        row for row in sim.founding.projects.values()
-        if str(row.id) == result.created_id
-    )
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == result.created_id)
     target_id = sim.founding.target_operational_node_id(project.target_spec)
     assert target_id not in sim.graph.locations
     assert not sim.graph.has_operational_node(target_id)
     assert all(location_id != target_id for location_id, _resource in sim.inventory.stock)
     assert not sim.transport.movement_plan_candidates(ids.LUNAR_ORBIT, target_id)
-
 
 def test_non_surface_operational_node_founding_uses_common_lifecycle_without_early_node_creation():
     app = build_game_application()
@@ -155,16 +156,17 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
         target_id,
         "Test orbital founding target",
         ids.SOL_SYSTEM,
-        CharacteristicTransportGeometry((12000.0, 0.0, 0.0), (0.2, 0.0, 0.0)),
+        None,
         body_id=ids.EARTH_BODY,
         kind=SpatialNodeKind.ORBITAL,
         inherits_parent_environment=False,
+        body_center_orbit_radius_km=12_000.0,
     ))
     recipe_id = DefinitionId("test.deployment_recipe.non_surface")
     sim.founding.deployment_recipes[recipe_id] = DeploymentRecipe(
         recipe_id, "Test orbital deployment", (), 0.0, "construction"
     )
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 2.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 2.0)
     sim.transport.add_fleet_units(ids.REUSABLE_ORBITAL_CARGO_TUG, 1, ids.LEO, day=sim.day)
 
     result = app.execute(PlanOperationalNodeFounding(
@@ -217,7 +219,7 @@ def test_non_surface_operational_node_founding_uses_common_lifecycle_without_ear
 def test_founding_transport_path_and_site_requirements_follow_staging_and_target_contexts():
     app = build_game_application()
     sim = app._simulation
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
     _survey_cell_to_l2(sim, cell)
 
@@ -243,7 +245,8 @@ def test_founding_transport_path_and_site_requirements_follow_staging_and_target
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, ids.EARTH_CELL_COASTAL), recipe.id,
         ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day
     )
-    assert any(row.code == "target:environment:low_pressure" for row in earth_target)
+    assert not any(row.code.startswith("target:") for row in earth_target)
+    assert any(row.code.startswith("deployment_vehicle") for row in earth_target)
 
 
 
@@ -276,7 +279,7 @@ def test_surface_cell_claim_registry_enforces_exclusivity_across_builtin_and_ext
         str(ids.EARTH), str(cell), procurement_policy="immediate"
     )).created_id
     assert development_id is not None
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     builtin_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, cell),
         recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
@@ -296,7 +299,7 @@ def test_surface_cell_claim_registry_enforces_exclusivity_across_builtin_and_ext
         for row in development_failures
     )
 
-    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+    recipe = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
     founding_failures = sim.founding.planning_failures(
         ids.LUNAR_ORBIT, _surface_target(sim, ids.EARTH_BODY, cell),
         recipe.id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
@@ -327,7 +330,10 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         blocker.code in {"import_source", "import_transport_blocked"}
         for blocker in planned.blockers
     )
-    assert any(blocker.code == "resource_shortage" for blocker in planned.blockers)
+    # Logistics may present an import blocker rather than a second generic
+    # resource_shortage blocker; the physical deficit is explicit on the
+    # project Resource row regardless of its supply route.
+    assert any(row.shortage_t > 0 for row in planned.resources)
 
     app.execute(AdvanceTime(1))
     project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
@@ -358,6 +364,66 @@ def test_partial_founding_procurement_becomes_durable_staged_payload_and_cancel_
         stock_before_cancel + staged
     )
 
+def test_surface_founding_preview_does_not_expose_unmeasured_site_truth():
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    recipe_id = DefinitionId("test.founding.observation_eligibility")
+    base = sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    physical_condition = FacetValueRange(
+        ThermalField, "nominal_temperature_k", "environment:thermal_eligibility",
+        "the equipment cannot operate at this temperature", minimum=10000.0,
+    )
+    sim.founding.deployment_recipes[recipe_id] = replace(
+        base, id=recipe_id,
+        target_requirements=SiteRequirements(environment=(physical_condition,)),
+    )
+    target = sim.founding.surface_target_spec(ids.MOON, cell)
+    physical_blockers = sim.founding.target_settlement_failures(
+        target, sim.founding.deployment_recipes[recipe_id], "Founding preview", sim.day,
+    )
+    assert any(row.code == "target:environment:thermal_eligibility" for row in physical_blockers)
+    planning = sim.founding.planning_failures(
+        ids.LUNAR_ORBIT, target, recipe_id, ids.REUSABLE_SURFACE_CARGO_LANDER, sim.day,
+    )
+    assert not any(row.code == "target:environment:thermal_eligibility" for row in planning)
+
+    def option():
+        surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell),)))
+        row = next(item for item in surface.cells if item.id == str(cell))
+        return next(item for item in row.foundation_options
+                    if item.deployment_recipe_id == str(recipe_id)
+                    and item.staging_node_id == str(ids.LUNAR_ORBIT)
+                    and item.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER))
+
+    unknown = option()
+    assert unknown.can_plan and unknown.site_knowledge_unverified
+    assert all(blocker.code != "target:environment:thermal_eligibility" for blocker in unknown.blockers)
+    # The uncertain intent can be created, but the unfit site cannot consume
+    # Fleet/payload through a deployment or mint an Operational Node.
+    _stage_founding_resources(sim)
+    project_id = app.execute(PlanOperationalNodeFounding(
+        staging_node_id=str(ids.LUNAR_ORBIT), display_name="Unverified outpost",
+        target_spec=SurfaceLocationFoundingTarget("surface_location", str(ids.MOON), str(cell)),
+        deployment_recipe_id=str(recipe_id), vehicle_definition_id=str(ids.REUSABLE_SURFACE_CARGO_LANDER),
+    )).created_id
+    assert project_id is not None
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == project_id)
+    app.execute(AdvanceTime(1))
+    assert project.status.value == "preparing" and project.movement_execution_id is None
+    row = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert any(blocker.code == "site_knowledge_unverified" for blocker in row.blockers)
+    assert all(blocker.code != "target:environment:thermal_eligibility" for blocker in row.blockers)
+    sim.surface_knowledge.observe_attribute(cell, "environment", 2)
+    measured = option()
+    assert not measured.site_knowledge_unverified
+    assert any(blocker.code == "target:environment:thermal_eligibility" for blocker in measured.blockers)
+    assert measured.can_plan is False  # Existing claim forbids another Founding intent.
+    row = next(row for row in app.query(GetProjects()).items if row.id == project_id)
+    assert any(blocker.code == "target:environment:thermal_eligibility" for blocker in row.blockers)
+    app.execute(CancelFounding(project_id))
+
+
 def test_founding_target_preflight_uses_facility_site_and_powered_inventory_contracts_atomically():
     app = build_game_application()
     sim = app._simulation
@@ -366,8 +432,9 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
         target_id = SpatialNodeId(name)
         sim.graph.add(SpatialNodeDef(
             target_id, name, ids.SOL_SYSTEM,
-            CharacteristicTransportGeometry((9000.0 + offset, 0.0, 0.0), (0.1, 0.0, 0.0)),
+            None,
             body_id=ids.EARTH_BODY, kind=SpatialNodeKind.ORBITAL, inherits_parent_environment=False,
+            body_center_orbit_radius_km=9_000.0 + offset,
         ))
         return target_id
 
@@ -414,11 +481,11 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
     assert any(row.code == "initial_inventory_admission" for row in blocked_failures)
     assert not sim.graph.has_operational_node(blocked_target)
 
-    # A valid plan can still lose eligibility while in transit. Arrival must fail
-    # before any target-side State is materialized.
+    # A valid plan can lose eligibility while in transit. Settlement must
+    # retain the physical Fleet/payload and avoid partial target creation.
     sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
     target_id = orbital_target("test.node.founding_atomic_preflight", 991000.0)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 5.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 5.0)
     project_id = app.execute(PlanOperationalNodeFounding(
         staging_node_id=str(ids.LEO),
         display_name="Atomic preflight outpost",
@@ -433,22 +500,32 @@ def test_founding_target_preflight_uses_facility_site_and_powered_inventory_cont
     sim.power.specs[storage_facility] = PowerSpec(load_mw=1.0)
     remaining = execution.completion_day - sim.day
     assert remaining > 0
-    with pytest.raises(ApplicationError, match="founding settlement preflight failed"):
-        app.execute(AdvanceTime(remaining))
+    app.execute(AdvanceTime(remaining))
+    assert project.status.value == "deploying"
+    assert project.movement_execution_id is not None
     assert not sim.graph.has_operational_node(target_id)
     assert not sim.facilities.all_at(target_id)
     assert sim.inventory.amount(target_id, ids.PROPELLANT) == pytest.approx(0.0)
+    # Recovery is a new physical State, never retroactive settlement.
+    sim.power.specs[storage_facility] = PowerSpec(FixedGeneration(2.0), load_mw=1.0)
+    app.execute(AdvanceTime(1))
+    assert project.status.value == "complete"
+    assert sim.graph.has_operational_node(target_id)
 
 
 def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     app = build_game_application()
     cell_id = ids.MOON_CELL_FARSIDE_HIGHLANDS
-    cell = next(row for row in app.query(GetSurfaceMap(str(ids.MOON))).cells if row.id == str(cell_id))
+    cell = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell_id),))).cells if row.id == str(cell_id))
     option = next(
         row for row in cell.foundation_options
         if row.staging_node_id == str(ids.LUNAR_ORBIT)
-        and row.deployment_recipe_id == str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE)
+        and row.deployment_recipe_id == str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE)
         and row.vehicle_definition_id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
+    )
+    recipe = app._simulation.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
+    assert tuple(row.facility_definition_id for row in option.deployed_facilities) == tuple(
+        str(item.facility_def_id) for item in recipe.deployed_facilities
     )
     assert option.payload_t > 0
     assert 0 < option.payload_t_per_unit <= option.payload_t
@@ -460,7 +537,7 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     expected_resources = {
         str(row.resource_id): row.amount_t
         for row in app._simulation.founding.resource_requirements_for(
-            ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE,
+            ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE,
             ids.REUSABLE_SURFACE_CARGO_LANDER,
                 ids.LUNAR_ORBIT,
                 _surface_target(app._simulation, ids.MOON, cell_id),
@@ -468,27 +545,127 @@ def test_surface_map_exposes_founding_recipe_vehicle_and_blockers():
     }
     assert displayed_resources == expected_resources
     assert str(ids.PROPELLANT) in displayed_resources
-    assert any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
+    assert not any(blocker.code == "knowledge_requirement" for blocker in option.blockers)
 
-    surface = app.query(GetSurfaceMap(str(ids.MOON)))
+    surface = app.query(GetSurfaceMap(str(ids.MOON), (str(cell_id),)))
     assert surface.founding_comparison_axes
     assert any(axis.differs for axis in surface.founding_comparison_axes)
-    assert {axis.key for axis in surface.founding_comparison_axes} == {
-        "transit_days",
-        "preparation_work",
-        "required_units",
-        "payload_t",
-        "staging_resource_t",
-        "terrain_factor",
-        "bearing_capacity_factor",
-        "dust_factor",
-        "slope_factor",
-    }
+    # Candidate comparison can add new physical dimensions; only the
+    # decision-critical transport and payload quantities are required here.
+    comparison_keys = {axis.key for axis in surface.founding_comparison_axes}
+    assert {"transit_days", "payload_t"} <= comparison_keys
+    assert len(comparison_keys) == len(surface.founding_comparison_axes)
     option_values = {value.axis_key: value.number_value for value in option.comparison_values}
-    assert option.comparison_key.startswith(f"{cell.id}|")
     assert set(option_values) == {axis.key for axis in surface.founding_comparison_axes}
-    assert option_values["terrain_factor"] == pytest.approx(dict(cell.terrain)["terrain_factor"])
-    assert option_values["staging_resource_t"] == pytest.approx(sum(displayed_resources.values()))
+    # Undiscovered physical terrain must not be available through the Founding
+    # comparison even though the true World remains executable.
+    assert cell.terrain_knowledge_level == 0
+    assert not cell.terrain
+    assert option_values["development_work_factor"] is None
+
+
+def test_observation_foundation_and_resource_access_are_one_application_progression(tmp_path):
+    """Survey evidence changes the actual founding/extraction decision, without
+    creating a fictional inventory node before physical Fleet deployment.
+    Science's independent real-Movement observation is tested at its own owner.
+    """
+    app = build_game_application()
+    sim = app._simulation
+    cell = ids.MOON_CELL_FARSIDE_HIGHLANDS
+    resource = ids.MINERAL_FEEDSTOCK
+    before = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell),))).cells
+                  if row.id == str(cell))
+    initial_resource = next(row for row in before.resources if row.resource_id == str(resource))
+    assert initial_resource.visible_potential is None
+    assert before.geology == ()
+
+    campaign_id = app.execute(StartSurvey(
+        target_cell_ids=(str(cell),), resource_ids=(str(resource),), goal_knowledge_level=2,
+        provider_constraint=SurveyProviderConstraintInput(
+            str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        ),
+        observation_mode_constraint="remote_orbital_spectrometry",
+    )).created_id
+    assert campaign_id is not None
+    target = sim.surface_knowledge.targets[(cell, resource)]
+    while sim.surface_knowledge.progress(cell, resource) < target.thresholds[1] - 1e-9:
+        progress = sim.surface_knowledge.progress(cell, resource)
+        app.execute(AdvanceTime(1))
+        assert sim.surface_knowledge.progress(cell, resource) > progress
+    observed = next(row for row in app.query(GetSurfaceMap(str(ids.MOON), (str(cell),))).cells
+                    if row.id == str(cell))
+    observed_resource = next(row for row in observed.resources if row.resource_id == str(resource))
+    assert observed_resource.knowledge_level == 2
+    assert observed_resource.visible_potential is not None
+    assert observed_resource.visible_potential_precision_fraction is not None
+    assert observed.terrain_knowledge_level > 0 and observed.geology == ()
+
+    # A physical target is never a second operational resource/transport node.
+    _stage_founding_resources(sim)
+    founding_id = app.execute(_found_command("Surveyed outpost", cell)).created_id
+    project = next(row for row in sim.founding.projects.values() if str(row.id) == founding_id)
+    node_id = sim.founding.target_operational_node_id(project.target_spec)
+    assert not sim.graph.has_operational_node(node_id)
+    _advance_founding_to_completion(app, project)
+    assert sim.graph.has_operational_node(node_id)
+    assert sim.graph.locations[node_id].core_cell_id == cell
+    result = app.query(GetOperationalNode(str(node_id)))
+    assert result.id == str(node_id)
+    assert result.population is not None
+    assert result.population.current_count == 0
+    # A surveyed ore deposit is a real accessible opportunity, not free
+    # extraction throughput or player-owned stock at founding completion.
+    assert sim.surface_knowledge.visible_potential(cell, resource) == observed_resource.visible_potential
+    assert sim.inventory.amount(node_id, resource) >= 0
+    before_people = sim.population.count_at(node_id)
+    assert before_people == 0
+
+    # The surveyed deposit is usable through real Facility investment and
+    # canonical extraction, not merely through its Map evidence or a spawned
+    # initial Resource grant. This scenario supplies already owned industrial
+    # construction/power capacity and a completed enabling Technology; the
+    # actual new mining asset still requires its Construction Project.
+    sim.research.technology_state.unlock(ids.RP_RESOURCE_CHAIN_02)
+    sim.facilities.install(ids.INDUSTRIAL_POWER_BLOCK, node_id, level=10)
+    sim.facilities.install(ids.CONSTRUCTION_YARD, node_id, level=10)
+    mine_recipe = sim.projects.recipes[ids.VACUUM_MINERAL_HARVESTER]
+    for requirement in mine_recipe.resources:
+        add_preexisting_stock(sim, node_id, requirement.resource_id, requirement.amount_t)
+    mine_project_id = app.execute(PlanBuild(
+        str(node_id), str(ids.VACUUM_MINERAL_HARVESTER)
+    )).created_id
+    assert mine_project_id is not None
+    mine_project = next(row for row in sim.projects.projects.values()
+                        if str(row.id) == mine_project_id)
+    while mine_project.status.value != 'complete':
+        previous = (mine_project.status, mine_project.construction_done)
+        app.execute(AdvanceTime(1))
+        assert (mine_project.status, mine_project.construction_done) != previous
+    assert mine_project.completed_facility_id is not None
+    assert sim.inventory.amount(node_id, resource) == 0
+    app.execute(AdvanceTime(1))
+    # A newly invested Facility still needs real ongoing Maintenance inputs.
+    # Without those inputs the physical asset exists but cannot produce.
+    assert sim.inventory.amount(node_id, resource) == 0
+    for requirement in mine_recipe.resources:
+        add_preexisting_stock(sim, node_id, requirement.resource_id, requirement.amount_t)
+    app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(node_id, resource) > 0
+    assert sim.graph.surface_cells[cell].resource_potential_by_resource[resource] > 0
+    assert any(row.resource_id == str(resource) and row.output_t_per_day > 0
+               for row in app.query(GetOperationalNode(str(node_id))).extraction_resources)
+
+    saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / 'observed-founded-node.json'
+    save_game(app, path, saved_at=saved_at)
+    direct, _ = load_game(path, build_game_application_for_load)
+    offline, outcome = load_game(path, build_game_application_for_load,
+                                  now=saved_at + timedelta(seconds=1),
+                                  offline_policy=OfflineProgressPolicy(real_seconds_per_game_day=1.0))
+    direct.execute(AdvanceTime(1))
+    assert outcome is not None and outcome.advanced_days == 1
+    assert capture_state(offline._simulation) == capture_state(direct._simulation)
+    assert offline._simulation.population.count_at(node_id) == 0
 
 
 def test_founding_persistence_preserves_payload_ownership_and_materializes_location_once(tmp_path):
@@ -497,7 +674,7 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
     def factory(*, for_load: bool = False):
         current = build_game_application_for_load() if for_load else build_game_application()
         current_sim = current._simulation
-        base = current_sim.founding.deployment_recipes[ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE]
+        base = current_sim.founding.deployment_recipes[ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE]
         first_deployment = base.deployed_facilities[0]
         duplicated_investment = replace(
             first_deployment,
@@ -540,8 +717,8 @@ def test_founding_persistence_preserves_payload_ownership_and_materializes_locat
             expected_payload.get(requirement.resource_id, 0.0) + requirement.amount_t
         )
     for resource_id, amount_t in expected_payload.items():
-        sim.inventory.add(ids.LUNAR_ORBIT, resource_id, amount_t + 1.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
+        add_preexisting_stock(sim, ids.LUNAR_ORBIT, resource_id, amount_t + 1.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 10.0)
 
     project_id = app.execute(PlanOperationalNodeFounding(
         staging_node_id=str(ids.LUNAR_ORBIT),

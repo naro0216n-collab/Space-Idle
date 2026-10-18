@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 from .application_commands import (
-    AcceptContract, AdvanceTime, ApplicationError, CancelBuild, ClearTransportMovementConstraint,
-    CreateTransportAllocation, SetTransportMovementConstraint, DeclineContract,
-    DeleteTransportAllocation, SetResearchPriority, GetAttention, GetBottlenecks,
-    GetBuildOptions, GetCatalog, GetCargoFlows, GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast,
+    AdvanceTime, ApplicationError, CancelBuild, ClearTransportMovementConstraint,
+    CreateTransportAllocation, SetTransportMovementConstraint,
+    DeleteTransportAllocation, SetInfrastructureFreightLink, DeleteInfrastructureFreightLink, SetResearchPriority, GetAttention, GetBottlenecks,
+    GetBuildOptions, GetCatalog, GetCargoFlows,  GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast,
     GetOperationalNode, GetLogistics, GetLogisticsSummary, GetProjects,
     GetResearch, GetMovementPlans, GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, PauseBuild, PauseFacility,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, PauseBuild, PauseFacility,
     PauseResearch, PauseScientificExploration, AbortScientificExploration, ReturnScientificExploration, SetScientificExplorationCompletionDisposition, PauseSurvey, PauseTransportAllocation,
-    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
+    PauseVehicleProduction, PlanBuild, PlanFacilityUpgrade, SurfaceLocationFoundingTarget, NonSurfaceOperationalNodeFoundingTarget, PlanOperationalNodeFounding, CancelFounding, PauseFounding, ResumeFounding, SetFoundingPriority, DevelopSurfaceCell, EngineerSurfaceCell, ProduceVehicle, RelocateFleet, RetireFleet, CancelFleetRetirement, SetFleetRetirementPriority,
     ResumeBuild, ResumeFacility, ResumeResearch,
     ResumeScientificExploration, ResumeSurvey, ResumeTransportAllocation,
-    ResumeVehicleProduction, SetFacilityProcess, SetMaintenancePriority,
+    ResumeVehicleProduction, SetFacilityProcess, SetFacilityExtractionMethod, SetMaintenancePriority,
     SetFacilityActivityPriority, SetProjectPriority, SetProjectProcurementPolicy,
     SetResearchDemonstrationSite, SetResearchPrototypeSite, SetSurveyPriority,
-    SetTimeControl, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
+    SetTimeControl, SetPowerLink, DeletePowerLink, SetVehicleProductionSettings, StartResearch, StartScientificExploration, SetScientificExplorationPriority,
     SurveyProviderConstraintInput, StartSurvey, UpdateSurvey, UnassignExplorationFleet, UpdateTransportAllocation, AssignExplorationFleet, SetResearchProviderFleetQuantity, SetResearchProviderAssignmentPriority, PauseResearchProviderAssignment, ResumeResearchProviderAssignment, SetSurveyProviderFleetQuantity, CreateTradeOrder,
     UpdateTradeOrder, CancelTradeOrder, GetMarket,
     SetTargetStock, DeleteTargetStock, SetSupplyRoutingConstraint, ClearSupplyRoutingConstraint,
+    SetPopulationTarget, ClearPopulationTarget, SetNaturalPopulationGrowth, RequestPassengerTransfer,
+    CancelPassengerTransfer, GetPassengerTransferPreview, GetPassengerTransfers,
 )
 
 from .application_command_handlers import ApplicationCommandMixin
@@ -59,3 +61,20 @@ class GameApplication(ApplicationCommandMixin, ApplicationQueryMixin):
         self, elapsed_real_seconds: float, policy: OfflineProgressPolicy
     ) -> OfflineProgressResult:
         return self._simulation.advance_offline(elapsed_real_seconds, policy)
+
+
+    @property
+    def game_day(self) -> int:
+        return self._simulation.day
+
+    def observe_development_state(self, *, operational_node_ids=None, resource_ids=None):
+        """Read the authoritative state using the shared Domain observation."""
+        from .analysis_observation import observe_state
+        return observe_state(self._simulation, operational_node_ids=operational_node_ids,
+                             resource_ids=resource_ids)
+
+    def observe_development_day(self, *, operational_node_ids=None, resource_ids=None):
+        """Observe one ordinary AdvanceTime day; no alternative tick rules."""
+        from .analysis_execution import observe_canonical_day
+        return observe_canonical_day(self._simulation, operational_node_ids=operational_node_ids,
+                                     resource_ids=resource_ids)

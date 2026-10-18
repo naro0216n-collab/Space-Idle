@@ -15,7 +15,6 @@ class LogisticsProjectorMixin(
         sim = self._simulation
         decision = self._tick_decision_projection()
         return LogisticsView(
-            movement_plans=self._movement_plan_rows(),
             fleet_pools=self._fleet_pool_rows(),
             relocations=self._fleet_relocation_rows(),
             releases=self._fleet_release_rows(),
@@ -34,7 +33,6 @@ class LogisticsProjectorMixin(
 
     def _logistics_summary_view(self) -> LogisticsSummaryView:
         sim = self._simulation
-        movement_plans = self._movement_plan_rows(include_modes=False)
         pools = self._fleet_pool_rows()
         allocations = self._transport_allocation_rows()
         flows = self._cargo_flow_rows()
@@ -44,9 +42,7 @@ class LogisticsProjectorMixin(
             resolutions=decision.plan.requirement_resolutions,
         )
         return LogisticsSummaryView(
-            movement_plan_count=len(movement_plans),
-            usable_movement_plan_count=sum(1 for row in movement_plans if row.service_feasible_now),
-            fleet_units=sum(row.total_units for row in pools),
+            fleet_units=sim.transport.fleet_owned_units(),
             free_fleet_units=sum(row.free_units for row in pools),
             allocation_count=len(allocations),
             unfilled_allocation_units=sum(row.unfilled_units for row in allocations),

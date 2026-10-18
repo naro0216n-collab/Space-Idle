@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from contextlib import contextmanager
+from dataclasses import replace
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
@@ -23,7 +24,7 @@ from .supply import SupplyRequirement
 from .spatial_claims import SurfaceCellClaim, SurfaceCellClaimRegistry
 from .shared import CelestialBodyId, DefinitionId, EntityId, ProjectId, SpatialNodeId, SurfaceCellId
 from .exploration_models import KnowledgeRequirement, KnowledgeRequirementSpec
-from .spatial import EnvironmentResolver, OperationalNodeState
+from .spatial import EnvironmentResolver, OperationalNodeState, SpatialGraph
 from .site import SiteRequirements, evaluate_physical_site_requirements, evaluate_site_requirements
 from .storage import StorageService
 from .transport.models import (
@@ -186,6 +187,25 @@ class OperationalNodeFoundingService:
     surface_cell_claim_registry: SurfaceCellClaimRegistry = field(default_factory=SurfaceCellClaimRegistry)
     projects: dict[ProjectId, OperationalNodeFoundingProject] = field(default_factory=dict)
     _counter: int = 0
+    _target_preview_cache: dict[tuple[FoundingTargetSpec, DefinitionId, str, int], tuple[FoundingBlocker, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    @contextmanager
+    def target_preview_scope(self):
+        """Share target-side preflight within one unchanged physical projection.
+
+        Staging and Vehicle choices do not alter target facility installation,
+        power or initial Inventory admission. The scope must not cross a
+        player Command or canonical settlement.
+        """
+        previous = self._target_preview_cache
+        if previous is None:
+            self._target_preview_cache = {}
+        try:
+            yield
+        finally:
+            self._target_preview_cache = previous
 
     def __post_init__(self) -> None:
         self.surface_cell_claim_registry.register(self)
@@ -385,9 +405,17 @@ class OperationalNodeFoundingService:
             for row in failures
         )
         if not target_identity_blocked:
-            failures.extend(self._target_settlement_failures(
-                target_spec, recipe, "Founding preview", day
-            ))
+            # Founding planning reserves an intent and a fleet, not a completed
+            # installation. A physical environment may become suitable while
+            # preparation is queued. Check it before irreversible deployment;
+            # otherwise can_plan would reveal unobserved World truth.
+            runtime_codes = {f"target:{condition.code}" for condition in recipe.target_requirements.environment}
+            runtime_codes.add("facility_environment")
+            failures.extend(
+                failure for failure in self.target_settlement_failures(
+                    target_spec, recipe, "Founding preview", day
+                ) if failure.code not in runtime_codes
+            )
 
         if self.transport.vehicle_definition(vehicle_definition_id) is None:
             failures.append(FoundingBlocker("vehicle_definition", str(vehicle_definition_id)))
@@ -555,10 +583,11 @@ class OperationalNodeFoundingService:
     def execution_requirement_bundles(
         self, day: int = 0
     ) -> tuple[ExecutionRequirementBundle, ...]:
-        del day
         rows: list[ExecutionRequirementBundle] = []
         for project in sorted(self.projects.values(), key=lambda row: (-row.priority, str(row.id))):
             if project.status is not FoundingStatus.PREPARING or project.paused:
+                continue
+            if any(b.code != "resource_shortage" for b in self.blockers(project.id, day)):
                 continue
             if not project.inputs_consumed:
                 for requirement in self.project_resource_requirements(project.id):
@@ -624,14 +653,16 @@ class OperationalNodeFoundingService:
         project.inputs_consumed = all_committed
         return all_committed
 
-    def _release_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
+    def _release_prepared_payload(self, project: OperationalNodeFoundingProject, movement_execution_id: EntityId) -> None:
         payload_owner = self.payload_owner_id(project.id)
         for requirement in self.project_resource_requirements(project.id):
             resource_id = requirement.resource_id
             staged = self.staged_payload_t(project.id, resource_id)
             if staged > 1e-12:
                 self.inventory.release_storage_occupancy(
-                    payload_owner, project.staging_node_id, resource_id, staged
+                    payload_owner, project.staging_node_id, resource_id, staged,
+                    destination_owner=f"movement:{movement_execution_id}",
+                    activity_id=f"founding_dispatch:{project.id}",
                 )
 
     def _restore_prepared_payload(self, project: OperationalNodeFoundingProject) -> None:
@@ -666,6 +697,13 @@ class OperationalNodeFoundingService:
                 if not (row.code == "cell_claimed" and row.detail == str(EntityId(project.id)))
             ]
         failures = [row for row in failures if row.code != "fleet_units"]
+        # A selected target remains physically subject to Site requirements;
+        # the planning-only relaxation never grants runtime eligibility.
+        recipe = self.deployment_recipes[project.deployment_recipe_id]
+        failures.extend(self.target_settlement_failures(
+            project.target_spec, recipe, project.display_name, day
+        ))
+        failures = list(dict.fromkeys(failures))
         if project.status is FoundingStatus.PREPARING and not project.inputs_consumed:
             for requirement in self.project_resource_requirements(project.id):
                 staged = self.staged_payload_t(project.id, requirement.resource_id)
@@ -797,7 +835,7 @@ class OperationalNodeFoundingService:
                     except Exception:
                         self.transport.finish_movement_execution(execution.id)
                         raise
-                    self._release_prepared_payload(project)
+                    self._release_prepared_payload(project, execution.id)
                     project.status = FoundingStatus.DEPLOYING
                     project.movement_execution_id = execution.id
 
@@ -813,6 +851,12 @@ class OperationalNodeFoundingService:
             if execution is None:
                 raise RuntimeError(f"founding MovementExecution missing: {project.id}")
             if execution.completion_day <= day:
+                # World may have been changed after dispatch. Keep Fleet and
+                # payload committed to the arrived Movement until all target
+                # admission conditions are satisfied, without partial creation.
+                recipe = self.deployment_recipes[project.deployment_recipe_id]
+                if self.target_settlement_failures(project.target_spec, recipe, project.display_name, day):
+                    continue
                 self._complete(project, day)
                 physical_state_changed = True
         return physical_state_changed
@@ -864,24 +908,33 @@ class OperationalNodeFoundingService:
     @staticmethod
     def _installation_requirement_failures(
         facilities: FacilityBook, facility_ids: tuple[EntityId, ...], day: int
-    ) -> tuple[str, ...]:
-        failures: list[str] = []
+    ) -> tuple[FoundingBlocker, ...]:
+        failures: list[FoundingBlocker] = []
         for facility_id in facility_ids:
             facility = facilities.facilities[facility_id]
             definition = facilities.definitions[facility.definition_id]
             context_id = facilities.facility_environment_context(facility)
-            failures.extend(
-                f"{facility.definition_id}:{failure.code}:{failure.detail}"
-                for failure in evaluate_site_requirements(
-                    definition.installation_requirements,
-                    facility.operational_node_id,
-                    day,
-                    facilities.environment,
-                    facilities,
-                    environment_context_id=context_id,
-                )
-            )
+            environment_codes = {condition.code for condition in definition.installation_requirements.environment}
+            for failure in evaluate_site_requirements(
+                definition.installation_requirements,
+                facility.operational_node_id,
+                day,
+                facilities.environment,
+                facilities,
+                environment_context_id=context_id,
+            ):
+                failures.append(FoundingBlocker(
+                    "facility_environment" if failure.code in environment_codes else "facility_installation",
+                    f"{facility.definition_id}:{failure.code}:{failure.detail}",
+                ))
         return tuple(failures)
+
+    def target_settlement_failures(
+        self, target_spec: FoundingTargetSpec, recipe: DeploymentRecipe,
+        display_name: str, day: int,
+    ) -> tuple[FoundingBlocker, ...]:
+        """Physical target preflight used by both decisions and actual deployment."""
+        return self._target_settlement_failures(target_spec, recipe, display_name, day)
 
     def _target_settlement_failures(
         self,
@@ -897,15 +950,40 @@ class OperationalNodeFoundingService:
         authoritative State and therefore cannot partially materialize a target.
         """
 
+        cache = self._target_preview_cache
+        cache_key = (target_spec, recipe.id, display_name, day)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+
         graph = self.facilities.environment.graph
-        preview_graph = deepcopy(graph)
+        # Founding adds one dynamic operational Location / Node. The world
+        # definitions never change in this preflight: copying all celestial
+        # bodies, Cells and geometry per Vehicle candidate is redundant.
+        preview_graph = SpatialGraph(
+            star_systems=graph.star_systems,
+            bodies=graph.bodies,
+            nodes=graph.nodes,
+            surface_cells=graph.surface_cells,
+            locations=dict(graph.locations),
+            operational_node_states=dict(graph.operational_node_states),
+        )
         preview_environment = EnvironmentResolver(
             preview_graph,
             self.facilities.environment.static,
             list(self.facilities.environment.overlays),
         )
         preview_facilities = self.facilities.copy_for_environment(preview_environment)
-        preview_inventory = deepcopy(self.inventory)
+        # Inventory owns scalar quantities keyed by Node/Resource. Snapshot
+        # only its mutable maps; Resource definitions are immutable inputs.
+        preview_inventory = replace(
+            self.inventory,
+            stock=dict(self.inventory.stock),
+            reserved=dict(self.inventory.reserved),
+            physical_storage_capacity_t=dict(self.inventory.physical_storage_capacity_t),
+            usable_storage_capacity_t=dict(self.inventory.usable_storage_capacity_t),
+            storage_limiting_factors=dict(self.inventory.storage_limiting_factors),
+            external_occupancy=dict(self.inventory.external_occupancy),
+        )
         preview_storage = StorageService(
             self.storage.providers, preview_inventory, preview_facilities
         )
@@ -920,7 +998,10 @@ class OperationalNodeFoundingService:
                 preview_facilities, recipe, target_node_id, core_cell_id
             )
         except (KeyError, ValueError, RuntimeError) as exc:
-            return (FoundingBlocker("target_settlement", str(exc)),)
+            result = (FoundingBlocker("target_settlement", str(exc)),)
+            if cache is not None:
+                cache[cache_key] = result
+            return result
 
         target_context_id = core_cell_id if core_cell_id is not None else target_node_id
         for failure in evaluate_site_requirements(
@@ -933,12 +1014,9 @@ class OperationalNodeFoundingService:
         ):
             failures.append(FoundingBlocker(f"target:{failure.code}", failure.detail))
 
-        failures.extend(
-            FoundingBlocker("facility_installation", detail)
-            for detail in self._installation_requirement_failures(
-                preview_facilities, facility_ids, day
-            )
-        )
+        failures.extend(self._installation_requirement_failures(
+            preview_facilities, facility_ids, day
+        ))
 
         target_power = preview_power.snapshot(target_node_id, preview_facilities, day)
         preview_storage.refresh_node(target_node_id, day, target_power)
@@ -949,7 +1027,10 @@ class OperationalNodeFoundingService:
                     "initial_inventory_admission",
                     f"{resource_id}:{admission.admitted_t:g}/{amount_t:g}",
                 ))
-        return tuple(failures)
+        result = tuple(failures)
+        if cache is not None:
+            cache[cache_key] = result
+        return result
 
     def _preflight_settlement(
         self, project: OperationalNodeFoundingProject, recipe: DeploymentRecipe, day: int
@@ -1039,10 +1120,14 @@ class OperationalNodeFoundingService:
             if execution.final_asset_disposition is OperationAssetDisposition.DESTINATION
             else project.staging_node_id
         )
-        destination_id = execution.destination.operational_node_id
-        if destination_id is not None and destination_id != final_location:
+        destination = execution.destination
+        if isinstance(project.target_spec, SurfaceLocationTargetSpec):
+            target_matches = destination.physical_target_cell_id == project.target_spec.core_cell_id
+        else:
+            target_matches = destination.physical_target_node_id == project.target_spec.spatial_node_id
+        if not target_matches:
             failures.append(FoundingBlocker(
-                "fleet_settlement", "MovementExecution arrival location mismatch"
+                "fleet_settlement", "MovementExecution physical target mismatch"
             ))
         if final_location != target_node_id and not self.facilities.environment.graph.has_operational_node(final_location):
             failures.append(FoundingBlocker(
@@ -1098,7 +1183,11 @@ class OperationalNodeFoundingService:
         target_power = self.power.snapshot(target_node_id, self.facilities, day)
         self.storage.refresh_node(target_node_id, day, target_power)
         for resource_id, amount_t in recipe.initial_inventory_totals().items():
-            admission = self.inventory.admit(target_node_id, resource_id, amount_t)
+            admission = self.inventory.admit(
+                target_node_id, resource_id, amount_t,
+                source_owner=f"founding_manifest:{project.id}",
+                activity_id=f"founding_deployment:{project.id}",
+            )
             if not admission.fully_admitted:
                 raise RuntimeError(
                     f"Founding settlement diverged from preflight Inventory Admission: {resource_id}"

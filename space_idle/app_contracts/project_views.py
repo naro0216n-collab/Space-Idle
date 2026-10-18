@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
-from .ui_reports import ComparisonAxisRow, ComparisonValueRow
 
 
 @dataclass(frozen=True)
@@ -21,9 +20,44 @@ class ProjectResourceRow:
 class BuildResourceOption:
     resource_id: str
     required_t: float
+    shortage_t: float
     available_t: float = 0.0
     projected_source_id: str | None = None
     projected_arrival_day: int | None = None
+
+
+@dataclass(frozen=True)
+class BuildProcessOptionRow:
+    process_id: str
+    display_name: str
+    # Nominal mass flows at the candidate facility's installed throughput.
+    # Actual execution remains bounded by allocation, upkeep and storage.
+    input_rates_per_day: tuple[tuple[str, float], ...]
+    output_rates_per_day: tuple[tuple[str, float], ...]
+    missing_technology_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BuildResearchCapacityRow:
+    provider_tier: int
+    generation_points_per_day: float
+    storage_capacity_points: float
+    execution_work_per_day: float
+    crew_person_days_per_research_point: float
+
+
+@dataclass(frozen=True)
+class BuildSurveyModeRow:
+    display_name: str
+    survey_rate: float
+    max_knowledge_level: int
+
+
+@dataclass(frozen=True)
+class BuildSurveyProviderRow:
+    provider_id: str
+    capacity_units_per_source_per_day: float
+    observation_modes: tuple[BuildSurveyModeRow, ...]
 
 
 @dataclass(frozen=True)
@@ -37,11 +71,23 @@ class BuildOptionRow:
     can_plan: bool
     capabilities: tuple[str, ...] = ()
     service_capacity_supplies: tuple[tuple[str, float], ...] = ()
-    process_options: tuple[tuple[str, str], ...] = ()
+    process_options: tuple[BuildProcessOptionRow, ...] = ()
     placement_scope: str = "OPERATIONAL_NODE"
     projected_material_readiness_day: int | None = None
-    comparison_key: str = ""
-    comparison_values: tuple[ComparisonValueRow, ...] = ()
+    power_nominal_generation_mw: float = 0.0
+    power_nominal_load_mw: float = 0.0
+    power_nominal_standby_load_mw: float = 0.0
+    process_nominal_throughput_per_day: float | None = None
+    extraction_nominal_capacity_t_per_day: float | None = None
+    # Recurring material demand at Level 1 from this construction investment;
+    # actual allocation remains subject to competing activities.
+    maintenance_rates_per_day: tuple[tuple[str, float], ...] = ()
+    housing_capacity: int = 0
+    life_support_person_days_per_day: float = 0.0
+    life_support_net_resources_per_person_day: tuple[tuple[str, float], ...] = ()
+    research_capacity: BuildResearchCapacityRow | None = None
+    survey_providers: tuple[BuildSurveyProviderRow, ...] = ()
+    site_knowledge_unverified: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,7 +116,6 @@ class BuildOptionsView:
     operational_node_id: str
     procurement_policy_options: tuple[str, ...]
     items: tuple[BuildOptionRow, ...]
-    comparison_axes: tuple[ComparisonAxisRow, ...] = ()
 
 
 @dataclass(frozen=True)

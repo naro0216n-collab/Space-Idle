@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..shared import SpatialNodeId
 from ..priority import DEFAULT_ACTIVITY_PRIORITY
+from .infrastructure import infrastructure_transport_supply
 from .models import (
     TransportOperationDependencyProjection,
     TransportServiceSupply,
@@ -102,6 +103,12 @@ class TransportSupplyMixin:
                         propellant_t_per_t=reverse_propellant_per_t,
                     )
                 )
+
+        for link in sorted(self.infrastructure_links.values(), key=lambda row: str(row.id)):
+            method = self.infrastructure_methods[link.method_id]
+            supply = infrastructure_transport_supply(link, method, self.facilities, day)
+            if supply is not None:
+                supplies.append(supply)
 
         result = tuple(supplies)
         if cache is not None:

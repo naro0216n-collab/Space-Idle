@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from space_idle import GetSurfaceMap, build_game_application
+from space_idle import build_game_application
 from space_idle.content import base_ids as ids
 from space_idle.shared import CelestialBodyId, DefinitionId, EntityId, SpatialNodeId, StarSystemId, SurfaceCellId
 from space_idle.supply import SupplyRoutingConstraintScope
@@ -83,25 +83,17 @@ def test_surface_topology_supports_variable_graphs_and_connected_single_owner_te
         graph.found_location(SpatialNodeId("location.two"), "Two", body_a, SurfaceCellId("a.2"))
 
 
-def test_base_surface_map_exposes_affiliation_without_creating_cell_inventory_nodes():
-    app = build_game_application()
-    sim = app._simulation
-    before_inventory_locations = {location_id for location_id, _resource_id in sim.inventory.stock}
-    view = app.query(GetSurfaceMap(str(ids.MOON)))
-
-    assert view.cells
-    assert not view.locations
-    assert any(not cell.developed for cell in view.cells)
-    assert all(cell.environment for cell in view.cells)
-    assert all(cell.display_name for cell in view.cells)
-    assert all(cell.id not in {str(value) for value in sim.graph.operational_node_ids()} for cell in sim.graph.surface_cells.values())
-    assert {location_id for location_id, _resource_id in sim.inventory.stock} == before_inventory_locations
-
-
-
 def test_operational_node_ownership_is_explicit_and_uniform_across_spatial_kinds():
     app = build_game_application()
     sim = app._simulation
+    # Ownership is a Spatial/Inventory invariant, not a Map projection or
+    # an Environment/Knowledge presentation rule. Check the authoritative IDs
+    # directly; the public Map's disclosure rules have their own test.
+    node_ids = set(sim.graph.operational_node_ids())
+    cell_ids = set(sim.graph.surface_cells)
+    assert node_ids.isdisjoint(cell_ids)
+    assert all(location_id not in cell_ids for location_id, _ in sim.inventory.stock)
+
     dormant = SpatialNodeId("test.node.dormant")
     sim.graph.add(
         SpatialNodeDef(

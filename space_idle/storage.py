@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
 from .facilities import FacilityBook, FacilityLifecycle
 from .facility_lifecycle import FacilityLifecycleBlocker
-from .inventory import InventoryBook, StoragePoolKey
+from .inventory import InventoryBook, StoragePoolKey, DEFAULT_STORAGE_POOL_KEY
 from .power import PowerSnapshot
 from .shared import DefinitionId, EntityId, SpatialNodeId
 
@@ -18,8 +19,10 @@ class StorageProviderSpec:
     power_sensitive_pools: frozenset[StoragePoolKey] = frozenset()
 
     def __post_init__(self) -> None:
-        if any(amount < 0 for amount in self.capacity_t_by_pool.values()):
-            raise ValueError("negative storage provider capacity")
+        if DEFAULT_STORAGE_POOL_KEY in self.capacity_t_by_pool:
+            raise ValueError("ordinary Inventory does not require a storage provider")
+        if any(not isfinite(amount) or amount < 0 for amount in self.capacity_t_by_pool.values()):
+            raise ValueError("nonfinite or negative storage provider capacity")
         unknown = self.power_sensitive_pools - set(self.capacity_t_by_pool)
         if unknown:
             raise ValueError(f"power-sensitive storage pool has no capacity: {sorted(unknown)}")
@@ -37,8 +40,10 @@ class StorageService:
     def set_infrastructure_capacity(
         self, operational_node_id: SpatialNodeId, pool_key: StoragePoolKey, amount_t: float
     ) -> None:
-        if amount_t < -1e-9:
-            raise ValueError("negative storage infrastructure capacity")
+        if not isfinite(amount_t) or amount_t < -1e-9:
+            raise ValueError("nonfinite or negative storage infrastructure capacity")
+        if pool_key == DEFAULT_STORAGE_POOL_KEY:
+            raise ValueError("ordinary Inventory has no storage capacity")
         self.infrastructure_capacity_t[(operational_node_id, pool_key)] = max(0.0, amount_t)
 
     def facility_decommission_blockers(
@@ -70,7 +75,7 @@ class StorageService:
         physical = {
             pool_key: amount
             for (node_id, pool_key), amount in self.infrastructure_capacity_t.items()
-            if node_id == operational_node_id
+            if node_id == operational_node_id and pool_key != DEFAULT_STORAGE_POOL_KEY
         }
         usable = dict(physical)
         limiter_lists: dict[StoragePoolKey, list[str]] = {}
@@ -83,10 +88,13 @@ class StorageService:
             if provider is None:
                 continue
             compatible = self.facilities.is_environmentally_compatible(facility, day)
+            # A power-sensitive pool must have an actual fulfilled Power
+            # requirement. A paused or unpowered provider with no request
+            # cannot silently receive full utilization by default.
             utilization = (
-                1.0
+                0.0
                 if power is None
-                else max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 1.0)))
+                else max(0.0, min(1.0, power.utilization_by_facility.get(facility.id, 0.0)))
             )
             maintenance = (
                 1.0
@@ -94,7 +102,7 @@ class StorageService:
                 else max(0.0, min(1.0, power.maintenance_factor_by_facility.get(facility.id, 1.0)))
             )
             for pool_key, capacity in provider.capacity_t_by_pool.items():
-                physical[pool_key] = physical.get(pool_key, 0.0) + capacity
+                physical[pool_key] = physical.get(pool_key, 0.0) + capacity * facility.level
                 if not compatible:
                     factor = 0.0
                     limiter_lists.setdefault(pool_key, []).append("storage_environment_unavailable")
@@ -108,7 +116,7 @@ class StorageService:
                     factor = maintenance
                     if maintenance < 1.0 - 1e-9:
                         limiter_lists.setdefault(pool_key, []).append("storage_maintenance_limited")
-                usable[pool_key] = usable.get(pool_key, 0.0) + capacity * factor
+                usable[pool_key] = usable.get(pool_key, 0.0) + capacity * facility.level * factor
         limiters = {key: tuple(dict.fromkeys(values)) for key, values in limiter_lists.items() if values}
         return physical, usable, limiters
 
@@ -141,7 +149,7 @@ class StorageService:
                 usable.get(pool_key, 0.0)
                 - self.inventory.stored_in_pool(facility.operational_node_id, pool_key),
             )
-            for pool_key in pools
+            for pool_key in pools if pool_key != DEFAULT_STORAGE_POOL_KEY
         }
 
     def refresh_node(

@@ -24,6 +24,7 @@ class MovementExecutionMixin:
         plans: tuple[MovementPlan, ...],
         *,
         payload_t_per_unit: float = 0.0,
+        physical_departure_supply_node_id: SpatialNodeId | None = None,
     ) -> tuple[MovementExecutionResourceRequirement, ...]:
         if vehicle_definition_id not in self.vehicle_defs:
             raise KeyError(vehicle_definition_id)
@@ -35,6 +36,8 @@ class MovementExecutionMixin:
         totals: dict[tuple[SpatialNodeId, DefinitionId], float] = {}
         for plan in plans:
             origin_id = plan.origin.operational_node_id
+            if origin_id is None:
+                origin_id = physical_departure_supply_node_id
             if origin_id is None:
                 raise ValueError("movement operation resources require an Operational Node origin")
             amount = vehicle.propellant_t(plan, payload_t_per_unit) * units
@@ -59,17 +62,24 @@ class MovementExecutionMixin:
         *,
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
+        payload_fleet_commitment_id: EntityId | None = None,
         day: int = 0,
+        physical_departure_supply_node_id: SpatialNodeId | None = None,
     ) -> MovementExecution:
         if execution_id in self.movement_executions:
             raise ValueError(f"movement execution already exists: {execution_id}")
         commitment = self.fleet_commitments.get(fleet_commitment_id)
         if commitment is None:
             raise KeyError(fleet_commitment_id)
-        if commitment.operational_node_id is None:
-            raise ValueError("movement execution requires a node-local Fleet commitment")
+        if commitment.operational_node_id is None and commitment.physical_target is None:
+            raise ValueError("movement execution requires a located Fleet commitment")
         if not plans:
             raise ValueError("movement execution requires a movement plan")
+        if commitment.physical_target is not None:
+            if plans[0].origin != commitment.physical_target:
+                raise ValueError("physical return must start at committed Fleet position")
+            if physical_departure_supply_node_id is None:
+                raise ValueError("physical departure requires a prepaid Operational Node source")
 
         vehicle_definition_id = commitment.vehicle_definition_id
         units = commitment.quantity
@@ -77,6 +87,12 @@ class MovementExecutionMixin:
         if resource_payload_t > payload_t_per_unit * units + 1e-9:
             raise ValueError("movement execution resource payload exceeds total payload")
         vehicle = self.vehicle_defs[vehicle_definition_id]
+        # An isolated Movement cannot claim the external momentum delivered by
+        # a powered Facility. Ordinary Cargo dispatch settles these demands in
+        # its root ExecutionBundle; one-shot owners must add a corresponding
+        # Service reservation before this API can support assisted propulsion.
+        if vehicle.performance.operation_service_requirements:
+            raise ValueError("assisted movement requires settled operation service")
         legs: list[MovementExecutionLeg] = []
         expected_origin = plans[0].origin
         for index, plan in enumerate(plans):
@@ -106,7 +122,7 @@ class MovementExecutionMixin:
             latency = self.performance_movement_transit_days(plan, vehicle.performance)
             leg_resources: tuple[MovementExecutionResourceRequirement, ...] = ()
             if vehicle.propellant_resource_id is not None:
-                origin_id = plan.origin.operational_node_id
+                origin_id = plan.origin.operational_node_id or physical_departure_supply_node_id
                 if origin_id is None:
                     raise ValueError(
                         "movement operation resources require an Operational Node origin"
@@ -143,6 +159,8 @@ class MovementExecutionMixin:
             started_day=day,
             completion_day=day + max(1, latency_days),
             payload_resources=payload_resources,
+            payload_fleet_commitment_id=payload_fleet_commitment_id,
+            passenger_accommodation=(vehicle.passengers if kind is MovementExecutionKind.PASSENGER_TRANSFER else None),
         )
         self.movement_executions[execution_id] = execution
         return execution
@@ -157,6 +175,7 @@ class MovementExecutionMixin:
         *,
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
+        payload_fleet_commitment_id: EntityId | None = None,
         day: int = 0,
     ) -> MovementExecution:
         plans = tuple(self.require_movement_plan(plan_id) for plan_id in path)
@@ -168,6 +187,7 @@ class MovementExecutionMixin:
             plans,
             payload_t_per_unit=payload_t_per_unit,
             payload_resources=payload_resources,
+            payload_fleet_commitment_id=payload_fleet_commitment_id,
             day=day,
         )
 
@@ -182,6 +202,7 @@ class MovementExecutionMixin:
         payload_t_per_unit: float = 0.0,
         payload_resources: tuple[MovementExecutionPayloadResource, ...] = (),
         day: int = 0,
+        physical_departure_supply_node_id: SpatialNodeId | None = None,
     ) -> MovementExecution:
         # Physical-target plans are ephemeral and intentionally need not be
         # recoverable from the regular Operational Node Movement graph later.
@@ -195,6 +216,7 @@ class MovementExecutionMixin:
             payload_t_per_unit=payload_t_per_unit,
             payload_resources=payload_resources,
             day=day,
+            physical_departure_supply_node_id=physical_departure_supply_node_id,
         )
 
     def movement_execution_snapshot(

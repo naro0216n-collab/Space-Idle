@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import math
 
 from ..execution_requirements import ExecutionAllocationPlan
@@ -22,31 +21,32 @@ class IndustryExecutionMixin:
             location_id, facilities, inventory, day, execution_allocations,
         )
 
-        input_resource_ids = sorted(
-            {resource_id for snapshot in plan for resource_id in snapshot.input_rates_per_day},
-            key=str,
-        )
-        for resource_id in input_resource_ids:
-            amount = math.fsum(
-                snapshot.input_rates_per_day.get(resource_id, 0.0)
-                for snapshot in plan if snapshot.scale > 1e-12
-            )
-            if amount > 1e-12:
-                inventory.consume_allocated(location_id, resource_id, amount)
-
-        output_resource_ids = sorted(
-            {resource_id for snapshot in plan for resource_id in snapshot.output_rates_per_day},
-            key=str,
-        )
-        for resource_id in output_resource_ids:
-            amount = math.fsum(
-                snapshot.output_rates_per_day.get(resource_id, 0.0)
-                for snapshot in plan if snapshot.scale > 1e-12
-            )
-            if amount > 1e-12:
-                admission = inventory.admit(location_id, resource_id, amount)
-                if not admission.fully_admitted:
-                    raise RuntimeError("allocated industry output exceeded Inventory Admission")
+        # All inputs settle before any output, so no same-day output can be
+        # spent by a concurrent Process. Settle each real Facility allocation
+        # separately to preserve causal ownership of the actual amounts; the
+        # shared Allocation has already resolved resource and storage contention.
+        for snapshot in plan:
+            if snapshot.scale <= 1e-12:
+                continue
+            activity = f"industry_process:{snapshot.facility_id}:{snapshot.process_id}"
+            for resource_id, amount in sorted(snapshot.input_rates_per_day.items()):
+                if amount > 1e-12:
+                    inventory.consume_allocated(
+                        location_id, resource_id, amount,
+                        destination_owner=f"process:{snapshot.facility_id}", activity_id=activity,
+                    )
+        for snapshot in plan:
+            if snapshot.scale <= 1e-12:
+                continue
+            activity = f"industry_process:{snapshot.facility_id}:{snapshot.process_id}"
+            for resource_id, amount in sorted(snapshot.output_rates_per_day.items()):
+                if amount > 1e-12:
+                    admission = inventory.admit(
+                        location_id, resource_id, amount,
+                        source_owner=f"process:{snapshot.facility_id}", activity_id=activity,
+                    )
+                    if not admission.fully_admitted:
+                        raise RuntimeError("allocated industry output exceeded Inventory Admission")
 
         activities: list[DomainActivity] = []
         for snapshot in plan:

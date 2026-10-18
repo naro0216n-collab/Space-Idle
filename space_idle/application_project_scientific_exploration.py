@@ -27,8 +27,41 @@ class ScientificExplorationProjectorMixin:
             max(0.0, sim.research.storage_capacity(power_by_location, sim.day) - sim.research.stored_points),
         )
         rows: list[ScientificExplorationRow] = []
+        # One derived index for the query, not a separate Knowledge authority.
+        survey_subjects = sim.surface_knowledge.resource_ids_by_cell
+        observation_counts: dict[tuple, tuple[int, int]] = {}
         for definition in sorted(service.definitions.values(), key=lambda row: str(row.id)):
+            observation_key = (
+                definition.observation_body_id,
+                definition.observation_resource_level,
+                definition.observation_attribute_level,
+            )
+            if observation_key not in observation_counts:
+                observed_cells = (
+                    sim.graph.cells_for_body(definition.observation_body_id)
+                    if definition.observation_body_id is not None else ()
+                )
+                missing = sum(
+                    1 for cell in observed_cells
+                    if (
+                        definition.observation_attribute_level > 0 and any(
+                            sim.surface_knowledge.attribute_level(cell.id, attribute)
+                            < definition.observation_attribute_level
+                            for attribute in ("terrain", "environment")
+                        )
+                    ) or (
+                        definition.observation_resource_level > 0 and any(
+                            sim.surface_knowledge.knowledge_level(cell.id, resource_id)
+                            < definition.observation_resource_level
+                            for resource_id in survey_subjects.get(cell.id, ())
+                        )
+                    )
+                )
+                observation_counts[observation_key] = (len(observed_cells), missing)
+            observation_cell_count, observation_cells_with_new_knowledge = observation_counts[observation_key]
             state = service.campaigns.get(definition.id)
+            commitment = None
+            physical_target = service._physical_target(definition)
             if state is None:
                 status = "available"
                 paused = False
@@ -37,7 +70,7 @@ class ScientificExplorationProjectorMixin:
                 assigned_vehicle_definition_id = None
                 fleet_commitment_id = None
                 committed_units = 0
-                blockers: tuple[str, ...] = ()
+                blockers = service.start_blockers(definition.id)
                 priority = 3
                 can_set_priority = False
             else:
@@ -63,6 +96,19 @@ class ScientificExplorationProjectorMixin:
                     day=sim.day,
                     power_by_location=power_by_location,
                 )
+
+            fleet_location_kind = None
+            fleet_location_id = None
+            if commitment is not None:
+                if commitment.physical_target is not None:
+                    fleet_location_kind = "physical_target"
+                    fleet_location_id = str(commitment.physical_target.locator_id)
+                elif commitment.movement_execution_id is not None:
+                    fleet_location_kind = "in_transit"
+                    fleet_location_id = str(commitment.movement_execution_id)
+                else:
+                    fleet_location_kind = "operational_node"
+                    fleet_location_id = str(commitment.operational_node_id)
 
             rp_requested_today = 0.0
             rp_admitted_today = 0.0
@@ -152,7 +198,7 @@ class ScientificExplorationProjectorMixin:
                 fleet = sim.transport.fleet_pool_snapshot(
                     vehicle_definition.id, definition.origin_id
                 )
-                option_blockers = service.fleet_failures(
+                option_blockers, can_assign = service.fleet_assignment_assessment(
                     definition.id,
                     vehicle_definition.id,
                     day=sim.day,
@@ -200,12 +246,7 @@ class ScientificExplorationProjectorMixin:
                         ),
                         outbound_latency_days=option_outbound_latency,
                         return_latency_days=option_return_latency,
-                        can_assign=service.can_assign_fleet(
-                            definition.id,
-                            vehicle_definition.id,
-                            day=sim.day,
-                            power_by_location=power_by_location,
-                        ),
+                        can_assign=can_assign,
                     )
                 )
             rows.append(
@@ -218,6 +259,20 @@ class ScientificExplorationProjectorMixin:
                     can_set_priority=can_set_priority,
                     origin_id=str(definition.origin_id),
                     destination_id=str(definition.destination_id),
+                    destination_kind=(
+                        "operational_node" if physical_target is None else
+                        "surface_cell" if physical_target.physical_target_cell_id is not None else
+                        "non_surface_spatial_node"
+                    ),
+                    observation_body_id=(None if definition.observation_body_id is None
+                                         else str(definition.observation_body_id)),
+                    observation_resource_level=int(definition.observation_resource_level),
+                    observation_attribute_level=definition.observation_attribute_level,
+                    observation_estimate_uncertainty_fraction=definition.observation_estimate_uncertainty_fraction,
+                    observation_cell_count=observation_cell_count,
+                    observation_cells_with_new_knowledge=observation_cells_with_new_knowledge,
+                    fleet_location_kind=fleet_location_kind,
+                    fleet_location_id=fleet_location_id,
                     movement_operations=movement_operations,
                     outbound_latency_days=outbound_latency_days,
                     return_latency_days=return_latency_days,
@@ -238,7 +293,17 @@ class ScientificExplorationProjectorMixin:
                     ),
                     required_units=definition.required_units,
                     minimum_payload_t=definition.minimum_payload_t,
+                    required_crew=definition.required_crew,
+                    committed_crew=sim.population.activity_count(service._crew_owner(definition)),
+                    crew_in_transit=sum(
+                        group.count for group in sim.population.activity_groups(service._crew_owner(definition))
+                        if group.position.kind == "transport_execution"
+                    ),
+                    onboard_resources=(() if commitment is None else tuple(
+                        (str(resource), amount) for resource, amount in commitment.onboard_resources
+                    )),
                     required_vehicle_capabilities=definition.required_vehicle_capabilities,
+                    prerequisite_technologies=tuple(sorted(map(str, definition.prerequisite_technologies))),
                     assigned_vehicle_definition_id=assigned_vehicle_definition_id,
                     fleet_commitment_id=fleet_commitment_id,
                     committed_units=committed_units,
@@ -256,8 +321,26 @@ class ScientificExplorationProjectorMixin:
                     can_resume=service.can_resume(definition.id),
                     can_abort=service.can_abort(definition.id),
                     can_return=service.can_return(definition.id),
-                    can_set_completion_disposition=(state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
+                    can_set_completion_disposition=(physical_target is None and state is not None and state.phase.value in {"awaiting_fleet", "preparing", "outbound", "active"}),
                     can_unassign=service.can_unassign_fleet(definition.id),
+                    return_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "return"),
+                        affected_action="return_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
+                    abort_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "abort"),
+                        affected_action="abort_scientific_exploration",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
+                    unassign_action_blockers=constraints_from_codes(
+                        service.transition_blockers(definition.id, "unassign_fleet"),
+                        affected_action="unassign_scientific_exploration_fleet",
+                        related_entity_kind="scientific_exploration",
+                        related_entity_id=str(definition.id),
+                    ),
                     fleet_options=tuple(fleet_options),
                 )
             )

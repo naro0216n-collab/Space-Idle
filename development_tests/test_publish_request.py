@@ -1,27 +1,22 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
-from development_tests.script_harness import load_script, run_script
+import pytest
+
+from development_tests.script_harness import (
+    commit_all, git, load_script, read_content_tree_plan, run_script, write_source_snapshot,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "publish_request.py"
 PUBLISH_REQUEST = load_script(SCRIPT, "space_idle_test_publish_request")
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    ).stdout.strip()
-
-
-def commit_all(repo: Path, message: str) -> None:
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
 
 
 def run_request(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -42,25 +37,6 @@ def connector_state(repo: Path) -> dict[str, object]:
 
 def prepared(repo: Path) -> dict[str, object]:
     return json.loads(manifest_path(repo).read_text(encoding="utf-8"))
-
-
-def write_source_snapshot(repo: Path, directory: Path, *, publish_commit: str | None = None) -> Path:
-    directory.mkdir()
-    develop = git(repo, "rev-parse", "refs/heads/develop")
-    develop_tree = git(repo, "rev-parse", f"{develop}^{{tree}}")
-    publish = publish_commit or develop
-    publish_tree = git(repo, "rev-parse", f"{publish}^{{tree}}")
-    git(repo, "update-ref", "refs/space-idle/publish-base", publish)
-    (directory / ".source-commit").write_text(develop + "\n", encoding="utf-8")
-    (directory / ".source-tree").write_text(develop_tree + "\n", encoding="utf-8")
-    (directory / ".source-branch").write_text("develop\n", encoding="utf-8")
-    (directory / ".source-publish-commit").write_text(publish + "\n", encoding="utf-8")
-    (directory / ".source-publish-tree").write_text(publish_tree + "\n", encoding="utf-8")
-    git(
-        repo, "bundle", "create", str(directory / "repository.bundle"),
-        "refs/heads/develop", "refs/space-idle/publish-base",
-    )
-    return directory
 
 
 def init_repo(tmp_path: Path) -> tuple[Path, str, str, str, str]:
@@ -140,17 +116,6 @@ def test_init_restores_publish_base_after_clone_from_snapshot_bundle(tmp_path: P
     assert result["publish_commit"] == (snapshot / ".source-publish-commit").read_text(encoding="utf-8").strip()
 
 
-def test_publish_commit_inherits_target_commit_time(tmp_path: Path) -> None:
-    repo, _, _, _, _ = init_repo(tmp_path)
-    result = prepare_change(repo)
-    target_commit = str(result["local_target_commit"])
-    publish_commit = str(result["publish_commit"])
-
-    assert git(repo, "show", "-s", "--format=%cI", publish_commit) == git(
-        repo, "show", "-s", "--format=%cI", target_commit
-    )
-    assert git(repo, "show", "-s", "--format=%ct", publish_commit) != "946684800"
-
 def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) -> None:
     repo, _, _, _, _ = init_repo(tmp_path)
     (repo / "payload.txt").write_text("checkpoint\n", encoding="utf-8")
@@ -164,6 +129,11 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
     assert result["target_tree"] == checkpoint_tree
     assert result["working_tree_clean"] is False
     assert request["version"] == 8
+    # The published identity and timestamp must belong to the committed target,
+    # not to later working-tree edits.
+    assert git(repo, "show", "-s", "--format=%cI", str(result["publish_commit"])) == git(
+        repo, "show", "-s", "--format=%cI", checkpoint
+    )
     raw = subprocess.run(
         ["git", "cat-file", "commit", str(request["publish_commit"])], cwd=repo,
         check=True, stdout=subprocess.PIPE,
@@ -173,16 +143,14 @@ def test_prepare_uses_head_only_and_excludes_uncommitted_work(tmp_path: Path) ->
 
 def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_budget(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
-    (repo / "large.bin").write_bytes(os.urandom(420_000))
+    (repo / "large.bin").write_bytes(os.urandom(1_200_000))
     commit_all(repo, "large checkpoint")
     run_request(repo, "prepare")
     summary = plan(repo, base, publish_head)
 
-    assert summary["strategy"] == "fixed-slot-16kib-tree-content-batches"
-    assert summary["transport_chunk_bytes"] == 16 * 1024
-    assert summary["payload_part_count"] > 8
+    assert summary["transport_chunk_bytes"] > 0
+    assert 1 < summary["payload_part_count"] < 8
     assert summary["tree_call_count"] > 1
-    assert summary["normal_pre_ref_helper_round_trips"] == 0
 
     state = connector_state(repo)
     assert state["stage"] == "execution-plan-ready"
@@ -190,31 +158,30 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
     assert isinstance(plan_data, dict)
     chunks = plan_data["chunks"]
     assert isinstance(chunks, list) and len(chunks) == summary["payload_part_count"]
-    assert all(len(str(chunk["content"]).encode("utf-8")) <= 16 * 1024 for chunk in chunks)
+    assert all(len(str(chunk["content"]).encode("utf-8")) <= summary["transport_chunk_bytes"]
+               for chunk in chunks)
+    assert len(chunks[0]["content"]) > 32 * 1024  # no fixed small parts
+    assert "".join(str(chunk["content"]) for chunk in chunks) == prepared(repo)["payload_b64"]
 
     expected_paths = {str(chunk["path"]) for chunk in chunks}
     observed_paths: set[str] = set()
-    previous_tree = state["publish_base_tree"]
-    tree_packets = [Path(path) for path in summary["tree_packets"]]
+    tree_packets = summary["tree_packets"]
     assert len(tree_packets) == summary["tree_call_count"]
-    for index, packet_path in enumerate(tree_packets):
-        packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        assert packet["action"] == "GitHub.create_tree"
+    final_tree, packets = read_content_tree_plan(tree_packets, state["publish_base_tree"])
+    for index, packet in enumerate(packets):
         assert packet["tree_batch_index"] == index
-        assert packet["action_args"]["base_tree_sha"] == previous_tree
         encoded_args = json.dumps(
             packet["action_args"], ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
-        assert len(encoded_args) <= 144 * 1024
+        assert len(encoded_args) <= PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES
         for entry in packet["action_args"]["tree_elements"]:
             if str(entry["path"]).endswith(".b64"):
                 assert "content" in entry
                 assert "sha" not in entry
                 observed_paths.add(str(entry["path"]))
-        previous_tree = packet["expected_tree"]
 
     assert observed_paths == expected_paths
-    assert previous_tree == plan_data["final_tree"]
+    assert final_tree == plan_data["final_tree"]
 
     commit_packet = json.loads(Path(str(summary["commit_packet"])).read_text(encoding="utf-8"))
     assert commit_packet["action"] == "GitHub.create_commit"
@@ -229,11 +196,189 @@ def test_connector_plan_uses_tree_content_batches_and_scales_past_single_call_bu
     }
 
 
+def test_transport_plan_handles_five_mib_source_without_exceeding_call_budget(tmp_path: Path) -> None:
+    repo, base, base_tree, publish_head, _ = init_repo(tmp_path)
+    (repo / "five_mib.bin").write_bytes(os.urandom(5 * 1024 * 1024))
+    commit_all(repo, "five MiB checkpoint")
+    run_request(repo, "prepare")
+    summary = plan(repo, base, publish_head)
+
+    assert 1 < summary["payload_part_count"] <= 12
+    assert summary["tree_call_count"] <= summary["payload_part_count"]
+    assert max(summary["tree_call_bytes"]) <= PUBLISH_REQUEST.CONNECTOR_CALL_BUDGET_BYTES
+    chunks = connector_state(repo)["plan"]["chunks"]
+    assert chunks[0]["content"] and len(chunks[0]["content"]) > 32 * 1024
+    restored_bundle = base64.b64decode("".join(str(chunk["content"]) for chunk in chunks), validate=True)
+    assert hashlib.sha256(restored_bundle).hexdigest() == prepared(repo)["payload_sha256"]
+    final_tree, packets = read_content_tree_plan(summary["tree_packets"], base_tree)
+    assert final_tree == connector_state(repo)["plan"]["final_tree"]
+    assert len(packets) == summary["tree_call_count"]
+
+
+def test_large_publish_plan_generates_self_contained_ten_tree_call_segments(tmp_path: Path) -> None:
+    repo, base, base_tree, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    state = connector_state(repo)
+    # A 14-call plan exercises the transport executor's boundary without a
+    # permanent 10 MiB/20-second test in the ordinary development suite.
+    prior = base_tree
+    batches = []
+    for i in range(14):
+        expected = f"{i + 1:040x}"
+        batches.append({
+            "batch_index": i, "base_tree": prior, "expected_tree": expected,
+            "elements": [{"path": f".publish/transport/develop/{i:04d}.b64",
+                          "mode": "100644", "type": "blob", "content": "Zg=="}],
+        })
+        prior = expected
+    state["plan"]["batches"] = batches
+    state["plan"]["final_tree"] = prior
+    trees, _, commit = PUBLISH_REQUEST._write_execution_packets(repo, state)
+    state["tree_packets"] = trees
+    state["commit_packet"] = commit
+    PUBLISH_REQUEST._write_connector_state(repo, state)
+    original_index = PUBLISH_REQUEST._write_execution_index(repo, state)
+    segments = PUBLISH_REQUEST._write_execution_segments(repo, state, original_index)
+    assert len(segments) == 2
+
+    first_index = Path(segments[0])
+    first = json.loads(first_index.read_text(encoding="ascii"))
+    second_index = Path(first["next_execution_index"])
+    second = json.loads(second_index.read_text(encoding="ascii"))
+    assert first["version"] == second["version"] == 2
+    assert first["first_tree_index"] == 0
+    assert second["first_tree_index"] == 10
+    assert first["end_tree"] == second["start_tree"]
+    assert second["next_execution_index"] is None
+    assert first["total_tree_count"] == second["total_tree_count"] == 14
+    assert len(first["packets"]) == 11
+    assert len(second["packets"]) == 5
+    assert second["end_tree"] == second["final_tree"] == prior
+    recovered = json.loads(run_request(repo, "connector-segments").stdout)
+    assert recovered["execution_index"] == str(first_index)
+    assert recovered["execution_segment_count"] == 2
+    assert first_index.is_file() and second_index.is_file()
+    # The helper verifies immutable packet descriptors; no commit was changed.
+    assert prepared(repo)["payload_sha256"] == hashlib.sha256(base64.b64decode(
+        prepared(repo)["payload_b64"], validate=True,
+    )).hexdigest()
+
+    if shutil.which("node"):
+        result = subprocess.run(
+            ["node", "-e", _SEGMENT_EXECUTOR_TEST, str(first_index), str(second_index)],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+
+
+_SEGMENT_EXECUTOR_TEST = r"""
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+const source = fs.readFileSync('scripts/publish_connector_executor.js', 'utf8');
+async function execute(path, corrupt=false, wrongSHA=false) {
+  const dir=path.slice(0,path.lastIndexOf('/')+1);
+  const index=JSON.parse(fs.readFileSync(path, 'utf8'));
+  let treeCalls=0, commits=0, refUpdates=0, deletes=0, output=[];
+  const tools={
+    files__list:async ()=>({items:[],next_cursor:null}),
+    files__manage_library: async ({operations})=>({results:operations.map(op=>{
+      if(op.operation==='upload') return {status:'succeeded',file_id:op.container_path,library_file_id:op.container_path};
+      if(op.operation==='delete') deletes++;
+      return {status:'succeeded'};
+    })}),
+    files__read: async ({read})=>({results:read.map(({ref_id})=>({
+      content:[fs.readFileSync(ref_id,'utf8')],has_more:false,warnings:[],
+    }))}),
+    mcp__GitHub__create_tree: async args=>{
+      treeCalls++;
+      const packet=JSON.parse(fs.readFileSync(dir+'tree-batch-'+String(treeCalls-1).padStart(3,'0')+'.json','utf8'));
+      return {result:{sha:wrongSHA ? 'f'.repeat(40) : packet.expected_tree}};
+    },
+    mcp__GitHub__create_commit: async ()=>{commits++;return {result:{sha:'a'.repeat(40)}};},
+    mcp__GitHub__update_ref: async ()=>{refUpdates++;return {result:{success:true}};},
+  };
+  const exec=new AsyncFunction('tools','text','INDEX_PATH',source);
+  let error='';
+  if(corrupt){
+    const raw=JSON.parse(fs.readFileSync(path,'utf8'));
+    raw.end_tree='0'.repeat(40);
+    tools.files__read=async args=>({results:args.read.map(({ref_id})=>({
+      content:[ref_id===path?JSON.stringify(raw):fs.readFileSync(ref_id,'utf8')],has_more:false,warnings:[],
+    }))});
+  }
+  try{await exec(tools,t=>output.push(JSON.parse(t)),path);}catch(e){error=String(e);}
+  return {treeCalls,commits,refUpdates,deletes,output,error,index};
+}
+(async()=>{
+  const [first,second]=process.argv.slice(-2);
+  const failed=await execute(first,true);
+  assert.match(failed.error,/end tree mismatch/);
+  assert.equal(failed.treeCalls,0);
+  assert.equal(failed.commits,0);
+  const mismatch=await execute(first,false,true);
+  assert.match(mismatch.error,/SHA mismatch/);
+  assert.equal(mismatch.commits,0);
+  assert.equal(mismatch.refUpdates,0);
+  const a=await execute(first);
+  assert.equal(a.error,'');assert.equal(a.treeCalls,10);
+  assert.equal(a.commits,0);assert.equal(a.refUpdates,0);
+  assert.equal(a.output[0].stage,'continue');
+  assert.equal(a.output[0].next_execution_index,second);
+  const b=await execute(second);
+  assert.equal(b.error,'');assert.ok(b.treeCalls>0&&b.treeCalls<=10);
+  assert.equal(b.commits,1);assert.equal(b.refUpdates,1);
+  assert.equal(b.output[0].stage,'transport-ref-updated');
+})().catch(err=>{console.error(err);process.exitCode=1;});
+"""
+
+
+def test_transport_plan_replaces_only_its_fixed_slot(tmp_path: Path) -> None:
+    repo, _, _, _, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    manifest = prepared(repo)
+    root = repo / ".publish" / "transport"
+    for branch, parts in (("develop", ("0000.b64", "0001.b64", "0002.b64")),
+                          ("temp", ("0000.b64",))):
+        directory = root / branch
+        directory.mkdir(parents=True)
+        for name in parts:
+            (directory / name).write_text("abcd", encoding="ascii")
+    git(repo, "add", ".publish")
+    base_tree = git(repo, "write-tree")
+
+    chunks, elements, stale = PUBLISH_REQUEST._desired_transport_elements(
+        repo, manifest, base_tree=base_tree,
+    )
+    desired = {str(row["path"]) for row in chunks}
+    assert {str(row["path"]) for row in elements if "content" in row} == desired
+    assert set(stale) == {
+        f".publish/transport/develop/{index:04d}.b64"
+        for index in range(len(chunks), 3)
+    }
+    assert all(row["path"].startswith(".publish/transport/develop/") for row in elements)
+    assert all(row.get("type") == "blob" for row in elements)
+    assert PUBLISH_REQUEST._expected_tree_batches(repo, base_tree=base_tree, batches=[elements])
+
+    unknown = repo / ".publish" / "outdated"
+    unknown.mkdir(parents=True)
+    (unknown / "handoff.json").write_text("{}", encoding="utf-8")
+    git(repo, "add", ".publish")
+    with pytest.raises(PUBLISH_REQUEST.PublishStateError, match="unsupported publish transport path"):
+        PUBLISH_REQUEST._desired_transport_elements(
+            repo, manifest, base_tree=git(repo, "write-tree"),
+        )
+
+
 def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gateway_run(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     result = prepare_change(repo)
     summary = plan(repo, base, publish_head)
     candidate = "a" * 40
+    # Work on the next checkpoint must not change the prepared transaction.
+    (repo / "later.txt").write_text("later\n", encoding="utf-8")
+    commit_all(repo, "later local work")
 
     recorded = json.loads(run_request(
         repo, "record",
@@ -244,6 +389,8 @@ def test_record_uses_prepared_identity_without_reverifying_bundle_and_tracks_gat
     assert recorded["verified"] is True
     assert recorded["record_verification"] == "manifest-identity-and-gateway-run"
     assert recorded["remote_commit"] == result["publish_commit"]
+    assert recorded["local_head"] == result["local_target_commit"]
+    assert recorded["local_head"] != git(repo, "rev-parse", "HEAD")
     assert recorded["publish_commit"] == candidate
     assert recorded["publish_tree"] == connector_state_from_summary_tree(summary)
     assert not transaction(repo).exists()
@@ -255,54 +402,26 @@ def connector_state_from_summary_tree(summary: dict[str, object]) -> str:
     return str(expected[-1])
 
 
-def test_record_stays_bound_to_prepared_target_if_local_head_advances(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    first = prepare_change(repo, "first\n")
-    plan(repo, base, publish_head)
-    candidate = "b" * 40
-    (repo / "later.txt").write_text("later\n", encoding="utf-8")
-    commit_all(repo, "later local work")
-    recorded = json.loads(run_request(
-        repo, "record",
-        "--gateway-transport-commit", candidate,
-        "--gateway-run-id", "42",
-        "--gateway-conclusion", "success",
-    ).stdout)
-    assert recorded["local_head"] == first["local_target_commit"]
-    assert recorded["local_head"] != git(repo, "rev-parse", "HEAD")
-
-
-def test_record_rejects_manifest_mutation_after_plan(tmp_path: Path) -> None:
+def test_preflight_and_record_reject_moved_heads_or_modified_manifest(tmp_path: Path) -> None:
     repo, base, _, publish_head, _ = init_repo(tmp_path)
     prepare_change(repo)
+    for develop_head, gateway_head in (("c" * 40, publish_head), (base, "d" * 40)):
+        rejected = run_request(
+            repo, "connector-plan", "--develop-head", develop_head,
+            "--publish-head", gateway_head, check=False,
+        )
+        assert rejected.returncode != 0
+
     plan(repo, base, publish_head)
     manifest = prepared(repo)
     manifest["request_id"] = "0" * 32
     manifest_path(repo).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     rejected = run_request(
-        repo, "record",
-        "--gateway-transport-commit", "c" * 40,
-        "--gateway-run-id", "77",
-        "--gateway-conclusion", "success",
-        check=False,
+        repo, "record", "--gateway-transport-commit", "c" * 40,
+        "--gateway-run-id", "77", "--gateway-conclusion", "success", check=False,
     )
     assert rejected.returncode != 0
     assert "manifest changed" in rejected.stderr
-
-
-def test_combined_preflight_rejects_moved_develop_or_publish(tmp_path: Path) -> None:
-    repo, base, _, publish_head, _ = init_repo(tmp_path)
-    prepare_change(repo)
-    moved_target = run_request(
-        repo, "connector-plan", "--develop-head", "c" * 40,
-        "--publish-head", publish_head, check=False,
-    )
-    assert moved_target.returncode != 0
-    moved_publish = run_request(
-        repo, "connector-plan", "--develop-head", base,
-        "--publish-head", "d" * 40, check=False,
-    )
-    assert moved_publish.returncode != 0
 
 
 def test_cancel_uses_heads_only_and_never_needs_publish_tree_read(tmp_path: Path) -> None:
@@ -366,13 +485,41 @@ def test_gateway_trusted_workflow_guard_requires_publish_control_blob_identity(t
     assert "untrusted workflow change" in blocked.stderr
 
 
-def test_gateway_transport_path_gate_is_owned_by_trusted_workflow_only() -> None:
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Gateway's bash execution contract is verified on Linux CI")
+def test_gateway_workflow_accepts_only_transport_slot_mutations(tmp_path: Path) -> None:
+    """Execute the actual Gateway path filter, rather than assert source fragments."""
     workflow = (ROOT / ".github" / "workflows" / "publish-gateway.yml").read_text(encoding="utf-8")
-    validator = (ROOT / "scripts" / "publish_gateway_validate.py").read_text(encoding="utf-8")
-    assert "Invalid publish transport change" in workflow
-    assert "git diff-tree --no-commit-id --name-status" in workflow
-    assert "_validate_transport_commit_paths" not in validator
-    assert "diff-tree" not in validator
+    step = workflow.split("      - name: Resolve fixed transport slot\n", 1)[1]
+    script = step.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
+
+    repo = tmp_path / "gateway"
+    repo.mkdir()
+    git(repo, "init")
+    (repo / "base.txt").write_text("baseline", encoding="utf-8")
+    commit_all(repo, "base")
+
+    def run_filter(path: str) -> subprocess.CompletedProcess[str]:
+        file = repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("payload", encoding="utf-8")
+        commit_all(repo, "candidate transport")
+        env_file = tmp_path / "gateway.env"
+        env_file.write_text("", encoding="utf-8")
+        return subprocess.run(
+            ["bash", "-c", script], cwd=repo,
+            env={**os.environ, "GITHUB_SHA": git(repo, "rev-parse", "HEAD"),
+                 "GITHUB_ENV": str(env_file)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    accepted = run_filter(".publish/transport/develop/0000.b64")
+    assert accepted.returncode == 0, accepted.stderr
+    assert "TARGET_BRANCH=develop" in (tmp_path / "gateway.env").read_text(encoding="utf-8")
+
+    for unexpected_path in ("src/unrelated.py", ".publish/transport/publish/0000.b64"):
+        rejected = run_filter(unexpected_path)
+        assert rejected.returncode != 0
 
 
 def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> None:
@@ -383,3 +530,195 @@ def test_gateway_contract_validates_fixed_slot_then_publishes_exact_commit() -> 
     assert 'git push origin "${PUBLISH_COMMIT}:refs/heads/${TARGET_BRANCH}"' in workflow
     assert "actions/workflows/ci.yml/dispatches" in workflow
     assert '-f ref="${TARGET_BRANCH}"' in workflow
+
+
+def _execute_original_packets(index_path: Path, mode: str = "normal") -> subprocess.CompletedProcess[str]:
+    """Execute the fixed Connector source with Files/GitHub mock boundaries."""
+    js = r"""
+const fs = require('node:fs');
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+const source = fs.readFileSync(0, 'utf8');
+const indexPath = process.argv[1], mode = process.argv[2], approvedExecutor = process.argv[3];
+const index = JSON.parse(fs.readFileSync(indexPath,'utf8'));
+const packets = index.packets.map(e => JSON.parse(fs.readFileSync(require('node:path').join(require('node:path').dirname(indexPath),e.name),'utf8')));
+const events = [], registered=new Map(), reads=new Map();
+let treeIndex=0, tempExists=false, nextId=0;
+const prefix='/temp/space-idle-publish-' + index.request_id + '-';
+if(mode==='stale') {
+  registered.set('stale', {path:null,name:prefix+'0.json'});
+  registered.set('other', {path:null,name:'/temp/unrelated.json'});
+  registered.set('other-transaction', {path:null,name:'/temp/space-idle-publish-'+'f'.repeat(32)+'-0.json'});
+}
+const tools = {
+ mcp__GitHub__fetch_file: async ({repository_full_name,path,ref}) => {
+   events.push({type:'fetch-source'});
+   if(repository_full_name!=='naro0216n-collab/Space-Idle' ||
+      path!=='scripts/publish_connector_executor.js' || ref!=='develop')
+     throw Error('invalid published executor lookup');
+   if(mode==='source-unavailable') return {result:{content:null}};
+   return {result:{content:fs.readFileSync(approvedExecutor,'utf8')}};
+ },
+ files__list: async ({surface,library_path,limit,cursor}) => {
+   events.push({type:'list'});
+   if(surface!=='library'||library_path!=='/temp'||limit!==250||cursor) throw Error('invalid Library listing');
+   if(mode==='list-fails') throw Error('Library list unavailable');
+   return {items:[...registered].map(([id,entry])=>({kind:'file',name:entry.name.split('/').at(-1),library_file_id:id})),next_cursor:null};
+ },
+ files__manage_library: async ({operations}) => {
+   events.push({type:operations[0].operation,count:operations.length});
+   return {results:operations.map((op,i) => {
+     if(op.operation==='create_folder') {
+       if(op.path!=='/temp'||op.parents!==true) throw Error('unexpected temporary folder');
+       if(mode==='folder-fails') return {status:'failed'};
+       tempExists=true;
+       return {status:'succeeded',path:'/temp'};
+     }
+     if(op.operation==='upload') {
+       if(!tempExists || !op.destination_path.startsWith(prefix))
+         throw Error('upload outside current transaction');
+       for(const [oldId,entry] of registered) {
+         if(entry.name===op.destination_path) {
+           if(op.overwrite!==true) throw Error('registered input collision');
+           registered.delete(oldId);
+         }
+       }
+       const id='file-'+(nextId++);
+       registered.set(id,{path:op.container_path,name:op.destination_path});
+       if(mode==='upload-throws-partial') throw Error('Upload timed out after registration');
+       if(mode==='upload-fails' && i===operations.length-1) return {status:'failed'};
+       if(mode==='upload-without-id') return {status:'succeeded'};
+       return {status:'succeeded',file_id:id,library_file_id:id};
+     }
+     if(op.operation==='delete') {
+       const id=op.target?.library_file_id;
+       if(!registered.has(id)) throw Error('delete unknown file');
+       if(mode==='delete-fails') return {status:'failed'};
+       registered.delete(id);
+       return {status:'succeeded'};
+     }
+     throw Error('unexpected operation');
+   })};
+ },
+ files__read: async ({read}) => {
+   events.push({type:'read',count:read.length});
+   return {results:read.map(({ref_id}) => {
+     const attempt=(reads.get(ref_id)||0)+1;
+     reads.set(ref_id,attempt);
+     if(mode==='unreadable'||(mode==='lag'&&attempt===1)) return {warnings:['not yet visible'],content:['not visible'],has_more:false};
+     const entry=registered.get(ref_id);
+     if(!entry) throw Error('read deleted file');
+     let value=fs.readFileSync(entry.path,'utf8');
+     if(mode==='trim-newline') value=value.replace(/\n$/, '');
+     if(mode==='tampered' && entry.path.endsWith('tree-batch-000.json')) {
+       const pos=value.indexOf('content');
+       value=value.slice(0,pos+12) + 'x' + value.slice(pos+13);
+     }
+     return {content:[value],has_more:false,warnings:[]};
+   })};
+ },
+ mcp__GitHub__create_tree: async args => {
+   events.push({type:'tree'});
+   const expected=packets[treeIndex++];
+   if (JSON.stringify(expected.action_args)!==JSON.stringify(args)) throw Error('modified tree args');
+   if(mode==='stale' && (!registered.has('other') || !registered.has('other-transaction') || registered.has('stale')))
+     throw Error('stale recovery touched an unrelated file');
+   return {result:{sha:mode==='tree-mismatch'?'0'.repeat(40):expected.expected_tree}};
+ },
+ mcp__GitHub__create_commit: async args => {
+   events.push({type:'commit'});
+   if(JSON.stringify(args)!==JSON.stringify(packets.at(-1).action_args)) throw Error('modified commit args');
+   return {result:{sha:'a'.repeat(40)}};
+ },
+ mcp__GitHub__update_ref: async ({sha,force,branch_name}) => {
+   events.push({type:'ref'});
+   if(sha!=='a'.repeat(40)||force!==false||branch_name!=='publish') throw Error('unsafe ref');
+   return {result:{success:true}};
+ },
+};
+new AsyncFunction('tools','text','INDEX_PATH',source)(tools,()=>{},indexPath)
+ .then(()=>process.stdout.write(JSON.stringify(events)))
+ .catch(e=>{events.push({type:'residual',paths:[...registered.values()].map(x=>x.name)});process.stdout.write(JSON.stringify(events));console.error(e.message);process.exitCode=1});
+"""
+    return subprocess.run(
+        ["node", "-e", js, str(index_path), mode, str(ROOT / "scripts" / "publish_connector_executor.js")],
+        input=(ROOT / "scripts" / "publish_connector_launch.js").read_text(encoding="utf-8"),
+        text=True, capture_output=True,
+    )
+
+
+def test_direct_packet_registration_preflights_before_github_writes(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    prepare_change(repo)
+    summary = plan(repo, base, publish_head)
+    index_path = Path(summary["execution_index"])
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert len(index["packets"]) == summary["tree_call_count"] + 1
+    assert not list(index_path.parent.glob("handoff-*.json"))
+    for entry in index["packets"]:
+        original = (index_path.parent / str(entry["name"])).read_bytes()
+        assert len(original) == entry["size"]
+        assert PUBLISH_REQUEST._tool_call_fingerprint(original.decode("ascii")) == entry["fnv32"]
+    ok = _execute_original_packets(index_path)
+    assert ok.returncode == 0, ok.stderr
+    trimmed = _execute_original_packets(index_path, "trim-newline")
+    lag = _execute_original_packets(index_path, "lag")
+    assert lag.returncode == 0, lag.stderr
+    lag_actions = [event["type"] for event in json.loads(lag.stdout)]
+    assert lag_actions.count("list") >= 1
+    assert lag_actions.index("list") < lag_actions.index("tree")
+    stale = _execute_original_packets(index_path, "stale")
+    assert stale.returncode == 0, stale.stderr
+    stale_actions = [event["type"] for event in json.loads(stale.stdout)]
+    assert 'list' not in stale_actions  # the known input name is replaced, not enumerated
+    assert trimmed.returncode == 0, trimmed.stderr
+    actions = [a["type"] for a in json.loads(ok.stdout)]
+    # The connector may change its retry/read batching without changing the
+    # safety contract: no remote write can precede durable input cleanup.
+    assert "read" in actions and "delete" in actions
+    assert "list" not in actions  # no normal-path Library enumeration
+    assert actions[-3:] == ["tree", "commit", "ref"]
+    assert actions.count("tree") == summary["tree_call_count"]
+    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
+
+    for mode in ("source-unavailable", "folder-fails", "upload-fails", "upload-without-id", "upload-throws-partial", "delete-fails", "unreadable", "tampered"):
+        rejected = _execute_original_packets(index_path, mode)
+        assert rejected.returncode != 0, (mode, rejected.stderr)
+        rejected_events = json.loads(rejected.stdout)
+        assert "tree" not in [a["type"] for a in rejected_events]
+        if mode != "delete-fails":
+            current_prefix = "/temp/space-idle-publish-" + index["request_id"] + "-"
+            assert not any(path.startswith(current_prefix) for path in rejected_events[-1]["paths"]), mode
+    no_inventory = _execute_original_packets(index_path, "list-fails")
+    assert no_inventory.returncode == 0, no_inventory.stderr
+    assert "list" not in [a["type"] for a in json.loads(no_inventory.stdout)]
+    mismatch = _execute_original_packets(index_path, "tree-mismatch")
+    assert mismatch.returncode != 0
+    assert [a["type"] for a in json.loads(mismatch.stdout)][-2:] == ["tree", "residual"]
+
+    packet_file = Path(summary["tree_packets"][0])
+    packet = json.loads(packet_file.read_text(encoding="utf-8"))
+    packet["action_args"]["repository_full_name"] = "different/repository"
+    packet_file.write_text(json.dumps(packet), encoding="utf-8")
+    rejected = _execute_original_packets(index_path)
+    assert rejected.returncode != 0
+    assert "tree" not in [a["type"] for a in json.loads(rejected.stdout)]
+
+
+def test_direct_packet_registration_large_multi_batch(tmp_path: Path) -> None:
+    repo, base, _, publish_head, _ = init_repo(tmp_path)
+    (repo / "large.bin").write_bytes(os.urandom(1_200_000))
+    commit_all(repo, "large checkpoint")
+    run_request(repo, "prepare")
+    summary = plan(repo, base, publish_head)
+    assert summary["tree_call_count"] > 1
+    index_path = Path(summary["execution_index"])
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert len(index["packets"]) == summary["tree_call_count"] + 1
+    assert not list(index_path.parent.glob("handoff-*.json"))
+    ok = _execute_original_packets(index_path)
+    assert ok.returncode == 0, ok.stderr
+    actions = [a["type"] for a in json.loads(ok.stdout)]
+    assert actions.count("tree") == summary["tree_call_count"]
+    assert actions[-2:] == ["commit", "ref"]
+    assert actions.index("tree") > max(i for i,k in enumerate(actions) if k == "delete")
+    assert len([a for a in actions if a == "create_folder"]) == 1

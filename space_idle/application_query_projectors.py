@@ -11,6 +11,7 @@ from .application_project_progression import ProgressionProjectorMixin
 from .application_project_reports import ApplicationReportProjectorMixin
 from .application_project_forecast import DetailedForecastProjectorMixin
 from .application_project_economy import MarketProjectorMixin
+from .application_project_passengers import PassengerProjectorMixin
 
 
 class ApplicationQueryMixin(
@@ -25,6 +26,7 @@ class ApplicationQueryMixin(
     ApplicationReportProjectorMixin,
     DetailedForecastProjectorMixin,
     MarketProjectorMixin,
+    PassengerProjectorMixin,
 ):
     """Query facade composed from domain-focused projectors."""
 

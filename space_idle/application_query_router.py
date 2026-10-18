@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from .application_commands import (
-    ApplicationError, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog, GetCargoFlows,
-    GetContracts, GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
+    ApplicationError, GetAttention, GetBottlenecks, GetBuildOptions, GetCatalog, GetDevelopmentWorldReference, GetCargoFlows,
+    GetFleet, GetFleetRelocationPreview, GetFlowReport, GetDependencyAnalytics, GetDetailedForecast, GetOperationalNode, GetLogistics,
     GetLogisticsSummary, GetProjects, GetResearch, GetMovementPlans,
     GetScientificExplorations, GetSurveys, GetSurveyCampaignIntentPreview, GetTransportAllocations,
-    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockOptions, GetWorld, GetSurfaceMap, Query,
+    GetTransportAllocationOptions, GetTransportAllocationPreview, GetTargetStockContext, GetWorld, GetSurfaceMap, GetNonSurfaceFoundingOptions, Query,
     GetMarket,
+    GetPassengerTransferPreview, GetPassengerTransfers,
 )
 from .application_views import ProjectsView, QueryResult
 
@@ -46,8 +47,14 @@ class ApplicationQueryRouterMixin:
                 self._query_projection_cache = None
 
     def _query(self, query: Query) -> QueryResult:
+        if isinstance(query, GetPassengerTransferPreview):
+            return self._passenger_transfer_preview_view(query)
+        if isinstance(query, GetPassengerTransfers):
+            return self._passenger_transfers_view(query)
         if isinstance(query, GetCatalog):
             return self._catalog_view()
+        if isinstance(query, GetDevelopmentWorldReference):
+            return self._development_world_reference()
         if isinstance(query, GetWorld):
             return self._world_view()
         if isinstance(query, GetSurfaceMap):
@@ -55,7 +62,22 @@ class ApplicationQueryRouterMixin:
             body_id = CelestialBodyId(query.body_id)
             if body_id not in self._simulation.graph.bodies:
                 raise KeyError(body_id)
-            return self._surface_map_view(body_id)
+            if not set(query.founding_cell_ids) <= {
+                str(cell.id) for cell in self._simulation.graph.cells_for_body(body_id)
+            }:
+                raise ValueError("founding Cell must belong to the selected body")
+            return self._surface_map_view(body_id, founding_cell_ids=query.founding_cell_ids)
+        if isinstance(query, GetNonSurfaceFoundingOptions):
+            from .shared import CelestialBodyId
+            body_id = CelestialBodyId(query.body_id)
+            if body_id not in self._simulation.graph.bodies:
+                raise KeyError(body_id)
+            if query.founding_context_id and query.founding_context_id not in {
+                str(node.id) for node in self._simulation.graph.nodes.values()
+                if node.body_id == body_id
+            }:
+                raise ValueError("founding Context must belong to the selected body")
+            return self._non_surface_founding_view(body_id, founding_context_id=query.founding_context_id)
         if isinstance(query, GetOperationalNode):
             return self._operational_node_view(self._require_operational_node(query.operational_node_id))
         if isinstance(query, GetFlowReport):
@@ -78,6 +100,10 @@ class ApplicationQueryRouterMixin:
         if isinstance(query, GetLogisticsSummary):
             return self._logistics_summary_view()
         if isinstance(query, GetMovementPlans):
+            if query.touching_node_id is not None:
+                if query.origin_id is not None or query.destination_id is not None or query.movement_plan_id is not None:
+                    raise ApplicationError("invalid_query", "touching_node_id cannot be combined with a Movement Plan or OD scope")
+                self._require_operational_node(query.touching_node_id)
             if query.origin_id is not None:
                 self._require_operational_node(query.origin_id)
             if query.destination_id is not None:
@@ -118,25 +144,29 @@ class ApplicationQueryRouterMixin:
                 self._require_operational_node(query.source_id),
                 self._require_operational_node(query.destination_id),
             )
-        if isinstance(query, GetTargetStockOptions):
+        if isinstance(query, GetTargetStockContext):
             destination_id = self._require_operational_node(query.destination_id)
             resource_ids = {str(value.id) for value in self._simulation.inventory.resource_definitions.values()}
             if query.resource_id not in resource_ids:
                 raise KeyError(query.resource_id)
             from .shared import DefinitionId
-            return self._target_stock_options_view(destination_id, DefinitionId(query.resource_id))
+            return self._target_stock_context_view(destination_id, DefinitionId(query.resource_id))
         if isinstance(query, GetResearch):
             return self._research_view()
         if isinstance(query, GetScientificExplorations):
             return self._scientific_explorations_view()
         if isinstance(query, GetSurveys):
+            from .shared import CelestialBodyId
+            body_id = None if query.body_id is None else CelestialBodyId(query.body_id)
+            if body_id is not None and body_id not in self._simulation.graph.bodies:
+                raise KeyError(body_id)
             return self._surveys_view(
-                None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id)
+                None if query.provider_operational_node_id is None else self._require_operational_node(query.provider_operational_node_id),
+                body_id=body_id,
+                include_target_rows=query.include_target_rows,
             )
         if isinstance(query, GetSurveyCampaignIntentPreview):
             return self._survey_campaign_intent_preview_view(query)
-        if isinstance(query, GetContracts):
-            return self._contracts_view()
         if isinstance(query, GetMarket):
             return self._market_view()
         raise TypeError(f"unsupported query: {type(query).__name__}")

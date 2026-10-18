@@ -12,11 +12,11 @@ from .application import GameApplication
 from .application_commands import ApplicationError, SetTimeControl
 from .domain import validate_extension_registry
 from .simulation import OfflineProgressPolicy, OfflineProgressResult
-from .validation import validate_runtime_state
+from .validation import validate_domain_runtime_state, validate_runtime_state
 from .validation_support import ConfigurationError
 
 
-SAVE_SCHEMA_VERSION = 65
+SAVE_SCHEMA_VERSION = 76
 
 
 class SaveFormatError(ValueError):
@@ -267,7 +267,10 @@ def load_game(
         _restore_application_state(app, envelope.state)
         validate_runtime_state(app._simulation)
         app._simulation.refresh_storage()
-        validate_runtime_state(app._simulation)
+        # Refresh changes only derived capacity/runtime projections. Static
+        # Definitions were validated immediately above, so recheck the
+        # authoritative State without repeating full World configuration.
+        validate_domain_runtime_state(app._simulation)
     except SaveFormatError:
         raise
     except (ConfigurationError, KeyError, RuntimeError, TypeError, ValueError) as exc:

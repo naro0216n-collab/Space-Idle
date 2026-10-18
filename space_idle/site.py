@@ -7,7 +7,8 @@ from typing import Protocol, TYPE_CHECKING
 if TYPE_CHECKING:
     from .facilities import FacilityBook
 from .shared import SpatialNodeId
-from .spatial import EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
+from .shared import DefinitionId
+from .spatial import AtmosphereField, EnvironmentFieldScope, EnvironmentResolver, SpatialContextId, SpatialFacet, SpatialNodeKind
 
 
 
@@ -43,7 +44,7 @@ class EnvironmentCondition(Protocol):
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool: ...
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -52,8 +53,8 @@ class RequiresFacet:
     code: str
     description: str
 
-    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
-        return environment.get(context_id, self.facet_type, day) is not None
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool:
+        return environment.get(context_id, self.facet_type) is not None
 
 
 @dataclass(frozen=True)
@@ -69,14 +70,49 @@ class FacetValueRange:
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
             raise ValueError("facet minimum cannot exceed maximum")
 
-    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId, day: int) -> bool:
-        facet = environment.get(context_id, self.facet_type, day)
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool:
+        facet = environment.get(context_id, self.facet_type)
         if facet is None:
             return False
         value = getattr(facet, self.attribute)
         if self.minimum is not None and value < self.minimum - 1e-12:
             return False
         if self.maximum is not None and value > self.maximum + 1e-12:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
+class AtmosphericPartialPressureRange:
+    """An environmental gas requirement, not a planet or Location exception.
+
+    Atmosphere composition contains mole fractions of environmental species,
+    while pressure is the total ambient pressure. Missing species have zero
+    partial pressure.
+    """
+
+    species_id: DefinitionId
+    code: str
+    description: str
+    minimum_pa: float | None = None
+    maximum_pa: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.minimum_pa is not None and self.minimum_pa < 0:
+            raise ValueError('minimum partial pressure cannot be negative')
+        if self.maximum_pa is not None and self.maximum_pa < 0:
+            raise ValueError('maximum partial pressure cannot be negative')
+        if self.minimum_pa is not None and self.maximum_pa is not None and self.minimum_pa > self.maximum_pa:
+            raise ValueError('invalid partial-pressure bounds')
+
+    def matches(self, environment: EnvironmentResolver, context_id: SpatialContextId) -> bool:
+        atmosphere = environment.get(context_id, AtmosphereField)
+        if atmosphere is None:
+            return False
+        partial_pressure = atmosphere.pressure_pa * atmosphere.composition.get(self.species_id, 0.0)
+        if self.minimum_pa is not None and partial_pressure < self.minimum_pa:
+            return False
+        if self.maximum_pa is not None and partial_pressure > self.maximum_pa:
             return False
         return True
 
@@ -133,7 +169,6 @@ class SiteRequirementFailure:
 def evaluate_physical_site_requirements(
     requirements: SiteRequirements,
     context_id: SpatialContextId,
-    day: int,
     environment: EnvironmentResolver,
 ) -> tuple[SiteRequirementFailure, ...]:
     failures = [
@@ -144,7 +179,7 @@ def evaluate_physical_site_requirements(
     failures.extend(
         SiteRequirementFailure(condition.code, condition.description)
         for condition in requirements.environment
-        if not condition.matches(environment, context_id, day)
+        if not condition.matches(environment, context_id)
     )
     return tuple(failures)
 
@@ -159,7 +194,7 @@ def evaluate_site_requirements(
     environment_context_id: SpatialContextId | None = None,
 ) -> tuple[SiteRequirementFailure, ...]:
     context_id = location_id if environment_context_id is None else environment_context_id
-    failures = list(evaluate_physical_site_requirements(requirements, context_id, day, environment))
+    failures = list(evaluate_physical_site_requirements(requirements, context_id, environment))
 
     for requirement in requirements.capability_requirements:
         if requirement.required_state is CapabilityRequirementState.INSTALLED:

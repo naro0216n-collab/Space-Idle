@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from contextlib import contextmanager
+from typing import Mapping
 
 from .execution_requirements import (
     ExecutionRequirementBundle,
@@ -8,12 +10,13 @@ from .execution_requirements import (
     ServiceCapacityRequirement,
     StockOrPoolAdmissionRequirement,
 )
-from .facilities import FacilityBook
+from .facilities import FacilityBook, FacilityDef
 from .inventory import InventoryBook
 from .power import PowerSnapshot
 from .service_capacity import ServiceCapacityScope
 from .supply import SupplyRequirement
 from .shared import DefinitionId, EntityId, SpatialNodeId
+from .technology import TechnologyState
 from .production import (
     ProcessSpec, ProcessSnapshot, ProcessSelectionMixin,
     IndustryPlanningMixin, IndustryExecutionMixin,
@@ -23,8 +26,35 @@ from .production import (
 @dataclass
 class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExecutionMixin):
     processes: dict[DefinitionId, ProcessSpec]
+    # Read-only reference to the Composition-owned Facility Definitions; no Facility State is copied.
+    facility_defs: Mapping[DefinitionId, FacilityDef]
+    technology_state: TechnologyState
 
     SERVICE_TYPE_PREFIX = "process:"
+    _compatible_process_projection: dict[DefinitionId, tuple[ProcessSpec, ...]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    _process_provider_definitions_projection: dict[DefinitionId, frozenset[DefinitionId]] | None = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+
+    @contextmanager
+    def derived_projection_scope(self):
+        """Reuse Process/Capability matches for one read or execution boundary.
+
+        This is a derived index, never persistent. A subsequent command or
+        definition mutation uses fresh matches and remains the authority.
+        """
+        if self._compatible_process_projection is not None:
+            yield
+            return
+        self._compatible_process_projection = {}
+        self._process_provider_definitions_projection = {}
+        try:
+            yield
+        finally:
+            self._compatible_process_projection = None
+            self._process_provider_definitions_projection = None
 
     @classmethod
     def process_service_type(cls, process_id: DefinitionId) -> str:
@@ -56,7 +86,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
         for storage_pool_key, delta in sorted(
             self._storage_delta_per_scale(process, inventory).items()
         ):
-            if delta > 1e-12:
+            if delta > 1e-12 and inventory.is_finite_storage_pool(storage_pool_key):
                 requirements.append(
                     StockOrPoolAdmissionRequirement(storage_pool_key, delta)
                 )
@@ -74,7 +104,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             facilities.active_compatible_at(location_id, day), key=lambda row: str(row.id)
         ):
             process = self.process_for(facility)
-            if process is None:
+            if process is None or self.missing_process_technologies(process):
                 continue
             rows.append(ExecutionRequirementBundle(
                 id=self.execution_bundle_id(facility.id),
@@ -82,7 +112,7 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                 owner_id=facility.id,
                 purpose=f"process:{process.id}",
                 operational_node_id=location_id,
-                requested_execution=1.0,
+                requested_execution=self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level,
                 priority=facility.activity_priority,
                 requirements=self.execution_requirements_for_process(process, inventory),
             ))
@@ -94,27 +124,39 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             self.process_service_type(process.id) for process in self.processes.values()
         ))
 
-    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
-        if service_type not in self.service_capacity_types():
+    def _service_process(self, service_type: str) -> ProcessSpec:
+        # Match one registered Process directly, rather than re-enumerating
+        # every process Service type for each downstream dependency lookup.
+        if not service_type.startswith(self.SERVICE_TYPE_PREFIX):
             raise KeyError(service_type)
+        process = self.processes.get(DefinitionId(service_type[len(self.SERVICE_TYPE_PREFIX):]))
+        if process is None or self.process_service_type(process.id) != service_type:
+            raise KeyError(service_type)
+        return process
+
+    def service_capacity_scope(self, service_type: str) -> ServiceCapacityScope:
+        self._service_process(service_type)
         return ServiceCapacityScope.OPERATIONAL_NODE
 
     def service_capacity_provider_definition_ids(
         self, service_type: str
     ) -> frozenset[DefinitionId]:
-        if service_type not in self.service_capacity_types():
-            raise KeyError(service_type)
-        return frozenset(
-            process.facility_def_id
-            for process in self.processes.values()
-            if self.process_service_type(process.id) == service_type
+        process = self._service_process(service_type)
+        cache = self._process_provider_definitions_projection
+        if cache is not None and process.id in cache:
+            return cache[process.id]
+        providers = frozenset(
+            facility_id for facility_id, definition in self.facility_defs.items()
+            if process.required_capabilities <= definition.capability_ids
         )
+        if cache is not None:
+            cache[process.id] = providers
+        return providers
 
     def service_capacity_upstream_services(
         self, service_type: str
     ) -> frozenset[str]:
-        if service_type not in self.service_capacity_types():
-            raise KeyError(service_type)
+        self._service_process(service_type)
         return frozenset()
 
     def service_capacity_supply_at(
@@ -129,12 +171,19 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
     ) -> tuple[float, float]:
         if power is None:
             nominal = sum(
-                1.0
+                self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
                 for facility in facilities.active_compatible_at(location_id, day)
                 for process in (self.process_for(facility),)
                 if process is not None and self.process_service_type(process.id) == service_type
             )
-            return (nominal, nominal)
+            available = sum(
+                self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
+                for facility in facilities.active_compatible_at(location_id, day)
+                for process in (self.process_for(facility),)
+                if process is not None and self.process_service_type(process.id) == service_type
+                and not self.missing_process_technologies(process)
+            )
+            return (nominal, available)
         nominal, enabled = self.service_supply(
             location_id, facilities, power, day, provider_factors=provider_factors
         )
@@ -159,7 +208,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             if process is None:
                 continue
             key = (location_id, self.process_service_type(process.id))
-            nominal[key] = nominal.get(key, 0.0) + 1.0
+            throughput = self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level
+            nominal[key] = nominal.get(key, 0.0) + throughput
             upstream = (provider_factors or {}).get(facility.id, 1.0)
             factor = max(
                 0.0,
@@ -170,7 +220,9 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
                     * upstream,
                 ),
             )
-            enabled[key] = enabled.get(key, 0.0) + factor
+            if self.missing_process_technologies(process):
+                factor = 0.0
+            enabled[key] = enabled.get(key, 0.0) + throughput * factor
         return nominal, enabled
 
     def supplys(
@@ -189,7 +241,8 @@ class IndustryService(ProcessSelectionMixin, IndustryPlanningMixin, IndustryExec
             for resource_id, amount_t in process.inputs_per_day.items():
                 if amount_t > 1e-12:
                     key = (resource_id, int(facility.activity_priority))
-                    required[key] = required.get(key, 0.0) + amount_t
+                    required[key] = (required.get(key, 0.0) + amount_t
+                                     * self.facility_defs[facility.definition_id].process_throughput_per_day * facility.level)
 
         owner_id = EntityId(f"industry.site:{location_id}")
         requirements: list[SupplyRequirement] = []

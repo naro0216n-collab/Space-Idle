@@ -10,8 +10,6 @@ from .logistics_views import (
 
 @dataclass(frozen=True)
 class LogisticsSummaryView:
-    movement_plan_count: int
-    usable_movement_plan_count: int
     fleet_units: int
     free_fleet_units: int
     allocation_count: int
@@ -56,6 +54,9 @@ class FleetRelocationPreviewView:
     infrastructure_requirements: tuple[InfrastructureRequirementRow, ...]
     feasible: bool
     blockers: tuple[DecisionConstraintRow, ...]
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 0
+    payload_mass_t: float = 0.0
 
 
 @dataclass(frozen=True)

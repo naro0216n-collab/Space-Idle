@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from .ui_reports import ComparisonAxisRow, ComparisonValueRow, DecisionConstraintRow
+from .ui_reports import DecisionConstraintRow
 from ..priority import ActivityPriority, ProvisioningPriority
 from .project_views import FacilityUpgradeOption, ProjectRow
 
@@ -87,6 +87,11 @@ class FacilityRow:
     projected_salvage: tuple[tuple[str, float], ...] = ()
     can_decommission: bool = False
     active_decommission_project_id: str | None = None
+    power_active_load_mw: float = 0.0
+    power_standby_load_mw: float = 0.0
+    operating_resources_per_day: tuple[tuple[str, float], ...] = ()
+    selected_process_id: str | None = None
+    selected_extraction_method_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,8 +139,7 @@ class IndustryProcessOptionRow:
     output_rates_per_day: tuple[tuple[str, float], ...]
     service_requirements: tuple[tuple[str, float], ...]
     blockers: tuple[DecisionConstraintRow, ...]
-    comparison_key: str
-    comparison_values: tuple[ComparisonValueRow, ...]
+    can_select: bool = True
 
 
 @dataclass(frozen=True)
@@ -146,7 +150,6 @@ class IndustryRow:
     process_id: str | None
     process_display_name: str | None
     process_options: tuple[IndustryProcessOptionRow, ...]
-    process_comparison_axes: tuple[ComparisonAxisRow, ...]
     selection_required: bool
     scale: float
     limiting_factors: tuple[DecisionConstraintRow, ...]
@@ -184,6 +187,20 @@ class SurfaceLocationDecisionRow:
 
 
 @dataclass(frozen=True)
+class ExtractionMethodOptionRow:
+    method_id: str
+    display_name: str
+    resource_id: str
+    resource_name: str
+    output_resource_id: str
+    output_resource_name: str
+    potential_opportunity: float | None
+    nominal_output_t_per_day: float | None
+    can_select: bool
+    blockers: tuple[DecisionConstraintRow, ...]
+
+
+@dataclass(frozen=True)
 class ExtractionRow:
     facility_id: str
     facility_definition_id: str
@@ -193,23 +210,76 @@ class ExtractionRow:
     output_resource_id: str
     output_resource_name: str
     nominal_capacity_t_per_day: float
-    effective_opportunity: float
-    marginal_efficiency: float
+    effective_opportunity: float | None
+    marginal_efficiency: float | None
     scale: float
     output_t_per_day: float
     limiting_factors: tuple[DecisionConstraintRow, ...]
+    method_id: str | None = None
+    method_options: tuple[ExtractionMethodOptionRow, ...] = ()
+    selection_required: bool = False
 
 
 @dataclass(frozen=True)
 class ExtractionResourceRow:
     resource_id: str
     resource_name: str
-    effective_opportunity: float
+    static_opportunity: float | None
+    effective_opportunity: float | None
+    knowledge_eligible_cell_count: int
+    knowledge_blocked_cell_count: int
     installed_nominal_capacity_t_per_day: float
     operational_fulfillment: float
-    diminishing_efficiency: float
-    marginal_efficiency: float
+    diminishing_efficiency: float | None
+    marginal_efficiency: float | None
     output_t_per_day: float
+
+
+@dataclass(frozen=True)
+class ExternalPopulationSourceRow:
+    id: str
+    remaining_people: int
+    max_acquisition_per_day: int
+    available_today: int
+    missing_technologies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PopulationView:
+    current_count: int
+    desired_count: int | None
+    target_unmet_count: int
+    target_local_receivable: int
+    target_blockers: tuple[str, ...]
+    committed_count: int
+    housing_physical: int
+    housing_usable: int
+    life_support_required: float
+    life_support_allocated: float
+    crew_capacity: float
+    deprivation_person_days: float
+    resource_demand_per_day: tuple[tuple[str, float], ...]
+    external_sources: tuple[ExternalPopulationSourceRow, ...]
+    natural_growth_enabled: bool = True
+    natural_growth_credit: float = 0.0
+    natural_growth_last_added: int = 0
+    natural_growth_blockers: tuple[str, ...] = ()
+    natural_growth_constraints: tuple[DecisionConstraintRow, ...] = ()
+    natural_growth_current_constraints: tuple[DecisionConstraintRow, ...] = ()
+    natural_growth_housing_spare: int = 0
+    natural_growth_life_support_spare: int = 0
+    natural_growth_reserved_arrivals: int = 0
+    natural_growth_supply_observed_day: int | None = None
+    natural_growth_confirmed_receipts: tuple[tuple[str, float], ...] = ()
+    inbound_count: int = 0
+    outbound_count: int = 0
+    expected_count_after_confirmed_arrivals: int = 0
+    crew_service_used_per_day: float = 0.0
+    # Resource, current daily need, on-hand, in-transit/arrival-waiting,
+    # confirmed future daily need.  All quantities originate in owning Domains.
+    living_resource_flows: tuple[tuple[str, float, float, float, float], ...] = ()
+    # Origin, people, external source or None, route days, shared payload tonnes.
+    target_transport_candidates: tuple[tuple[str, int, int, str | None, int, float, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -234,3 +304,14 @@ class OperationalNodeView:
     extraction_resources: tuple[ExtractionResourceRow, ...]
     projects: tuple[ProjectRow, ...]
     surface_location: SurfaceLocationDecisionRow | None = None
+    population: PopulationView | None = None
+    power_imported_mw: float = 0.0
+    power_exported_mw: float = 0.0
+    # Available physical equipment remains visible even before a link can operate.
+    power_transmitters: tuple[tuple[str, str, str, float, bool], ...] = ()
+    power_receivers: tuple[tuple[str, str, str, float, bool], ...] = ()
+    power_links: tuple[tuple[str, str, float, str, str], ...] = ()
+    infrastructure_methods: tuple[tuple[str, str, str, float], ...] = ()
+    infrastructure_launchers: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = ()
+    infrastructure_catchers: tuple[tuple[str, str, str, tuple[str, ...], bool], ...] = ()
+    infrastructure_links: tuple[tuple[str, str, str, str, float, bool], ...] = ()

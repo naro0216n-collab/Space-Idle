@@ -100,3 +100,23 @@ class RelocateFleet:
     source_id: str
     destination_id: str
     movement_hard_constraint: tuple[str, ...] | None = None
+    carrier_vehicle_definition_id: str | None = None
+    carrier_units: int = 1
+
+
+@dataclass(frozen=True)
+class SetInfrastructureFreightLink:
+    method_id: str
+    source_facility_id: str
+    destination_facility_id: str
+    target_t_per_day: float
+
+    def __post_init__(self) -> None:
+        import math
+        if not math.isfinite(self.target_t_per_day) or self.target_t_per_day <= 0:
+            raise ValueError("infrastructure freight target must be positive and finite")
+
+
+@dataclass(frozen=True)
+class DeleteInfrastructureFreightLink:
+    link_id: str

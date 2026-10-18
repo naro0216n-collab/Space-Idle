@@ -15,16 +15,14 @@ def _project(sim):
     return next(iter(sim.projects.projects.values()))
 
 
-
 def test_partial_construction_procurement_is_project_owned_until_cancelled():
     app = build_game_application()
     sim = app._simulation
     result = app.execute(
         PlanBuild(
             str(ids.EARTH),
-            str(ids.SURFACE_POWER_GRID),
+            str(ids.CONSTRUCTION_YARD),
             procurement_policy="extended_wait",
-            site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
         )
     )
     project = _project(sim)
@@ -40,7 +38,6 @@ def test_partial_construction_procurement_is_project_owned_until_cancelled():
     app.execute(AdvanceTime(1))
     staged = sim.projects.reserved_resource_t(project, partial_requirement.resource_id)
     assert staged > 0.0
-    assert sim.projects.reserved_resource_t(project, partial_requirement.resource_id) >= staged
     assert project.resources[partial_requirement.resource_id].committed_t == pytest.approx(0.0)
 
     app.execute(PauseBuild(result.created_id))

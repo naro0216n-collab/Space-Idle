@@ -5,7 +5,7 @@ from enum import Enum
 import types
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
-from ..application_commands import Command
+from ..application_commands import Command, Query
 
 
 class ApiPayloadError(ValueError):
@@ -36,6 +36,13 @@ def _command_types() -> dict[str, type]:
 
 
 COMMAND_TYPES = _command_types()
+
+
+QUERY_TYPES = {
+    cls.__name__: cls for cls in get_args(Query)
+    if isinstance(cls, type) and is_dataclass(cls)
+    and cls.__name__ != "GetDevelopmentWorldReference"
+}
 
 
 def command_schema() -> tuple[dict[str, Any], ...]:
@@ -176,5 +183,34 @@ def decode_command(document: Any):
         values[name] = _coerce(payload[name], hints.get(name, field.type), f"payload.{name}")
     try:
         return command_type(**values)
+    except (TypeError, ValueError) as exc:
+        raise ApiPayloadError(str(exc)) from exc
+
+
+def decode_query(document: Any):
+    """Decode a GameApplication Query with the same typed fields as Commands."""
+    if not isinstance(document, dict):
+        raise ApiPayloadError("query document must be an object")
+    query_name = document.get("type")
+    payload = document.get("payload", {})
+    if not isinstance(query_name, str) or query_name not in QUERY_TYPES:
+        raise ApiPayloadError(f"unknown query type: {query_name!r}")
+    if not isinstance(payload, dict):
+        raise ApiPayloadError("query payload must be an object")
+    cls = QUERY_TYPES[query_name]
+    field_map = {field.name: field for field in fields(cls)}
+    unknown = sorted(set(payload) - set(field_map))
+    if unknown:
+        raise ApiPayloadError(f"unknown query fields: {', '.join(unknown)}")
+    hints = get_type_hints(cls)
+    values = {}
+    for name, field in field_map.items():
+        if name not in payload:
+            if field.default is MISSING and field.default_factory is MISSING:
+                raise ApiPayloadError(f"missing query field: {name}")
+            continue
+        values[name] = _coerce(payload[name], hints.get(name, field.type), f"payload.{name}")
+    try:
+        return cls(**values)
     except (TypeError, ValueError) as exc:
         raise ApiPayloadError(str(exc)) from exc

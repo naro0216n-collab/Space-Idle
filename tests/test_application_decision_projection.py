@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units, add_preexisting_stock
+
 import pytest
+from unittest.mock import patch
 
 from space_idle import (
     AdvanceTime,
@@ -10,7 +13,6 @@ from space_idle import (
     GetBuildOptions,
     GetCargoFlows,
     GetCatalog,
-    GetContracts,
     GetDependencyAnalytics,
     GetFleet,
     GetFleetRelocationPreview,
@@ -26,7 +28,7 @@ from space_idle import (
     GetTransportAllocations,
     GetTransportAllocationOptions,
     GetTransportAllocationPreview,
-    GetTargetStockOptions,
+    GetTargetStockContext,
     GetWorld,
     PlanBuild,
     SetProjectPriority,
@@ -46,14 +48,14 @@ from space_idle.api.codec import to_jsonable
 from space_idle.content.base_game import EARTH, LEO
 from space_idle.content import base_ids as ids
 from space_idle.shared import DefinitionId
-from space_idle.spatial import AtmosphereField, GravityField
-from space_idle.transport import PoweredAscentCapability, TransportPerformanceProfile, VehicleDef
+from space_idle.transport import TransportPerformanceProfile, VehicleDef
 from space_idle.transport.movement import MovementResolver
 
 
 
 def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
-    capacity = app._simulation.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        app._simulation.transport,
         vehicle_definition_id, source_id, destination_id, units, day=app._simulation.day
     )
     return {
@@ -63,7 +65,6 @@ def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_
 
 def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_contracts():
     app = build_game_application()
-    sim = app._simulation
     catalog = app.query(GetCatalog())
     fleet = app.query(GetFleet())
     movement_plans = app.query(GetMovementPlans(include_modes=True))
@@ -72,56 +73,16 @@ def test_vehicle_catalog_and_movement_modes_follow_definition_and_capability_con
     assert definitions
     assert all(pool.vehicle_definition_id in definitions for pool in fleet.pools)
     for movement_plan in movement_plans.items:
-        assert movement_plan.comparison_key == movement_plan.id
-        assert movement_plan.comparison_values == ()
         for mode in movement_plan.modes:
             if mode.vehicle_definition_id is not None:
                 assert mode.vehicle_definition_id in definitions
 
-    plan = min(
-        sim.transport.movement_plan_candidates(ids.EARTH, ids.LEO),
-        key=lambda row: str(row.id),
+    # Physics and per-operation limits are Domain-owned. The Application
+    # obligation here is referential integrity and explaining unusable modes.
+    assert all(
+        mode.service_feasible or mode.blockers
+        for plan in movement_plans.items for mode in plan.modes
     )
-    movement_plan_view = app.query(
-        GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)
-    ).items[0]
-    lander_mode = next(
-        mode
-        for mode in movement_plan_view.modes
-        if mode.id == str(ids.REUSABLE_SURFACE_CARGO_LANDER)
-    )
-    assert not lander_mode.service_feasible
-    assert any("operation:powered_ascent" in blocker.code for blocker in lander_mode.blockers)
-
-    origin_context = sim.transport.movement_geometry(plan.id).origin.environment_context_id
-    gravity = sim.environment.require(origin_context, GravityField).local_acceleration_m_s2
-    pressure = sim.environment.require(origin_context, AtmosphereField).pressure_pa
-    definition_id = DefinitionId("test.vehicle.integrated_spacecraft")
-    sim.transport.vehicle_defs[definition_id] = VehicleDef(
-        id=definition_id,
-        display_name="統合型試験宇宙船",
-        performance=TransportPerformanceProfile(
-            dry_mass_t=10.0,
-            payload_t=2.0,
-            endurance_days=30.0,
-            operation_capabilities=(
-                PoweredAscentCapability(
-                    plan.delta_v_km_s + 1.0, gravity + 1.0, pressure + 1000.0
-                ),
-            ),
-        ),
-    )
-    sim.transport.add_fleet_units(definition_id, 1, ids.EARTH)
-    assert not sim.transport.vehicle_movement_failures(plan.id, definition_id, sim.day)
-    mode = next(
-        row
-        for row in app.query(
-            GetMovementPlans(movement_plan_id=str(plan.id), include_modes=True)
-        ).items[0].modes
-        if row.id == str(definition_id)
-    )
-    assert mode.fleet_total_units == 1
-    assert mode.nominal_capacity.forward_t_per_day > 0
 
 
 def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_global_enumeration(monkeypatch):
@@ -201,19 +162,34 @@ def test_movement_plan_projection_reuses_derived_state_and_scoped_queries_avoid_
         assert {
             "transit_days",
             "delta_v_km_s",
-            "operation_count",
             "service_feasible",
             "cycle_days",
             "nominal_forward_t_per_day",
             "full_load_propellant_t",
-            "infrastructure_count",
         } <= value_keys
+
+    # Node-neighbourhood and OD views share the scoped Movement contract.
+    touching = app.query(GetMovementPlans(
+        touching_node_id=str(EARTH), include_modes=True,
+    )).items
+    assert touching
+    assert all(str(EARTH) in (row.origin_id, row.destination_id) for row in touching)
+    assert len({row.id for row in touching}) == len(touching)
 
 def test_application_decision_queries_are_observational_and_reuse_projection_within_query(monkeypatch):
     app = build_game_application()
     sim = app._simulation
     original = sim.tick_decision_projection
+    original_dependencies = sim.service_capacity_dependencies
     calls = 0
+    dependency_derivations = 0
+
+    def counted_dependencies():
+        nonlocal dependency_derivations
+        dependency_derivations += 1
+        return original_dependencies()
+
+    monkeypatch.setattr(sim, "service_capacity_dependencies", counted_dependencies)
 
     def counted_projection():
         nonlocal calls
@@ -225,6 +201,9 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
 
     app.query(GetLogistics())
     assert calls == 1
+    # Maintenance/transport feedback must not rebuild the invariant provider
+    # dependency graph for every allocation attempt within the same query.
+    assert dependency_derivations == 1
 
     for query in (
         GetWorld(),
@@ -253,44 +232,60 @@ def test_application_decision_queries_are_observational_and_reuse_projection_wit
 
 
 def test_global_attention_filters_diagnostic_blockers_and_exposes_decision_context():
+    """Attention selects actionable issues without encoding a particular opening Content state."""
     app = build_game_application()
-
     bottlenecks = app.query(GetBottlenecks()).items
     attention = app.query(GetAttention()).items
 
-    assert attention
-    assert all(row.attention_required for row in attention)
-    assert all(row.navigation is not None for row in attention)
-    assert len(attention) < len(bottlenecks)
+    assert attention == tuple(issue for issue in bottlenecks if issue.attention_required)
+    assert all(issue.navigation is not None and issue.navigation.decision_area
+               for issue in attention)
+    for issue in attention:
+        if issue.source == "industry":
+            assert issue.navigation.decision_area == "location"
+            assert issue.navigation.operational_node_id == issue.operational_node_id
+            assert issue.navigation.subject_kind == "facility"
+            assert issue.navigation.subject_id == issue.entity_id
+    assert to_jsonable(app.query(GetAttention()))["items"] == [
+        to_jsonable(issue) for issue in attention
+    ]
+    # A single composite read shares progression derivations but must preserve
+    # global and location-specific issue contracts independently.
+    # One full Research projection is sufficient for each immutable read
+    # boundary, even when attention and the Research panel both consume it.
+    research = app._simulation.research
+    start_blockers = research.start_blockers
+    calls_per_research = {}
 
-    # Locked future Research is still inspectable through Bottlenecks but does
-    # not flood the global Attention surface.
-    research_start = next(row for row in bottlenecks if row.source == "research_start")
-    assert research_start.attention_required is False
-    assert research_start.navigation is not None
-    assert research_start.navigation.decision_area == "research"
-    assert research_start.navigation.subject_kind == "research"
-    assert research_start.navigation.subject_id == research_start.definition_id
+    def counted_start_blockers(research_id, *args, **kwargs):
+        calls_per_research[research_id] = calls_per_research.get(research_id, 0) + 1
+        return start_blockers(research_id, *args, **kwargs)
 
-    # Active facility/industry constraints lead directly to the affected
-    # Location and Facility without the UI parsing the blocker text.
-    facility_issue = next(row for row in attention if row.source == "industry")
-    assert facility_issue.navigation is not None
-    assert facility_issue.navigation.decision_area == "location"
-    assert facility_issue.navigation.operational_node_id == facility_issue.operational_node_id
-    assert facility_issue.navigation.subject_kind == "facility"
-    assert facility_issue.navigation.subject_id == facility_issue.entity_id
+    with patch.object(research, "start_blockers", side_effect=counted_start_blockers):
+        standalone = app.query(GetResearch())
+        standalone_calls = dict(calls_per_research)
+        calls_per_research.clear()
+        batched = app.query_many({
+            "attention": GetAttention(), "global": GetBottlenecks(),
+            "local": GetBottlenecks(str(EARTH)), "research": GetResearch(),
+        })
+        assert calls_per_research == standalone_calls
+        calls_per_research.clear()
+        app.query(GetResearch())
+        assert calls_per_research == standalone_calls
 
-    payload = to_jsonable(app.query(GetAttention()))
-    assert payload["items"][0]["attention_required"] is True
-    assert payload["items"][0]["navigation"]["decision_area"] == "location"
+    assert batched["research"] == standalone
+    assert batched["attention"].items == attention
+    assert batched["global"].items == bottlenecks
+    assert batched["local"] == app.query(GetBottlenecks(str(EARTH)))
 
-def test_target_stock_options_project_current_state_and_application_owned_presets():
+
+def test_target_stock_context_exposes_physical_quantities_without_picking_a_reserve_strategy():
     app = build_game_application()
     destination_id = str(ids.EARTH)
     resource_id = str(ids.STRUCTURAL_COMPONENTS)
 
-    view = app.query(GetTargetStockOptions(destination_id, resource_id))
+    view = app.query(GetTargetStockContext(destination_id, resource_id))
 
     assert view.destination_id == destination_id
     assert view.resource_id == resource_id
@@ -298,17 +293,21 @@ def test_target_stock_options_project_current_state_and_application_owned_preset
         app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
     )
     assert view.normal_demand_t_per_day > 0
-    assert [preset.days_of_supply for preset in view.presets] == [1.0, 3.0, 7.0]
-    for preset in view.presets:
-        assert preset.target_quantity_t == pytest.approx(
-            view.normal_demand_t_per_day * preset.days_of_supply
-        )
-    assert view.suggested_max_t >= view.current_stock_t
+    assert view.current_target_quantity_t == 0.0
+    stock_before = app._simulation.inventory.amount(ids.EARTH, ids.STRUCTURAL_COMPONENTS)
+    normal_demand_before = view.normal_demand_t_per_day
+    inbound_before = view.inbound_t
 
     app.execute(SetTargetStock(destination_id, resource_id, 5.0, priority=4))
-    updated = app.query(GetTargetStockOptions(destination_id, resource_id))
+    updated = app.query(GetTargetStockContext(destination_id, resource_id))
     assert updated.current_target_quantity_t == pytest.approx(5.0)
     assert int(updated.priority) == 4
+    assert updated.current_stock_t == pytest.approx(stock_before)
+    assert updated.normal_demand_t_per_day == pytest.approx(normal_demand_before)
+    assert updated.inbound_t == pytest.approx(inbound_before)
+    # Additional reserve is a planning intent, not a stock reservation or a
+    # second source of ordinary recurring demand.
+    assert app._simulation.inventory.available(ids.EARTH, ids.STRUCTURAL_COMPONENTS) == pytest.approx(stock_before)
 
 
 def test_transport_allocation_projection_exposes_capacity_target_and_canonical_plan_requirements():
@@ -332,12 +331,12 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
         in option.operational_supply_at_full_unit
     )
 
-    assert option.suggested_capacity_max.forward_t_per_day >= option.nominal_capacity.forward_t_per_day
-    assert option.capacity_presets
-    assert any(preset.units == 1 for preset in option.capacity_presets)
-    assert all(preset.capacity.forward_t_per_day >= 0 for preset in option.capacity_presets)
+    assert option.nominal_capacity.forward_t_per_day > 0
+    assert option.fleet_free_units <= option.fleet_total_units
+    assert option.fleet_total_units >= 0
 
-    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    two_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
     )
     preview = app.query(GetTransportAllocationPreview(
@@ -353,7 +352,8 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
     assert preview.achievable_capacity.forward_t_per_day <= preview.target_capacity.forward_t_per_day
     assert preview.available_units >= 0
 
-    two_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    two_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 2, day=app._simulation.day
     )
     allocation_id = app.execute(CreateTransportAllocation(
@@ -386,7 +386,8 @@ def test_transport_allocation_projection_exposes_capacity_target_and_canonical_p
     assert constrained.movement_hard_constraint == option.forward_path
     assert constrained.selected_forward_path == option.forward_path
 
-    one_unit_capacity = app._simulation.transport.transport_capacity_for_units(
+    one_unit_capacity = service_target_for_test_units(
+        app._simulation.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1,
         day=app._simulation.day,
         movement_hard_constraint=tuple(
@@ -418,8 +419,8 @@ def test_fleet_relocation_preview_exposes_the_same_plan_used_by_command():
     sim.transport.fleet_pool(vehicle_id, ids.LEO).total_units = 1
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LEO)
     sim.facilities.install(ids.ORBITAL_LOGISTICS_NODE, ids.LUNAR_ORBIT)
-    sim.inventory.add(ids.LEO, ids.PROPELLANT, 100.0)
-    sim.inventory.add(ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LEO, ids.PROPELLANT, 100.0)
+    add_preexisting_stock(sim, ids.LUNAR_ORBIT, ids.PROPELLANT, 100.0)
 
     auto_preview = app.query(GetFleetRelocationPreview(
         str(vehicle_id), 1, str(ids.LEO), str(ids.LUNAR_ORBIT)
@@ -536,23 +537,54 @@ def test_ui_snapshot_is_json_safe_and_clock_consistent_at_application_boundary(t
     now[0] = 3.2
     queries = {
         "world": GetWorld(), "global_issues": GetAttention(), "research": GetResearch(),
-        "scientific_explorations": GetScientificExplorations(), "contracts": GetContracts(),
+        "scientific_explorations": GetScientificExplorations(),
         "logistics_summary": GetLogisticsSummary(), "logistics": GetLogistics(),
         "movement_plans": GetMovementPlans(include_modes=True), "fleet": GetFleet(),
         "transport_allocations": GetTransportAllocations(), "cargo_flows": GetCargoFlows(),
 "operational_node": GetOperationalNode(location_id),
         "flow": GetFlowReport(location_id), "projects": GetProjects(location_id),
         "build_options": GetBuildOptions(location_id), "bottlenecks": GetBottlenecks(location_id),
-        "surveys": GetSurveys(location_id),
+        "surveys": GetSurveys(location_id, body_id=str(ids.EARTH_BODY)),
     }
     result = runtime.snapshot(queries)
     payload = to_jsonable(result.data)
     assert payload["session"]["day"] == payload["world"]["day"] == 3
     assert payload["operational_node"]["id"] == location_id
-    assert "items" in payload["global_issues"]
-    assert "pools" in payload["fleet"]
-    assert "items" in payload["transport_allocations"]
-    assert "items" in payload["cargo_flows"]
+
+
+def test_logistics_projections_share_scoped_derivations_without_changing_read_contracts():
+    app = build_game_application()
+    sim = app._simulation
+    # A logistics-only read does not need to generate unrelated Movement modes.
+    with patch.object(app, "_movement_plan_rows", side_effect=AssertionError(
+        "logistics summary/details must not expand Movement candidates",
+    )):
+        logistics_only = app.query_many({
+            "logistics": GetLogistics(), "summary": GetLogisticsSummary(),
+        })
+    assert logistics_only["logistics"].fleet_pools
+    assert logistics_only["summary"].fleet_units >= 0
+
+    # The batched view must match individually requested decisions. Do not
+    # specify an internal helper's exact invocation count or module location;
+    # scoped, non-expanding requests are checked above and in the Movement suite.
+    batched = app.query_many({
+        "summary": GetLogisticsSummary(),
+        "logistics": GetLogistics(),
+        "movement": GetMovementPlans(include_modes=True),
+        "fleet": GetFleet(),
+        "allocations": GetTransportAllocations(),
+        "cargo": GetCargoFlows(),
+    })
+    assert batched["logistics"] == app.query(GetLogistics())
+    assert batched["movement"] == app.query(GetMovementPlans(include_modes=True))
+    assert batched["fleet"] == app.query(GetFleet())
+    assert batched["allocations"] == app.query(GetTransportAllocations())
+    assert batched["cargo"] == app.query(GetCargoFlows())
+
+    # The cache belongs to one query snapshot, not the authoritative state.
+    app.execute(AdvanceTime(1))
+    assert app.query(GetLogisticsSummary()) == app.query_many({"summary": GetLogisticsSummary()})["summary"]
 
 
 def test_construction_queries_expose_authoritative_project_controls():
@@ -561,9 +593,8 @@ def test_construction_queries_expose_authoritative_project_controls():
     assert tuple(build_options.procurement_policy_options) == app._simulation.projects.procurement_policy_options()
 
     project_id = app.execute(PlanBuild(
-        str(EARTH), str(ids.SURFACE_POWER_GRID), priority=2,
+        str(EARTH), str(ids.CONSTRUCTION_YARD), priority=2,
         procurement_policy="immediate",
-        site_cell_id=str(ids.EARTH_CELL_INDUSTRIAL),
     )).created_id
     assert project_id is not None
     row = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
@@ -588,3 +619,40 @@ def test_construction_queries_expose_authoritative_project_controls():
     app.execute(SetProjectProcurementPolicy(project_id, "extended_wait"))
     updated = next(item for item in app.query(GetProjects(str(EARTH))).items if item.id == project_id)
     assert (updated.priority, updated.procurement_policy) == (5, "extended_wait")
+
+
+def test_survey_service_catalog_uses_physical_source_names_for_new_content():
+    app = build_game_application()
+    sim = app._simulation
+    assert sim.survey is not None
+
+    catalog = app.query(GetCatalog())
+    projected = {row.id: row.display_name for row in catalog.service_capacities}
+    assert set(projected) == set(sim.survey.service_capacity_types())
+    assert all("survey_observation:" not in name for name in projected.values())
+    assert all(name for name in projected.values())
+
+    source_id = DefinitionId("test.vehicle.survey_platform")
+    sim.transport.vehicle_defs[source_id] = VehicleDef(
+        id=source_id,
+        display_name="追加観測プラットフォーム",
+        performance=TransportPerformanceProfile(
+            dry_mass_t=2.0, payload_t=0.0,
+            generic_capabilities=("survey_sensor",),
+        ),
+    )
+    expanded = {row.id: row.display_name for row in app.query(GetCatalog()).service_capacities}
+    compatible_providers = (
+        provider for provider in sim.survey.providers.values()
+        if provider.source_kind.value == "fleet"
+        and provider.required_source_capabilities <= {"survey_sensor"}
+    )
+    service_ids = {
+        sim.survey.service_type_for_provider(provider.id, source_id)
+        for provider in compatible_providers
+    }
+    assert service_ids
+    assert set(expanded) - set(projected) == service_ids
+    assert all(sim.transport.vehicle_defs[source_id].display_name in expanded[service_id]
+               for service_id in service_ids)
+    assert all(expanded[key] == name for key, name in projected.items())

@@ -8,7 +8,7 @@ from .facilities import FacilityBook
 from .inventory import InventoryBook
 from .shared import DefinitionId, EntityId
 from .supply_planning import SupplyPlanningMixin
-from .logistics_models import CargoArrivalWaiting, CargoFlowSegment
+from .logistics_models import CargoArrivalWaiting, CargoFlowSegment, CargoPositionSnapshot
 from .supply import SupplyRoutingConstraintScope, SupplyRoutingConstraintState, TargetStockPolicy
 from .transport.service import TransportService
 from .transport.models import TransportServiceSupply
@@ -30,6 +30,9 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
     _projection_service_edges_cache: dict[int, tuple[TransportServiceSupply, ...]] | None = field(
         default=None, init=False, repr=False
     )
+    _projection_service_adjacency_cache: dict[int, tuple[tuple[TransportServiceSupply, ...], dict]] | None = field(
+        default=None, init=False, repr=False
+    )
     _projection_service_path_cache: dict[tuple[object, ...], tuple[str, ...]] | None = field(
         default=None, init=False, repr=False
     )
@@ -43,6 +46,23 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
     _cargo_flow_counter: int = 0
     _arrival_waiting_counter: int = 0
 
+    def cargo_position_snapshot(self) -> tuple[CargoPositionSnapshot, ...]:
+        """Physical Cargo positions from Logistics-owned active lifecycle State.
+
+        Cargo in transit or awaiting handling is not Inventory at its final
+        destination.  The current leg is distinct from the final route target.
+        """
+        rows = [CargoPositionSnapshot(
+            row.id, row.resource_id, row.amount_t, "in_transit", None,
+            row.leg.source_id, row.leg.destination_id,
+            row.final_destination_id, row.owner_kind, row.owner_id,
+        ) for row in self.cargo_flows.values()]
+        rows.extend(CargoPositionSnapshot(
+            row.id, row.resource_id, row.amount_t, "arrival_waiting", row.node_id,
+            None, None, row.final_destination_id, row.owner_kind, row.owner_id,
+        ) for row in self.arrival_waiting.values())
+        return tuple(sorted(rows, key=lambda row: (row.phase, str(row.cargo_id))))
+
     def __post_init__(self) -> None:
         self.register_supply_owner_resolver(
             "target_stock", lambda owner_id: owner_id in self.target_stocks
@@ -54,6 +74,7 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
         root_scope = self._projection_cache_depth == 0
         if root_scope:
             self._projection_service_edges_cache = {}
+            self._projection_service_adjacency_cache = {}
             self._projection_service_path_cache = {}
             self._projection_service_path_failure_cache = {}
             self._projection_candidate_paths_cache = {}
@@ -64,6 +85,7 @@ class LogisticsService(SupplyPlanningMixin, LogisticsFlowMixin):
             self._projection_cache_depth -= 1
             if root_scope:
                 self._projection_service_edges_cache = None
+                self._projection_service_adjacency_cache = None
                 self._projection_service_path_cache = None
                 self._projection_service_path_failure_cache = None
                 self._projection_candidate_paths_cache = None

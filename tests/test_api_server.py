@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import json
 from threading import Thread
+from contextlib import contextmanager
 
 from space_idle import build_game_application
 from space_idle.bootstrap import build_game_application_for_load
@@ -37,13 +38,29 @@ def _raw_request(port: int, path: str):
     return status, headers, data
 
 
-def test_http_api_command_query_and_save_load_boundary(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
+@contextmanager
+def running_api(tmp_path):
+    """Give each HTTP scenario an isolated server and game runtime."""
+    runtime = GameRuntime(
+        new_game_factory=build_game_application,
+        load_factory=build_game_application_for_load,
+        save_dir=tmp_path,
+    )
     server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
+    # The default 0.5s serve_forever poll delay only slows shutdown in
+    # short-lived HTTP contract tests; it is not part of HTTP semantics.
+    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
     try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_command_and_world_read_cross_json_boundary(tmp_path):
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {"type": "AdvanceTime", "payload": {"days": 2}},
@@ -56,77 +73,110 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert payload["data"]["day"] == 2
         assert payload["data"]["operational_nodes"]
 
+        # Optimistic revision checking is part of the same HTTP Command boundary.
+        status, headers, rejected = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 1}},
+            headers={"If-Match": '"rev-0"'},
+        )
+        assert status == 409
+        assert rejected["error"]["code"] == "revision_conflict"
+        assert rejected["error"]["details"]["current_revision"] == 1
+        assert headers["X-Space-Idle-Revision"] == "1"
+        assert _request(port, "GET", "/api/v1/world")[2]["data"]["day"] == 2
+
+        # The independent finite passenger intent uses real HTTP Command and
+        # Query contracts; setting a Population Target is not a prerequisite.
+        status, _, payload = _request(port, "GET", f"/api/v1/population/passenger-preview?origin_node_id={ids.EARTH}&destination_node_id={ids.LEO}&requested_count=2")
+        assert status == 200 and payload["data"]["requested_count"] == 2
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "RequestPassengerTransfer", "payload": {
+                "origin_node_id": str(ids.EARTH), "destination_node_id": str(ids.LEO),
+                "requested_count": 2, "capacity_source_constraint": {
+                    "dedicated_vehicle_definition_id": str(ids.REUSABLE_LAUNCH_VEHICLE),
+                    "dedicated_units": 1,
+                },
+            },
+        })
+        assert status == 200 and payload["data"]["created_id"]
+        order_id = payload["data"]["created_id"]
+        status, _, payload = _request(port, "GET", "/api/v1/population/passenger-transfers")
+        assert status == 200 and payload["data"]["items"][0]["id"] == order_id
+        status, _, payload = _request(port, "POST", "/api/v1/commands", {
+            "type": "CancelPassengerTransfer", "payload": {"order_id": order_id},
+        })
+        assert status == 200
+
+
+def test_http_decision_views_route_and_scoped_json_boundary(tmp_path):
+    """HTTP owns routing, scope arguments and JSON transport, not Domain arithmetic."""
+    with running_api(tmp_path) as port:
         status, _, payload = _request(
             port, "GET",
             f"/api/v1/ui-state?operational_node_id={ids.EARTH}&surface_body_id={ids.EARTH_BODY}",
         )
         assert status == 200
-        data = payload["data"]
-        required = {
-            "world", "operational_node", "surface_map", "logistics",
-            "scientific_explorations", "market", "dependency_analytics_current", "dependency_analytics_forecast",
-        }
-        assert required <= data.keys()
-        assert data["operational_node"]["id"] == str(ids.EARTH)
-        assert data["surface_map"]["body_id"] == str(ids.EARTH_BODY)
-        assert data["dependency_analytics_current"]["time_basis"] == "CURRENT"
-        assert data["dependency_analytics_forecast"]["time_basis"] == "FORECAST"
+        assert {
+            "world", "operational_node", "surface_map", "logistics", "market",
+            "scientific_explorations", "dependency_analytics_current", "dependency_analytics_forecast",
+        } <= payload["data"].keys()
+        assert payload["data"]["operational_node"]["id"] == str(ids.EARTH)
+        assert payload["data"]["surface_map"]["body_id"] == str(ids.EARTH_BODY)
 
-        status, _, payload = _request(
-            port, "GET",
-            f"/api/v1/target-stock-options?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
+        # Exercise each distinct query decoder and serialization route. Numerical
+        # forecasts, eligibility and candidate selection belong to Application tests.
+        urls = (
+            f"/api/v1/surfaces/{ids.MOON}",
+            f"/api/v1/surfaces/{ids.MOON}?founding_cell_id={ids.MOON_CELL_FARSIDE_HIGHLANDS}",
+            "/api/v1/non-surface-founding-options?body_id=base.body.jupiter",
+            f"/api/v1/target-stock-context?destination_id={ids.EARTH}&resource_id={ids.STRUCTURAL_COMPONENTS}",
+            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
+            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=1",
         )
-        assert status == 200
-        target_stock_options = payload["data"]
-        assert target_stock_options["destination_id"] == str(ids.EARTH)
-        assert target_stock_options["resource_id"] == str(ids.STRUCTURAL_COMPONENTS)
-        assert target_stock_options["normal_demand_t_per_day"] > 0
-        assert [row["display_name"] for row in target_stock_options["presets"]] == ["1日分", "3日分", "7日分"]
+        for url in urls:
+            status, _, response = _request(port, "GET", url)
+            assert status == 200, url
+            assert isinstance(response["data"], dict), url
 
-        allocation_options_status, _, allocation_options_payload = _request(
+        # Preview parses the directional capacity targets through the HTTP codec.
+        status, _, allocation_options = _request(
             port, "GET",
             f"/api/v1/transport-allocation-options?source_id={ids.EARTH}&destination_id={ids.LEO}",
         )
-        assert allocation_options_status == 200
-        allocation_option = next(
-            row for row in allocation_options_payload["data"]["options"]
-            if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE)
-        )
-        one_unit = next(row for row in allocation_option["capacity_presets"] if row["units"] == 1)
-        preview_status, _, preview_payload = _request(
-            port, "GET",
-            "/api/v1/transport-allocation-preview"
+        assert status == 200
+        option = next(row for row in allocation_options["data"]["options"]
+                      if row["vehicle_definition_id"] == str(ids.REUSABLE_LAUNCH_VEHICLE))
+        nominal = option["nominal_capacity"]
+        status, _, preview = _request(
+            port, "GET", "/api/v1/transport-allocation-preview"
             f"?vehicle_definition_id={ids.REUSABLE_LAUNCH_VEHICLE}"
             f"&source_id={ids.EARTH}&destination_id={ids.LEO}"
-            f"&target_forward_t_per_day={one_unit['capacity']['forward_t_per_day']}"
-            f"&target_reverse_t_per_day={one_unit['capacity']['reverse_t_per_day']}",
-        )
-        assert preview_status == 200
-        assert preview_payload["data"]["required_units"] == 1
-        assert preview_payload["data"]["selected_forward_path"] == allocation_option["forward_path"]
-
-        status, _, payload = _request(
-            port, "GET",
-            f"/api/v1/dependency-analytics?scope_kind=operational_nodes&node_id={ids.EARTH}&time_basis=FORECAST",
+            f"&target_forward_t_per_day={nominal['forward_t_per_day']}"
+            f"&target_reverse_t_per_day={nominal['reverse_t_per_day']}",
         )
         assert status == 200
-        assert payload["data"]["time_basis"] == "FORECAST"
-        assert payload["data"]["forecast_resources"]
-        assert not payload["data"]["current_resources"]
+        assert preview["data"]["required_units"] == 1
 
-        status, _, payload = _request(
+        # A selected cell must belong to the selected body at the HTTP boundary.
+        status, _, response = _request(
             port, "GET",
-            f"/api/v1/detailed-forecast?scope_kind=operational_nodes&node_id={ids.EARTH}&horizon=SHORT_TERM&period_days=2",
+            f"/api/v1/ui-state?surface_body_id={ids.MOON}&founding_cell_id={ids.EARTH_CELL_INDUSTRIAL}",
+        )
+        assert status in (400, 422)
+        assert response["error"]["code"]
+
+
+def test_http_nested_intent_and_save_load_boundary(tmp_path):
+    with running_api(tmp_path) as port:
+        status, _, payload = _request(
+            port, "POST", "/api/v1/commands",
+            {"type": "AdvanceTime", "payload": {"days": 2}},
         )
         assert status == 200
-        assert payload["data"]["base_day"] == 2
-        assert payload["data"]["projected_day"] == 4
-        assert payload["data"]["period_days"] == 2
-        assert payload["data"]["inventory"]
+        assert payload["revision"] == 1
 
         # Exercise nested command decoding through the real HTTP boundary.
-        # Domain validation should reject this not-yet-surveyed founding target,
-        # proving the typed target reached the application command contract.
+        # Founding uses a typed target and a shared Application command contract.
         status, _, payload = _request(
             port, "POST", "/api/v1/commands",
             {
@@ -139,14 +189,13 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                         "body_id": str(ids.MOON),
                         "core_cell_id": str(ids.MOON_CELL_FARSIDE_HIGHLANDS),
                     },
-                    "deployment_recipe_id": str(ids.ROBOTIC_LUNAR_OUTPOST_FOUNDING_PACKAGE),
+                    "deployment_recipe_id": str(ids.ROBOTIC_SURFACE_OUTPOST_PACKAGE),
                     "vehicle_definition_id": str(ids.REUSABLE_SURFACE_CARGO_LANDER),
                 },
             },
         )
-        assert status == 400
-        assert payload["error"]["code"] == "invalid_command"
-        assert "knowledge_requirement" in payload["error"]["message"]
+        assert status == 200
+        assert payload["data"]["created_id"] is not None
 
         # Survey Campaign crosses the HTTP codec as a multi-target intent with a nested
         # optional provider constraint; the query must expose the same authoritative scope.
@@ -155,7 +204,7 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
             "/api/v1/survey-campaign-intent-preview"
             f"?target_cell_id={survey_cells[0]}"
             f"&target_cell_id={survey_cells[1]}"
-            f"&resource_id={ids.WATER}"
+            f"&resource_id={ids.VOLATILE_BEARING_MATERIAL}"
             "&goal_knowledge_level=1"
         )
         status, _, payload = _request(port, "GET", preview_path)
@@ -168,10 +217,10 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
                 "type": "StartSurvey",
                 "payload": {
                     "target_cell_ids": survey_cells,
-                    "resource_ids": [str(ids.WATER)],
+                    "resource_ids": [str(ids.VOLATILE_BEARING_MATERIAL)],
                     "goal_knowledge_level": 1,
                     "provider_constraint": {
-                        "provider_definition_id": str(ids.LUNAR_RESOURCE_SURVEY_ORBITER),
+                        "provider_definition_id": str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER),
                         "operational_node_id": str(ids.LUNAR_ORBIT),
                     },
                     "observation_mode_constraint": "remote_orbital_spectrometry",
@@ -189,12 +238,27 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         assert status == 200
         campaign = next(row for row in payload["data"]["surveys"]["campaigns"] if row["id"] == campaign_id)
         assert set(campaign["target_cell_ids"]) == set(survey_cells)
-        assert campaign["resource_ids"] == [str(ids.WATER)]
+        assert campaign["resource_ids"] == [str(ids.VOLATILE_BEARING_MATERIAL)]
         assert campaign["goal_knowledge_level"] == 1
         assert campaign["priority"] == 4
-        assert campaign["projected_provider_definition_id"] == str(ids.LUNAR_RESOURCE_SURVEY_ORBITER)
+        assert campaign["projected_provider_definition_id"] == str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)
         assert campaign["projected_provider_display_name"]
-        assert "base." not in campaign["projected_provider_display_name"]
+        assert campaign["projected_provider_display_name"] != campaign["projected_provider_definition_id"]
+
+        # The shell uses the same coherent UI snapshot outside Surface Map.
+        # Global Campaign decisions must remain visible, but unselected worlds'
+        # per-Cell observations must not be serialized on every periodic sync.
+        status, _, summary = _request(
+            port, "GET", f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}",
+        )
+        assert status == 200
+        assert summary["data"]["surveys"]["items"] == []
+        assert {row["id"] for row in summary["data"]["surveys"]["campaigns"]} == {
+            row["id"] for row in payload["data"]["surveys"]["campaigns"]
+        }
+        assert payload["data"]["surveys"]["items"]
+        assert all(row["body_id"] == str(ids.MOON)
+                   for row in payload["data"]["surveys"]["items"])
 
         status, _, payload = _request(port, "GET", preview_path)
         assert status == 200
@@ -235,57 +299,21 @@ def test_http_api_command_query_and_save_load_boundary(tmp_path):
         )
         assert status == 400
         assert payload["error"]["code"] == "invalid_save"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
-def test_http_api_rejects_stale_command_revision(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0, cors_origins=("*",)))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        status, _, payload = _request(
-            port, "POST", "/api/v1/commands",
-            {"type": "AdvanceTime", "payload": {"days": 1}},
-            headers={"If-Match": '"rev-0"'},
-        )
-        assert status == 200 and payload["revision"] == 1
 
-        status, headers, payload = _request(
-            port, "POST", "/api/v1/commands",
-            {"type": "AdvanceTime", "payload": {"days": 1}},
-            headers={"If-Match": '"rev-0"'},
-        )
-        assert status == 409
-        assert payload["error"]["code"] == "revision_conflict"
-        assert payload["error"]["details"]["current_revision"] == 1
-        assert headers.get("X-Space-Idle-Revision") == "1"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revision_invalidation(tmp_path):
-    runtime = GameRuntime(
-        new_game_factory=build_game_application,
-        load_factory=build_game_application_for_load,
-        save_dir=tmp_path,
-    )
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+    with running_api(tmp_path) as port:
+        # The view-token contract needs a representative Surface scope, not
+        # an unfiltered payload of every Survey target in the Solar System.
+        surface_scope = f"&surface_body_id={ids.EARTH_BODY}"
+        path = f"/api/v1/ui-state?operational_node_id={ids.EARTH}{surface_scope}"
         status, headers, payload = _request(port, "GET", path)
         assert status == 200
         assert payload["revision"] == 0
         etag = headers["ETag"]
-        assert etag.startswith('"ui-state-0-')
+        assert etag and etag.startswith('"') and etag.endswith('"')
 
         status, headers, payload = _request(
             port,
@@ -301,7 +329,7 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
 
         # An ETag belongs to one concrete UI-state representation. Reusing the
         # Earth-node ETag for another scope must not suppress that projection.
-        other_path = f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}"
+        other_path = f"/api/v1/ui-state?operational_node_id={ids.LUNAR_ORBIT}{surface_scope}"
         status, _, payload = _request(
             port,
             "GET",
@@ -310,6 +338,23 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         )
         assert status == 200
         assert payload["data"]["operational_node"]["id"] == str(ids.LUNAR_ORBIT)
+
+        # The inspection node is independent of the execution node. Scope
+        # changes invalidate the composite view token and constrain Movement.
+        inspect_path = (
+            f"/api/v1/ui-state?operational_node_id={ids.EARTH}"
+            f"&inspect_node_id={ids.LUNAR_ORBIT}{surface_scope}"
+        )
+        status, _, payload = _request(port, "GET", inspect_path, headers={"X-Space-Idle-Known-View": etag})
+        assert status == 200
+        inspected = payload["data"]
+        assert inspected["operational_node"]["id"] == str(ids.EARTH)
+        assert inspected["inspected_node"]["id"] == str(ids.LUNAR_ORBIT)
+        assert inspected["inspected_flow"]["operational_node_id"] == str(ids.LUNAR_ORBIT)
+        assert all(
+            str(ids.LUNAR_ORBIT) in (plan["origin_id"], plan["destination_id"])
+            for plan in inspected["movement_plans"]["items"]
+        )
 
         status, _, payload = _request(
             port,
@@ -328,20 +373,12 @@ def test_ui_state_conditional_refresh_uses_scope_specific_view_tokens_and_revisi
         )
         assert status == 200
         assert payload["revision"] == 1
-        assert headers["ETag"].startswith('"ui-state-1-')
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        assert headers["ETag"] != etag
+        assert headers["ETag"] and headers["ETag"].startswith('"')
 
 
 def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
-    runtime = GameRuntime(new_game_factory=build_game_application, load_factory=build_game_application_for_load, save_dir=tmp_path)
-    server = create_server(runtime, ApiServerConfig(host="127.0.0.1", port=0))
-    port = server.server_address[1]
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_api(tmp_path) as port:
         status, headers, body = _raw_request(port, "/")
         assert status == 200
         assert headers["Content-Type"].startswith("text/html")
@@ -349,7 +386,3 @@ def test_static_webui_is_served_and_path_traversal_is_rejected(tmp_path):
 
         status, _, _ = _raw_request(port, "/%2e%2e/%2e%2e/README.md")
         assert status == 404
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)

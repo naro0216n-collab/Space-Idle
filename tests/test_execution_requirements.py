@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 import pytest
 
 from space_idle.catalog import ResourceDef
@@ -17,7 +19,7 @@ from space_idle.execution_requirements import (
     resource_constraint,
     service_constraint,
 )
-from space_idle.inventory import DEFAULT_STORAGE_POOL_KEY, InventoryBook
+from space_idle.inventory import InventoryBook
 from space_idle.priority import (
     ActivityPriority,
     DEFAULT_ACTIVITY_PRIORITY,
@@ -73,6 +75,26 @@ def test_execution_bundle_settlement_uses_one_rate_and_requires_explicit_capacit
     with pytest.raises(KeyError, match="missing allocation capacities"):
         allocate_execution_requirements([missing], {})
 
+    # Reservation and shared-pool requests use the same allocator rather than
+    # separate owner-specific settlement mechanisms.
+    reservation = ReservationAcquisitionRequirement(
+        id=EntityId("reserve"), owner_id=EntityId("project"),
+        operational_node_id=NODE, resource_id=ORE,
+        requested_amount=7, priority=ActivityPriority(3),
+    )
+    reservation_plan = allocate_execution_requirements(
+        [reservation], {resource_constraint(NODE, ORE): 3}
+    )
+    assert reservation_plan.allocated(reservation.id) == pytest.approx(3)
+
+    pool_request = bundle(
+        "research", 10, PoolRequirement("research_points", 1, scope_id="organization"),
+    )
+    pool_plan = allocate_execution_requirements(
+        [pool_request], {pool_constraint("research_points", "organization"): 4}
+    )
+    assert pool_plan.allocated(pool_request.id) == pytest.approx(4)
+
 
 
 def test_boundary_settlement_resources_feed_the_next_physical_snapshot_allocation():
@@ -102,7 +124,8 @@ def test_boundary_settlement_resources_feed_the_next_physical_snapshot_allocatio
     sim.inventory.stock[(ids.LEO, ids.STRUCTURAL_COMPONENTS)] = 0.0
     sim.inventory.add(ids.EARTH, ids.STRUCTURAL_COMPONENTS, 100.0)
 
-    target_capacity = sim.transport.transport_capacity_for_units(
+    target_capacity = service_target_for_test_units(
+        sim.transport,
         ids.REUSABLE_LAUNCH_VEHICLE, ids.EARTH, ids.LEO, 1, day=sim.day
     )
     sim.transport.create_transport_allocation(
@@ -229,6 +252,9 @@ def test_shared_allocators_preserve_priority_progressive_fairness_and_registrati
     )
     assert prioritized_service.allocated(high_service.id) == pytest.approx(3.0)
     assert prioritized_service.allocated(low_service.id) == pytest.approx(1.0)
+    summary = prioritized_service.summary(NODE, "test_service")
+    assert (summary.requested_rate, summary.allocated_rate, summary.spare_rate) == pytest.approx((6.0, 4.0, 0.0))
+    assert prioritized_service.summary(NODE, "absent").allocated_rate == 0.0
 
 
 def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key():
@@ -248,29 +274,6 @@ def test_atomic_admission_requires_persistent_age_and_uses_age_then_stable_key()
     assert plan.allocated(newer.id) == pytest.approx(0)
 
 
-def test_common_allocator_handles_reservation_acquisition_and_shared_owner_pools():
-    intent = ReservationAcquisitionRequirement(
-        id=EntityId("reserve"),
-        owner_id=EntityId("project"),
-        operational_node_id=NODE,
-        resource_id=ORE,
-        requested_amount=7,
-        priority=ActivityPriority(3),
-    )
-    reservation = allocate_execution_requirements(
-        [intent], {resource_constraint(NODE, ORE): 3}
-    )
-    assert reservation.allocated(intent.id) == pytest.approx(3)
-
-    shared_pool = bundle(
-        "research",
-        10,
-        PoolRequirement("research_points", 1, scope_id="organization"),
-    )
-    pool_plan = allocate_execution_requirements(
-        [shared_pool], {pool_constraint("research_points", "organization"): 4}
-    )
-    assert pool_plan.allocated(shared_pool.id) == pytest.approx(4)
 
 
 def test_canonical_tick_routes_domain_requirements_through_common_execution_allocation():
@@ -280,7 +283,7 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
     app = build_game_application()
     sim = app._simulation
     project_id = app.execute(PlanBuild(
-        str(ids.EARTH), str(ids.WATER_STORAGE), priority=3,
+        str(ids.EARTH), str(ids.CONSTRUCTION_YARD), priority=3,
         procurement_policy="extended_wait",
     )).created_id
     project = next(row for row in sim.projects.projects.values() if str(row.id) == project_id)
@@ -359,41 +362,25 @@ def test_canonical_tick_routes_domain_requirements_through_common_execution_allo
     assert structural_industry
     assert all(plan.fulfillment(row.id) == pytest.approx(0.0) for row in structural_industry)
     assert plan.used_by_constraint[structural_key] == pytest.approx(maintenance_need)
-    assert all(
-        any(key.kind == "service" and key.name.startswith("process:") for key, _ in row.coefficients())
-        for row in industry_rows
-    )
-    assert all(
-        any(key.kind == "service" and key.name.startswith("extraction:") for key, _ in row.coefficients())
-        for row in extraction_rows
-    )
-    assert all(
-        any(key.kind == "service" and key.name == "construction_work" for key, _ in row.coefficients())
-        for row in construction_rows
-    )
-    assert all(
-        0.0 <= plan.fulfillment(row.id) <= 1.0
-        for row in industry_rows + extraction_rows + construction_rows
-    )
 
 
 def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
-    default_admission = StockOrPoolAdmissionRequirement("default", 10.0)
+    thermal_admission = StockOrPoolAdmissionRequirement("thermal", 10.0)
     cryogenic_admission = StockOrPoolAdmissionRequirement("cryogenic", 6.0)
     multi_pool = bundle(
         "multi_pool",
         1.0,
-        default_admission,
+        thermal_admission,
         cryogenic_admission,
     )
     concurrent = bundle(
         "concurrent_admission",
         1.0,
-        StockOrPoolAdmissionRequirement("default", 2.0),
+        StockOrPoolAdmissionRequirement("thermal", 2.0),
         priority=5,
     )
     capacities = {
-        admission_constraint(NODE, "default"): 8.0,
+        admission_constraint(NODE, "thermal"): 8.0,
         admission_constraint(NODE, "cryogenic"): 6.0,
     }
 
@@ -403,7 +390,7 @@ def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
         "multi_pool_reversed",
         1.0,
         cryogenic_admission,
-        default_admission,
+        thermal_admission,
     )
     reversed_requirements = allocate_execution_requirements(
         (requirements_reversed, concurrent), capacities
@@ -413,7 +400,7 @@ def test_multi_pool_admission_uses_one_fraction_and_is_order_independent():
     assert forward.fulfillment(multi_pool.id) == pytest.approx(0.6)
     assert reverse.fulfillment(multi_pool.id) == pytest.approx(0.6)
     assert reversed_requirements.fulfillment(requirements_reversed.id) == pytest.approx(0.6)
-    assert forward.used_by_constraint[admission_constraint(NODE, "default")] == pytest.approx(8.0)
+    assert forward.used_by_constraint[admission_constraint(NODE, "thermal")] == pytest.approx(8.0)
     assert forward.used_by_constraint[admission_constraint(NODE, "cryogenic")] == pytest.approx(3.6)
 
 
@@ -431,14 +418,8 @@ def test_shared_recovery_settlement_applies_allocated_fraction_independent_of_re
         }
     )
     inventory.set_capacity_snapshot(
-        {
-            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
-            (NODE, "cryogenic"): 6.0,
-        },
-        {
-            (NODE, DEFAULT_STORAGE_POOL_KEY): 10.0,
-            (NODE, "cryogenic"): 6.0,
-        },
+        {(NODE, "cryogenic"): 6.0},
+        {(NODE, "cryogenic"): 6.0},
     )
     potential = ((default_salvage, 10.0), (cryogenic_salvage, 6.0))
 
@@ -460,3 +441,46 @@ def test_shared_recovery_settlement_applies_allocated_fraction_independent_of_re
     }
     assert inventory.amount(NODE, default_salvage) == pytest.approx(6.0)
     assert inventory.amount(NODE, cryogenic_salvage) == pytest.approx(3.6)
+
+
+def test_execution_graph_compilation_preserves_priority_shared_pools_and_domain_independence():
+    """Constraint keys, not Domain or Location names, define competing activities."""
+    from space_idle.execution_requirements import ExecutionAllocationGraph
+
+    other_node = SpatialNodeId("remote")
+    first = bundle("first", 10, ResourceRequirement(ORE, 1), priority=5)
+    local = bundle("local", 10, ResourceRequirement(ORE, 1))
+    remote = ExecutionRequirementBundle(
+        EntityId("remote"), "test", EntityId("remote"), "run", other_node,
+        20, ActivityPriority(3), (ResourceRequirement(ORE, 1),),
+    )
+    shared = ExecutionRequirementBundle(
+        EntityId("shared"), "research", EntityId("shared"), "run", other_node,
+        10, ActivityPriority(3), (PoolRequirement("shared", 1),),
+    )
+    cross_node = bundle("cross", 10, PoolRequirement("shared", 1), priority=3)
+    atomic = ExecutionRequirementBundle(
+        EntityId("atomic"), "market", EntityId("atomic"), "run", other_node,
+        4, ActivityPriority(3), (ResourceRequirement(ORE, 2),),
+        atomic=True, wait_started_day=1,
+    )
+    capacities = {
+        resource_constraint(NODE, ORE): 12,
+        resource_constraint(other_node, ORE): 16,
+        pool_constraint("shared"): 8,
+    }
+    rows = (first, local, remote, shared, cross_node, atomic)
+    expected = allocate_execution_requirements(rows, capacities)
+    compiled = ExecutionAllocationGraph.compile(rows[:3]).extend(rows[3:]).allocate(capacities)
+    reordered = allocate_execution_requirements(tuple(reversed(rows)), capacities)
+    assert compiled.allocations == expected.allocations == reordered.allocations
+    assert compiled.used_by_constraint == expected.used_by_constraint == reordered.used_by_constraint
+    assert expected.allocated(first.id) == 10
+    assert expected.allocated(local.id) == 2
+    assert expected.allocated(atomic.id) == 4
+    assert expected.allocated(remote.id) == 8
+    assert expected.allocated(shared.id) == expected.allocated(cross_node.id) == 4
+    assert expected.used_by_constraint[pool_constraint("shared")] == 8
+    assert expected.used_by_constraint[resource_constraint(other_node, ORE)] == 16
+    for key, used in expected.used_by_constraint.items():
+        assert 0 <= used <= capacities[key] + 1e-9

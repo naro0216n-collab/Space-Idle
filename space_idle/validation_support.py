@@ -76,6 +76,10 @@ class ValidationContext:
     known_capabilities: set[str]
     known_service_types: set[str]
     known_technologies: set
+    static_world_proof_matches: bool
+    static_geology_keys: frozenset[str] | None
+    static_terrain_types: frozenset[type] | None
+    survey_registration_matches: bool
 
     @classmethod
     def from_simulation(cls, sim: Simulation) -> "ValidationContext":
@@ -84,6 +88,19 @@ class ValidationContext:
             technologies.update(sim.research.definitions)
         service_types = set(sim.service_capacity_scopes())
         service_types.add(sim.power.SERVICE_TYPE)
+        # Configuration validators share this context in one pure validation
+        # pass. Certify the same static World input once, not once per Domain.
+        proof = getattr(sim.graph, "_static_world_proof", None)
+        static_world_proof_matches = bool(
+            proof is not None and proof.matches(sim.graph, sim.environment)
+        )
+        registration = getattr(sim.survey, "verified_registration", None) if sim.survey is not None else None
+        survey_registration_matches = bool(
+            static_world_proof_matches and registration is not None
+            and sim.survey.targets == registration.targets
+            and registration.cell_ids == sim.graph.surface_cells.keys()
+            and registration.resource_ids <= sim.inventory.resource_definitions.keys()
+        )
         return cls(
             sim.graph.nodes,
             sim.graph.operational_node_map(),
@@ -91,4 +108,8 @@ class ValidationContext:
             sim.facilities.capability_ids(),
             service_types,
             technologies,
+            static_world_proof_matches,
+            proof.geology_keys if static_world_proof_matches else None,
+            proof.terrain_types if static_world_proof_matches else None,
+            survey_registration_matches,
         )

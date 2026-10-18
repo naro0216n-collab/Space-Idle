@@ -15,6 +15,16 @@ class MarketOfferRow:
 
 
 @dataclass(frozen=True)
+class MarketOrderCandidateRow:
+    market_interface_id: str
+    direction: str
+    resource_id: str
+    offer_price_musd_per_t: float | None
+    can_create: bool
+    blockers: tuple[DecisionConstraintRow, ...]
+
+
+@dataclass(frozen=True)
 class MarketInterfaceRow:
     id: str
     provider_id: str
@@ -63,3 +73,4 @@ class MarketView:
     interfaces: tuple[MarketInterfaceRow, ...]
     orders: tuple[TradeOrderRow, ...]
     buy_commitments: tuple[BuyCommitmentRow, ...]
+    order_candidates: tuple[MarketOrderCandidateRow, ...] = ()

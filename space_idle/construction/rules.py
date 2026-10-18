@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from functools import cached_property
+from dataclasses import replace
+
 from ..execution_requirements import ExecutionAllocationPlan
 from ..power import PowerSnapshot
 from ..service_capacity import ServiceCapacityAllocationPlan, ServiceCapacityScope
@@ -14,12 +17,29 @@ from .models import (
     FacilityUpgradeTarget,
     NewFacilityTarget,
     ProjectRecipe,
+    SpatialDevelopmentRecipe,
     ProjectStatus,
-    SurfaceCellDevelopmentTarget,
+    SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 
 
 class ConstructionRulesMixin:
+    @cached_property
+    def _retired_facility_definitions(self) -> dict[EntityId, DefinitionId]:
+        """Read index of completed removal records; never a saved facility owner."""
+        return {
+            project.target.facility_id: project.target.facility_definition_id
+            for project in self.projects.values()
+            if isinstance(project.target, FacilityDecommissionTarget)
+            and project.status is ProjectStatus.COMPLETE
+        }
+
+    def _upgrade_definition_id(self, facility_id: EntityId) -> DefinitionId:
+        facility = self.facilities.facilities.get(facility_id)
+        if facility is not None:
+            return facility.definition_id
+        return self._retired_facility_definitions[facility_id]
+
     def target_facility_definition_id(self, project: ConstructionProject) -> DefinitionId | None:
         return self._target_facility_def_id(project)
 
@@ -31,10 +51,7 @@ class ConstructionRulesMixin:
         if isinstance(target, NewFacilityTarget):
             return target.facility_def_id
         if isinstance(target, FacilityUpgradeTarget):
-            facility = self.facilities.facilities.get(target.facility_id)
-            if facility is None:
-                raise KeyError(target.facility_id)
-            return facility.definition_id
+            return self._upgrade_definition_id(target.facility_id)
         if isinstance(target, FacilityDecommissionTarget):
             return target.facility_definition_id
         return None
@@ -44,17 +61,44 @@ class ConstructionRulesMixin:
         if isinstance(target, NewFacilityTarget):
             return self.recipes[target.facility_def_id]
         if isinstance(target, FacilityUpgradeTarget):
-            facility = self.facilities.facilities.get(target.facility_id)
-            if facility is None:
-                raise KeyError(target.facility_id)
-            return self.upgrade_recipes[(facility.definition_id, target.target_level)]
+            return self.upgrade_recipe_for_definition(self._upgrade_definition_id(target.facility_id), target.target_level)
         if isinstance(target, FacilityDecommissionTarget):
             return self.decommission_recipes[target.facility_definition_id]
-        return self.spatial_recipes[target.recipe_id]
+        recipe = self.spatial_recipes[target.recipe_id]
+        return replace(recipe, construction_work=project.planned_spatial_work)
+
+    def development_work_required(self, recipe_id: DefinitionId, cell_id: SurfaceCellId) -> float:
+        """Apply the same physical work to preview, accounting and execution."""
+        recipe = self.spatial_recipes[recipe_id]
+        graph = self.facilities.environment.graph
+        profile = graph.terrain_profile(cell_id)
+        return recipe.construction_work * profile.development_work_factor
+
+    def upgrade_recipe_for_definition(
+        self, definition_id: DefinitionId, target_level: int,
+    ) -> FacilityUpgradeRecipe | None:
+        """One physical acquisition unit per Level, at every positive scale.
+
+        A Content-authored transition can specify a different physical assembly,
+        but ordinary installations reuse the per-unit construction investment.
+        No fixed Level ceiling or free scale increase is imposed by Core.
+        """
+        if type(target_level) is not int or target_level < 2:
+            return None
+        explicit = self.upgrade_recipes.get((definition_id, target_level))
+        if explicit is not None:
+            return explicit
+        base = self.recipes.get(definition_id)
+        if base is None:
+            return None
+        return FacilityUpgradeRecipe(
+            definition_id, target_level, base.resources, base.construction_work,
+            base.site_requirements, base.prerequisite_technologies,
+        )
 
     def next_upgrade_recipe(self, facility_id: EntityId) -> FacilityUpgradeRecipe | None:
         facility = self.facilities.facilities[facility_id]
-        return self.upgrade_recipes.get((facility.definition_id, facility.level + 1))
+        return self.upgrade_recipe_for_definition(facility.definition_id, facility.level + 1)
 
     def _facility_site_failures_for_recipe(
         self,
@@ -95,7 +139,7 @@ class ConstructionRulesMixin:
 
     def _spatial_target_cell(self, project: ConstructionProject) -> SurfaceCellId | None:
         target = project.target
-        if isinstance(target, SurfaceCellDevelopmentTarget):
+        if isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
             return target.cell_id
         return None
 
@@ -109,6 +153,7 @@ class ConstructionRulesMixin:
             )
             for project in sorted(self.projects.values(), key=lambda row: str(row.id))
             if project.status not in {ProjectStatus.COMPLETE, ProjectStatus.CANCELLED}
+            if isinstance(project.target, SurfaceCellDevelopmentTarget)
             if (target_cell := self._spatial_target_cell(project)) is not None
         )
 
@@ -156,6 +201,62 @@ class ConstructionRulesMixin:
             failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
         return tuple(dict.fromkeys(failures))
 
+    def _spatial_intent_failures(self, recipe_id: DefinitionId, failures):
+        """A physical Site condition gates execution, not an authored Project intent.
+
+        Structural territory/claim and explicit Knowledge eligibility remain
+        required at planning. Runtime Environment and installed/active
+        Capability can become satisfied during queued construction.
+        """
+        recipe = self.spatial_recipes[recipe_id]
+        runtime_codes = {row.code for row in recipe.site_requirements.environment}
+        runtime_codes.update(("capability:installed", "capability:active"))
+        return tuple(row for row in failures if row.code not in runtime_codes)
+
+    def surface_cell_development_plan_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        recipe_id = self.surface_cell_development_recipe_id
+        if recipe_id is None or recipe_id not in self.spatial_recipes:
+            return self.surface_cell_development_failures(location_id, cell_id, day, power)
+        return self._spatial_intent_failures(
+            recipe_id, self.surface_cell_development_failures(location_id, cell_id, day, power)
+        )
+
+    def surface_cell_engineering_plan_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        recipe_id: DefinitionId, day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        failures = self.surface_cell_engineering_failures(location_id, cell_id, recipe_id, day, power)
+        if recipe_id not in self.spatial_recipes or self.spatial_recipes[recipe_id].target_terrain_profile_id is None:
+            return failures
+        return self._spatial_intent_failures(recipe_id, failures)
+
+    def terrain_engineering_recipes(self) -> tuple[SpatialDevelopmentRecipe, ...]:
+        """All authored landform outcomes, independent of Content registration order."""
+        return tuple(sorted((recipe for recipe in self.spatial_recipes.values()
+                            if recipe.target_terrain_profile_id is not None), key=lambda row: str(row.id)))
+
+    def surface_cell_engineering_failures(
+        self, location_id: SpatialNodeId, cell_id: SurfaceCellId,
+        recipe_id: DefinitionId, day: int = 0, power: PowerSnapshot | None = None,
+    ) -> tuple[SiteRequirementFailure, ...]:
+        """Single Domain authority for a selected landform project."""
+        recipe = self.spatial_recipes.get(recipe_id)
+        if recipe is None or recipe.target_terrain_profile_id is None:
+            return (SiteRequirementFailure("construction_recipe", "unknown terrain engineering recipe"),)
+        graph = self.facilities.environment.graph
+        failures = [
+            SiteRequirementFailure(code, detail) for code, detail in
+            graph.terrain_engineering_failures(location_id, cell_id, recipe.target_terrain_profile_id)
+        ]
+        if self.active_spatial_project_for_cell(cell_id) is not None:
+            failures.append(SiteRequirementFailure("cell_project", "a surface project is already in progress"))
+        if graph.has_operational_node(location_id):
+            failures.extend(self._spatial_recipe_site_failures(recipe_id, location_id, cell_id, day, power))
+        return tuple(dict.fromkeys(failures))
+
     def spatial_project_failures(
         self,
         project: ConstructionProject,
@@ -163,18 +264,20 @@ class ConstructionRulesMixin:
         power: PowerSnapshot | None = None,
     ) -> tuple[SiteRequirementFailure, ...]:
         target = project.target
-        if not isinstance(target, SurfaceCellDevelopmentTarget):
-            raise TypeError("project is not a surface development project")
+        if not isinstance(target, (SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget)):
+            raise TypeError("project is not a spatial development project")
         graph = self.facilities.environment.graph
-        failures: list[SiteRequirementFailure] = [
-            SiteRequirementFailure(code, detail)
-            for code, detail in graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)
-        ]
-        for claim in self.surface_cell_claim_registry.claims_for(
-            target.cell_id,
-            exclude=("construction_project", EntityId(project.id)),
-        ):
-            failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
+        if isinstance(target, SurfaceCellEngineeringTarget):
+            target_profile_id = self.spatial_recipes[target.recipe_id].target_terrain_profile_id
+            failures = [SiteRequirementFailure(code, detail) for code, detail in
+                        graph.terrain_engineering_failures(project.operational_node_id, target.cell_id, target_profile_id)]
+        else:
+            failures = [SiteRequirementFailure(code, detail) for code, detail in
+                        graph.surface_cell_development_failures(project.operational_node_id, target.cell_id)]
+            for claim in self.surface_cell_claim_registry.claims_for(
+                target.cell_id, exclude=("construction_project", EntityId(project.id)),
+            ):
+                failures.append(SiteRequirementFailure("cell_claimed", str(claim.claimant_id)))
         failures.extend(self._spatial_recipe_site_failures(
             target.recipe_id, project.operational_node_id, target.cell_id, day, power
         ))
@@ -201,7 +304,9 @@ class ConstructionRulesMixin:
         power: PowerSnapshot | None = None,
     ):
         facility = self.facilities.facilities[facility_id]
-        recipe = self.upgrade_recipes[(facility.definition_id, target_level)]
+        recipe = self.upgrade_recipe_for_definition(facility.definition_id, target_level)
+        if recipe is None:
+            raise ValueError("no facility upgrade recipe")
         return self._facility_site_failures_for_recipe(
             recipe, facility.operational_node_id, day, power, existing_facility_id=facility_id
         )
@@ -352,7 +457,7 @@ class ConstructionRulesMixin:
         for facility in self.facilities.active_compatible_at(location_id, day):
             spec = self.construction_providers.get(facility.definition_id)
             if spec is not None:
-                capacity += spec.work_per_day
+                capacity += spec.work_per_day * facility.level
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += (
                 self.inventory.available(location_id, resource_id)
@@ -373,7 +478,7 @@ class ConstructionRulesMixin:
             utilization = power.utilization_by_facility.get(facility.id, 1.0)
             maintenance = power.maintenance_factor_by_facility.get(facility.id, 1.0)
             upstream = (provider_factors or {}).get(facility.id, 1.0)
-            capacity += spec.work_per_day * utilization * maintenance * upstream
+            capacity += spec.work_per_day * facility.level * utilization * maintenance * upstream
         for resource_id, spec in self.construction_resource_providers.items():
             capacity += (
                 self.inventory.available(location_id, resource_id)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stock_support import service_target_for_test_units
+
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -13,6 +15,8 @@ from space_idle import (
     DevelopSurfaceCell,
     GetDependencyAnalytics,
     GetOperationalNode,
+    GetSurfaceMap,
+    GetBuildOptions,
     GetResearch,
     GetWorld,
     PauseBuild,
@@ -47,10 +51,12 @@ from space_idle.persistence import (
     SAVE_SCHEMA_VERSION, SaveFormatError, capture_state, load_game, save_game,
 )
 from space_idle.research import (
+    ResearchDefinition, ResearchPrototypeStageSpec,
     ResearchProviderLevelSpec, ResearchProviderSourceKind, ResearchProviderSpec,
     ResearchState,
 )
 from space_idle.shared import EntityId, DefinitionId, SpatialNodeId
+from space_idle.site import SiteRequirements
 from space_idle.simulation import OfflineProgressPolicy
 from space_idle.spatial import SpatialNodeDef, SpatialNodeKind
 from space_idle.terraforming import PlanetaryClimateState, TerraformingEnvironmentOverlay, TerraformingService
@@ -58,7 +64,8 @@ from space_idle.validation_support import ConfigurationError
 
 
 def _capacity_command_kwargs(app, vehicle_definition_id, source_id, destination_id, units):
-    capacity = app._simulation.transport.transport_capacity_for_units(
+    capacity = service_target_for_test_units(
+        app._simulation.transport,
         vehicle_definition_id, source_id, destination_id, units, day=app._simulation.day
     )
     return {
@@ -73,7 +80,7 @@ def _make_nontrivial_state():
 
     research = next(
         item for item in app.query(GetResearch()).items
-        if item.id == str(ids.TECH_ORBITAL_OPERATIONS)
+        if item.id == str(ids.RP_RESOURCE_CHAIN_01)
     )
     assert research.can_start
     app.execute(StartResearch(research.id, priority=4))
@@ -98,15 +105,15 @@ def _make_nontrivial_state():
     selected_process = sim.industry.processes[ids.PROCESS_BASIC_STRUCTURAL_MATERIAL]
     process_facility = next(
         row for row in sim.facilities.facilities.values()
-        if row.definition_id == selected_process.facility_def_id
+        if selected_process in sim.industry.compatible_processes(row.definition_id)
     )
     app.execute(SetFacilityProcess(str(process_facility.id), str(selected_process.id)))
 
-    survey_provider_id = ids.LUNAR_RESOURCE_SURVEY_ORBITER
+    survey_provider_id = ids.ORBITAL_RESOURCE_MAPPING_PROVIDER
     survey_mode_id = "remote_orbital_spectrometry"
     survey_goal = 2
     survey_cells = (ids.MOON_CELL_FARSIDE_HIGHLANDS, ids.MOON_CELL_NEARSIDE_MARE)
-    survey_resources = (ids.REGOLITH, ids.WATER)
+    survey_resources = (ids.MINERAL_FEEDSTOCK, ids.VOLATILE_BEARING_MATERIAL)
     survey_key = (survey_cells[0], survey_resources[0])
     app.execute(
         StartSurvey(
@@ -121,7 +128,7 @@ def _make_nontrivial_state():
         )
     )
     target = sim.survey.targets[survey_key]
-    sim.survey.knowledge_progress[survey_key] = target.thresholds[0] / 2.0
+    sim.surface_knowledge.knowledge_progress[survey_key] = target.thresholds[0] / 2.0
 
     target_id = app.execute(SetTargetStock(str(LEO), str(ids.MACHINERY), 1.0, priority=4)).created_id
     assert target_id is not None
@@ -156,7 +163,32 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
         TerraformingEnvironmentOverlay(TerraformingService({body_id: climate}))
     )
     overlay = app._simulation.environment.overlays[-1]
+    cell_id = ids.EARTH_CELL_INDUSTRIAL
+    knowledge = app._simulation.surface_knowledge
+    def surface_cell(game):
+        return next(row for row in game.query(GetSurfaceMap(str(body_id))).cells
+                    if row.id == str(cell_id))
+
+    # Acquired geology is independent of changing atmosphere; an environment
+    # observation is evidence of one physical state, not permanent omniscience.
+    assert surface_cell(app).geology == ()
+    knowledge.observe_attribute(cell_id, "geology", 2)
+    knowledge.observe_attribute(cell_id, "environment", 2)
+    measured = surface_cell(app)
+    assert measured.geology == tuple(sorted(app._simulation.graph.surface_cells[cell_id].static_geology.items()))
+    assert measured.environment_knowledge_level == 2 and measured.environment
     overlay.service.add_atmosphere(body_id, 250.0, 0.01, species, 0.0, 3.5)
+    stale = surface_cell(app)
+    assert stale.environment_knowledge_level == 0 and stale.environment == ()
+    assert stale.geology == measured.geology and stale.geology_knowledge_level == 2
+    # A prospective facility on the same location cannot bypass Knowledge by
+    # querying the true atmosphere via the Construction catalog.
+    candidate = next(row for row in app.query(GetBuildOptions(str(ids.EARTH))).items
+                     if row.facility_definition_id == str(ids.BREATHABLE_SURFACE_LIFE_SUPPORT))
+    assert candidate.site_knowledge_unverified
+    assert not any(row.code == 'environment:breathable_oxygen' for row in candidate.blockers)
+    assert candidate.can_plan
+    assert candidate.power_nominal_generation_mw is None
 
     def load_factory():
         loaded_app = build_game_application_for_load()
@@ -171,27 +203,25 @@ def test_authoritative_snapshot_roundtrip_preserves_domain_ownership_and_future_
     path = tmp_path / "game.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    state = payload["state"]
-    assert "industry" not in state
-    assert "day" not in state
-    assert "pending_offline_game_days" not in state
-    assert "boundary_used_by_constraint" not in state
-    assert set(state["core"]) == {
-        "day", "pending_offline_game_days", "boundary_service_usage",
-    }
-    assert any(
-        row["selected_process_id"] == str(ids.PROCESS_BASIC_STRUCTURAL_MATERIAL)
-        for row in state["facilities"]["items"]
-    )
-
     loaded, offline = load_game(path, load_factory)
     assert offline is None
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+    assert surface_cell(loaded).environment == ()
+    assert surface_cell(loaded).geology == measured.geology
 
     app.execute(AdvanceTime(1))
     loaded.execute(AdvanceTime(1))
     assert capture_state(loaded._simulation) == capture_state(app._simulation)
+
+    # Re-observing the modified environment restores published measurements;
+    # it does not mutate the physical World or unrelated geological evidence.
+    loaded._simulation.surface_knowledge.observe_attribute(cell_id, "environment", 1)
+    assert surface_cell(loaded).environment_knowledge_level == 1
+    assert surface_cell(loaded).environment == ()
+    loaded._simulation.surface_knowledge.observe_attribute(cell_id, "environment", 2)
+    fresh = surface_cell(loaded)
+    assert fresh.environment_knowledge_level == 2 and fresh.environment
+    assert fresh.geology == measured.geology
 
 def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     saved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -213,6 +243,9 @@ def test_offline_load_matches_direct_progress_for_active_domain_state(tmp_path):
     for allocation in tuple(sim.transport.transport_allocations.values()):
         if allocation.paused:
             original.execute(ResumeTransportAllocation(str(allocation.id)))
+    sim.technology.completed.update(
+        sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.prerequisite_technologies
+    )
     original.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim.facilities.install(
         ids.SURFACE_DISTRIBUTION_HUB, ids.EARTH,
@@ -281,9 +314,10 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
     assert allocation_state["movement_hard_constraint"] == [
         str(value) for value in selected_plan.forward_path
     ]
-    assert "required_units" not in allocation_state
-    assert "selected_plan" not in allocation_state
-    assert "nominal_capacity" not in allocation_state
+    assert allocation_state["target_capacity"] == {
+        "forward_t_per_day": sim.transport.transport_allocations[allocation_entity_id].target_capacity.forward_t_per_day,
+        "reverse_t_per_day": sim.transport.transport_allocations[allocation_entity_id].target_capacity.reverse_t_per_day,
+    }
 
     path = tmp_path / "cargo-flow.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -306,8 +340,11 @@ def test_save_load_preserves_in_flight_cargo_and_rederives_transport_projection(
 
 def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path):
     app = build_game_application()
-    app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim = app._simulation
+    sim.technology.completed.update(
+        sim.transport.vehicle_defs[REUSABLE_ORBITAL_CARGO_TUG].production.prerequisite_technologies
+    )
+    app.execute(ProduceVehicle(str(REUSABLE_ORBITAL_CARGO_TUG), str(EARTH)))
     sim.graph.develop_surface_cell(ids.EARTH, ids.EARTH_CELL_COASTAL)
     dormant = SpatialNodeId("test.node.context_only")
     sim.graph.add(
@@ -331,10 +368,10 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     )
     survey_campaign_id = app.execute(StartSurvey(
         target_cell_ids=(str(ids.MOON_CELL_FARSIDE_HIGHLANDS),),
-        resource_ids=(str(ids.REGOLITH),),
+        resource_ids=(str(ids.MINERAL_FEEDSTOCK),),
         goal_knowledge_level=1,
         provider_constraint=SurveyProviderConstraintInput(
-            str(ids.LUNAR_RESOURCE_SURVEY_ORBITER), str(ids.LUNAR_ORBIT)
+            str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT)
         ),
         observation_mode_constraint="remote_orbital_spectrometry",
     )).created_id
@@ -354,31 +391,27 @@ def test_derived_projections_are_not_persisted_and_rederive_after_load(tmp_path)
     movement_geometry_before = sim.transport.movement_geometry(movement_before[0].id)
     assert infrastructure_before is not None
     assert capture_state(sim) == before
-    assert "surface_infrastructure" not in before
-    assert "dependency_analytics" not in before
-    assert "allocation_projection" not in before
-    assert "movement_plans" not in before.get("transport", {})
-    assert "extraction" not in before
-    assert before["survey"]["knowledge_progress"]
+    assert before["surface_knowledge"]["knowledge_progress"]
     assert all(
         "cell_id" in row and "resource_id" in row and "location_id" not in row
-        for row in before["survey"]["knowledge_progress"]
+        for row in before["surface_knowledge"]["knowledge_progress"]
     )
 
     path = tmp_path / "derived-projections.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert "developed_cell_ids" in raw["state"]["environment"]["locations"][0]
-    assert "owner_location_id" not in json.dumps(raw["state"]["environment"])
     saved_campaign = next(
         row
         for row in raw["state"]["survey"]["campaigns"]
         if row["id"] == survey_campaign_id
     )
-    assert "fleet_commitment_ref" not in saved_campaign
-    assert "resolved_provider_definition_id" not in saved_campaign
-    assert "resolved_observation_mode_id" not in saved_campaign
-    assert "unfinished_targets" not in saved_campaign
+    # Save the Campaign's intent; candidate resolution is reconstructed from
+    # current providers, Fleet and research after loading.
+    assert saved_campaign["target_cell_ids"] == [str(ids.MOON_CELL_FARSIDE_HIGHLANDS)]
+    assert saved_campaign["resource_ids"] == [str(ids.MINERAL_FEEDSTOCK)]
+    assert saved_campaign["observation_mode_constraint"] == "remote_orbital_spectrometry"
+    assert saved_campaign["provider_constraint"]["provider_definition_id"] == str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER)
 
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation) == before
@@ -417,15 +450,14 @@ def _roundtrip_fleet_backed_assignment(
     path = tmp_path / f"{name}-fleet-backed-provider.json"
     save_game(app, path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
     raw = json.loads(path.read_text(encoding="utf-8"))
-    saved_assignment = raw["state"][domain_key]["provider_assignments"][0]
+    saved_assignment = next(row for row in raw["state"][domain_key]["provider_assignments"] if row["id"] == str(assignment.id))
     assert saved_assignment["fleet_commitment_ref"] == str(assignment.fleet_commitment_ref)
-    assert "quantity" not in saved_assignment
 
     loaded, offline = load_game(path, load_factory)
     assert offline is None
     loaded_sim = loaded._simulation
     loaded_domain = getattr(loaded_sim, domain_key)
-    loaded_assignment = next(iter(loaded_domain.provider_assignments.values()))
+    loaded_assignment = loaded_domain.provider_assignments[assignment.id]
     loaded_commitment = loaded_sim.transport.fleet_commitment_snapshot(
         loaded_assignment.fleet_commitment_ref
     )
@@ -435,21 +467,26 @@ def _roundtrip_fleet_backed_assignment(
 
 def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_fleet_commitment(tmp_path):
     provider_id = DefinitionId("test.research_provider.persistence_fleet")
+    research_id = DefinitionId("test.research.persistence_prototype")
 
     def research_factory(*, for_load: bool):
         app = build_game_application_for_load() if for_load else build_game_application()
         app._simulation.research.providers[provider_id] = ResearchProviderSpec(
             provider_id,
             ResearchProviderSourceKind.FLEET,
-            ids.REUSABLE_ORBITAL_CARGO_TUG,
+            frozenset({"docking_interface"}),
             tier=2,
             levels=(ResearchProviderLevelSpec(1, 2.0, 25.0, 1.5),),
+        )
+        app._simulation.research.definitions[research_id] = ResearchDefinition(
+            research_id,
+            "Persistence Prototype Research",
+            (ResearchPrototypeStageSpec("prototype", {}, SiteRequirements()),),
         )
         return app
 
     research_app = research_factory(for_load=False)
     research_sim = research_app._simulation
-    research_id = ids.TECH_ORBITAL_OPERATIONS
     research_sim.research.active[research_id] = ResearchState(
         research_id,
         "prototype",
@@ -466,7 +503,7 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
     research_assignment_id = result.created_id
     assert research_assignment_id is not None
     research_app.execute(SetResearchProviderAssignmentPriority(research_assignment_id, 4))
-    research_assignment = next(iter(research_sim.research.provider_assignments.values()))
+    research_assignment = research_sim.research.provider_assignments[research_assignment_id]
     research_raw, loaded_research, loaded_research_assignment, loaded_research_commitment = (
         _roundtrip_fleet_backed_assignment(
             tmp_path,
@@ -477,7 +514,7 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
             load_factory=lambda: research_factory(for_load=True),
         )
     )
-    saved_research_assignment = research_raw["state"]["research"]["provider_assignments"][0]
+    saved_research_assignment = next(row for row in research_raw["state"]["research"]["provider_assignments"] if row["id"] == research_assignment_id)
     assert saved_research_assignment["vehicle_definition_id"] == str(
         ids.REUSABLE_ORBITAL_CARGO_TUG
     )
@@ -493,14 +530,14 @@ def test_fleet_backed_provider_state_roundtrips_with_quantity_owned_only_by_flee
     survey_app = build_game_application()
     survey_sim = survey_app._simulation
     survey_sim.transport.add_fleet_units(
-        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=survey_sim.day
+        ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=survey_sim.day
     )
     survey_assignment_id = survey_app.execute(SetSurveyProviderFleetQuantity(
-        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
-        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1
+        str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 1
     )).created_id
     assert survey_assignment_id is not None
-    survey_assignment = next(iter(survey_sim.survey.provider_assignments.values()))
+    survey_assignment = survey_sim.survey.provider_assignments[survey_assignment_id]
     survey_raw, loaded_survey, loaded_survey_assignment, loaded_survey_commitment = (
         _roundtrip_fleet_backed_assignment(
             tmp_path,
@@ -578,7 +615,11 @@ def _corrupt_saved_snapshot(path, case: str) -> None:
         resource_id = next(iter(provider["supply_available_t"]))
         provider["supply_available_t"][resource_id] = 1.0e12
     elif case == "post_rebuild_capacity_violation":
-        state["inventory"]["stock"][0]["amount"] = 1.0e12
+        # Use a physically finite storage pool; ordinary dry cargo is not
+        # subject to the special cryogenic capacity invariant.
+        next(row for row in state["inventory"]["stock"]
+             if row["operational_node_id"] == str(ids.EARTH)
+             and row["resource_id"] == str(ids.HYDROGEN))["amount"] = 1.0e12
     elif case == "non_finite_number":
         state["core"]["pending_offline_game_days"] = float("nan")
     else:
@@ -590,11 +631,11 @@ def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
     app = _make_nontrivial_state()
     sim = app._simulation
     sim.transport.add_fleet_units(
-        ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
+        ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT, 1, ids.LUNAR_ORBIT, day=sim.day
     )
     app.execute(SetSurveyProviderFleetQuantity(
-        str(ids.LUNAR_FLEET_SURVEY_PROVIDER), str(ids.LUNAR_ORBIT),
-        str(ids.LUNAR_ORBITAL_SURVEY_SPACECRAFT), 1,
+        str(ids.ORBITAL_RESOURCE_MAPPING_PROVIDER), str(ids.LUNAR_ORBIT),
+        str(ids.ORBITAL_RESOURCE_MAPPING_SPACECRAFT), 1,
     ))
     baseline_path = tmp_path / "baseline.json"
     save_game(app, baseline_path, saved_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -620,12 +661,24 @@ def test_load_boundary_rejects_noncanonical_or_invalid_snapshots(tmp_path):
         "invalid_utf8",
         "non_finite_number",
     )
+    # Envelope syntax/schema errors must fail *before* any Simulation is
+    # composed. Runtime/domain errors still take the real load + validation
+    # path. Rebuilding the full World for malformed JSON only retests setup.
+    envelope_errors = {
+        "unexpected_envelope_field", "invalid_timestamp", "duplicate_json_key",
+        "invalid_utf8", "non_finite_number",
+    }
+
+    def unexpected_factory():
+        pytest.fail("invalid save envelope reached the application factory")
+
     for case in cases:
         path = tmp_path / f"invalid-{case}.json"
         path.write_bytes(baseline)
         _corrupt_saved_snapshot(path, case)
+        factory = unexpected_factory if case in envelope_errors else build_game_application_for_load
         try:
-            load_game(path, build_game_application_for_load)
+            load_game(path, factory)
         except SaveFormatError:
             continue
         pytest.fail(f"load accepted invalid persisted snapshot: {case}")

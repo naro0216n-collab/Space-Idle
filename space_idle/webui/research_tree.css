@@ -27,12 +27,24 @@
 .research-tree-link.is-complete {
   stroke: var(--ok);
 }
+.research-tree-link.is-prerequisite { stroke: #e0b55d; stroke-width: 3; stroke-dasharray: 6 3; }
+.research-tree-link.is-successor { stroke: #78b9e5; stroke-width: 3; }
+.research-node.is-prerequisite { outline: 2px dashed #e0b55d; outline-offset: 2px; }
+.research-node.is-successor { outline: 2px solid #78b9e5; outline-offset: 2px; }
+.research-search { display: grid; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+.research-search > label { font-size: 12px; color: var(--muted); }
+.research-search-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, .35fr); gap: 8px; }
+.research-search-results { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-height: 160px; overflow-y: auto; }
+.research-search-result { min-height: 44px; display: grid; gap: 3px; text-align: left; padding: 7px 10px; }
+.research-search-result strong { font-size: 11px; }
+.research-search-result small { color: var(--muted); font-size: 9px; }
+.research-search-result.is-selected { border-color: var(--accent); }
 .research-node {
   position: absolute;
   width: 232px;
-  min-height: 116px;
+  min-height: 136px;
   display: grid;
-  grid-template-rows: auto auto auto 7px;
+  grid-template-rows: auto auto auto auto 7px;
   gap: 6px;
   align-content: start;
   text-align: left;
@@ -57,6 +69,9 @@
   border-color: #343f49;
   background: #10161c;
 }
+.research-node.is-blocked:not(.status-complete) {
+  box-shadow: inset 3px 0 0 var(--warn), 0 5px 18px #0004;
+}
 .research-node.status-prototype,
 .research-node.status-demonstration,
 .research-node.status-theory {
@@ -76,11 +91,23 @@
   white-space: normal;
 }
 .research-node-meta,
+.research-node-blocker,
 .research-node-progress {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
   white-space: normal;
+}
+.research-node-blocker {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-node-blocker:not(.is-empty) {
+  color: var(--warn);
+}
+.research-node-blocker.is-empty {
+  visibility: hidden;
 }
 .research-node-progress {
   display: flex;

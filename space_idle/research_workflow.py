@@ -15,11 +15,13 @@ from .research_models import (
     ResearchExecutionSite,
     ResearchTheoryStageSpec,
     ResearchPrototypeStageSpec,
+    ResearchPrototypeSiteResource,
     ResearchDemonstrationStageSpec,
     ResearchOperationalExperienceStageSpec,
     ResearchStage,
     ResearchStageSpec,
     ResearchState,
+    site_stage_daily_progress_request_limit,
 )
 
 
@@ -163,6 +165,33 @@ class ResearchWorkflowMixin:
             self._prototype_reservation_owner_id(research_id, stage_id), location_id, resource_id
         )
 
+    def prototype_site_resources(
+        self, research_id: DefinitionId, site: ResearchExecutionSite
+    ) -> tuple[ResearchPrototypeSiteResource, ...]:
+        """Project current stock and owned reservations as if ``site`` were chosen.
+
+        Reassigning an execution context releases this project's reservations.
+        Other projects' reservations remain unavailable to this project.
+        """
+        spec = self.current_stage_spec(research_id)
+        if not isinstance(spec, ResearchPrototypeStageSpec):
+            raise ValueError("research is not in a prototype stage")
+        current_site = self.active[research_id].execution_context
+        same_site = current_site == site
+        rows = []
+        for resource_id, required in sorted(spec.resources.items(), key=lambda row: str(row[0])):
+            current_reserved = (
+                self.prototype_reserved_t(research_id, spec.stage_id, current_site.operational_node_id, resource_id)
+                if current_site is not None else 0.0
+            )
+            reserved = current_reserved if same_site else 0.0
+            available = self.inventory.available(site.operational_node_id, resource_id)
+            if current_site is not None and not same_site and current_site.operational_node_id == site.operational_node_id:
+                available += current_reserved  # Released on reassignment within this node.
+            shortfall = max(0.0, required - reserved - available)
+            rows.append(ResearchPrototypeSiteResource(resource_id, required, reserved, available, shortfall))
+        return tuple(rows)
+
     def _release_stage_reservations(self, research_id: DefinitionId, stage_id: str) -> None:
         self.inventory.release_reservation(self._prototype_reservation_owner_id(research_id, stage_id))
 
@@ -174,7 +203,11 @@ class ResearchWorkflowMixin:
         owner_id = self._prototype_reservation_owner_id(research_id, stage_id)
         for resource_id, required in spec.resources.items():
             if required > 1e-12:
-                self.inventory.consume_reserved(owner_id, site.operational_node_id, resource_id, required)
+                self.inventory.consume_reserved(
+                    owner_id, site.operational_node_id, resource_id, required,
+                    destination_owner=f"research:{research_id}",
+                    activity_id=f"research_prototype:{research_id}:{stage_id}",
+                )
 
     def prototype_failures(self, research_id: DefinitionId, location_id: SpatialNodeId, day: int = 0, power: PowerSnapshot | None = None, surface_cell_id: SurfaceCellId | None = None) -> tuple[SiteRequirementFailure, ...]:
         spec = self.current_stage_spec(research_id)
@@ -191,6 +224,20 @@ class ResearchWorkflowMixin:
     @classmethod
     def _structural_site_blockers(cls, blockers: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
         return tuple(blocker for blocker in blockers if blocker[0] not in cls._TRANSIENT_SITE_BLOCKERS)
+
+    def _selection_site_blockers(self, research_id: DefinitionId, blockers: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        """Selection is intent; actual environment suitability gates execution.
+
+        Physical environment tests are still evaluated by the owning Site
+        service every day. Treating them as a *selection* prohibition leaks an
+        unobserved Cell's truth through can_select and prevents direct trials.
+        """
+        requirements = self.current_stage_spec(research_id).site_requirements
+        environmental_codes = {condition.code for condition in requirements.environment}
+        return tuple(
+            row for row in self._structural_site_blockers(blockers)
+            if row[0] not in environmental_codes
+        )
 
     def _site_blockers(self, research_id: DefinitionId, expected_type: type, location_id: SpatialNodeId, day: int, power, surface_cell_id) -> tuple[tuple[str, str], ...]:
         state = self.active.get(research_id)
@@ -214,10 +261,10 @@ class ResearchWorkflowMixin:
         return self._site_blockers(research_id, ResearchDemonstrationStageSpec, location_id, day, power, surface_cell_id)
 
     def can_select_prototype_site(self, research_id, location_id, day=0, surface_cell_id=None) -> bool:
-        return not self._structural_site_blockers(self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+        return not self._selection_site_blockers(research_id, self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
 
     def can_select_demonstration_site(self, research_id, location_id, day=0, surface_cell_id=None) -> bool:
-        return not self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+        return not self._selection_site_blockers(research_id, self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
 
     def set_prototype_site(self, research_id: DefinitionId, stage_id: str, location_id: SpatialNodeId, day: int = 0, surface_cell_id: SurfaceCellId | None = None) -> None:
         state = self.active.get(research_id)
@@ -226,7 +273,7 @@ class ResearchWorkflowMixin:
         spec = self.current_stage_spec(research_id)
         if not isinstance(spec, ResearchPrototypeStageSpec):
             raise ValueError("研究は試作段階ではありません")
-        structural = self._structural_site_blockers(self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+        structural = self._selection_site_blockers(research_id, self.prototype_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
         if structural:
             raise ValueError("prototype site requirements not met: " + "; ".join(detail for _code, detail in structural))
         site = ResearchExecutionSite(location_id, surface_cell_id)
@@ -241,7 +288,7 @@ class ResearchWorkflowMixin:
         spec = self.current_stage_spec(research_id)
         if not isinstance(spec, ResearchDemonstrationStageSpec):
             raise ValueError("研究は実証段階ではありません")
-        structural = self._structural_site_blockers(self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
+        structural = self._selection_site_blockers(research_id, self.demonstration_site_blockers(research_id, location_id, day, surface_cell_id=surface_cell_id))
         if structural:
             raise ValueError("demonstration site requirements not met: " + "; ".join(detail for _code, detail in structural))
         state.execution_context = ResearchExecutionSite(location_id, surface_cell_id)
@@ -342,7 +389,9 @@ class ResearchWorkflowMixin:
             remaining = max(0.0, required_work - (state.stage_progress or 0.0))
             if remaining <= 1e-12:
                 continue
-            request = min(1.0, remaining)
+            request_limit = site_stage_daily_progress_request_limit(spec)
+            assert request_limit is not None
+            request = min(request_limit, remaining)
             rows.append(ExecutionRequirementBundle(
                 self._stage_bundle_id(research_id, spec.stage_id, spec.stage_type, site),
                 "research_project", self._project_owner_id(research_id), spec.stage_id,

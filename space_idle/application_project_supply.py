@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .priority import ActivityPriority
 from .application_constraints import constraints_from_codes
-from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockPresetRow, TargetStockOptionsView
+from .application_views import SupplyRequirementRow, SupplyRoutingConstraintRow, TargetStockRow, TargetStockContextView
 
 
 class SupplyPlanningProjectorMixin:
@@ -62,21 +62,17 @@ class SupplyPlanningProjectorMixin:
             runway = None if rate is None else runway_by_key.get(
                 (requirement.destination_id, requirement.resource_id), 0.0
             )
-            earliest = options.earliest_confirmed_arrival_day
+            earliest = options.earliest_in_transit_arrival_day
             gap = None
             if runway is not None and earliest is not None:
                 gap = max(0.0, float(earliest - sim.day) - runway)
 
-            if gap is not None and gap > 1e-9:
-                supply_state = "coverage_gap"
-            elif remaining_t > 1e-9 and not options.candidate_source_ids:
+            if remaining_t > 1e-9 and not options.candidate_source_ids:
                 supply_state = "no_source"
             elif remaining_t > 1e-9 and not options.operational_source_ids:
                 supply_state = "transport_blocked"
             elif remaining_t > 1e-9 and not options.stocked_source_ids:
                 supply_state = "source_shortage"
-            elif remaining_t > 1e-9 and runway is not None and runway <= 1.0 + 1e-9:
-                supply_state = "low_runway"
             elif remaining_t > 1e-9:
                 supply_state = "uncovered"
             elif pipeline_t > 1e-9:
@@ -160,7 +156,8 @@ class SupplyPlanningProjectorMixin:
                     forecast_requirement_day=requirement.forecast_requirement_day,
                     recurring_rate_t_per_day=rate,
                     local_runway_days=runway,
-                    earliest_confirmed_arrival_day=earliest,
+                    earliest_in_transit_arrival_day=earliest,
+                    latest_in_transit_arrival_day=options.latest_in_transit_arrival_day,
                     projected_gap_days=gap,
                     candidate_source_count=len(options.candidate_source_ids),
                     operational_source_count=len(options.operational_source_ids),
@@ -180,7 +177,7 @@ class SupplyPlanningProjectorMixin:
         return result
 
 
-    def _target_stock_options_view(self, destination_id, resource_id) -> TargetStockOptionsView:
+    def _target_stock_context_view(self, destination_id, resource_id) -> TargetStockContextView:
         sim = self._simulation
         decision = self._tick_decision_projection()
         normal_demand = 0.0
@@ -212,24 +209,8 @@ class SupplyPlanningProjectorMixin:
         )
         current_target = 0.0 if current is None else current.target_quantity_t
         priority = ActivityPriority(3) if current is None else current.priority
-        presets = tuple(
-            TargetStockPresetRow(
-                key=f"days_{days}",
-                display_name=f"{days}日分",
-                target_quantity_t=normal_demand * days,
-                days_of_supply=float(days),
-            )
-            for days in (1, 3, 7)
-            if normal_demand > 1e-12
-        )
         current_stock = sim.inventory.amount(destination_id, resource_id)
-        suggested_max = max(
-            1.0,
-            current_stock + inbound,
-            current_target * 1.5,
-            normal_demand * 7.0,
-        )
-        return TargetStockOptionsView(
+        return TargetStockContextView(
             destination_id=str(destination_id),
             resource_id=str(resource_id),
             current_stock_t=current_stock,
@@ -237,8 +218,6 @@ class SupplyPlanningProjectorMixin:
             normal_demand_t_per_day=normal_demand,
             current_target_quantity_t=current_target,
             priority=priority,
-            suggested_max_t=suggested_max,
-            presets=presets,
         )
 
     def _routing_constraint_rows(self) -> tuple[SupplyRoutingConstraintRow, ...]:

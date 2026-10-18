@@ -58,3 +58,59 @@ def run_script(
             stderr=completed.stderr,
         )
     return completed
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
+
+
+def commit_all(repo: Path, message: str) -> None:
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", message)
+
+
+def write_source_snapshot(
+    repo: Path, directory: Path, *, publish_commit: str | None = None,
+) -> Path:
+    """Construct the actual publish-base metadata and bundle for a test repository."""
+    directory.mkdir()
+    develop = git(repo, "rev-parse", "refs/heads/develop")
+    develop_tree = git(repo, "rev-parse", f"{develop}^{{tree}}")
+    publish = publish_commit or develop
+    publish_tree = git(repo, "rev-parse", f"{publish}^{{tree}}")
+    git(repo, "update-ref", "refs/space-idle/publish-base", publish)
+    for name, value in (
+        (".source-commit", develop),
+        (".source-tree", develop_tree),
+        (".source-branch", "develop"),
+        (".source-publish-commit", publish),
+        (".source-publish-tree", publish_tree),
+    ):
+        (directory / name).write_text(value + "\n", encoding="utf-8")
+    git(
+        repo, "bundle", "create", str(directory / "repository.bundle"),
+        "refs/heads/develop", "refs/space-idle/publish-base",
+    )
+    return directory
+
+
+def read_content_tree_plan(packet_paths, base_tree: str) -> tuple[str, list[dict]]:
+    """Verify the shared ordered GitHub tree protocol once for every publish path.
+
+    Each maintenance/transport test then checks only its own packet payload and
+    branch-specific semantics rather than reproducing the protocol assertions.
+    """
+    import json
+
+    previous_tree = base_tree
+    packets = []
+    for path in packet_paths:
+        packet = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert packet["action"] == "GitHub.create_tree"
+        assert packet["action_args"]["base_tree_sha"] == previous_tree
+        packets.append(packet)
+        previous_tree = packet["expected_tree"]
+    return previous_tree, packets

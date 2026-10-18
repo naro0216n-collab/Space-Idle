@@ -5,10 +5,10 @@ from ..service_capacity import ServiceCapacityScope
 from ..projects import BuildResourceRequirement, ConstructionRecipe
 from ..shared import DefinitionId
 from ..site import (
-    CapabilityRequirement, CapabilityRequirementState, FacetValueRange, SiteRequirements,
+    AtmosphericPartialPressureRange, CapabilityRequirement, CapabilityRequirementState, FacetValueRange, RequiresFacet, SiteRequirements,
     SpatialClassification, SpatialClassificationRequirement,
 )
-from ..spatial import AtmosphereField, ThermalField
+from ..spatial import AtmosphereField, RadiationField, ThermalField, ExternalGridConnectionField
 from .base_ids import STRUCTURAL_COMPONENTS, MACHINERY, PRECISION_ELECTRONICS, BULK_STRUCTURE, FABRICATED_STRUCTURE, BASIC_MACHINE_PARTS
 
 SURFACE_CLASSIFICATION = (
@@ -26,13 +26,29 @@ VACUUM_ENV = (
         AtmosphereField, "pressure_pa", "environment:low_pressure", "低圧環境が必要", maximum=1000.0
     ),
 )
-COLD_VOLATILE_ENV = VACUUM_ENV + (
+COLD_VOLATILE_ENV = (
     FacetValueRange(
         ThermalField, "nominal_temperature_k", "environment:cold", "低温環境が必要", maximum=180.0
     ),
 )
+# Radiation sensitivity is equipment-specific. This is an Eligibility check,
+# not an independent dose penalty; protective capacity is separately supplied.
+LOW_RADIATION_ENV = (
+    FacetValueRange(
+        RadiationField, "dose_equivalent_msv_per_day",
+        "environment:radiation_tolerance", "設備の耐放射線上限を超過", maximum=5.0,
+    ),
+)
 SURFACE_SITE = SiteRequirements(spatial_classification_requirements=SURFACE_CLASSIFICATION)
 ORBIT_SITE = SiteRequirements(spatial_classification_requirements=ORBIT_CLASSIFICATION)
+EXTERNAL_GRID_SITE = SiteRequirements(
+    environment=(RequiresFacet(
+        ExternalGridConnectionField, "world:external_grid_connection",
+        "外部電力網との実在接続が必要",
+    ),),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+
 ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
     environment=(
         FacetValueRange(
@@ -45,12 +61,32 @@ ATMOSPHERIC_SURFACE_SITE = SiteRequirements(
     ),
     spatial_classification_requirements=SURFACE_CLASSIFICATION,
 )
+BREATHABLE_SURFACE_SITE = SiteRequirements(
+    environment=(
+        AtmosphericPartialPressureRange(
+            DefinitionId('base.species.o2'),
+            'environment:breathable_oxygen', '呼吸可能な酸素分圧が必要',
+            minimum_pa=16000.0,
+        ),
+    ),
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
 VACUUM_SURFACE_SITE = SiteRequirements(
     environment=VACUUM_ENV,
     spatial_classification_requirements=SURFACE_CLASSIFICATION,
 )
 COLD_VOLATILE_SURFACE_SITE = SiteRequirements(
     environment=COLD_VOLATILE_ENV,
+    spatial_classification_requirements=SURFACE_CLASSIFICATION,
+)
+# Deployed off-the-shelf robotic outpost hardware has a finite thermal envelope;
+# a solid surface is not sufficient to survive a hot planetary environment.
+# The envelope is an equipment property, never a planet-name allowlist.
+ROBOTIC_OUTPOST_SURFACE_SITE = SiteRequirements(
+    environment=(FacetValueRange(
+        ThermalField, "nominal_temperature_k", "environment:robotic_thermal_limit",
+        "初期ロボット拠点設備の熱環境上限を超過", maximum=400.0,
+    ),),
     spatial_classification_requirements=SURFACE_CLASSIFICATION,
 )
 

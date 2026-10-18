@@ -4,16 +4,19 @@ from datetime import datetime, timezone
 
 import pytest
 
+from space_idle.analysis_execution import observe_canonical_day
 from space_idle import (
     CreateTradeOrder,
     GetMarket,
     build_game_application,
 )
+from space_idle.app_contracts.common import ApplicationError
 from space_idle.bootstrap import build_game_application_for_load
 from space_idle.content import base_ids as ids
 from space_idle.content.base_market import EARTH_MARKET_INTERFACE
 from space_idle.execution_requirements import allocate_execution_requirements
 from space_idle.inventory import InventoryBook
+from space_idle.catalog import ResourceDef
 from space_idle.market import (
     FundsState,
     MarketAvailabilityDef,
@@ -131,8 +134,8 @@ def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for
     commitment = next(iter(market.buy_commitments.values()))
     market.update_order(order_id, priority=5)
 
-    inventory = InventoryBook()
-    inventory.set_capacity_snapshot({(node_id, "default"): 1.0}, {(node_id, "default"): 1.0})
+    inventory = InventoryBook({resource: ResourceDef(resource, "Special purchase", storage_pool_key="cryogenic")})
+    inventory.set_capacity_snapshot({(node_id, "cryogenic"): 1.0}, {(node_id, "cryogenic"): 1.0})
     bundles = market.buy_boundary_bundles(1, inventory)
     bundle = next(row for row in bundles if row.owner_id == commitment.id)
     assert int(bundle.priority) == 5
@@ -169,6 +172,7 @@ def test_matured_buy_settles_funds_supply_and_inventory_atomically_and_waits_for
     assert commitment.remaining_quantity_t == pytest.approx(1.0)
 
 
+
 def test_sell_funds_cannot_finance_same_tick_buy():
     app = build_game_application()
     sim = app._simulation
@@ -193,12 +197,83 @@ def test_sell_funds_cannot_finance_same_tick_buy():
     )).created_id
     assert sell_id and buy_id
 
-    sim.advance_days(1)
+    with observe_canonical_day(sim) as trace:
+        sim.advance_days(1)
+    assert any(row.activity_id.startswith('market_sell:')
+               and row.destination_owner.startswith('market_provider:')
+               and row.source_owner.startswith('inventory:')
+               for row in trace.activity_flows())
     assert sim.market.funds.balance > 0.0
     assert not [row for row in sim.market.buy_commitments.values() if str(row.order_id) == buy_id]
 
     sim.advance_days(1)
     assert [row for row in sim.market.buy_commitments.values() if str(row.order_id) == buy_id]
+
+
+
+def test_market_offer_eligibility_is_shared_by_candidates_and_order_commands():
+    app = build_game_application()
+    sim = app._simulation
+    candidates = app.query(GetMarket()).order_candidates
+    assert candidates
+    assert len(candidates) == len({(row.market_interface_id, row.direction, row.resource_id)
+                                    for row in candidates})
+    for row in candidates:
+        blockers = sim.market.order_offer_blockers(
+            direction=TradeDirection(row.direction),
+            resource_id=DefinitionId(row.resource_id),
+            market_interface_id=EntityId(row.market_interface_id),
+        )
+        assert row.can_create == (not blockers)
+        assert tuple(reason.code for reason in row.blockers) == blockers
+        command = CreateTradeOrder(
+            direction=row.direction, resource_id=row.resource_id,
+            market_interface_id=row.market_interface_id, priority=3,
+            control_mode="quantity", quantity_target_t=1.0,
+        )
+        if blockers:
+            with pytest.raises(ApplicationError):
+                app.execute(command)
+        else:
+            result = app.execute(command)
+            assert result.created_id in {str(order_id) for order_id in sim.market.orders}
+            sim.market.cancel_order(EntityId(result.created_id))
+
+    interface = sim.market.interfaces[EntityId(candidates[0].market_interface_id)]
+    interface.enabled = False
+    disabled = app.query(GetMarket()).order_candidates
+    assert all(not row.can_create and "market_interface_disabled" in
+               {blocker.code for blocker in row.blockers}
+               for row in disabled if row.market_interface_id == str(interface.id))
+    with pytest.raises(ApplicationError, match="interface"):
+        app.execute(CreateTradeOrder(
+            direction=candidates[0].direction, resource_id=candidates[0].resource_id,
+            market_interface_id=str(interface.id), priority=3,
+            control_mode="quantity", quantity_target_t=1.0,
+        ))
+
+    # Rejected target parameters must not create a Market order.
+    market, _provider, interface_id, _node, resource_id = _market()
+    with pytest.raises(ValueError, match="QUANTITY order"):
+        market.create_order(
+            direction="buy", resource_id=resource_id,
+            market_interface_id=interface_id,
+            control_mode="quantity", quantity_target_t=None,
+        )
+    assert not market.orders
+    first_valid_id = market.create_order(
+        direction="buy", resource_id=resource_id,
+        market_interface_id=interface_id,
+        control_mode="quantity", quantity_target_t=1.0,
+    )
+    market.cancel_order(first_valid_id)
+    assert market.order_offer_blockers(
+        direction="buy", resource_id=DefinitionId("test.resource.unlisted"),
+        market_interface_id=interface_id,
+    ) == ("offer_unavailable",)
+    assert market.order_offer_blockers(
+        direction="buy", resource_id=resource_id, market_interface_id=interface_id,
+    ) == ()
 
 
 def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
@@ -220,7 +295,63 @@ def test_market_state_roundtrips_and_replenishes_deterministically(tmp_path):
     loaded, _ = load_game(path, build_game_application_for_load)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
 
-    sim.advance_days(3)
+    traces = []
+    for _ in range(3):
+        with observe_canonical_day(sim) as trace:
+            sim.advance_days(1)
+        traces.append(trace)
+    assert any(row.activity_id.startswith('market_buy:')
+               and row.source_owner.startswith('market_provider:')
+               and row.destination_owner.startswith('inventory:')
+               for trace in traces for row in trace.activity_flows())
     loaded._simulation.advance_days(3)
     assert capture_state(loaded._simulation)["market"] == capture_state(sim)["market"]
     assert loaded.query(GetMarket()) == app.query(GetMarket())
+
+
+def test_physical_cold_stock_and_matured_market_receipt_share_actual_powered_admission(tmp_path):
+    """Cold stocks survive outage; new purchases settle only when power returns."""
+    from space_idle import AdvanceTime, PauseFacility, ResumeFacility, GetOperationalNode
+
+    app = build_game_application()
+    sim = app._simulation
+    node = ids.EARTH
+    cold = "cryogenic"
+    stock_before = sim.inventory.amount(node, ids.PROPELLANT)
+    funds_before = sim.market.funds.balance
+    physical = sim.inventory.physical_storage_capacity_t[(node, cold)]
+    assert physical > sim.inventory.stored_in_pool(node, cold)
+    assert not sim.storage.infrastructure_capacity_t
+    assert any(f.definition_id == ids.CRYOGENIC_STORAGE for f in sim.facilities.all_at(node))
+
+    grid = next(f for f in sim.facilities.all_at(node) if f.definition_id == ids.GRID_POWER_SUPPLY)
+    app.execute(PauseFacility(str(grid.id)))
+    assert sim.inventory.usable_storage_capacity_t[(node, cold)] == pytest.approx(0.0)
+    assert sim.inventory.stored_in_pool(node, cold) > 0
+
+    app.execute(CreateTradeOrder(
+        direction="buy", resource_id=str(ids.PROPELLANT),
+        market_interface_id=str(EARTH_MARKET_INTERFACE), priority=5,
+        control_mode="quantity", quantity_target_t=2.0,
+    ))
+    for _ in range(4):
+        app.execute(AdvanceTime(1))
+    assert sim.inventory.amount(node, ids.PROPELLANT) == pytest.approx(stock_before)
+    assert sim.market.funds.balance == pytest.approx(funds_before)
+    assert sim.market.reserved_funds_musd > 0
+    row = next(r for r in app.query(GetOperationalNode(str(node))).storage if r.storage_pool_key == cold)
+    assert row.unusable_occupied_t > 0
+
+    fixed = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    path = tmp_path / "powered_cold_stock.json"
+    save_game(app, path, saved_at=fixed)
+    restored, _ = load_game(path, build_game_application_for_load, now=fixed)
+    assert capture_state(restored._simulation) == capture_state(sim)
+
+    for game in (app, restored):
+        game.execute(ResumeFacility(str(grid.id)))
+        game.execute(AdvanceTime(3))
+    assert capture_state(restored._simulation) == capture_state(sim)
+    assert sim.inventory.amount(node, ids.PROPELLANT) == pytest.approx(stock_before + 2.0)
+    assert sim.market.funds.balance < funds_before
+    assert sim.market.reserved_funds_musd == pytest.approx(0.0)

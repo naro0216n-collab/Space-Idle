@@ -10,7 +10,7 @@ from ..power import PowerSnapshot
 from ..shared import EntityId, SpatialNodeId
 from .models import (
     CONSTRUCTION_SERVICE_TYPE, ConstructionProject, FacilityDecommissionTarget, FacilityUpgradeTarget, NewFacilityTarget,
-    ProjectStatus, SurfaceCellDevelopmentTarget,
+    ProjectStatus, SurfaceCellDevelopmentTarget, SurfaceCellEngineeringTarget,
 )
 
 
@@ -60,6 +60,8 @@ class ConstructionExecutionMixin:
                 facility.operational_node_id,
                 recovery_potential,
                 decommission_recoverable_fraction,
+                source_owner=f"decommissioned_facility:{target.facility_id}",
+                activity_id=f"facility_decommission:{project.id}",
             )
             project.salvage_recovered_fraction = min(
                 1.0, max(0.0, float(decommission_recoverable_fraction))
@@ -67,11 +69,19 @@ class ConstructionExecutionMixin:
             project.salvage_recovered = dict(recovered)
             self.facility_lifecycle_registry.release_references(target.facility_id)
             self.facilities.finalize_decommission(target.facility_id)
+        elif isinstance(target, SurfaceCellEngineeringTarget):
+            profile_id = self.spatial_recipes[target.recipe_id].target_terrain_profile_id
+            self.facilities.environment.graph.engineer_surface_cell(
+                project.operational_node_id, target.cell_id, profile_id
+            )
+            self.engineered_results.append(target.cell_id)
         else:
             self.facilities.environment.graph.develop_surface_cell(
                 project.operational_node_id, target.cell_id
             )
         project.status = ProjectStatus.COMPLETE
+        if isinstance(target, FacilityDecommissionTarget):
+            self.__dict__.pop("_retired_facility_definitions", None)
 
     def _target_ready_for_execution(self, project: ConstructionProject) -> bool:
         target = project.target
@@ -81,6 +91,11 @@ class ConstructionExecutionMixin:
                 facility is not None
                 and facility.operational_node_id == project.operational_node_id
                 and facility.level == target.target_level - 1
+            )
+        if isinstance(target, SurfaceCellEngineeringTarget):
+            return not self.facilities.environment.graph.terrain_engineering_failures(
+                project.operational_node_id, target.cell_id,
+                self.spatial_recipes[target.recipe_id].target_terrain_profile_id
             )
         if isinstance(target, SurfaceCellDevelopmentTarget):
             return not self.facilities.environment.graph.surface_cell_development_failures(
@@ -102,11 +117,15 @@ class ConstructionExecutionMixin:
         location = service.graph.locations[project.operational_node_id]
         cells = set(location.developed_cell_ids)
         cells.add(project.target.cell_id)
-        prospective = sum(
-            row.demand
-            for row in service.load_sources_for_cells(project.operational_node_id, cells)
-        )
-        return max(0.0, prospective - service.demand(project.operational_node_id))
+        prospective = sum(row.demand for row in service.load_sources_for_cells(
+            project.operational_node_id, cells,
+        ))
+        current = sum(row.demand for row in service.load_sources_for_cells(
+            project.operational_node_id, location.developed_cell_ids,
+        ))
+        # This is the additional *construction Activity* required to reach a
+        # new geographic footprint, not an increment of operating demand.
+        return max(0.0, prospective - current)
 
     def project_service_requirement_forecast(
         self, project: ConstructionProject

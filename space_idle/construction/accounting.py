@@ -84,6 +84,8 @@ class ConstructionAccountingMixin:
                     project.operational_node_id,
                     requirement.resource_id,
                     requirement.amount_t,
+                    destination_owner=f"construction_project:{project.id}",
+                    activity_id=f"construction_commit:{project.id}",
                 )
             state.committed_t = requirement.amount_t
         project.materials_committed = True
