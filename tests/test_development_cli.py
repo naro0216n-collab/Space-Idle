@@ -90,7 +90,7 @@ def test_capital_and_continuous_operations_share_resource_and_time_with_plan_pro
     assert tx(rows, period="one", basis="planned_continuous_input")
     assert tx(rows, period="two", basis="planned_continuous_input")
     assert all(row["period"] in {"one", "two"} for row in rows)
-    connections = result["decision"]["cross_period_and_cross_objective_relations"]
+    connections = result["technical_evidence"]["shared_constraints"]
     assert any(set(c["periods"]) == {"one", "two"} for c in connections)
     assert not any(d.get("relation") == "planned_target" and d["status"] == "actual_at_start" and
                    d["activity"] == "new" for d in result["technical_evidence"]["dependencies"])
@@ -135,7 +135,7 @@ def test_transport_outbound_competes_with_industry_and_inbound_is_not_delivered(
     rows = result["technical_evidence"]["transactions"]
     assert tx(rows, source=f"resource:{node}:{resource}", quantity=3)
     assert tx(rows, sink=f"resource:{destination}:{resource}", basis="conditional_arrival_not_delivered")
-    assert any(c["code"] == "transport_vehicle_unselected" for c in result["decision"]["unresolved_conditions"])
+    assert any(c["code"] == "transport_vehicle_unselected" for c in result["technical_evidence"]["conditions"])
 
 
 def test_all_content_research_display_stages_are_not_gates(source):
@@ -161,8 +161,8 @@ def test_population_life_support_is_not_magic_supply_or_mandated_growth(source):
                                                people=100, life_support_facility=life)])])
     report = evaluate(defs, setup)
     assert tx(report["technical_evidence"]["transactions"], activity="people", basis="planned_continuous_input")
-    assert any(c["code"] == "housing_method_unselected" for c in report["decision"]["unresolved_conditions"])
-    assert any(c["code"] == "population_transition_unverified" for c in report["decision"]["unresolved_conditions"])
+    assert any(c["code"] == "housing_method_unselected" for c in report["technical_evidence"]["conditions"])
+    assert any(c["code"] == "population_transition_unverified" for c in report["technical_evidence"]["conditions"])
 
 
 def test_single_cli_workflow_uses_real_application_and_preserves_save(tmp_path, source):
@@ -199,8 +199,8 @@ def test_common_fleet_and_shared_process_capacity_cannot_be_credited_twice(sourc
                  resource=resource, vehicle=vehicle, rate_per_day=1),
     ])])
     report = evaluate(defs, plan, transport_preview=lambda *args: {"required_units": 2, "blockers": []})
-    assert any(c["code"] == "process_capacity_unproven" for c in report["decision"]["unresolved_conditions"])
-    assert any(c["code"] == "transport_shared_fleet_insufficient" for c in report["decision"]["unresolved_conditions"])
+    assert any(c["code"] == "process_capacity_unproven" for c in report["technical_evidence"]["conditions"])
+    assert any(c["code"] == "transport_shared_fleet_insufficient" for c in report["technical_evidence"]["conditions"])
     required = [d["quantity"]["nominal_required_units"] for d in report["technical_evidence"]["dependencies"]
                 if d["relation"] == "concurrent_transport_commitment"]
     assert required == [4]
@@ -236,3 +236,107 @@ def test_unchosen_supply_and_start_stock_do_not_certify_end_state(source):
     assert balances
     assert all(d["status"] == "supply_method_unselected" for d in balances)
     assert all(d["quantity"]["starting_real_stock_t_only"] is not None for d in balances)
+
+
+def test_conditional_delivery_is_not_equated_to_missing_supply_or_received_inventory(source):
+    _, defs = source
+    origin, destination = (r["id"] for r in defs["world"]["nodes"][:2])
+    facility = next(fid for fid, f in defs["facilities"].items()
+                    if "base.resource.structural_components" in (f["construction_resources_t"] or {}))
+    plan = design([period("one", 4, [
+        activity("shipment", "industry", "transport", source=origin, destination=destination,
+                 resource="base.resource.structural_components", rate_per_day=0.25,
+                 vehicle="base.vehicle.reusable_launch_vehicle"),
+        activity("capital", "research", "facility", node=destination, definition=facility, target_count=1),
+    ])])
+    result = evaluate(defs, plan, transport_preview=lambda *args: {
+        "required_units": 1, "blockers": [{"code": "fleet", "severity": "blocking"}],
+        "selected_forward_path": [], "forward_latency_days": 2})
+    refs = [d for d in result["technical_evidence"]["dependencies"]
+            if d["relation"] == "shared_resource_balance" and
+            d["condition"] == f"resource:{destination}:base.resource.structural_components"]
+    assert len(refs) == 1
+    assert refs[0]["status"] == "conditional_transport_arrival"
+    assert refs[0]["quantity"]["conditional_inbound_t_per_day"] == 0.25
+    assert refs[0]["quantity"]["capital_t"] > 0
+    codes = [i["code"] for i in result["technical_evidence"]["conditions"]]
+    assert "conditional_transport_supply" in codes
+    assert "transport_preview_blocked" in codes
+    assert "transport_forward_path_unverified" in codes
+    assert not any(i["code"] == "supply_method_unselected" and
+                   i["condition"] == f"{destination}:base.resource.structural_components"
+                   for i in result["technical_evidence"]["conditions"])
+
+
+def test_nominal_supply_relation_and_unselected_unlock_trace_to_whole_horizon(source):
+    _, defs = source
+    node = defs["world"]["nodes"][0]["id"]
+    pid = "base.process.standard_structural_components"
+    provider = defs["processes"][pid]["provider_facilities"][0]
+    f = next(fid for fid, row in defs["facilities"].items()
+             if row["prerequisites"] and row["construction_resources_t"])
+    plan = design([period("one", 4, [
+        activity("manufacture", "industry", "process", node=node, definition=pid,
+                 facility=provider, rate_per_day=0.05),
+        activity("capital", "research", "facility", node=node, definition=f, target_count=10),
+    ]), period("two", 12)])
+    result = evaluate(defs, plan)
+    material = [r for r in result["technical_evidence"]["dependencies"]
+                if r["relation"] == "shared_resource_balance" and
+                r["condition"] == f"resource:{node}:base.resource.structural_components"]
+    assert len(material) == 2
+    assert material[0]["quantity"]["conditional_supply_t_per_day"] == 0.05 * (
+        defs["processes"][pid]["outputs_per_unit_t"]["base.resource.structural_components"])
+    assert material[0]["quantity"]["nominal_use_including_capital_t_per_day"] > 0
+    assert all(r["id"].startswith("d") for r in material)
+    issues = result["technical_evidence"]["conditions"]
+    assert any(i["code"] == "selected_supply_relation_incomplete" for i in issues)
+    assert any(i["code"] == "requirement_method_unselected" for i in issues)
+    assert result["decision"]["scope"] == "entire_horizon"
+    assert any(any(ref.startswith("d") for ref in c["evidence_ids"])
+               for c in result["technical_evidence"]["shared_constraints"])
+
+
+def test_decision_is_a_whole_horizon_view_over_same_evidence_not_a_local_issue_list(source):
+    _, defs = source
+    node = defs["world"]["nodes"][0]["id"]
+    plan = design([period("one", 4, [
+        activity("first", "industry", "research", definition="AR-AUTONOMY-ROBOTICS-01"),
+        activity("mining", "industry", "extraction", definition="base.extraction.crust_ore",
+                 node=node, facility="base.facility.metal_ore_mine", rate_per_day=1.2),
+    ]), period("two", 12, [
+        activity("second", "research", "research", definition="AR-AUTONOMY-ROBOTICS-02"),
+    ])])
+    report = evaluate(defs, plan)
+    evidence = report["technical_evidence"]
+    all_conditions = {i["id"] for i in evidence["conditions"]}
+    groups = report["decision"]["unresolved_conditions"]
+    assert groups
+    assert all("code" not in g and "relation_family" in g for g in groups)
+    assert all_conditions == {ref for g in groups for ref in g["condition_evidence_ids"]}
+    assert all(g["periods"] and g["meaning"] for g in groups)
+    for c in report["decision"]["cross_period_and_cross_objective_relations"]:
+        matching = next(e for e in evidence["shared_constraints"] if e["id"] == c["shared_evidence_id"])
+        assert set(c["objectives"]) <= set(matching["objectives"])
+        assert len(c["objectives"]) > 1
+    assert report["decision"]["scope"] == "entire_horizon"
+
+
+def test_multiple_freight_methods_can_share_a_route_without_silent_override(source):
+    _, defs = source
+    origin, destination = (r["id"] for r in defs["world"]["nodes"][:2])
+    resource = "base.resource.structural_components"
+    plan = design([period("one", 4, [
+        activity("a", "industry", "transport", source=origin, destination=destination,
+                 resource=resource, rate_per_day=0.2, vehicle="base.vehicle.reusable_launch_vehicle"),
+        activity("b", "research", "transport", source=origin, destination=destination,
+                 resource=resource, rate_per_day=0.3, vehicle="base.vehicle.deep_space_freighter"),
+    ])])
+    report = evaluate(defs, plan)
+    outbound = [q for q in report["technical_evidence"]["transactions"]
+                if q["source"] == f"resource:{origin}:{resource}" and
+                q["activity"] in {"a", "b"} and
+                q["basis"] == "planned_continuous_input"]
+    assert {(q["activity"], q["quantity"]) for q in outbound} == {("a", 0.2), ("b", 0.3)}
+    assert any(set(r["objectives"]) == {"industry", "research"}
+               for r in report["decision"]["cross_period_and_cross_objective_relations"])

@@ -141,12 +141,17 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
                              "quantity": amount, "basis": basis, "definition": definition})
 
     def dependency(period, activity, key, relation, status, *, quantity=None):
-        dependencies.append({"period": period, "activity": activity, "condition": key,
+        dependencies.append({"id": f"d{len(dependencies)}", "period": period,
+                             "activity": activity, "condition": key,
                              "relation": relation, "status": status, "quantity": quantity})
+        if status == "unselected":
+            issue(period, activity, "requirement_method_unselected", key,
+                  "Unselected unlock or operating condition affects capital, operations and later periods")
 
     def issue(period, activity, code, condition, meaning):
-        issues.append({"period": period, "activity": activity, "code": code,
-                       "condition": condition, "whole_horizon_implication": meaning})
+        issues.append({"id": f"i{len(issues)}", "period": period, "activity": activity,
+                       "code": code, "condition": condition,
+                       "whole_horizon_implication": meaning})
 
     def facility_requirements(period, activity, node, fid, added):
         spec = defs["facilities"][fid]
@@ -176,6 +181,7 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
             raise ValueError("cumulative_hours must increase")
         duration = (hours - previous_hours) * 3600
         previous_hours = hours
+        period_tx_start = len(transactions)
         if not isinstance(entry["activities"], list):
             raise ValueError("activities must be a list")
         objective_counts = defaultdict(int)
@@ -272,7 +278,7 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
                     raise ValueError("invalid transport pair")
                 _lookup(defs["resources"], resource, "resource")
                 rate = _num(activity.get("rate_per_day"), "rate_per_day")
-                active_operations[(kind, source, destination, resource)] = (aid, activity)
+                active_operations[(kind, source, destination, resource, activity.get("vehicle"))] = (aid, activity)
                 if activity.get("vehicle") is not None:
                     _lookup(defs["vehicles"], activity["vehicle"], "vehicle")
             elif kind == "population":
@@ -281,7 +287,6 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
         # The *same* period ledger carries acquisitions, continuous operations,
         # shared capacities, transport and research. Neither reference stock nor
         # nominal process output becomes realized supply automatically.
-        period_tx_start = next((i for i, t in enumerate(transactions) if t["period"] == period), len(transactions))
         process_capacity = defaultdict(float)
         required_fleet = defaultdict(int)
         fleet_commitment_known = set()
@@ -317,7 +322,7 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
                 if node in prospective:
                     issue(period, aid, "site_not_founded", node, "Site founding and construction are not established")
             elif kind == "transport":
-                _, source, destination, resource = key
+                _, source, destination, resource, _vehicle = key
                 rate = activity["rate_per_day"]
                 if not rate:
                     continue
@@ -339,6 +344,12 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
                         else:
                             issue(period, aid, "transport_preview_no_required_units", f"{source}:{destination}",
                                   "Fleet use cannot be related to the planned fleet without a valid Preview")
+                        if preview.get("blockers"):
+                            issue(period, aid, "transport_preview_blocked", f"{source}:{destination}:{vehicle}",
+                                  "Current Application Preview reports blockers; planned assets do not resolve them automatically")
+                        if not preview.get("selected_forward_path"):
+                            issue(period, aid, "transport_forward_path_unverified", f"{source}:{destination}:{vehicle}",
+                                  "A vehicle allocation without a canonical forward path does not imply cargo delivery")
                         dependency(period, aid, f"fleet:{source}:{vehicle}", "canonical_transport_preview",
                                    "conditional_not_executed", quantity=preview)
                     except (ValueError, RuntimeError, KeyError) as exc:
@@ -485,14 +496,48 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
                          else "conditional_output_t_per_day")
                 ledgers[(node, resource)][field] += txn["quantity"]
         for (node, resource), ledger in sorted(ledgers.items()):
-            if ledger["capital_t"] or ledger["operating_t_per_day"]:
-                status = "selected_conditional_supply" if ledger["conditional_output_t_per_day"] else "supply_method_unselected"
-                dependency(period, f"resource:{node}:{resource}", f"resource:{node}:{resource}",
-                           "shared_resource_balance", status, quantity={**ledger,
-                           "starting_real_stock_t_only": initial_stock.get((node, resource), 0.) if len(period_rows) == 0 else None})
-                if not ledger["conditional_output_t_per_day"]:
-                    issue(period, f"resource:{node}:{resource}", "supply_method_unselected",
-                          f"{node}:{resource}", "Capital, continuous operation and logistics compete for unresolved supply")
+            if not ledger["capital_t"] and not ledger["operating_t_per_day"]:
+                continue
+            local_output = ledger["conditional_output_t_per_day"]
+            inbound = ledger["conditional_inbound_t_per_day"]
+            has_supply = bool(local_output or inbound)
+            if local_output and inbound:
+                status = "conditional_local_and_transport_supply"
+            elif local_output:
+                status = "selected_conditional_supply"
+            elif inbound:
+                status = "conditional_transport_arrival"
+            else:
+                status = "supply_method_unselected"
+            # All five quantities participate in the *same* interval and site
+            # relationship. Stock is observed once; it is never silently carried
+            # as actual end-stock across hypothetical periods.
+            stock = initial_stock.get((node, resource), 0.) if not period_rows else None
+            equivalent_use_per_day = ledger["operating_t_per_day"] + ledger["capital_t"] / duration
+            reference_supply_per_day = local_output + inbound
+            dependency(period, f"resource:{node}:{resource}", f"resource:{node}:{resource}",
+                       "shared_resource_balance", status,
+                       quantity={**ledger, "interval_game_days": duration,
+                                 "nominal_use_including_capital_t_per_day": equivalent_use_per_day,
+                                 "conditional_supply_t_per_day": reference_supply_per_day,
+                                 "starting_real_stock_t_only": stock})
+            if not has_supply:
+                issue(period, f"resource:{node}:{resource}", "supply_method_unselected",
+                      f"{node}:{resource}",
+                      "Concurrent capital, maintenance, production and logistics depend on an unselected source or previous-period stock")
+            elif inbound and not local_output:
+                issue(period, f"resource:{node}:{resource}", "conditional_transport_supply",
+                      f"{node}:{resource}",
+                      "Inbound nominal quantities depend on transport eligibility, latency and fleet, not delivered stock")
+            # This is a cross-period dependency diagnostic, not a local shortage
+            # score or a feasibility verdict. Prior hypothetical output is NOT
+            # an available inventory balance, and even selected output is only
+            # conditional on real GameApplication allocation.
+            observed_stock_rate = (stock / duration) if stock is not None else 0.
+            if equivalent_use_per_day > reference_supply_per_day + observed_stock_rate + 1e-9:
+                issue(period, f"resource:{node}:{resource}", "selected_supply_relation_incomplete",
+                      f"{node}:{resource}",
+                      "Nominal concurrent demand exceeds selected conditional production/arrival and known start stock; earlier inventory or an alternative supply method is required and remains unverified")
         period_rows.append({"id": period, "cumulative_hours": hours, "interval_game_days": duration,
                             "purpose": entry["purpose"], "activity_ids": introduced,
                             "objective_ids": sorted(objective_counts), "new_acquisitions": acquisitions,
@@ -518,11 +563,73 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
         record["activities"].add(row["activity"])
         if row["activity"] in activity_objectives:
             record["objectives"].add(activity_objectives[row["activity"]])
-    coupled = [{"shared_constraint": key, "periods": sorted(record["periods"]),
-                "objectives": sorted(record["objectives"]), "evidence_ids": record["evidence"],
+        record["evidence"].append(row["id"])
+    coupled = [{"id": f"sc{i}", "shared_constraint": key,
+                "periods": sorted(record["periods"]),
+                "objectives": sorted(record["objectives"]),
+                "evidence_ids": record["evidence"],
                 "relationship": "common_finite_resource_or_capability_not_verified_supply"}
-               for key, record in sorted(connections.items())
+               for i, (key, record) in enumerate(sorted(connections.items()))
                if len(record["objectives"]) > 1 or len(record["periods"]) > 1]
+    # The decision view is a whole-horizon relationship projection, not a
+    # ranked collection of individual constraints. Every condition remains
+    # inspectable through its stable evidence ID below.
+    def condition_family(code):
+        if code.startswith(("research_", "requirement_method_")):
+            return "technology_and_research"
+        if code.startswith(("supply_", "selected_supply_", "conditional_transport_supply",
+                            "construction_recipe_", "maintenance_recipe_")):
+            return "shared_material_continuity"
+        if code.startswith("transport_"):
+            return "logistics_and_fleet"
+        if code.startswith(("population_", "housing_", "life_support_", "planned_population_")):
+            return "settlement_and_life_support"
+        if code.startswith(("site_", "extraction_")):
+            return "geography_and_resource_opportunity"
+        if code.startswith(("work_", "process_", "power_", "construction_work_")):
+            return "shared_work_power_and_process_capacity"
+        if code.startswith("retirement_"):
+            return "capital_and_asset_succession"
+        return "unclassified_conditions_require_review"
+
+    families = defaultdict(lambda: {"periods": set(), "objectives": set(),
+                                    "evidence_ids": [], "unattributed": False})
+    for row in issues:
+        family = families[condition_family(row["code"])]
+        family["periods"].add(row["period"])
+        objective = activity_objectives.get(row["activity"])
+        if objective:
+            family["objectives"].add(objective)
+        else:
+            family["unattributed"] = True
+        family["evidence_ids"].append(row["id"])
+    unresolved = [{"relation_family": family, "periods": sorted(row["periods"]),
+                   "objectives": sorted(row["objectives"]),
+                   "contains_unattributed_actual_or_shared_demand": row["unattributed"],
+                   "condition_evidence_ids": row["evidence_ids"],
+                   "meaning": "Conditions link to the same horizon quantities; no isolated feasibility or adoption verdict"}
+                  for family, row in sorted(families.items())]
+    material_balances = defaultdict(list)
+    for row in dependencies:
+        if row["relation"] == "shared_resource_balance":
+            material_balances[row["condition"]].append(row)
+    cross_objective = []
+    for link in coupled:
+        if len(link["objectives"]) < 2:
+            continue
+        resource = link["shared_constraint"]
+        statuses = {d["status"] for d in material_balances[resource]}
+        if statuses & {"selected_conditional_supply", "conditional_transport_arrival",
+                       "conditional_local_and_transport_supply"}:
+            relation = "shared_resource_with_conditional_supply_not_confirmed"
+        elif resource.startswith("resource:"):
+            relation = "shared_material_demand_without_selected_supply"
+        else:
+            relation = "shared_capability_or_unlock_not_confirmed"
+        cross_objective.append({"shared_constraint": resource,
+                                "shared_evidence_id": link["id"],
+                                "periods": link["periods"], "objectives": link["objectives"],
+                                "relationship": relation})
     quantified_uses = {activity_objectives[row["activity"]] for row in transactions
                        if row["activity"] in activity_objectives}
     quantified_uses.update(activity_objectives[row["activity"]] for row in dependencies
@@ -530,12 +637,14 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
     return {"kind": "whole_development_constraints", "format": FORMAT, "identity": defs["identity"],
             "development": development, "decision": {"scope": "entire_horizon", "verification": "not_verified",
             "objectives_with_no_quantified_connection": sorted(set(objectives) - quantified_uses),
-            "cross_period_and_cross_objective_relations": coupled,
-            "periods": [row["id"] for row in period_rows], "unresolved_conditions": issues,
+            "cross_period_and_cross_objective_relations": cross_objective,
+            "periods": [row["id"] for row in period_rows], "unresolved_conditions": unresolved,
             "objectives_relationships_without_quantified_shared_constraint": [
                 {"from": objective, "to": other, "status": "authored_relation_not_physically_connected"}
                 for objective, row in sorted(objectives.items()) for other in row["relationships"]
-                if not any({objective, other} <= set(link["objectives"]) for link in coupled)],
+                if not any({objective, other} <= set(link["objectives"]) and
+                           any(ref.startswith("q") for ref in link["evidence_ids"])
+                           for link in coupled)],
             "interpretation": "Quantities are design commitments, not actual Game State or a feasibility verdict"},
             "technical_evidence": {"periods": period_rows, "transactions": transactions,
                                   "dependencies": dependencies, "conditions": issues, "shared_constraints": coupled,
