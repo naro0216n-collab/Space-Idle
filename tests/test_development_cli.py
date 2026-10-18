@@ -59,20 +59,35 @@ def test_contract_requires_real_objective_links_and_no_legacy_inputs(source):
             evaluate(defs, invalid)
 
 
-def test_research_prerequisite_acquisition_is_shared_and_not_actual_completion(source):
+def test_unselected_research_prerequisites_are_not_implicitly_planned_or_acquired(source):
     _, defs = source
-    research_id = next(key for key, val in defs["research"].items() if val["prerequisites"])
-    content = design([period("one", 4, [activity("r1", "research", "research", definition=research_id)]),
-                      period("two", 12, [activity("r2", "research", "research", definition=research_id)])])
-    result = evaluate(defs, content)
+    parent, target = "AR-AUTONOMY-ROBOTICS-01", "AR-AUTONOMY-ROBOTICS-02"
+    assert parent in defs["research"][target]["prerequisites"]
+    only_target = design([period("one", 4, [activity("target", "research", "research", definition=target)]),
+                          period("two", 12, [activity("repeat", "research", "research", definition=target)])])
+    result = evaluate(defs, only_target)
     evidence = result["technical_evidence"]["transactions"]
-    first = tx(evidence, period="one", unit="rp")
-    second = tx(evidence, period="two", unit="rp")
-    assert sum(row["quantity"] for row in first) >= 0
-    assert not second
-    assert any(d["relation"] == "prerequisite" for d in result["technical_evidence"]["dependencies"])
+    assert tx(evidence, period="one", definition=target)
+    assert not tx(evidence, definition=parent)
+    assert not tx(evidence, period="two", definition=target)
+    assert any(d["condition"] == f"technology:{parent}" and d["status"] == "unselected"
+               for d in result["technical_evidence"]["dependencies"])
+    assert any(i["code"] == "requirement_method_unselected"
+               for i in result["technical_evidence"]["conditions"])
     assert result["decision"]["verification"] == "not_verified"
-    assert result["technical_evidence"]["periods"][0]["interval_game_days"] == 4 * 3600
+
+    # The same-period selection is declarative, not sensitive to list order.
+    together = design([period("one", 4, [
+        activity("target", "research", "research", definition=target),
+        activity("parent", "research", "research", definition=parent),
+    ])])
+    linked = evaluate(defs, together)
+    assert tx(linked["technical_evidence"]["transactions"], definition=target)
+    assert tx(linked["technical_evidence"]["transactions"], definition=parent)
+    prereq = [d for d in linked["technical_evidence"]["dependencies"]
+              if d["activity"] == "target" and d["condition"] == f"technology:{parent}"]
+    assert prereq and prereq[0]["status"] == "planned_not_verified"
+    assert linked["technical_evidence"]["periods"][0]["interval_game_days"] == 4 * 3600
 
 
 def test_capital_and_continuous_operations_share_resource_and_time_with_plan_provenance(source):

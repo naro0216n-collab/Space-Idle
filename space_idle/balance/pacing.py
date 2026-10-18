@@ -184,6 +184,10 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
         period_tx_start = len(transactions)
         if not isinstance(entry["activities"], list):
             raise ValueError("activities must be a list")
+        # Authored choices are a set within a period, not a procedural order.
+        # Prerequisite closure is reference evidence, NEVER an implicit choice.
+        period_research_choices = {a.get("definition") for a in entry["activities"]
+                                   if isinstance(a, dict) and a.get("kind") == "research"}
         objective_counts = defaultdict(int)
         introduced = []
         acquisitions = []
@@ -210,13 +214,16 @@ def evaluate(defs: dict, design: dict, *, transport_preview=None) -> dict:
             if kind == "research":
                 if node is not None and node not in all_nodes:
                     raise ValueError("invalid research site")
-                needed = _closure(defs["research"], [target]) - planned_technologies
-                planned_technologies.update(needed)
+                required = _closure(defs["research"], [target]) - {target}
+                for prerequisite in sorted(required):
+                    dependency(period, aid, f"technology:{prerequisite}", "prerequisite",
+                               "actual_at_start" if prerequisite in starting_completed else
+                               "planned_not_verified" if prerequisite in planned_technologies or
+                               prerequisite in period_research_choices else "unselected")
+                needed = {target} - planned_technologies
+                planned_technologies.add(target)
                 for rid in sorted(needed):
                     definition = defs["research"][rid]
-                    for prerequisite in definition["prerequisites"]:
-                        dependency(period, aid, f"technology:{prerequisite}", "prerequisite",
-                                   "actual_at_start" if prerequisite in starting_completed else "planned_not_verified")
                     for stage in definition["stages"]:
                         if stage["kind"] == "theory":
                             transaction(period, aid, "capacity:global:research_execution", f"technology:{rid}", "rp", stage["rp"], "planned_acquisition", definition=rid)
